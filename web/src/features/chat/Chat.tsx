@@ -614,6 +614,9 @@ function ChatContent(props: ChatProps) {
             session={main}
             profile={agent.profile}
             activeRun={activeRun}
+            hasPausedReply={overview.runs.some(
+              (run) => run.sessionId === main?.id && run.status === "paused",
+            )}
             queuedRuns={queuedRuns}
             archived={agent.archived}
             visible={enabled}

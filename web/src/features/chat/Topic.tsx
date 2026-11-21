@@ -41,7 +41,7 @@ import type { MessageActionHandlers } from "./MessageActions";
 import { Item, ItemContent, ItemGroup, ItemMedia } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
 import { UserMessage } from "./UserMessage";
-import { canRetryRun, RetryRunButton } from "./RetryRunButton";
+import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
 import { canEditSentMessage, RunContent } from "./RunContent";
 import { isWorking, RunStatus } from "./RunStatus";
 import { useRevealEntry } from "./useRevealEntry";
@@ -78,7 +78,10 @@ function mergeTopicRuns(
   );
   for (const run of history) runs.set(run.sequence, run);
   for (const run of activeRuns) {
-    if (run.sessionId === sessionId && active(run.status))
+    if (
+      run.sessionId === sessionId &&
+      (active(run.status) || run.status === "paused")
+    )
       runs.set(run.sequence, run);
   }
   return [...runs.values()].sort((a, b) => a.sequence - b.sequence);
@@ -275,13 +278,14 @@ export function Topic({
           {latest.status !== "completed" && (
             <RunStatus
               status={latest.status}
+              label={latest.pauseRequested ? t("chat.pausingReply") : undefined}
               iconOnly={isWorking(latest.status)}
             />
           )}
           {!agent.archived &&
             !latest.superseded &&
-            canRetryRun(latest.status) && (
-              <RetryRunButton key={latest.id} run={latest} />
+            canRecoverRun(latest.status) && (
+              <RunRecoveryButton key={latest.id} run={latest} />
             )}
           {onExpand && (
             <Button
@@ -558,6 +562,9 @@ function TopicConversationContent({
           reply
           compact={props.compactReply}
           activeRun={activeRun}
+          hasPausedReply={overview.runs.some(
+            (run) => run.sessionId === session.id && run.status === "paused",
+          )}
           queuedRuns={overview.runs.filter(
             (run) => run.sessionId === session.id && run.status === "queued",
           )}

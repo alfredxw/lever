@@ -107,7 +107,7 @@ function TurnChangeCard({
 
 export function TurnChanges({ run }: { run: Run }) {
   const { t } = useTranslation();
-  if (!run.finishedAt) return null;
+  if (!run.finishedAt && run.status !== "paused") return null;
   const native = run.turnDiff;
   if (native && !native.reported && !native.error) return null;
   const changes = native ? [native] : run.changes;

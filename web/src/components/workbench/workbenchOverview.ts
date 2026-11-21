@@ -11,6 +11,8 @@ export function selectWorkbenchOverview({ runs, ...overview }: Overview) {
       chatId: run.chatId,
       sessionId: run.sessionId,
       status: run.status,
+      canPause: run.canPause && !run.channel,
+      nativeTurnId: run.status === "paused" ? run.nativeTurnId : undefined,
       quiet: run.quiet,
       operation: run.operation,
       createdAt: run.createdAt,

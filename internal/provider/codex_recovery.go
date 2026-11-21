@@ -75,11 +75,15 @@ func resumeInterruptedCodexThread(ctx context.Context, call func(string, object)
 	if err != nil {
 		return nil, errors.Join(ErrUnconfirmed, err)
 	}
-	completedAt, _ := turn["completedAt"].(float64)
-	if turn["id"] != turnID || turn["status"] != "interrupted" || completedAt <= 0 {
+	if !confirmedCodexInterruption(turn, turnID) {
 		return nil, errors.Join(ErrUnconfirmed, errors.New("The interrupted turn is no longer the latest confirmed turn in this Codex conversation."))
 	}
 	return result, nil
+}
+
+func confirmedCodexInterruption(turn object, turnID string) bool {
+	completedAt, _ := turn["completedAt"].(float64)
+	return turn["id"] == turnID && turn["status"] == "interrupted" && completedAt > 0
 }
 
 func matchesCodexRecoveryTurn(turn object, in Input) bool {
@@ -90,9 +94,13 @@ func matchesCodexRecoveryTurn(turn object, in Input) bool {
 	if in.Recovery.NativeTurnID != nil {
 		return id == *in.Recovery.NativeTurnID
 	}
+	return hasCodexUserMessage(turn, in.RunID)
+}
+
+func hasCodexUserMessage(turn object, clientID string) bool {
 	for _, value := range arr(turn["items"]) {
 		item := obj(value)
-		if item["type"] == "userMessage" && item["clientId"] == in.RunID {
+		if item["type"] == "userMessage" && item["clientId"] == clientID {
 			return true
 		}
 	}

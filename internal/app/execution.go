@@ -24,6 +24,8 @@ type execution struct {
 	app               *App
 	ctx               context.Context
 	cancel            context.CancelFunc
+	runtimeCtx        context.Context
+	interrupt         context.CancelCauseFunc
 	mu                sync.Mutex
 	run               model.Run
 	session           model.Session
@@ -99,6 +101,7 @@ func (e *execution) BindTurn(id string) error {
 		run.TurnDiff = nil
 	}
 	run.NativeTurnID = &id
+	run.CanPause = id != "" && !run.Quiet && e.providerInput(run).CanPauseTurn()
 	if id != "" && run.Status == "starting" {
 		run.Status = "running"
 	}
@@ -113,19 +116,32 @@ func (e *execution) BindTurn(id string) error {
 		return err
 	}
 	e.run.NativeTurnID, e.run.Status, e.run.TurnDiff = run.NativeTurnID, run.Status, run.TurnDiff
+	e.run.CanPause = run.CanPause
 	e.dirty = false
 	return nil
 }
 
-func (e *execution) stop(ctx context.Context) error {
+func (e *execution) stop(ctx context.Context, pause bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.run.Status == "cancelling" {
+		return nil
+	}
 	if e.recovery != nil && e.run.Status == "starting" {
 		return conflict("Checking whether the previous execution has stopped")
 	}
+	if pause && !e.run.CanPause {
+		return conflict("This reply cannot be paused")
+	}
 	run := e.run
 	run.Status = "cancelling"
+	run.PauseRequested = pause
 	if err := e.app.Store.Write(ctx, func(tx *sql.Tx) error {
+		if pause {
+			if err := requireLocalTurn(ctx, tx, run.ID, "Channel messages cannot be paused in Lever"); err != nil {
+				return err
+			}
+		}
 		if e.hosted {
 			if _, err := tx.Exec("UPDATE runtime_hosts SET stop=1 WHERE run_id=?", run.ID); err != nil {
 				return err
@@ -138,9 +154,13 @@ func (e *execution) stop(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	e.run.Status = run.Status
+	e.run.Status, e.run.PauseRequested = run.Status, pause
 	if !e.hosted {
-		e.cancel()
+		if pause {
+			e.interrupt(provider.ErrPauseRequested)
+		} else {
+			e.cancel()
+		}
 	}
 	return nil
 }
@@ -275,7 +295,7 @@ func (e *execution) Ask(ctx context.Context, r model.Request) (model.Answer, err
 	defer func() {
 		e.mu.Lock()
 		delete(e.requests, r.ID)
-		if len(e.requests) == 0 && e.ctx.Err() == nil {
+		if len(e.requests) == 0 && e.ctx.Err() == nil && e.run.Status == "waiting_user" {
 			e.run.Status = "running"
 			e.dirty = true
 		}
@@ -382,7 +402,7 @@ func (e *execution) execute() error {
 			if e.app.independentProviders {
 				err = e.startHost(input)
 			} else {
-				err = provider.Run(e.ctx, input, e)
+				err = provider.Run(e.runtimeCtx, input, e)
 			}
 		}
 	}
@@ -409,11 +429,18 @@ func (e *execution) execute() error {
 func (e *execution) finish(err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	pauseRequested := e.run.PauseRequested
+	e.run.CanPause, e.run.PauseRequested = false, false
 	e.run.ResumeAfterShutdown = false
 	switch {
 	case e.recovery != nil && e.run.Status == "starting" && e.ctx.Err() != nil:
 		e.run.Status = "unknown"
 		e.run.ResumeAfterShutdown = e.app.closed && e.recovery.Continue
+	case errors.Is(err, provider.ErrPaused):
+		e.run.Status, e.run.FinishedAt = "paused", ""
+		err = nil
+	case pauseRequested && errors.Is(err, provider.ErrUnconfirmed):
+		e.run.Status = "unknown"
 	case e.ctx.Err() != nil || errors.Is(err, context.Canceled):
 		e.run.ResumeAfterShutdown = e.app.closed && e.ctx.Err() != nil && e.provider.Type == "codex" && e.run.Status == "running"
 		e.run.Status = "interrupted"
@@ -427,7 +454,7 @@ func (e *execution) finish(err error) {
 	if err != nil {
 		e.run.Error = err.Error()
 	}
-	if e.run.FinishedAt == "" {
+	if e.run.Status != "paused" && e.run.FinishedAt == "" {
 		e.run.FinishedAt = now()
 	}
 	e.run.PermissionMutable = false

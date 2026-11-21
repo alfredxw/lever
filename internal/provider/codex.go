@@ -95,6 +95,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 	}
 	terminal := false
 	var outcome error
+	var initialTurnID string
 	// turn/start can deliver a patch or completion before it returns its turn
 	// ID. Retain the latest of each until the response identifies our turn.
 	var startingEvents map[[2]string]object
@@ -107,6 +108,9 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		stateMu.Unlock()
 		owner := str(q["threadId"])
 		if frame["id"] != nil && method != "" {
+			if ctx.Err() != nil {
+				return nil
+			}
 			request := model.Request{Kind: "approval", Title: method, Detail: pretty(q), Questions: []model.Question{}}
 			switch method {
 			case "item/commandExecution/requestApproval":
@@ -313,7 +317,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			return emit(item)
 		case "turn/completed":
 			v := obj(q["turn"])
-			if turn != "" && str(v["id"]) != turn {
+			if owner != tid || (turn != "" && str(v["id"]) != turn) {
 				return nil
 			}
 			terminal = true
@@ -371,6 +375,48 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			}
 		}
 	}
+	defer func() {
+		if !errors.Is(context.Cause(ctx), ErrPauseRequested) {
+			return
+		}
+		// Read the remaining events before closing the native process. A pause
+		// can lose a race to completion or arrive before the input was saved.
+		pauseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+		defer cancel()
+		rpcCtx = pauseCtx
+		for !terminal {
+			select {
+			case b, ok := <-p.Frames:
+				if !ok {
+					err = errors.Join(ErrUnconfirmed, p.Error())
+					return
+				}
+				frame, readErr := decode(b)
+				if readErr == nil {
+					readErr = handle(frame)
+				}
+				if readErr != nil {
+					err = errors.Join(ErrUnconfirmed, readErr)
+					return
+				}
+			case <-pauseCtx.Done():
+				err = errors.Join(ErrUnconfirmed, errors.New("Codex did not confirm the pause"))
+				return
+			}
+		}
+		err = outcome
+		if !errors.Is(outcome, context.Canceled) {
+			return
+		}
+		previous, readErr := latestCodexTurn(call, threadID, "full")
+		if readErr != nil || !confirmedCodexInterruption(previous, turnID) {
+			return
+		}
+		if turnID == initialTurnID && in.Recovery == nil && !hasCodexUserMessage(previous, in.RunID) {
+			return
+		}
+		err = ErrPaused
+	}()
 	if _, err = call("initialize", object{"clientInfo": object{"name": "lever", "version": "0.1.0"}, "capabilities": object{"experimentalApi": true}}); err != nil {
 		return err
 	}
@@ -387,11 +433,13 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		stateMu.Lock()
 		threadID = in.Session.NativeID
 		stateMu.Unlock()
-		for _, value := range arr(previous["items"]) {
-			item := obj(value)
-			if item["type"] == "agentMessage" {
-				if err := handle(object{"method": "item/completed", "params": object{"threadId": threadID, "item": item}}); err != nil {
-					return err
+		if !in.Recovery.SkipOutputReplay {
+			for _, value := range arr(previous["items"]) {
+				item := obj(value)
+				if item["type"] == "agentMessage" {
+					if err := handle(object{"method": "item/completed", "params": object{"threadId": threadID, "item": item}}); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -405,9 +453,6 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 				return context.Canceled
 			}
 			interruptedTurnID = str(previous["id"])
-			if err := sink.BindTurn(interruptedTurnID); err != nil {
-				return err
-			}
 		}
 		rpcCtx = ctx
 	}
@@ -540,6 +585,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		if turnID == "" {
 			return errors.Join(ErrUnconfirmed, errors.New("Codex did not return a turn id"))
 		}
+		initialTurnID = turnID
 		if err := sink.BindTurn(turnID); err != nil {
 			return errors.Join(ErrUnconfirmed, err)
 		}

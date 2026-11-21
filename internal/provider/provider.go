@@ -23,6 +23,11 @@ import (
 // terminal event. The caller must not replay that input automatically.
 var ErrUnconfirmed = errors.New("runtime disconnected before confirming completion")
 
+// A pause request cancels provider I/O. ErrPaused confirms the native turn ended
+// and the provider can continue it from its saved conversation.
+var ErrPauseRequested = errors.New("pause requested")
+var ErrPaused = errors.New("execution paused")
+
 // A native rejection confirms this input was not accepted, so it may be queued.
 var ErrSteerRejected = errors.New("runtime rejected steering message")
 
@@ -42,8 +47,25 @@ type Input struct {
 }
 
 type Recovery struct {
-	NativeTurnID *string
-	Continue     bool
+	NativeTurnID     *string
+	Continue         bool
+	SkipOutputReplay bool // A confirmed pause already saved the streamed output.
+}
+
+func SupportsTurnContinuation(kind string) bool {
+	return kind == "codex" || kind == "claude"
+}
+
+func (in Input) CanPauseTurn() bool {
+	if !SupportsTurnContinuation(in.Provider.Type) {
+		return false
+	}
+	name, _ := in.command()
+	if in.Provider.Type == "claude" {
+		runtime := in.Session.Runtime
+		return name == "" && (runtime == nil || runtime.Goal == nil || runtime.Goal.Status != "active")
+	}
+	return name != "compact" && name != "goal"
 }
 
 type Attachment struct {

@@ -9,6 +9,12 @@
 - Complexity must be justified by the problem itself.
 - Abstract only after the need is demonstrated.
 
+## 跨 Provider 兼容性
+
+- Lever 的通用操作默认覆盖所有已支持的 provider，并保持一致的用户可见语义。新增或修改通用操作时，优先复用现有 provider 适配层。
+- 优先使用原生能力。缺少原生能力时，只要能保持相同的用户语义，就通过适配层实现兼容。适配层声明实际支持的能力，界面据此呈现可用操作和限制。
+- 逐一核对已支持的 provider，验证操作可用和能力受限时的行为。例如，继续应接续同一轮回复并保留已生成的内容。
+
 ## 界面规范
 
 - 设计、实现或评审 Lever UI 时，先读 [UI 组件选型 skill](.agents/skills/ui/SKILL.md)，按交互目的选择组件，优先复用仓库已有的 shadcn 组件。

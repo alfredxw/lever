@@ -148,6 +148,8 @@ func Serve(dir, id string) error {
 		switch {
 		case errors.Is(err, context.Canceled):
 			phase = "interrupted"
+		case errors.Is(err, provider.ErrPaused):
+			phase, detail = "paused", ""
 		case errors.Is(err, provider.ErrUnconfirmed):
 			phase = "unknown"
 		default:
@@ -177,7 +179,7 @@ type worker struct {
 	db         *sql.DB
 	id         string
 	ctx        context.Context
-	cancel     context.CancelFunc
+	cancel     context.CancelCauseFunc
 	steers     chan struct{}
 	mu         sync.Mutex
 	runtime    model.SessionRuntime
@@ -187,8 +189,10 @@ type worker struct {
 }
 
 func drive(db *sql.DB, dir string, in provider.Input) error {
-	ctx, cancel := signal.NotifyContext(provider.WithStateDir(context.Background(), dir), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	signalCtx, stopSignals := signal.NotifyContext(provider.WithStateDir(context.Background(), dir), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithCancelCause(signalCtx)
+	defer cancel(nil)
 	w := &worker{db: db, id: in.RunID, ctx: ctx, cancel: cancel, steers: make(chan struct{}, 1), positions: make(map[string]int)}
 	if in.Session.Runtime != nil {
 		w.runtime = *in.Session.Runtime
@@ -218,12 +222,12 @@ func drive(db *sql.DB, dir string, in provider.Input) error {
 				return
 			case <-ticker.C:
 				if err := w.flush(); err != nil {
-					cancel()
+					cancel(nil)
 					done <- err
 					return
 				}
 				if err := w.controls(); err != nil {
-					cancel()
+					cancel(nil)
 					done <- err
 					return
 				}
@@ -231,8 +235,8 @@ func drive(db *sql.DB, dir string, in provider.Input) error {
 		}
 	}()
 	err = provider.Run(ctx, in, w)
-	stopped := ctx.Err() != nil
-	cancel()
+	stopped := ctx.Err() != nil && !errors.Is(context.Cause(ctx), provider.ErrPauseRequested)
+	cancel(nil)
 	pollErr := <-done
 	if flushErr := w.flush(); flushErr != nil {
 		return errors.Join(provider.ErrUnconfirmed, flushErr)
@@ -331,17 +335,22 @@ func (w *worker) EnablePermissionChanges(set func(context.Context, string) error
 	defer w.mu.Unlock()
 	w.permission = set
 	if err := w.emitLocked("mutable", true); err != nil {
-		w.cancel()
+		w.cancel(nil)
 	}
 }
 func (w *worker) controls() error {
-	var stop, steers bool
-	if err := w.db.QueryRow(`SELECT stop, EXISTS(SELECT 1 FROM runtime_commands WHERE run_id=? AND kind='steer' AND taken=0)
-  FROM runtime_hosts WHERE run_id=?`, w.id, w.id).Scan(&stop, &steers); err != nil {
+	var stop, pause, steers bool
+	if err := w.db.QueryRow(`SELECT h.stop, COALESCE(r.data->>'pauseRequested',0),
+  EXISTS(SELECT 1 FROM runtime_commands WHERE run_id=h.run_id AND kind='steer' AND taken=0)
+  FROM runtime_hosts h JOIN runs r ON r.id=h.run_id WHERE h.run_id=?`, w.id).Scan(&stop, &pause, &steers); err != nil {
 		return err
 	}
 	if stop {
-		w.cancel()
+		if pause {
+			w.cancel(provider.ErrPauseRequested)
+		} else {
+			w.cancel(nil)
+		}
 		return nil
 	}
 	if steers {
@@ -369,7 +378,7 @@ func (w *worker) controls() error {
 	cancel()
 	_, dbErr := w.db.Exec("UPDATE runtime_commands SET result=? WHERE id=?", store.JSON(Result(err)), id)
 	if errors.Is(err, provider.ErrUnconfirmed) {
-		w.cancel()
+		w.cancel(nil)
 	}
 	return dbErr
 }

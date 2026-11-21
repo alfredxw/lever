@@ -198,7 +198,7 @@ export function AgentSidebar({
         conversation.unreadSequence > (readCursors[conversation.id] ?? 0);
       const run = runsBySession
         .get(conversation.id)
-        ?.find((run) => run.status !== "queued");
+        ?.find((run) => run.status !== "queued" && run.status !== "paused");
       const pending = pendingSessions.has(conversation.id);
       const pinIndex =
         conversation.kind === "topic"

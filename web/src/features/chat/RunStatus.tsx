@@ -33,7 +33,7 @@ export function RunStatus({
         ? CircleX
         : status === "interrupted"
           ? Square
-          : status === "waiting_user"
+          : status === "waiting_user" || status === "paused"
             ? CirclePause
             : CircleHelp;
   const statusLabel = label ?? t(`status.${status}`, { defaultValue: status });

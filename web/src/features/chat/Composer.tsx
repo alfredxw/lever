@@ -22,6 +22,7 @@ import {
   GitBranch,
   LoaderCircle,
   MessageCircle,
+  Pause,
   Plus,
   Square,
   Upload,
@@ -89,6 +90,7 @@ import {
 import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPicker";
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
+import { canPauseReply, interruptReply } from "./runControls";
 
 const MotionInputGroupButton = motion.create(InputGroupButton);
 
@@ -117,6 +119,7 @@ export function Composer({
   topicLauncher,
   compact,
   activeRun,
+  hasPausedReply,
   queuedRuns = [],
   archived,
   autoFocus,
@@ -133,6 +136,7 @@ export function Composer({
   topicLauncher?: { topicId: string; backButton: ReactElement };
   compact?: boolean;
   activeRun?: Run;
+  hasPausedReply?: boolean;
   queuedRuns?: Run[];
   archived?: boolean;
   autoFocus?: boolean;
@@ -458,10 +462,18 @@ export function Composer({
       onSent(result, launchedFromTopicId);
     },
   });
-  const stop = useMutation({
-    mutationFn: () => api(`/runs/${activeRun!.id}/stop`, {}),
+  const interrupt = useMutation({
+    mutationFn: interruptReply,
     onError: (error) => toast.error(error.message),
   });
+  const canPause = !!activeRun && canPauseReply(activeRun);
+  const interruptLabel = t(
+    activeRun?.pauseRequested
+      ? "chat.pausingReply"
+      : canPause
+        ? "chat.pauseReply"
+        : "chat.stop",
+  );
   function beginEdit(run: Run, sent: boolean) {
     if (sending || uploading || draft.editing || readSubmission(key)) {
       toast.error(t("chat.editUnavailable"));
@@ -526,7 +538,8 @@ export function Composer({
   }, [composer, draft.editing, draft.topic, key, sending, uploading, t]);
   const running = Boolean(activeRun && !topicMode);
   const followUp =
-    !editingSent && (running || (queuedRuns.length > 0 && !topicMode));
+    !editingSent &&
+    (running || (queuedRuns.length > 0 && !topicMode && !hasPausedReply));
   const matchingRun =
     running &&
     !draft.editing &&
@@ -1395,17 +1408,23 @@ export function Composer({
                     />
                   </>
                 )}
-                {running && activeRun?.status !== "unknown" && (
+                {running && activeRun && activeRun.status !== "unknown" && (
                   <InputGroupButton
                     className="send-button rounded-full"
                     variant={hasContent ? "ghost" : "default"}
                     size="icon-sm"
-                    aria-label={t("chat.stop")}
-                    title={t("chat.stop")}
-                    disabled={stop.isPending}
-                    onClick={() => stop.mutate()}
+                    aria-label={interruptLabel}
+                    title={interruptLabel}
+                    disabled={
+                      interrupt.isPending || activeRun.status === "cancelling"
+                    }
+                    onClick={() => interrupt.mutate(activeRun)}
                   >
-                    <Square fill="currentColor" />
+                    {canPause ? (
+                      <Pause fill="currentColor" />
+                    ) : (
+                      <Square fill="currentColor" />
+                    )}
                   </InputGroupButton>
                 )}
                 {hasContent && alternateAction && (

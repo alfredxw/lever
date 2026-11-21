@@ -127,6 +127,8 @@ func (e *execution) followHost() error {
 				return nil
 			case "interrupted":
 				return context.Canceled
+			case "paused":
+				return provider.ErrPaused
 			case "unknown":
 				return errors.Join(provider.ErrUnconfirmed, errors.New(detail))
 			case "failed":

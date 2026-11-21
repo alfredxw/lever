@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"lever/internal/device"
 	"lever/internal/model"
 	"lever/internal/workspace"
@@ -37,7 +38,16 @@ type claudePermissionChange struct {
 	done chan error
 }
 
-func claude(ctx context.Context, in Input, sink Sink) error {
+func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
+	messageID := in.RunID
+	if in.Recovery != nil {
+		if err := checkClaudeContinuation(ctx, in); err != nil {
+			return err
+		}
+		// An empty stream-json input starts generation from the saved conversation.
+		// The receipt UUID identifies this request without resending any user data.
+		messageID = uuid.NewString()
+	}
 	path, err := Executable(ctx, in.Provider)
 	if err != nil {
 		return err
@@ -85,10 +95,24 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 	}
 	approvalCtx, stopApprovals := context.WithCancel(ctx)
 	var approvals sync.WaitGroup
+	var nativeID string
 	defer func() {
 		stopApprovals()
 		p.Close()
 		approvals.Wait()
+		if !errors.Is(outcome, ErrPaused) {
+			return
+		}
+		proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		tip, err := claudeCheckpoint(proofCtx, in.Provider, nativeID, in.RunID)
+		if err != nil || (in.Recovery != nil && tip == *in.Recovery.NativeTurnID) {
+			outcome = context.Canceled
+			return
+		}
+		if err := sink.BindTurn(tip); err != nil {
+			outcome = errors.Join(ErrUnconfirmed, err)
+		}
 	}()
 	p.Watch(ctx, func() {
 		_ = p.Send(object{"type": "control_request", "request_id": "lever-interrupt", "request": object{"subtype": "interrupt"}})
@@ -106,8 +130,14 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 	subagents := claudeSubagents{calls: map[string]*subagent{}, tasks: map[string]*subagent{}, tools: map[string]*subagent{}}
 	nextAssistantBlock := map[string]int{}
 	currentMessage := ""
-	bound := false
 	sent := false
+	accepted, pausable := false, in.CanPauseTurn()
+	bindTurn := func() error {
+		if pausable && accepted && sharedUUID.MatchString(nativeID) {
+			return sink.BindTurn(messageID)
+		}
+		return nil
+	}
 	loopEnabled := command == "loop"
 	var loop claudeLoop
 	goalActive := in.Session.Runtime != nil && in.Session.Runtime.Goal != nil && in.Session.Runtime.Goal.Status == "active"
@@ -115,9 +145,12 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 	var lastModelMessage object
 	var requestedAt time.Time
 	refreshContext := command == "context" || command == "compact"
-	content, err := claudeContent(in)
-	if err != nil {
-		return err
+	content := []object{}
+	if in.Recovery == nil {
+		content, err = claudeContent(in)
+		if err != nil {
+			return err
+		}
 	}
 	steered := false
 	pendingSteers := map[string]bool{}
@@ -126,6 +159,9 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 	permissionChanges := (<-chan claudePermissionChange)(changes)
 	var changing *claudePermissionChange
 	approvalErr := make(chan error, 1)
+	done := ctx.Done()
+	var pauseDeadline context.Context
+	interruptAcknowledged, interrupted := false, false
 	emit := func(item model.Item) error {
 		items[item.ID] = item
 		if item.Kind == "reasoning" && strings.TrimSpace(item.Text) == "" {
@@ -142,6 +178,9 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 				return errors.Join(ErrUnconfirmed, err)
 			}
 		case err := <-approvalErr:
+			if errors.Is(context.Cause(ctx), ErrPauseRequested) && errors.Is(err, context.Canceled) {
+				continue
+			}
 			return err
 		case <-steering:
 			for {
@@ -173,8 +212,17 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 					return errors.Join(ErrUnconfirmed, err)
 				}
 			}
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-done:
+			if !errors.Is(context.Cause(ctx), ErrPauseRequested) {
+				return ctx.Err()
+			}
+			if pauseDeadline != nil {
+				return errors.Join(ErrUnconfirmed, errors.New("Claude Code did not confirm the pause"))
+			}
+			var cancel context.CancelFunc
+			pauseDeadline, cancel = context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+			defer cancel()
+			done, steering, permissionChanges = pauseDeadline.Done(), nil, nil
 		case b, ok := <-p.Frames:
 			if !ok {
 				if sent {
@@ -205,6 +253,16 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 			switch str(f["type"]) {
 			case "control_response":
 				r := obj(f["response"])
+				if r["request_id"] == "lever-interrupt" && errors.Is(context.Cause(ctx), ErrPauseRequested) {
+					if r["subtype"] != "success" {
+						return errors.Join(ErrUnconfirmed, fail(r))
+					}
+					interruptAcknowledged = true
+					if interrupted {
+						return ErrPaused
+					}
+					continue
+				}
 				if str(r["request_id"]) == "lever-permission" && changing != nil {
 					var changeErr error
 					if str(r["subtype"]) != "success" {
@@ -241,7 +299,7 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 				}
 				if !sent {
 					requestedAt = time.Now()
-					if err = p.Send(object{"type": "user", "uuid": in.RunID, "message": object{"role": "user", "content": content}}); err != nil {
+					if err = p.Send(object{"type": "user", "uuid": messageID, "message": object{"role": "user", "content": content}}); err != nil {
 						return err
 					}
 					sent = true
@@ -287,10 +345,16 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 					if err = sink.Bind(id); err != nil {
 						return err
 					}
-					bound = true
+					nativeID = id
+					if err := bindTurn(); err != nil {
+						return errors.Join(ErrUnconfirmed, err)
+					}
 					steering = in.Steers
 				}
 			case "control_request":
+				if ctx.Err() != nil {
+					continue
+				}
 				// Keep reading control responses while a tool waits for the user.
 				subagentID := subagents.approvalSource(f)
 				approvals.Go(func() {
@@ -412,6 +476,12 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 					}
 				}
 			case "user":
+				if f["uuid"] == messageID && f["isReplay"] == true && !accepted {
+					accepted = true
+					if err := bindTurn(); err != nil {
+						return errors.Join(ErrUnconfirmed, err)
+					}
+				}
 				if id := str(f["uuid"]); pendingSteers[id] {
 					delete(pendingSteers, id)
 					if err := sink.Steered(id, nil); err != nil {
@@ -439,8 +509,16 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 					}
 				}
 			case "result":
+				aborted := f["terminal_reason"] == "aborted_streaming" || f["terminal_reason"] == "aborted_tools"
+				if aborted && errors.Is(context.Cause(ctx), ErrPauseRequested) {
+					interrupted = true
+					if interruptAcknowledged {
+						return ErrPaused
+					}
+					continue
+				}
 				// A priority-now input aborts a segment, not the whole execution.
-				if steered && (str(f["terminal_reason"]) == "aborted_streaming" || str(f["terminal_reason"]) == "aborted_tools") {
+				if steered && aborted {
 					continue
 				}
 				// The previous result can cross an input already written to stdin.
@@ -448,7 +526,7 @@ func claude(ctx context.Context, in Input, sink Sink) error {
 				if len(pendingSteers) > 0 && f["is_error"] != true && str(f["subtype"]) == "success" {
 					continue
 				}
-				if !bound {
+				if nativeID == "" {
 					return errors.Join(ErrUnconfirmed, errors.New("Claude returned no bound session"))
 				}
 				if f["is_error"] == true || str(f["subtype"]) != "success" {

@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  canPauseReply,
+  interruptReply,
+  resumeReply,
+} from "@/features/chat/runControls";
 import { active, api, queryClient } from "@/api/client";
 import type { Agent, Conversation, SharedConversation } from "@/api/types.gen";
 import {
@@ -182,12 +187,17 @@ export function AgentSidebarMenus({
     const chat = overview.chats.find((item) => item.id === conversation.chatId);
     if (!chat) return null;
     const topic = conversation.kind === "topic";
+    const archived = overview.agents.some(
+      (agent) => agent.id === conversation.agentId && agent.archived,
+    );
     label = topic
       ? conversation.title || t("chat.topic")
       : displayChatTitle(chat, t);
     const state = navigation.tabState(conversation);
     const run = overview.runs.find(
-      (item) => item.sessionId === conversation.id && active(item.status),
+      (item) =>
+        item.sessionId === conversation.id &&
+        (active(item.status) || item.status === "paused"),
     );
     group(
       {
@@ -245,11 +255,18 @@ export function AgentSidebarMenus({
       },
     );
     group(
+      !archived && run?.status === "paused" && {
+        id: "resume",
+        label: t("chat.resumeReply"),
+        run: () => resumeReply(run),
+      },
       run &&
         ["starting", "running", "waiting_user"].includes(run.status) && {
           id: "stop",
-          label: t("agents.stopExecution"),
-          run: () => api("/runs/" + run.id + "/stop", {}),
+          label: t(
+            canPauseReply(run) ? "chat.pauseReply" : "agents.stopExecution",
+          ),
+          run: () => interruptReply(run),
         },
     );
   }

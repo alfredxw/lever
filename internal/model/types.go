@@ -378,6 +378,9 @@ type Run struct {
 	// A nil native turn ID permits lookup by the original client message ID.
 	// An empty ID records a continuation whose delivery has yet to be confirmed.
 	NativeTurnID        *string      `json:"nativeTurnId,omitempty"`
+	CanPause            bool         `json:"canPause,omitempty"`
+	PauseRequested      bool         `json:"pauseRequested,omitempty"`
+	Continued           bool         `json:"continued,omitempty"`
 	ResumeAfterShutdown bool         `json:"resumeAfterShutdown,omitempty"`
 	Operation           string       `json:"operation,omitempty"`
 	Delivery            string       `json:"delivery,omitempty"`

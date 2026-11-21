@@ -294,7 +294,7 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       queryClient.setQueryData<Overview>(["overview"], (old) => {
         if (!old) return;
         const index = old.runs.findIndex((item) => item.id === run.id);
-        if (!active(run.status) && run.status !== "queued") {
+        if (!active(run.status) && !["queued", "paused"].includes(run.status)) {
           if (index < 0) return;
           return {
             ...old,

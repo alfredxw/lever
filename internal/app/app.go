@@ -205,7 +205,7 @@ func (a *App) Overview(ctx context.Context) (model.Overview, error) {
 	}
 	o.Runs, err = store.List[model.Run](ctx, tx, `SELECT `+store.RunWithChannelReceipt+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
-WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','queued') ORDER BY r.sequence`)
+WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','queued') OR r.status='paused' ORDER BY r.sequence`)
 	if err != nil {
 		return o, err
 	}
@@ -644,8 +644,8 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 			if replaced.ComparisonID != "" {
 				return conflict("A comparison's original message cannot be edited in an individual Topic")
 			}
-			if replaced.Status != "completed" && replaced.Status != "failed" && replaced.Status != "interrupted" {
-				return conflict("Only sent messages from finished turns can be edited")
+			if replaced.Status != "completed" && replaced.Status != "failed" && replaced.Status != "interrupted" && replaced.Status != "paused" {
+				return conflict("Only sent messages from finished or paused turns can be edited")
 			}
 			if input.SessionID != "" && input.SessionID != replaced.SessionID {
 				return invalid("An edited sent message must run in its original conversation")
@@ -826,15 +826,21 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 		if err != nil {
 			return err
 		}
-		if origin.retry == nil && replaced.ID == "" && !create && current == nil && input.EditRunID == "" {
-			var queued int
-			if err := tx.QueryRow("SELECT COUNT(*) FROM runs WHERE session_id=? AND status='queued'", session.ID).Scan(&queued); err != nil {
+		startAfterPause := false
+		if session.QueuePaused && origin.retry == nil && replaced.ID == "" && current == nil && input.EditRunID == "" {
+			var paused, queued bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='paused'),
+EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, session.ID).Scan(&paused, &queued); err != nil {
 				return err
 			}
-			if queued == 0 {
+			// An explicit submission starts its own turn. Keep existing queued
+			// work on hold until the user resumes the queue.
+			startAfterPause = paused && input.Delivery == "" && origin == (sendOrigin{})
+			if !queued && (!paused || startAfterPause) {
 				if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false')) WHERE id=?", session.ID); err != nil {
 					return err
 				}
+				session.QueuePaused = false
 			}
 		}
 		if create {
@@ -901,7 +907,7 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 				// Start the chosen input while leaving the session's queue paused.
 				session.QueuePaused = true
 			}
-			if origin.retry != nil || replaced.ID != "" || origin.taskQueue != nil {
+			if origin.retry != nil || replaced.ID != "" || origin.taskQueue != nil || startAfterPause {
 				if err = reserveRun(tx, &run, &session); err != nil {
 					return err
 				}
@@ -1011,7 +1017,7 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 		}()
 		return run, nil
 	}
-	if origin.retry != nil || input.ReplaceRunID != "" || origin.taskQueue != nil {
+	if launchProvider.ID != "" {
 		a.launchLocked(run, session, launchProfile, launchProvider, nil)
 		return run, nil
 	}
@@ -1040,9 +1046,9 @@ func (a *App) launchLocked(run model.Run, session model.Session, profile model.P
 }
 
 func (a *App) newExecution(run model.Run, session model.Session, profile model.Profile, config model.Provider, recovery *provider.Recovery) *execution {
-
 	runCtx, cancel := context.WithCancel(a.ctx)
-	return &execution{app: a, ctx: runCtx, cancel: cancel, run: run, session: session, profile: profile, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
+	runtimeCtx, interrupt := context.WithCancelCause(runCtx)
+	return &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
 }
 func (a *App) trackLocked(e *execution, run func() error) {
 	id, sessionID := e.run.ID, e.session.ID
@@ -1069,9 +1075,16 @@ func (a *App) trackLocked(e *execution, run func() error) {
 func (a *App) Stop(ctx context.Context, runID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.stopLocked(ctx, runID)
+	return a.stopLocked(ctx, runID, false)
 }
-func (a *App) stopLocked(ctx context.Context, runID string) error {
+
+func (a *App) Pause(ctx context.Context, runID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopLocked(ctx, runID, true)
+}
+
+func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 	e := a.active[runID]
 	if e == nil {
 		run, err := store.Get[model.Run](ctx, a.Store.DB, "SELECT data FROM runs WHERE id=?", runID)
@@ -1081,14 +1094,17 @@ func (a *App) stopLocked(ctx context.Context, runID string) error {
 		if run.Status == "unknown" {
 			return conflict("Execution status is unknown; confirm the external runtime has stopped first")
 		}
+		if pause && run.Status != "paused" {
+			return conflict("This reply is no longer running")
+		}
 		return nil
 	}
-	if err := e.stop(ctx); err != nil {
+	if err := e.stop(ctx, pause); err != nil {
 		return err
 	}
 	for id, child := range a.active {
 		if child.session.ParentRunID == runID {
-			if err := a.stopLocked(ctx, id); err != nil {
+			if err := a.stopLocked(ctx, id, false); err != nil {
 				return err
 			}
 		}
@@ -1138,7 +1154,7 @@ func (a *App) Answer(ctx context.Context, id string, answer model.Answer) error 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ch := e.requests[id]
-	if (ch == nil && !e.hosted) || request.Status != "pending" {
+	if e.run.Status == "cancelling" || (ch == nil && !e.hosted) || request.Status != "pending" {
 		return conflict("Request is no longer pending")
 	}
 	if request.Kind == "question" && answer.Allow {

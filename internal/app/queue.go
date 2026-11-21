@@ -110,6 +110,20 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 }
 
 func reserveRun(tx *sql.Tx, run *model.Run, session *model.Session) error {
+	paused, err := store.Get[model.Run](context.Background(), tx, "SELECT data FROM runs WHERE session_id=? AND status='paused'", session.ID)
+	if err == nil {
+		paused.Status, paused.FinishedAt = "interrupted", now()
+		for i := range paused.Items {
+			if paused.Items[i].Status == "paused" {
+				paused.Items[i].Status = "interrupted"
+			}
+		}
+		if err := store.SaveRun(tx, paused); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if session.Selection.Provider != run.Selection.Provider {
 		session.NativeID = ""
 		session.Runtime = nil
@@ -124,7 +138,7 @@ WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','cancell
 	run.Status, run.Error, run.SteerRunID = "starting", "", ""
 	run.StartedAt = now()
 	session.Selection = run.Selection
-	_, err := tx.Exec("UPDATE sessions SET data=? WHERE id=?", store.JSON(session), session.ID)
+	_, err = tx.Exec("UPDATE sessions SET data=? WHERE id=?", store.JSON(session), session.ID)
 	return err
 }
 
@@ -258,7 +272,7 @@ func (e *execution) wakeSteer() {
 func (e *execution) NextSteer() (*provider.Input, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.permissionChange != nil {
+	if e.permissionChange != nil || e.run.Status == "cancelling" {
 		return nil, nil
 	}
 	var run model.Run

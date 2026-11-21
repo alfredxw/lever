@@ -157,6 +157,7 @@ CREATE INDEX IF NOT EXISTS task_queue_run ON task_queue(run_id) WHERE run_id IS 
 CREATE TABLE IF NOT EXISTS comparisons(id TEXT PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats(id), position INTEGER NOT NULL, command_id TEXT NOT NULL UNIQUE, input_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(chat_id,position));
 CREATE INDEX IF NOT EXISTS active_runs ON runs(sequence)
   WHERE status IN ('starting','running','waiting_user','cancelling','unknown','queued');
+CREATE UNIQUE INDEX IF NOT EXISTS paused_runs ON runs(session_id) WHERE status='paused';
 CREATE TABLE IF NOT EXISTS automations(
   id TEXT PRIMARY KEY, data TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('active','paused','archived')),
@@ -433,7 +434,7 @@ func InsertRun(tx *sql.Tx, run *model.Run, commandID, hash string) error {
 // SupersedeRuns removes turns from the active conversation while preserving their outcomes.
 func SupersedeRuns(tx *sql.Tx, from model.Run, session *model.Session) error {
 	if _, err := tx.Exec(`UPDATE runs SET data=json_set(data,'$.superseded',json('true'))
-WHERE session_id=? AND position>=? AND status IN ('completed','failed','interrupted')`, from.SessionID, from.Sequence); err != nil {
+WHERE session_id=? AND position>=? AND status IN ('completed','failed','interrupted','paused')`, from.SessionID, from.Sequence); err != nil {
 		return err
 	}
 	// Replacing the message that named a Topic also replaces its generated name.
@@ -448,7 +449,7 @@ WHERE id=? AND title_run_id=?`, session.ID, from.ID)
 		session.Title = ""
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET activity=json_set(activity,'$.title',COALESCE(json_extract(data,'$.title'),'')) WHERE id=? AND NOT EXISTS (
-  SELECT 1 FROM runs WHERE session_id=? AND position<? AND status IN ('completed','failed','interrupted')
+  SELECT 1 FROM runs WHERE session_id=? AND position<? AND status IN ('completed','failed','interrupted','paused')
 )`, from.SessionID, from.SessionID, from.Sequence); err != nil {
 		return err
 	}
@@ -559,6 +560,7 @@ func (s *Store) Recover(ctx context.Context) ([]RestartRun, error) {
 			WHEN (json_extract(r.data,'$.resumeAfterShutdown')=1 OR (
 				r.status IN ('starting','running') AND (json_extract(r.data,'$.nativeTurnId') IS NOT NULL OR
 				json_extract(s.data,'$.queuePaused') IS NOT 1)))
+			AND COALESCE(json_extract(r.data,'$.pauseRequested'),0)=0
 			AND NOT EXISTS (SELECT 1 FROM requests WHERE run_id=r.id AND status='pending')
 			THEN 'true' ELSE 'false' END))
 			FROM runs r JOIN sessions s ON s.id=r.session_id

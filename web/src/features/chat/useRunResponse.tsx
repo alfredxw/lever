@@ -82,6 +82,15 @@ export function useRunResponse({
     parts.length > 1 &&
     !Array.isArray(lastPart) &&
     lastPart?.kind === "text";
+  const earlierParts = collapseWork ? parts.slice(0, -1) : [];
+  const workParts = run.continued
+    ? earlierParts.filter(Array.isArray)
+    : earlierParts;
+  const visibleParts = !collapseWork
+    ? parts
+    : run.continued
+      ? parts.filter((part) => !Array.isArray(part))
+      : parts.slice(-1);
   const renderPart = (part: Item | Item[]) =>
     Array.isArray(part) ? (
       <RunActivity
@@ -133,12 +142,12 @@ export function useRunResponse({
       requests={pendingRequests}
       runtime={runtimeName}
     >
-      {collapseWork ? parts.slice(0, -1).map(renderPart) : undefined}
+      {workParts.length ? workParts.map(renderPart) : undefined}
     </RunWork>
   );
   const body = (parts.length > 0 || trailingThinking) && (
     <div className="message-body">
-      {(collapseWork ? parts.slice(-1) : parts).map(renderPart)}
+      {visibleParts.map(renderPart)}
       {trailingThinking && (
         <RunActivity
           items={[]}
@@ -153,7 +162,7 @@ export function useRunResponse({
   return {
     body,
     work,
-    hasWorkDetails: collapseWork || subagents.length > 0,
+    hasWorkDetails: workParts.length > 0 || subagents.length > 0,
     subagents,
     runtimeName,
   };

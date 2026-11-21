@@ -509,6 +509,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/runs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"accepted": true}, a.Stop(r.Context(), r.PathValue("id")))
 	})
+	mux.HandleFunc("POST /api/runs/{id}/pause", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"accepted": true}, a.Pause(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/runs/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			NativeTurnID string `json:"nativeTurnId"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]bool{"accepted": true}, a.Resume(r.Context(), r.PathValue("id"), in.NativeTurnID))
+	})
 	mux.HandleFunc("POST /api/runs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			CommandID string `json:"commandId"`

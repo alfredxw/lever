@@ -34,7 +34,7 @@ import { RuntimeIcon } from "@/components/RuntimeIcon";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { RequestCard } from "./RequestCard";
 import { useRunResponse } from "./useRunResponse";
-import { canRetryRun, RetryRunButton } from "./RetryRunButton";
+import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
 import { isWorking, RunStatus } from "./RunStatus";
 import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { subagentTitle } from "./RunWork";
@@ -48,7 +48,7 @@ export function canEditSentMessage(run: Run) {
     !run.channel &&
     !run.superseded &&
     !run.comparisonId &&
-    ["completed", "failed", "interrupted"].includes(run.status)
+    ["completed", "failed", "interrupted", "paused"].includes(run.status)
   );
 }
 
@@ -116,11 +116,11 @@ function RunMessages({
     },
   });
   const [confirmStopped, setConfirmStopped] = useState(false);
-  const retry = !agent.archived &&
+  const recovery = !agent.archived &&
     !run.channel &&
     !run.superseded &&
-    canRetryRun(run.status) && (
-      <RetryRunButton
+    canRecoverRun(run.status) && (
+      <RunRecoveryButton
         run={run}
         disabled={sessionBusy}
         onRetried={() =>
@@ -279,7 +279,7 @@ function RunMessages({
               <AlertDescription className="whitespace-pre-wrap break-words">
                 {run.error}
               </AlertDescription>
-              {retry && <AlertAction>{retry}</AlertAction>}
+              {recovery && <AlertAction>{recovery}</AlertAction>}
             </Alert>
           )}
           {run.status === "unknown" && (
@@ -323,7 +323,7 @@ function RunMessages({
             !isWorking(run.status) && (
               <div className="flex flex-wrap items-center gap-2">
                 <RunStatus status={run.status} />
-                {retry}
+                {recovery}
               </div>
             )}
           {run.channel &&

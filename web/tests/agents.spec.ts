@@ -2548,7 +2548,7 @@ test("sidebar menus rename the clicked Chat and Topic without switching or readi
   ).toBeVisible();
 });
 
-test("Agent menu clears only read activity and can archive after a sidebar stop", async ({
+test("Agent menu clears only read activity and can archive after a sidebar pause", async ({
   page,
 }) => {
   await createAgent(page, "活动菜单");
@@ -2591,7 +2591,7 @@ test("Agent menu clears only read activity and can archive after a sidebar stop"
   await expect(done).toBeVisible();
   await all.click();
   await busy.click({ button: "right" });
-  await item("停止本次执行").click();
+  await item("暂停回复").click();
   await expect(busy.locator(".agent-unread")).toBeVisible();
   await busy.click({ button: "right" });
   await item("标为已读").click();
@@ -3174,8 +3174,8 @@ test("running sends default to Steer and honor the saved action and shortcut", a
     "steered by the shifted send key",
   );
   await expect(queue).toContainText("queued by the other button");
-  await controls.getByRole("button", { name: "停止执行", exact: true }).click();
-  await expect(turn).toHaveAttribute("data-status", "interrupted");
+  await controls.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(turn).toHaveAttribute("data-status", "paused");
 });
 
 test("Topic steering uses the active model and saves the selected model for the next turn", async ({
@@ -3263,7 +3263,7 @@ test("Topic steering uses the active model and saves the selected model for the 
   await expect(turn.last()).toContainText('"model":"gpt-review"');
 });
 
-test("main and Topics execute independently with isolated queues, approvals and stop controls", async ({
+test("main and Topics execute independently with isolated queues, approvals and pause controls", async ({
   page,
 }) => {
   await createAgent(page, "并行搭档");
@@ -3297,7 +3297,7 @@ test("main and Topics execute independently with isolated queues, approvals and 
   await mode.click();
   await expect(queue).not.toBeVisible();
   await expect(
-    composer.getByRole("button", { name: "停止执行", exact: true }),
+    composer.getByRole("button", { name: "暂停回复", exact: true }),
   ).toHaveCount(0);
   await input.fill("[approval] Topic A");
   await composer.getByRole("button", { name: "发送", exact: true }).click();
@@ -3364,9 +3364,9 @@ test("main and Topics execute independently with isolated queues, approvals and 
   await expect(topicQueue).toContainText("edited queue only in Topic B");
   await page
     .locator(".topic-composer-wrap:visible")
-    .getByRole("button", { name: "停止执行", exact: true })
+    .getByRole("button", { name: "暂停回复", exact: true })
     .click();
-  await expect(topicB).toHaveAttribute("data-status", "interrupted");
+  await expect(topicB).toHaveAttribute("data-status", "paused");
   await expect(mainRuns).toHaveAttribute("data-status", "running");
   await expect(topicA).toHaveAttribute("data-status", "waiting_user");
   await topicQueue
@@ -4758,7 +4758,7 @@ test("a delegation opens its Agent's Chat while native subagents stay in the Top
   ).toBe(true);
 });
 
-test("approval and stop controls operate on the owning run", async ({
+test("approval and pause controls operate on the owning run", async ({
   page,
 }) => {
   await createAgent(page, "审阅搭档");
@@ -4773,22 +4773,44 @@ test("approval and stop controls operate on the owning run", async ({
   );
   await page
     .getByRole("textbox", { name: "发送消息", exact: true })
-    .fill("[hang]");
+    .fill("[pausable] Main reply");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const running = page.locator(".run-content").last();
+  await expect(
+    running.getByText("Partial reply before the pause", { exact: true }),
+  ).toHaveCount(1);
+  const mainRunId = await running.getAttribute("data-run-id");
   await expect(running).toHaveAttribute("data-status", "running");
   await expect(running.locator(".run-status")).toHaveCount(0);
   await expect(
-    running.getByRole("button", { name: "停止执行", exact: true }),
+    running.getByRole("button", { name: "暂停回复", exact: true }),
   ).toHaveCount(0);
   await page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "停止执行", exact: true })
+    .getByRole("button", { name: "暂停回复", exact: true })
     .click();
   await expect(page.locator(".run-content").last()).toHaveAttribute(
     "data-status",
-    "interrupted",
+    "paused",
   );
+  await expect(
+    running.getByRole("status").filter({ hasText: "已暂停" }),
+  ).toBeVisible();
+  await expect(
+    running.getByRole("button", { name: "重试", exact: true }),
+  ).toHaveCount(0);
+  await page.reload();
+  const resume = running.getByRole("button", { name: "继续回复", exact: true });
+  await expect(resume).toBeEnabled();
+  await resume.focus();
+  await resume.press("Enter");
+  await expect(running).toHaveAttribute("data-status", "completed");
+  await expect(running).toHaveAttribute("data-run-id", mainRunId!);
+  await expect(
+    running.getByText("Partial reply before the pause", { exact: true }),
+  ).toHaveCount(1);
+  await expect(running).toContainText("Continued from the saved native turn");
+  await expect(page.locator(".run-content")).toHaveCount(2);
   const composer = page.locator(".chat-composer-wrap");
   await composer.getByRole("button", { name: "Topic", exact: true }).click();
   await composer
@@ -4823,20 +4845,89 @@ test("approval and stop controls operate on the owning run", async ({
   await expect(topicRun).toHaveAttribute("data-status", "running");
   await expect(topicRun.locator(".run-status")).toHaveCount(0);
   await expect(
-    topicRun.getByRole("button", { name: "停止执行", exact: true }),
+    topicRun.getByRole("button", { name: "暂停回复", exact: true }),
   ).toHaveCount(0);
   await sidebar
     .locator(".topic-composer-wrap:visible")
-    .getByRole("button", { name: "停止执行", exact: true })
+    .getByRole("button", { name: "暂停回复", exact: true })
     .click();
   await expect(sidebar.locator(".run-content").last()).toHaveAttribute(
     "data-status",
-    "interrupted",
+    "paused",
   );
   await expect(sidebar.locator(".run-content").first()).toHaveAttribute(
     "data-status",
     "completed",
   );
+  await topic.getByRole("button", { name: "继续回复", exact: true }).click();
+  await expect(topicRun).toHaveAttribute("data-status", "completed");
+  await expect(topicRun).toContainText("Continued from the saved native turn");
+  await expect(sidebar.locator(".run-content")).toHaveCount(2);
+});
+
+test("Claude Code continues a paused reply after reload", async ({ page }) => {
+  await createAgent(page, "Claude 续接");
+  const composer = page.locator(".chat-composer-wrap");
+  await composer.getByRole("button", { name: "选择模型和运行时" }).click();
+  await page.getByRole("radio", { name: "Claude Code", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await composer
+    .getByRole("textbox", { name: "发送消息", exact: true })
+    .fill("[pausable] Claude reply");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+
+  const run = page.locator(".chat-panel .conversation > .run-content");
+  await expect(run).toContainText("Partial reply before the pause");
+  const runId = (await run.getAttribute("data-run-id"))!;
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(run).toHaveAttribute("data-status", "paused");
+  await page.reload();
+  await run.getByRole("button", { name: "继续回复", exact: true }).click();
+  await expect(run).toHaveAttribute("data-status", "completed");
+  await expect(run).toHaveAttribute("data-run-id", runId);
+  await expect(
+    run.getByText("Partial reply before the pause", { exact: true }),
+  ).toHaveCount(1);
+  await expect(run).toContainText("Continued from the saved native turn");
+});
+
+test("sending and editing a paused reply start new executions", async ({
+  page,
+}) => {
+  await createAgent(page, "暂停后发送");
+  const composer = page.locator(".chat-composer-wrap");
+  const input = composer.getByRole("textbox", {
+    name: "发送消息",
+    exact: true,
+  });
+  const runs = page.locator(".chat-panel .conversation > .run-content");
+  await input.fill("[pausable] First prompt");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(runs.first()).toContainText("Partial reply before the pause");
+  await input.fill("Queued follow-up");
+  await composer.getByRole("button", { name: "加入队列", exact: true }).click();
+  const queue = composer.getByRole("region", { name: "消息队列" });
+  await expect(queue).toContainText("Queued follow-up");
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(runs.first()).toHaveAttribute("data-status", "paused");
+
+  await input.fill("[pausable] New prompt");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(runs).toHaveCount(2);
+  await expect(runs.first()).toHaveAttribute("data-status", "interrupted");
+  await expect(runs.last()).toContainText("New prompt");
+  await expect(queue).toContainText("Queued follow-up");
+
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(runs.last()).toHaveAttribute("data-status", "paused");
+  const replacedId = await runs.last().getAttribute("data-run-id");
+  await runs.last().getByRole("button", { name: "从这里编辑" }).click();
+  await input.fill("Revised prompt");
+  await composer.getByRole("button", { name: "修改并重发" }).click();
+  await expect(runs.last()).toHaveAttribute("data-status", "completed");
+  await expect(runs.last()).not.toHaveAttribute("data-run-id", replacedId!);
+  await expect(runs.last()).toContainText("Revised prompt");
+  await expect(queue).toContainText("Queued follow-up");
 });
 
 test("editing a sent Chat message restores the draft and resends once after a lost response", async ({
@@ -5139,8 +5230,8 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
   await expect
     .poll(async () => (await readSession()).session.nativeId)
     .not.toBe("");
-  await composer.getByRole("button", { name: "停止执行", exact: true }).click();
-  await expect(runs.last()).toHaveAttribute("data-status", "interrupted");
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(runs.last()).toHaveAttribute("data-status", "paused");
 });
 
 test("topic submission stays pending across closing and reopening its tab", async ({
@@ -6233,7 +6324,9 @@ test("composer permissions follow the selected provider and apply to the next ru
   await input.fill("[hang] Codex keeps its current permissions");
   await input.press("Enter");
   await expect(runs.last()).toHaveAttribute("data-status", "running");
-  const actions = composer.getByRole("button", { name: "添加附件、命令或引用" });
+  const actions = composer.getByRole("button", {
+    name: "添加附件、命令或引用",
+  });
   await actions.click();
   await page.getByRole("option", { name: /^本轮自动批准/ }).click();
   await expect(trigger).toHaveAccessibleName("权限 · 按需审批 · 本轮自动批准");
@@ -6262,8 +6355,8 @@ test("composer permissions follow the selected provider and apply to the next ru
   await expect(
     composer.getByRole("button", { name: "发送到当前执行" }),
   ).toHaveCount(0);
-  await composer.getByRole("button", { name: "停止执行" }).click();
-  await expect(runs.last()).toHaveAttribute("data-status", "interrupted");
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(runs.last()).toHaveAttribute("data-status", "paused");
   await page.reload();
   await expect(trigger).toHaveAccessibleName("权限 · 代我审批");
   await send(page);
@@ -6443,8 +6536,8 @@ test("consecutive tools and thoughts share one activity row that shimmers while 
     "tool",
     "tool",
   ]);
-  await composer.getByRole("button", { name: "停止执行" }).click();
-  await expect(run).toHaveAttribute("data-status", "interrupted");
+  await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
+  await expect(run).toHaveAttribute("data-status", "paused");
   const stopped = activity.getByRole("button", {
     name: "2 条命令 · 1 次文件编辑 · 1 次查询",
     exact: true,
@@ -6531,8 +6624,8 @@ for (const provider of ["Codex", "Claude Code", "Antigravity"]) {
       await expect(runs.last().locator('[data-kind="reasoning"] p')).toHaveText(
         paragraphs,
       );
-      await page.getByRole("button", { name: "停止执行" }).click();
-      await expect(runs.last()).toHaveAttribute("data-status", "interrupted");
+      await page.getByRole("button", { name: "暂停回复", exact: true }).click();
+      await expect(runs.last()).toHaveAttribute("data-status", "paused");
     }
     await send(page, "[thinking]");
     await page.reload();

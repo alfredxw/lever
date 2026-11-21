@@ -825,6 +825,9 @@ export interface Run {
    * An empty ID records a continuation whose delivery has yet to be confirmed.
    */
   nativeTurnId?: string;
+  canPause?: boolean;
+  pauseRequested?: boolean;
+  continued?: boolean;
   resumeAfterShutdown?: boolean;
   operation?: string;
   delivery?: string;

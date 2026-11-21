@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -178,6 +179,7 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 65536), 2<<20)
 	native, prompt, turn, input := "", "", "", ""
+	var clientMessageID, partialReply string
 	var titleThread bool
 	var writerBusy bool
 	var goal object
@@ -365,6 +367,9 @@ func main() {
 		case "thread/turns/list":
 			var history object
 			data, err := os.ReadFile("codex-restart-history.json")
+			if os.IsNotExist(err) {
+				data, err = os.ReadFile(fixtureCodexTurnFile(str(p["threadId"])))
+			}
 			if err != nil || json.Unmarshal(data, &history) != nil || history["threadId"] != p["threadId"] {
 				send(object{"id": frame["id"], "error": object{"code": -32601, "message": "No saved fixture thread history"}})
 				continue
@@ -377,7 +382,8 @@ func main() {
 			}
 			send(object{"id": frame["id"], "result": object{"data": turns}})
 		case "turn/start":
-			turn = str(p["clientUserMessageId"])
+			clientMessageID = str(p["clientUserMessageId"])
+			turn, partialReply = clientMessageID, ""
 			messages, _ := p["input"].([]any)
 			if len(messages) == 0 {
 				if messages == nil || turn != "" || native == "" || p["threadId"] != native {
@@ -588,6 +594,9 @@ func main() {
 				send(object{"id": "approval-1", "method": "item/commandExecution/requestApproval", "params": object{"threadId": native, "turnId": turn, "command": "echo approval-fixture"}})
 			case strings.Contains(commands, "[question]"):
 				send(object{"id": "question-1", "method": "item/tool/requestUserInput", "params": object{"threadId": native, "questions": []object{{"id": "choice", "question": "Choose a color", "options": []object{{"label": "Green", "description": "Calm"}, {"label": "Blue", "description": "Cool"}}}}}})
+			case strings.Contains(commands, "[pausable]"):
+				partialReply = "Partial reply before the pause"
+				send(object{"method": "item/agentMessage/delta", "params": object{"threadId": native, "turnId": turn, "itemId": "partial-answer", "delta": partialReply}})
 			case strings.Contains(commands, "[hang]") || strings.Contains(commands, "[finish-on-steer]") || strings.Contains(commands, "[disconnect-steer]"):
 				send(object{"method": "turn/completed", "params": object{"threadId": "different-child-thread", "turn": object{"id": turn, "status": "completed"}}})
 			case strings.Contains(commands, "[disconnect]"):
@@ -623,10 +632,31 @@ func main() {
 				complete("Steered: " + text + "\n\nProfile: " + prompt)
 			}
 		case "turn/interrupt":
+			commands := fixtureCommands(input)
+			if strings.Contains(commands, "[unconfirmed-pause]") {
+				return
+			}
+			items := []object{}
+			if !strings.Contains(commands, "[missing-pause-input]") {
+				items = append(items, object{"type": "userMessage", "id": "original-user-message", "clientId": clientMessageID})
+			}
+			if partialReply != "" {
+				items = append(items, object{"type": "agentMessage", "id": "saved-partial-answer", "text": partialReply})
+			}
+			ended := object{"id": turn, "status": "interrupted", "completedAt": time.Now().Unix(), "items": items}
+			if home := os.Getenv("CODEX_HOME"); home != "" {
+				data, _ := json.Marshal(object{"threadId": native, "turns": []object{ended}})
+				_ = os.MkdirAll(home, 0700)
+				_ = os.WriteFile(fixtureCodexTurnFile(native), data, 0600)
+			}
 			send(object{"id": frame["id"], "result": object{}})
-			send(object{"method": "turn/completed", "params": object{"threadId": native, "turn": object{"id": turn, "status": "interrupted"}}})
+			send(object{"method": "turn/completed", "params": object{"threadId": native, "turn": ended}})
 		}
 	}
+}
+
+func fixtureCodexTurnFile(threadID string) string {
+	return filepath.Join(os.Getenv("CODEX_HOME"), "fixture-turn-"+filepath.Base(threadID)+".json")
 }
 
 type transport struct{ token string }
@@ -688,6 +718,7 @@ func delegate(config object, target string) (string, error) {
 
 func claude() {
 	native := fmt.Sprintf("claude-%d", time.Now().UnixNano())
+	var resumed, pausable bool
 	modelName, effort, permission := "", "", ""
 	instructions := ""
 	settings := object{}
@@ -697,6 +728,7 @@ func claude() {
 	for i, arg := range os.Args {
 		if arg == "--resume" && i+1 < len(os.Args) {
 			native = os.Args[i+1]
+			resumed = true
 		}
 		if i+1 < len(os.Args) {
 			switch arg {
@@ -733,6 +765,12 @@ func claude() {
 		switch str(f["type"]) {
 		case "control_request":
 			r := obj(f["request"])
+			if r["subtype"] == "interrupt" && pausable {
+				writeClaudeFixtureMessage(native, "user", uuid.NewString())
+				send(object{"type": "result", "subtype": "error_during_execution", "is_error": true, "terminal_reason": "aborted_streaming", "session_id": native})
+				send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": f["request_id"]}})
+				continue
+			}
 			if r["subtype"] == "get_skills_dialog" {
 				var skills []object
 				for _, c := range commands {
@@ -787,11 +825,31 @@ func claude() {
 			if str(f["priority"]) == "now" {
 				send(object{"type": "result", "terminal_reason": "aborted_streaming", "subtype": "success", "session_id": native})
 			}
-			send(object{"type": "user", "uuid": f["uuid"], "message": f["message"]})
+			send(object{"type": "user", "uuid": f["uuid"], "message": f["message"], "isReplay": true})
 			content, _ := obj(f["message"])["content"].([]any)
 			text := str(obj(f["message"])["content"])
 			if len(content) > 0 {
 				text = str(obj(content[0])["text"])
+			}
+			if content != nil && len(content) == 0 {
+				if !resumed {
+					os.Exit(3)
+				}
+				if _, err := os.Stat(claudeFixtureTranscript(native)); err != nil {
+					os.Exit(3)
+				}
+				text = "Continued from the saved native turn"
+			}
+			if strings.Contains(fixtureCommands(text), "[pausable]") {
+				if !resumed {
+					native = uuid.NewString()
+				}
+				pausable = true
+				writeClaudeFixtureMessage(native, "user", str(f["uuid"]))
+				send(object{"type": "system", "subtype": "init", "session_id": native})
+				send(object{"type": "stream_event", "event": object{"type": "message_start", "message": object{"id": "claude-partial"}}})
+				send(object{"type": "stream_event", "event": object{"type": "content_block_start", "index": 0, "content_block": object{"type": "text", "text": "Partial reply before the pause"}}})
+				continue
 			}
 			if strings.Contains(fixtureCommands(text), "[wire]") {
 				images := 0
@@ -843,5 +901,24 @@ func claude() {
 			send(object{"type": "result", "parent_tool_use_id": "child-1", "subtype": "success", "result": "child-only"})
 			send(object{"type": "result", "subtype": "success", "session_id": native, "result": text})
 		}
+	}
+}
+
+func claudeFixtureTranscript(session string) string {
+	return filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "fixture", filepath.Base(session)+".jsonl")
+}
+
+func writeClaudeFixtureMessage(session, kind, id string) {
+	path := claudeFixtureTranscript(session)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		panic(err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	if err := json.NewEncoder(file).Encode(object{"uuid": id, "type": kind}); err != nil {
+		panic(err)
 	}
 }

@@ -1,16 +1,17 @@
 import { useMutation } from "@tanstack/react-query";
-import { LoaderCircle, RotateCcw } from "lucide-react";
+import { LoaderCircle, Play, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { api, APIError, queryClient } from "@/api/client";
 import type { Run } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
+import { resumeReply } from "./runControls";
 
-export function canRetryRun(status: string) {
-  return status === "failed" || status === "interrupted";
+export function canRecoverRun(status: string) {
+  return ["paused", "failed", "interrupted"].includes(status);
 }
 
-export function RetryRunButton({
+export function RunRecoveryButton({
   run,
   disabled,
   onRetried,
@@ -20,45 +21,47 @@ export function RetryRunButton({
   onRetried?: () => void;
 }) {
   const { t } = useTranslation();
-  const retry = useMutation({
-    mutationFn: (commandId: string) =>
-      api<Run>(`/runs/${run.id}/retry`, { commandId }),
+  const paused = run.status === "paused";
+  const action = useMutation({
+    mutationFn: (commandId?: string) =>
+      paused ? resumeReply(run) : api(`/runs/${run.id}/retry`, { commandId }),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
         queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] }),
         queryClient.invalidateQueries({ queryKey: ["session", run.sessionId] }),
       ]);
-      onRetried?.();
+      if (!paused) onRetried?.();
     },
     onError: (error) => toast.error(error.message),
   });
   const responseUncertain =
-    retry.isError &&
-    (!(retry.error instanceof APIError) || retry.error.status >= 500);
+    action.isError &&
+    (!(action.error instanceof APIError) || action.error.status >= 500);
+  const Icon = paused ? Play : RotateCcw;
   return (
     <Button
       type="button"
       variant="outline"
       size="xs"
-      disabled={retry.isPending || disabled}
+      disabled={action.isPending || disabled}
       onClick={() =>
-        retry.mutate(
-          responseUncertain && retry.variables
-            ? retry.variables
-            : crypto.randomUUID(),
+        action.mutate(
+          paused
+            ? undefined
+            : (responseUncertain && action.variables) || crypto.randomUUID(),
         )
       }
     >
-      {retry.isPending ? (
+      {action.isPending ? (
         <LoaderCircle
           data-icon="inline-start"
           className="animate-spin motion-reduce:animate-none"
         />
       ) : (
-        <RotateCcw data-icon="inline-start" />
+        <Icon data-icon="inline-start" />
       )}
-      {t("common.retry")}
+      {t(paused ? "chat.resumeReply" : "common.retry")}
     </Button>
   );
 }
