@@ -1,0 +1,12 @@
+{
+  "name": "Lever",
+  "slug": "lever",
+  "identifier": "app.lever.desktop",
+  "version": "0.1.0",
+  "icon": "../cmd/lever-desktop/icon.png",
+  "main": "../cmd/lever-desktop",
+  "bindings": "../web/src/api/desktop.gen.ts",
+  "out": "dist",
+  "macos": { "minimumSystemVersion": "12.0", "category": "public.app-category.developer-tools" },
+  "windows": {}
+}

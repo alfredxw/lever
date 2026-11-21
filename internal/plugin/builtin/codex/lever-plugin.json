@@ -1,0 +1,9 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.codex",
+  "name": "Codex",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [{ "id": "codex", "name": "Codex", "driver": "codex", "args": [] }]
+  }
+}

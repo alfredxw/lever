@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.antigravity",
+  "name": "Antigravity",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [
+      { "id": "antigravity", "name": "Antigravity", "driver": "antigravity", "args": [] }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.lark-todos",
+  "name": "Lark Todos",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [],
+    "taskSources": [{ "id": "lark-todos", "name": "Lark Todos" }]
+  }
+}

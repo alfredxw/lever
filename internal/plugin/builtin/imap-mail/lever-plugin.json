@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.imap-mail",
+  "name": "IMAP Mail",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [],
+    "eventSources": [
+      {
+        "id": "new-email",
+        "name": "New email",
+        "fields": [
+          { "id": "server", "label": "IMAP server", "kind": "text", "required": true, "placeholder": "imap.example.com:993" },
+          { "id": "username", "label": "Username", "kind": "text", "required": true, "placeholder": "you@example.com" },
+          { "id": "password", "label": "Password or app password", "kind": "secret", "required": true },
+          { "id": "mailbox", "label": "Mailbox", "kind": "text", "default": "INBOX" }
+        ]
+      }
+    ]
+  }
+}

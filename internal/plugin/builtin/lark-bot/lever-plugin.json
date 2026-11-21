@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.feishu",
+  "name": "Lark Bot",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [],
+    "channels": [{ "id": "feishu", "name": "Lark Bot" }]
+  }
+}

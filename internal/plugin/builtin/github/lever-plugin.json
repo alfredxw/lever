@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.github",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [],
+    "taskSources": [{ "id": "github", "name": "GitHub" }]
+  }
+}

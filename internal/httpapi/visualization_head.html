@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light dark;
+    --background: Canvas;
+    --foreground: CanvasText;
+    --card: light-dark(#f6f6f6, #202020);
+    --card-foreground: var(--foreground);
+    --muted: light-dark(#efefef, #282828);
+    --muted-foreground: light-dark(#616161, #a3a3a3);
+    --primary: var(--foreground);
+    --primary-foreground: var(--background);
+    --border: color-mix(in srgb, CanvasText 15%, transparent);
+    --font-size-base: 14px;
+    font: var(--font-size-base)/1.5 system-ui, sans-serif;
+    color: var(--foreground);
+  }
+  body { display: flow-root; margin: 0; padding: 12px; }
+  button, input, select { font: inherit; }
+  .form-check { display: inline-flex; align-items: center; gap: 4px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+</style>
+<script>
+  addEventListener("DOMContentLoaded", () => {
+    const reportHeight = () => {
+      const height = Math.ceil(document.body.getBoundingClientRect().height);
+      parent.postMessage({ type: "lever:visualization-height", height }, "*");
+    };
+    new ResizeObserver(reportHeight).observe(document.body);
+    reportHeight();
+
+    if (document.querySelector("[data-lucide]")) {
+      const script = document.createElement("script");
+      script.src = "https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js";
+      script.addEventListener("load", () => globalThis.lucide?.createIcons());
+      document.head.appendChild(script);
+    }
+  });
+</script>

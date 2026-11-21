@@ -1,0 +1,5 @@
+packages:
+  - path: "lever/internal/model"
+    output_path: "web/src/api/types.gen.ts"
+    exclude_files: ["*_test.go"]
+    enum_style: "union"

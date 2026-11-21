@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.dsh",
+  "name": "DeepSeek Harness",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [
+      {
+        "id": "dsh",
+        "name": "DeepSeek Harness",
+        "driver": "acp",
+        "command": "dsh",
+        "args": ["--profile", "acp"]
+      }
+    ]
+  }
+}

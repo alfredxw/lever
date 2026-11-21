@@ -1,0 +1,111 @@
+.file-image-viewer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.file-image-viewer .attachment-preview {
+  background: var(--background);
+}
+.file-media-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.file-media-preview :is(video, audio) {
+  max-width: 100%;
+  max-height: 100%;
+}
+.file-media-preview audio {
+  width: min(100%, 560px);
+}
+.file-document-frame {
+  border: 0;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  background: white;
+}
+.file-preview-pager {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.file-pdf-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  text-align: center;
+  background: var(--muted);
+}
+.file-pdf-scroll canvas {
+  margin: 0 auto;
+  background: white;
+}
+.file-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.file-data-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 100%;
+}
+.file-data-table :is(td, th) {
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 80px;
+  max-width: 480px;
+}
+.file-data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--muted);
+}
+.file-sheet-select {
+  padding: 8px 12px;
+  margin: 8px 16px;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.file-notebook {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.file-notebook section {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 0;
+}
+.file-notebook pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 16px;
+  background: var(--muted);
+  font-size: 12px;
+}
+.file-notebook img {
+  max-width: 100%;
+}
+.file-notebook iframe {
+  min-height: 240px;
+  display: block;
+}

@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.claude",
+  "name": "Claude Code",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [
+      { "id": "claude", "name": "Claude Code", "driver": "claude", "args": [] }
+    ]
+  }
+}

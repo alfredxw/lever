@@ -1,0 +1,9 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.acp",
+  "name": "ACP",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [{ "id": "acp", "name": "ACP", "driver": "acp", "args": [] }]
+  }
+}
