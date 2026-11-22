@@ -8,21 +8,34 @@ import type {
 } from "@/api/types.gen";
 import type { TaskTarget } from "./useTaskDispatch";
 
+export async function changeTaskWorkflow(
+  target: TaskTarget,
+  action: TaskWorkflowUpdate["action"],
+  queueId?: string,
+) {
+  await api(
+    "/tasks/workflows/" + target.id,
+    { record: target.record, noteId: target.noteId, action, queueId },
+    "PATCH",
+  );
+  await Promise.all(
+    [
+      ["task-workflows"],
+      ["task-executions"],
+      ...(action === "todo" || action === "delete"
+        ? [["work-items"], ["external-tasks"], ["automation-runs"]]
+        : []),
+    ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
+}
+
 export function useTaskWorkflowUpdate(
   target: TaskTarget | undefined,
   queueId?: string,
 ) {
   return useMutation({
-    mutationFn: (action: TaskWorkflowUpdate["action"]) => {
-      const { id, record, noteId } = target!;
-      return api(
-        "/tasks/workflows/" + id,
-        { record, noteId, action, queueId },
-        "PATCH",
-      );
-    },
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: ["task-workflows"] }),
+    mutationFn: (action: TaskWorkflowUpdate["action"]) =>
+      changeTaskWorkflow(target!, action, queueId),
   });
 }
 

@@ -81,16 +81,18 @@ const refreshSourceFeed = () =>
 export function TaskSourceDetail({
   source,
   visible,
+  embedded = false,
 }: {
   source: TaskSource;
   visible: boolean;
+  embedded?: boolean;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    if (visible) heading.current?.focus({ preventScroll: true });
-  }, [source.id, visible]);
+    if (visible && !embedded) heading.current?.focus({ preventScroll: true });
+  }, [source.id, visible, embedded]);
   const plugins = useQuery({ ...pluginsQuery, enabled: visible });
   const typeName =
     plugins.data
@@ -135,14 +137,19 @@ export function TaskSourceDetail({
   });
 
   return (
-    <section className="task-source-view" aria-labelledby={titleId}>
-      <div className="task-source-inner">
-        <header className="task-source-heading">
-          <h2 ref={heading} id={titleId} tabIndex={-1}>
-            {source.name}
-          </h2>
-          <p className="text-xs text-muted-foreground">{typeName}</p>
-        </header>
+    <section
+      className={embedded ? "flex flex-col gap-4" : "task-source-view"}
+      aria-labelledby={embedded ? undefined : titleId}
+    >
+      <div className={embedded ? "flex flex-col gap-4" : "task-source-inner"}>
+        {!embedded && (
+          <header className="task-source-heading">
+            <h2 ref={heading} id={titleId} tabIndex={-1}>
+              {source.name}
+            </h2>
+            <p className="text-xs text-muted-foreground">{typeName}</p>
+          </header>
+        )}
         <div className="flex flex-col gap-5">
           {source.contributionId === "lark-todos" && (
             <SettingsGroup title={t("tasks.sourceGeneral")}>
@@ -370,10 +377,12 @@ function SyncKindPicker({
 }
 
 export function AddTaskSourceDialog({
+  pluginId,
   onAdded,
   onClose,
   onCloseAutoFocus,
 }: {
+  pluginId?: string;
   onAdded: (source: TaskSource) => void;
   onClose: () => void;
   onCloseAutoFocus: (event: Event) => void;
@@ -381,7 +390,7 @@ export function AddTaskSourceDialog({
   const { t } = useTranslation();
   const plugins = useQuery(pluginsQuery);
   const types = (plugins.data ?? [])
-    .filter((plugin) => plugin.enabled)
+    .filter((plugin) => plugin.enabled && (!pluginId || plugin.id === pluginId))
     .flatMap((plugin) =>
       (plugin.manifest.contributes.taskSources ?? []).map((type) => ({
         pluginId: plugin.id,

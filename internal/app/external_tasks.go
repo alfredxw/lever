@@ -11,7 +11,9 @@ import (
 const externalTaskColumns = `'id',e.id,'source',s.contribution_id,'project',s.name,
   'reference',json_extract(e.data,'$.reference'),'kind',json_extract(e.data,'$.kind'),
   'state',json_extract(e.data,'$.state'),'title',json_extract(e.data,'$.title'),
-  'done',json(CASE WHEN e.done THEN 'true' ELSE 'false' END)`
+  'done',json(CASE WHEN e.done THEN 'true' ELSE 'false' END),
+  'dueAt',COALESCE(json_extract(e.data,'$.dueAt'),0),
+  'dueDate',COALESCE(json_extract(e.data,'$.dueDate'),'')`
 
 const externalTaskFrom = " FROM external_tasks e JOIN task_sources s ON s.id=e.source_id"
 
@@ -23,7 +25,7 @@ WHERE (s.status<>'removed' AND e.in_scope AND (s.sync_kind='both' OR s.sync_kind
 OR e.done=1 OR EXISTS(
   SELECT 1 FROM chats WHERE json_type(data,'$.taskId')='text' AND json_extract(data,'$.taskId')=e.id
 )
-OR EXISTS(SELECT 1 FROM task_triage WHERE task_id=e.id AND closed=1)
+OR EXISTS(SELECT 1 FROM task_triage WHERE task_id=e.id AND (closed=1 OR disposition='todo'))
 OR EXISTS(SELECT 1 FROM task_queue WHERE task_id=e.id AND state='queued')
 ORDER BY s.name COLLATE NOCASE,e.rowid DESC`)
 }
@@ -57,6 +59,9 @@ func (a *App) DispatchExternalTask(ctx context.Context, id string, input model.E
 
 func (a *App) SetExternalTaskDone(ctx context.Context, id string, done bool) error {
 	return a.Store.Write(ctx, func(tx *sql.Tx) error {
+		if err := checkTaskInBoard(ctx, tx, id); err != nil {
+			return err
+		}
 		var current bool
 		if err := tx.QueryRowContext(ctx, "SELECT done FROM external_tasks WHERE id=?", id).Scan(&current); err != nil || current == done {
 			return err

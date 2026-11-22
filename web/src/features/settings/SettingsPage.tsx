@@ -14,7 +14,6 @@ import {
   Keyboard,
   Monitor,
   Moon,
-  Palette,
   Plug,
   Search,
   Settings2,
@@ -63,6 +62,14 @@ import { ShortcutSettings, shortcutGroups } from "./ShortcutSettings";
 import { isMac } from "./shortcuts";
 import { SecondarySidebar } from "@/components/workbench/SecondarySidebar";
 import { hasDesktopNotifications } from "@/features/agents/desktopNotifications";
+import { AutomationTimePicker } from "@/features/automations/AutomationTimePicker";
+import {
+  defaultReminderChoiceOffsets,
+  defaultReminderSettings,
+  formatShortReminderOffset,
+  useSaveTaskReminderSettings,
+  useTaskReminderSettings,
+} from "@/features/tasks/taskDeadlines";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
 
@@ -74,19 +81,40 @@ const sectionGroups = [
         id: "general",
         icon: Settings2,
         fields: [
+          "interface",
+          "appearance",
+          "theme",
+          "themeDescription",
+          "system",
+          "light",
+          "dark",
           "language",
           "languageDescription",
-          "maxWorkspaceTabs",
-          "maxWorkspaceTabsDescription",
+          "conversation",
           "sendShortcut",
           "sendShortcutDescription",
           "followUpBehavior",
           "followUpBehaviorDescription",
+          "chatFontSize",
+          "chatFontSizeDescription",
+          "chatWidth",
+          "chatWidthDescription",
+          "workbench",
           "openNewTopicOnCreate",
           "openNewTopicOnCreateDescription",
+          "agentActivity",
+          "agentActivityDescription",
+          "maxWorkspaceTabs",
+          "maxWorkspaceTabsDescription",
+          "notifications",
           ...(hasDesktopNotifications
             ? ["desktopNotifications", "desktopNotificationsDescription"]
             : []),
+          "taskReminders",
+          "defaultTaskReminder",
+          "defaultTaskReminderDescription",
+          "allDayReminderTime",
+          "allDayReminderTimeDescription",
           "agentDefaults",
           "agentDefaultsDescription",
           "permissions",
@@ -94,23 +122,6 @@ const sectionGroups = [
         ],
       },
       { id: "providers", icon: Plug, fields: [] },
-      {
-        id: "appearance",
-        icon: Palette,
-        fields: [
-          "theme",
-          "themeDescription",
-          "system",
-          "light",
-          "dark",
-          "chatFontSize",
-          "chatFontSizeDescription",
-          "chatWidth",
-          "chatWidthDescription",
-          "agentActivity",
-          "agentActivityDescription",
-        ],
-      },
       {
         id: "shortcuts",
         icon: Keyboard,
@@ -270,6 +281,13 @@ export function SettingsPage({
     enabled: visible && hasDesktopNotifications,
     staleTime: Infinity,
   });
+  const taskRemindersQuery = useTaskReminderSettings(visible);
+  const saveTaskReminders = useSaveTaskReminderSettings();
+  const taskReminders = taskRemindersQuery.data ?? defaultReminderSettings;
+  const defaultReminderValue =
+    taskReminders.defaultRemindOffsets.length > 0
+      ? String(taskReminders.defaultRemindOffsets[0])
+      : "-1";
   const query = search.trim().toLocaleLowerCase();
   const groups = sectionGroups
     .map((group) => ({
@@ -310,7 +328,41 @@ export function SettingsPage({
       case "general":
         return (
           <>
-            <SettingsGroup title={t("settings.preferences")}>
+            <SettingsGroup title={t("settings.interface")}>
+              <SettingsRow
+                title={t("settings.theme")}
+                description={t("settings.themeDescription")}
+              >
+                <ToggleGroup
+                  id="settings-theme"
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={theme}
+                  aria-label={t("settings.theme")}
+                  onValueChange={(value) => {
+                    if (
+                      value === "system" ||
+                      value === "light" ||
+                      value === "dark"
+                    )
+                      onThemeChange(value);
+                  }}
+                >
+                  <ToggleGroupItem value="system">
+                    <Monitor data-icon="inline-start" />
+                    {t("settings.system")}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="light">
+                    <Sun data-icon="inline-start" />
+                    {t("settings.light")}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="dark">
+                    <Moon data-icon="inline-start" />
+                    {t("settings.dark")}
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </SettingsRow>
               <SettingsChoiceRow
                 title={t("settings.language")}
                 description={t("settings.languageDescription")}
@@ -319,6 +371,9 @@ export function SettingsPage({
                 disabled={language.isPending}
                 options={languages}
               />
+            </SettingsGroup>
+            {language.error && <ErrorNotice error={language.error} />}
+            <SettingsGroup title={t("settings.conversation")}>
               <SettingsChoiceRow
                 title={t("settings.sendShortcut")}
                 description={t("settings.sendShortcutDescription", {
@@ -358,133 +413,6 @@ export function SettingsPage({
                   ),
                 }))}
               />
-              <SettingsRow
-                id="settings-open-new-topic"
-                title={t("settings.openNewTopicOnCreate")}
-                description={t("settings.openNewTopicOnCreateDescription")}
-              >
-                <Switch
-                  id="settings-open-new-topic"
-                  aria-describedby="settings-open-new-topic-description"
-                  checked={preferences.openNewTopicOnCreate}
-                  onCheckedChange={(openNewTopicOnCreate) =>
-                    preference.mutate({ openNewTopicOnCreate })
-                  }
-                />
-              </SettingsRow>
-              {hasDesktopNotifications && (
-                <SettingsRow
-                  id="settings-desktop-notifications"
-                  title={t("settings.desktopNotifications")}
-                  description={t(
-                    notificationSupport.data === false
-                      ? "settings.desktopNotificationsPackaged"
-                      : "settings.desktopNotificationsDescription",
-                  )}
-                >
-                  <Switch
-                    id="settings-desktop-notifications"
-                    aria-describedby="settings-desktop-notifications-description"
-                    checked={preferences.desktopNotifications}
-                    disabled={notificationSupport.data !== true}
-                    onCheckedChange={(desktopNotifications) =>
-                      preference.mutate({ desktopNotifications })
-                    }
-                  />
-                </SettingsRow>
-              )}
-              <WorkspaceTabLimitSetting
-                value={preferences.maxWorkspaceTabs}
-                onChange={(maxWorkspaceTabs) =>
-                  preference.mutate({ maxWorkspaceTabs })
-                }
-              />
-            </SettingsGroup>
-            {language.error && <ErrorNotice error={language.error} />}
-            <SettingsGroup title={t("settings.agentConfiguration")}>
-              <SettingsRow
-                title={t("settings.agentDefaults")}
-                description={t("settings.agentDefaultsDescription")}
-              >
-                <Badge variant="outline">{t("workspace.profile")}</Badge>
-              </SettingsRow>
-              <SettingsRow
-                title={t("settings.permissions")}
-                description={t("settings.permissionsDescription")}
-              >
-                <Badge variant="outline">{t("settings.perAgent")}</Badge>
-              </SettingsRow>
-            </SettingsGroup>
-            <p className="settings-note">{t("settings.autoSave")}</p>
-          </>
-        );
-      case "appearance":
-        return (
-          <>
-            <SettingsGroup title={t("settings.display")}>
-              <SettingsRow
-                title={t("settings.theme")}
-                description={t("settings.themeDescription")}
-              >
-                <ToggleGroup
-                  id="settings-theme"
-                  type="single"
-                  variant="outline"
-                  spacing={0}
-                  value={theme}
-                  aria-label={t("settings.theme")}
-                  onValueChange={(value) => {
-                    if (
-                      value === "system" ||
-                      value === "light" ||
-                      value === "dark"
-                    )
-                      onThemeChange(value);
-                  }}
-                >
-                  <ToggleGroupItem value="system">
-                    <Monitor data-icon="inline-start" />
-                    {t("settings.system")}
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="light">
-                    <Sun data-icon="inline-start" />
-                    {t("settings.light")}
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="dark">
-                    <Moon data-icon="inline-start" />
-                    {t("settings.dark")}
-                  </ToggleGroupItem>
-                </ToggleGroup>
-              </SettingsRow>
-              <SettingsRow
-                title={t("settings.agentActivity")}
-                description={t("settings.agentActivityDescription")}
-              >
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  spacing={0}
-                  value={
-                    preferences.expandAgentActivity ? "expanded" : "collapsed"
-                  }
-                  aria-label={t("settings.agentActivity")}
-                  onValueChange={(value) => {
-                    if (value)
-                      preference.mutate({
-                        expandAgentActivity: value === "expanded",
-                      });
-                  }}
-                >
-                  <ToggleGroupItem value="expanded">
-                    {t("settings.expanded")}
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="collapsed">
-                    {t("settings.collapsed")}
-                  </ToggleGroupItem>
-                </ToggleGroup>
-              </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title={t("settings.conversation")}>
               <SettingsChoiceRow
                 title={t("settings.chatFontSize")}
                 description={t("settings.chatFontSizeDescription")}
@@ -525,6 +453,142 @@ export function SettingsPage({
               <p>{t("settings.previewText")}</p>
               <code>const agent = "Lever";</code>
             </section>
+            <SettingsGroup title={t("settings.workbench")}>
+              <SettingsRow
+                id="settings-open-new-topic"
+                title={t("settings.openNewTopicOnCreate")}
+                description={t("settings.openNewTopicOnCreateDescription")}
+              >
+                <Switch
+                  id="settings-open-new-topic"
+                  aria-describedby="settings-open-new-topic-description"
+                  checked={preferences.openNewTopicOnCreate}
+                  onCheckedChange={(openNewTopicOnCreate) =>
+                    preference.mutate({ openNewTopicOnCreate })
+                  }
+                />
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.agentActivity")}
+                description={t("settings.agentActivityDescription")}
+              >
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={
+                    preferences.expandAgentActivity ? "expanded" : "collapsed"
+                  }
+                  aria-label={t("settings.agentActivity")}
+                  onValueChange={(value) => {
+                    if (value)
+                      preference.mutate({
+                        expandAgentActivity: value === "expanded",
+                      });
+                  }}
+                >
+                  <ToggleGroupItem value="expanded">
+                    {t("settings.expanded")}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="collapsed">
+                    {t("settings.collapsed")}
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </SettingsRow>
+              <WorkspaceTabLimitSetting
+                value={preferences.maxWorkspaceTabs}
+                onChange={(maxWorkspaceTabs) =>
+                  preference.mutate({ maxWorkspaceTabs })
+                }
+              />
+            </SettingsGroup>
+            <SettingsGroup title={t("settings.notifications")}>
+              {hasDesktopNotifications && (
+                <SettingsRow
+                  id="settings-desktop-notifications"
+                  title={t("settings.desktopNotifications")}
+                  description={t(
+                    notificationSupport.data === false
+                      ? "settings.desktopNotificationsPackaged"
+                      : "settings.desktopNotificationsDescription",
+                  )}
+                >
+                  <Switch
+                    id="settings-desktop-notifications"
+                    aria-describedby="settings-desktop-notifications-description"
+                    checked={preferences.desktopNotifications}
+                    disabled={notificationSupport.data !== true}
+                    onCheckedChange={(desktopNotifications) =>
+                      preference.mutate({ desktopNotifications })
+                    }
+                  />
+                </SettingsRow>
+              )}
+              <SettingsRow
+                title={t("settings.defaultTaskReminder")}
+                description={t("settings.defaultTaskReminderDescription")}
+              >
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={defaultReminderValue}
+                  aria-label={t("settings.defaultTaskReminder")}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    const minutes = Number(value);
+                    saveTaskReminders.mutate(
+                      {
+                        ...taskReminders,
+                        defaultRemindOffsets: minutes < 0 ? [] : [minutes],
+                      },
+                      { onError: (error) => toast.error(error.message) },
+                    );
+                  }}
+                >
+                  {defaultReminderChoiceOffsets.map((minutes) => (
+                    <ToggleGroupItem
+                      key={minutes}
+                      value={String(minutes)}
+                      disabled={saveTaskReminders.isPending}
+                      className="tabular-nums"
+                    >
+                      {formatShortReminderOffset(minutes, t)}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.allDayReminderTime")}
+                description={t("settings.allDayReminderTimeDescription")}
+              >
+                <AutomationTimePicker
+                  value={taskReminders.allDayReminderTime}
+                  disabled={saveTaskReminders.isPending}
+                  onChange={(allDayReminderTime) =>
+                    saveTaskReminders.mutate(
+                      { ...taskReminders, allDayReminderTime },
+                      { onError: (error) => toast.error(error.message) },
+                    )
+                  }
+                />
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title={t("settings.agentConfiguration")}>
+              <SettingsRow
+                title={t("settings.agentDefaults")}
+                description={t("settings.agentDefaultsDescription")}
+              >
+                <Badge variant="outline">{t("workspace.profile")}</Badge>
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.permissions")}
+                description={t("settings.permissionsDescription")}
+              >
+                <Badge variant="outline">{t("settings.perAgent")}</Badge>
+              </SettingsRow>
+            </SettingsGroup>
+            <p className="settings-note">{t("settings.autoSave")}</p>
           </>
         );
       case "shortcuts":

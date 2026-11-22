@@ -5,7 +5,6 @@ import {
   Check,
   MessageCircle,
   RotateCcw,
-  CircleX,
   Undo2,
   X,
 } from "lucide-react";
@@ -165,13 +164,20 @@ export function TaskDetail({
   );
 }
 
-export function TaskQueueInfo({ queue }: { queue?: TaskQueueEntry }) {
+export function TaskQueueInfo({
+  queue,
+  waitLabel,
+}: {
+  queue?: TaskQueueEntry;
+  waitLabel?: string;
+}) {
   const { t } = useTranslation();
   if (queue?.error) return <ErrorNotice error={queue.error} />;
   if (!queue?.position) return null;
   return (
     <p className="text-sm text-muted-foreground">
       {t("tasks.queuePosition", { count: queue.position })}
+      {waitLabel ? ` · ${waitLabel}` : ""}
     </p>
   );
 }
@@ -184,7 +190,7 @@ export function TaskDetailActions({
   onComplete,
   onReopen,
   onAccept,
-  onCloseTask,
+  onAcceptAndEnqueue,
   onWithdraw,
 }: {
   task: { title: string; status: TaskStatus };
@@ -194,18 +200,12 @@ export function TaskDetailActions({
   onComplete?: () => void;
   onReopen?: () => void;
   onAccept?: () => void;
-  onCloseTask?: () => void;
+  onAcceptAndEnqueue?: () => void;
   onWithdraw?: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <div className="task-detail-actions flex flex-wrap justify-end gap-2">
-      {onCloseTask && (
-        <Button size="sm" variant="ghost" onClick={onCloseTask}>
-          <CircleX data-icon="inline-start" />
-          {t("tasks.closeTask")}
-        </Button>
-      )}
       {onWithdraw && (
         <Button size="sm" variant="outline" onClick={onWithdraw}>
           <Undo2 data-icon="inline-start" />
@@ -231,9 +231,19 @@ export function TaskDetailActions({
         </Button>
       )}
       {onAccept && (
-        <Button size="sm" onClick={onAccept}>
+        <Button
+          size="sm"
+          variant={onAcceptAndEnqueue ? "outline" : "default"}
+          onClick={onAccept}
+        >
           <Check data-icon="inline-start" />
           {t("tasks.acceptTask")}
+        </Button>
+      )}
+      {onAcceptAndEnqueue && (
+        <Button size="sm" onClick={onAcceptAndEnqueue}>
+          <ArrowUpRight data-icon="inline-start" />
+          {t("tasks.acceptAndEnqueue")}
         </Button>
       )}
       {onReopen && (task.status === "done" || task.status === "closed") && (

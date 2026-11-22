@@ -79,6 +79,7 @@ import type {
   SharedConversation,
   Skill,
   TaskExecution,
+  TaskReminderNotice,
   RunLocation,
 } from "@/api/types.gen";
 import {
@@ -186,6 +187,7 @@ const WorkspaceNotes = lazy(() => import("@/features/tasks/WorkspaceNotes"));
 const BrowserPanel = lazy(() => import("@/features/browser/BrowserPanel"));
 const noAgents: Agent[] = [];
 const noChats: Overview["chats"] = [];
+const noRequests: Overview["requests"] = [];
 type WorkspaceTabTarget = { agentId: string; tab: WorkspaceTab };
 
 function expandedChatPane(
@@ -286,6 +288,7 @@ export default function App() {
   }>();
   const [selectedAutomation, setSelectedAutomation] = useState<string>();
   const [tasksOpened, setTasksOpened] = useState(false);
+  const [taskAlert, setTaskAlert] = useState(false);
   const [revealTask, setRevealTask] = useState<TaskDestination>();
   const onTaskLocated = useCallback(() => setRevealTask(undefined), []);
   const [forward, setForward] = useState<MessageQuote>();
@@ -354,6 +357,57 @@ export default function App() {
     markRead,
     markConversationsRead,
   } = useConversationReadState(overview.data?.conversations);
+  const seenTaskReminders = useRef(new Set<string>());
+  const notifyTaskReminder = useEffectEvent((notice: TaskReminderNotice) => {
+    if (seenTaskReminders.current.has(notice.id)) return;
+    seenTaskReminders.current.add(notice.id);
+    if (page !== "tasks") setTaskAlert(true);
+    const title = notice.title || t("tasks.untitled");
+    const overdue = Date.now() > notice.dueAt;
+    const heading = notice.snoozed
+      ? t("tasks.reminder.toastSnoozedTitle")
+      : overdue
+        ? t("tasks.reminder.toastOverdueTitle")
+        : t("tasks.reminder.toastTitle");
+    if (hasDesktopNotifications && preferences.desktopNotifications) {
+      void Notifications.show(
+        notice.id,
+        { kind: "task", taskId: notice.taskId },
+        heading,
+        title,
+      ).catch((error: unknown) => console.warn("Task notification", error));
+    }
+    toast(heading, {
+      id: `task-reminder:${notice.id}`,
+      description: title,
+      duration: 12_000,
+      action: {
+        label: t("tasks.reminder.viewTask"),
+        onClick: () => showTasks(notice.taskId, "card"),
+      },
+      cancel: {
+        label: t("tasks.reminder.snooze15m"),
+        onClick: () => {
+          void api(
+            `/tasks/deadlines/${notice.taskId}/snooze`,
+            { minutes: 15 },
+            "POST",
+          )
+            .then(() => {
+              void queryClient.invalidateQueries({
+                queryKey: ["task-deadlines"],
+              });
+              toast.success(t("tasks.reminder.snoozed", { count: 15 }));
+            })
+            .catch((error: unknown) =>
+              toast.error(
+                error instanceof Error ? error.message : String(error),
+              ),
+            );
+        },
+      },
+    });
+  });
   const notifyAgentActivity = useEffectEvent((notice: AgentNotice) => {
     if (!preferences.desktopNotifications) return;
     const name = queryClient
@@ -368,10 +422,15 @@ export default function App() {
   });
   useEffect(() => {
     if (!overview.data) return;
-    const observe = hasDesktopNotifications
+    const observeAgent = hasDesktopNotifications
       ? observeAgentNotifications((notice) => notifyAgentActivity(notice))
       : undefined;
-    return connectEvents(overview.data.cursor, observe);
+    return connectEvents(overview.data.cursor, (event) => {
+      observeAgent?.(event);
+      if (event.type === "task-reminder" && event.taskReminder) {
+        notifyTaskReminder(event.taskReminder);
+      }
+    });
   }, [overview.isSuccess]);
   useEffect(() => {
     localStorage.setItem("lever:agent", selected);
@@ -761,6 +820,7 @@ export default function App() {
     (id?: string, kind: TaskDestination["kind"] = "task") => {
       prefetchPrimaryPage("tasks");
       setTasksOpened(true);
+      setTaskAlert(false);
       setRevealTask(id ? { id, kind } : undefined);
       setPage("tasks");
     },
@@ -1133,7 +1193,12 @@ export default function App() {
     }
   }
   const openNotifiedConversation = useEffectEvent(
-    async ({ chatId, topicId, runId }: NotificationTarget) => {
+    async ({ kind, taskId, chatId, topicId, runId }: NotificationTarget) => {
+      if (kind === "task" && taskId) {
+        showTasks(taskId, "card");
+        return;
+      }
+      if (!chatId) return;
       const data = queryClient.getQueryData<Overview>(["overview"]);
       if (!data?.chats.some((chat) => chat.id === chatId)) {
         await overview.refetch();
@@ -1674,6 +1739,7 @@ export default function App() {
           secondarySidebarWidth={preferences.secondarySidebarWidth}
           page={page}
           providers={providers.data ?? []}
+          taskAlert={taskAlert && page !== "tasks"}
           onPreview={prefetchPrimaryPage}
           onAgents={() => {
             setPage("agents");
@@ -2418,6 +2484,7 @@ export default function App() {
               visible={page === "tasks"}
               agents={overview.data?.agents ?? noAgents}
               chats={overview.data?.chats ?? noChats}
+              requests={overview.data?.requests ?? noRequests}
               revealTask={revealTask}
               onLocated={onTaskLocated}
               onOpenChat={openTaskChat}

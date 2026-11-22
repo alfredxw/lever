@@ -86,29 +86,37 @@ func (t task) title() string {
 	return "Lark Todo"
 }
 
+func (t task) deadline() (dueAt int64, dueDate string) {
+	due, _ := strconv.ParseInt(t.Due.Timestamp, 10, 64)
+	if due <= 0 {
+		return 0, ""
+	}
+	if t.Due.AllDay {
+		// Lark encodes a calendar date at midnight UTC regardless of display timezone.
+		date := time.UnixMilli(due).UTC()
+		dueDate = date.Format(time.DateOnly)
+		dueAt = time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.Local).UnixMilli() - 1
+		return dueAt, dueDate
+	}
+	return due, ""
+}
+
 func (t task) item(state string) plugin.TaskSourceItem {
+	dueAt, dueDate := t.deadline()
 	return plugin.TaskSourceItem{
 		TaskSourceRef: plugin.TaskSourceRef{ExternalID: t.GUID, Reference: t.Reference},
 		Kind:          "todo", State: state, Title: t.title(), URL: t.URL, Body: t.Description,
+		DueAt: dueAt, DueDate: dueDate,
 	}
 }
 
 func (t task) preview() model.LarkPreviewTask {
 	updated, _ := strconv.ParseInt(t.UpdatedAt, 10, 64)
-	due, _ := strconv.ParseInt(t.Due.Timestamp, 10, 64)
-	item := model.LarkPreviewTask{
-		GUID: t.GUID, Title: t.title(), URL: t.URL, UpdatedAt: updated, Recurring: t.RepeatRule != "",
+	dueAt, dueDate := t.deadline()
+	return model.LarkPreviewTask{
+		GUID: t.GUID, Title: t.title(), URL: t.URL, UpdatedAt: updated,
+		DueAt: dueAt, DueDate: dueDate, Recurring: t.RepeatRule != "",
 	}
-	if due > 0 {
-		item.DueAt = due
-		if t.Due.AllDay {
-			// Lark encodes a calendar date at midnight UTC regardless of display timezone.
-			date := time.UnixMilli(due).UTC()
-			item.DueDate = date.Format(time.DateOnly)
-			item.DueAt = time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, time.Local).UnixMilli() - 1
-		}
-	}
-	return item
 }
 
 func matchesFilters(t model.LarkPreviewTask, filters *model.LarkTaskFilters, now time.Time) bool {

@@ -168,3 +168,43 @@ func TestTaskQueueStartIntervalSurvivesRestart(t *testing.T) {
 		t.Fatalf("recovery created duplicate Chats: %+v", overview.Chats)
 	}
 }
+
+func TestAgentTaskQueuePauseAndLiveSettings(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	paused := true
+	concurrency := 2
+	var updated model.Agent
+	f.request("PATCH", "/agents/"+agent.ID+"/task-queue", model.AgentTaskQueueSettings{
+		TaskQueuePaused: &paused,
+		TaskConcurrency: &concurrency,
+	}, 200, &updated)
+	if !updated.Profile.TaskQueuePaused || updated.Profile.TaskConcurrency != 2 {
+		t.Fatalf("unexpected agent task queue settings: %+v", updated.Profile)
+	}
+
+	first := f.queuedWorkItem(agent, "Wait while paused", "")
+	second := f.queuedWorkItem(agent, "Second while paused", "")
+	f.request("POST", "/tasks/queue", first, 200, nil)
+	f.request("POST", "/tasks/queue", second, 200, nil)
+	time.Sleep(80 * time.Millisecond)
+	if wf := f.taskWorkflow(first.TaskID); wf.Queue == nil || wf.Queue.Position != 1 {
+		t.Fatalf("paused agent should keep first item queued: %+v", wf)
+	}
+	var executions []model.TaskExecution
+	f.request("GET", "/tasks/executions", nil, 200, &executions)
+	if len(executions) != 0 {
+		t.Fatalf("paused agent started executions: %+v", executions)
+	}
+
+	paused = false
+	var resumed model.Agent
+	f.request("PATCH", "/agents/"+agent.ID+"/task-queue", model.AgentTaskQueueSettings{
+		TaskQueuePaused: &paused,
+	}, 200, &resumed)
+	if resumed.Profile.TaskQueuePaused {
+		t.Fatalf("expected agent queue to resume: %+v", resumed.Profile)
+	}
+	f.waitForTask(first.TaskID, "completed")
+	f.waitForTask(second.TaskID, "completed")
+}

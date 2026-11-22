@@ -297,7 +297,9 @@ function TaskBoardQuickFilter({ field, selected, onChange }: QuickFilterProps) {
           variant="outline"
           spacing={0}
           className={
-            showInline ? "w-max" : "invisible absolute end-0 top-0 w-max"
+            showInline
+              ? "task-segmented-toggle w-max"
+              : "task-segmented-toggle invisible absolute end-0 top-0 w-max"
           }
           aria-label={label}
           value={selected}

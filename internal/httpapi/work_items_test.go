@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,7 +57,6 @@ func TestWorkItemsWithLocalCLIAndUnavailableNotes(t *testing.T) {
 		t.Fatal("CLI allowed a Work Item for an archived Agent")
 	}
 	const path = "/tasks/work-items"
-	f.request("POST", path, model.WorkItemInput{Title: "Follow up"}, http.StatusMethodNotAllowed, nil)
 	flags := []string{"work-items", "create", "--agent", creator.ID, "--title", "Follow up", "--body", "Add a timeout check", "--request-key", "follow-up"}
 	var item, replay model.WorkItem
 	if err := command(flags, &item); err != nil {
@@ -142,4 +140,57 @@ func TestAgentWorkItemRetainsOriginRun(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatal("a read-only execution created a Work Item")
 	}
+}
+
+func TestUserWorkItemsCreateAndUpdate(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	other := f.agent("codex")
+	archived := f.agent("codex")
+	archived.Archived = true
+	f.request("PUT", "/agents/"+archived.ID, archived, 200, nil)
+
+	const path = "/tasks/work-items"
+	f.request("POST", path, model.UserWorkItemCreate{Title: "   "}, 400, nil)
+	f.request("POST", path, model.UserWorkItemCreate{Title: "Bad prio", Priority: "extreme"}, 400, nil)
+	f.request("POST", path, model.UserWorkItemCreate{Title: "Archived", AssigneeAgentID: archived.ID}, 409, nil)
+
+	var item model.WorkItem
+	f.request("POST", path, model.UserWorkItemCreate{
+		Title:           "Quick board item",
+		Body:            "Created directly from Works",
+		Project:         "lever",
+		Priority:        model.WorkItemPriorityHigh,
+		AssigneeAgentID: agent.ID,
+	}, 200, &item)
+	if item.ID == "" || item.CreatedByAgentID != "" || item.AssigneeAgentID != agent.ID || item.Project != "lever" || item.Priority != model.WorkItemPriorityHigh || item.Done {
+		t.Fatalf("unexpected user work item: %+v", item)
+	}
+
+	// Update metadata before dispatch.
+	newTitle := "Renamed work item"
+	newProject := "desktop"
+	newPriority := model.WorkItemPriorityUrgent
+	f.request("PATCH", path+"/"+item.ID, model.WorkItemUpdate{
+		Title:           &newTitle,
+		Project:         &newProject,
+		Priority:        &newPriority,
+		AssigneeAgentID: &other.ID,
+	}, 200, &item)
+	if item.Title != newTitle || item.Project != newProject || item.Priority != newPriority || item.AssigneeAgentID != other.ID {
+		t.Fatalf("unexpected updated work item: %+v", item)
+	}
+
+	// Empty update is rejected.
+	f.request("PATCH", path+"/"+item.ID, model.WorkItemUpdate{}, 400, nil)
+
+	// Once dispatched, assignee cannot be reassigned directly via PATCH.
+	var run model.Run
+	f.request("POST", path+"/"+item.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: other.ID, Note: "[hang]",
+	}, 200, &run)
+	f.wait(run.ID, "running")
+	f.request("PATCH", path+"/"+item.ID, model.WorkItemUpdate{AssigneeAgentID: &agent.ID}, 409, nil)
+	f.request("POST", "/runs/"+run.ID+"/stop", nil, 200, nil)
+	f.wait(run.ID, "interrupted")
 }

@@ -49,6 +49,7 @@ type TaskView struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
 	Group       string          `json:"group" tstype:"'status' | 'project' | 'agent'"`
+	Sort        string          `json:"sort,omitempty" tstype:"'' | 'deadline' | 'priority'"`
 	Filters     TaskViewFilters `json:"filters"`
 	QuickFilter string          `json:"quickFilter,omitempty" tstype:"'agent' | 'kind' | 'status' | 'project' | 'none'"`
 	Revision    int64           `json:"revision"`
@@ -62,6 +63,7 @@ type TaskViewFilters struct {
 	Source  []string `json:"source,omitempty"`
 	Kind    []string `json:"kind,omitempty"`
 	Remote  []string `json:"remote,omitempty"`
+	Due     []string `json:"due,omitempty"`
 }
 
 type TaskDispatch struct {
@@ -89,22 +91,30 @@ type TaskQueueInput struct {
 }
 
 type TaskQueueEntry struct {
-	ID       string `json:"id"`
-	AgentID  string `json:"agentId"`
-	Position int    `json:"position,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ID          string `json:"id"`
+	AgentID     string `json:"agentId"`
+	Position    int    `json:"position,omitempty"`
+	Error       string `json:"error,omitempty"`
+	NextStartAt int64  `json:"nextStartAt,omitempty"` // Unix milliseconds when start interval permits the next start.
+}
+
+type AgentTaskQueueSettings struct {
+	TaskConcurrency          *int  `json:"taskConcurrency,omitempty"`
+	TaskStartIntervalMinutes *int  `json:"taskStartIntervalMinutes,omitempty"`
+	TaskQueuePaused          *bool `json:"taskQueuePaused,omitempty"`
 }
 
 type TaskWorkflow struct {
-	TaskID   string          `json:"taskId"`
-	Accepted bool            `json:"accepted"`
-	Closed   bool            `json:"closed"`
-	Queue    *TaskQueueEntry `json:"queue,omitempty"`
+	Disposition string          `json:"disposition,omitempty" tstype:"'todo' | 'deleted'"`
+	TaskID      string          `json:"taskId"`
+	Accepted    bool            `json:"accepted"`
+	Closed      bool            `json:"closed"`
+	Queue       *TaskQueueEntry `json:"queue,omitempty"`
 }
 
 type TaskWorkflowUpdate struct {
 	TaskLocation `tstype:",extends"`
-	Action       string `json:"action" tstype:"'accept' | 'close' | 'reopen' | 'withdraw'"`
+	Action       string `json:"action" tstype:"'accept' | 'close' | 'reopen' | 'withdraw' | 'todo' | 'delete'"`
 	QueueID      string `json:"queueId,omitempty"`
 }
 
@@ -161,15 +171,45 @@ type RunLocation struct {
 	Topic     bool   `json:"topic,omitempty"`
 }
 
+type WorkItemPriority string
+
+const (
+	WorkItemPriorityUrgent WorkItemPriority = "urgent"
+	WorkItemPriorityHigh   WorkItemPriority = "high"
+	WorkItemPriorityMedium WorkItemPriority = "medium"
+	WorkItemPriorityLow    WorkItemPriority = "low"
+)
+
+type UserWorkItemCreate struct {
+	Title           string             `json:"title"`
+	OriginRunID     string             `json:"originRunId,omitempty"`
+	Body            string             `json:"body,omitempty"`
+	Project         string             `json:"project,omitempty"`
+	Priority        WorkItemPriority   `json:"priority,omitempty" tstype:"'' | 'urgent' | 'high' | 'medium' | 'low'"`
+	AssigneeAgentID string             `json:"assigneeAgentId,omitempty"`
+	Deadline        *TaskDeadlineInput `json:"deadline,omitempty"`
+}
+
+type WorkItemUpdate struct {
+	Done            *bool             `json:"done,omitempty"`
+	Title           *string           `json:"title,omitempty"`
+	Body            *string           `json:"body,omitempty"`
+	Project         *string           `json:"project,omitempty"`
+	Priority        *WorkItemPriority `json:"priority,omitempty" tstype:"'' | 'urgent' | 'high' | 'medium' | 'low'"`
+	AssigneeAgentID *string           `json:"assigneeAgentId,omitempty"`
+}
+
 type WorkItem struct {
-	ID               string       `json:"id"`
-	Title            string       `json:"title"`
-	Body             string       `json:"body,omitempty"`
-	CreatedByAgentID string       `json:"createdByAgentId"`
-	AssigneeAgentID  string       `json:"assigneeAgentId"`
-	Origin           *RunLocation `json:"origin,omitempty"`
-	CreatedAt        string       `json:"createdAt"`
-	Done             bool         `json:"done"`
+	ID               string           `json:"id"`
+	Title            string           `json:"title"`
+	Body             string           `json:"body,omitempty"`
+	Project          string           `json:"project,omitempty"`
+	Priority         WorkItemPriority `json:"priority,omitempty" tstype:"'' | 'urgent' | 'high' | 'medium' | 'low'"`
+	CreatedByAgentID string           `json:"createdByAgentId,omitempty"`
+	AssigneeAgentID  string           `json:"assigneeAgentId,omitempty"`
+	Origin           *RunLocation     `json:"origin,omitempty"`
+	CreatedAt        string           `json:"createdAt"`
+	Done             bool             `json:"done"`
 }
 
 type TaskSourceKind string
@@ -273,4 +313,40 @@ type ExternalTask struct {
 	Done      bool   `json:"done"`
 	URL       string `json:"url,omitempty"`
 	Body      string `json:"body,omitempty"`
+	DueAt     int64  `json:"dueAt,omitempty"`
+	DueDate   string `json:"dueDate,omitempty"`
+}
+
+// TaskDeadline stores local deadline and reminder overrides/state for any task
+// (work item, note task, or external task).
+type TaskDeadline struct {
+	TaskID        string `json:"taskId"`
+	DueAt         int64  `json:"dueAt,omitempty"`         // Unix ms; 0 means inherit external task dueAt
+	DueDate       string `json:"dueDate,omitempty"`       // YYYY-MM-DD for all-day deadlines
+	RemindOffsets *[]int `json:"remindOffsets,omitempty"` // nil = inherit global defaults; empty slice = muted
+	FiredDueAt    int64  `json:"firedDueAt,omitempty"`
+	FiredOffsets  []int  `json:"firedOffsets,omitempty"`
+	SnoozedUntil  int64  `json:"snoozedUntil,omitempty"`
+}
+
+type TaskDeadlineInput struct {
+	DueAt         int64  `json:"dueAt"`
+	DueDate       string `json:"dueDate,omitempty"`
+	RemindOffsets *[]int `json:"remindOffsets,omitempty"` // nil = use default reminder offsets; non-nil = explicit list
+}
+
+type TaskReminderSettings struct {
+	DefaultRemindOffsets []int  `json:"defaultRemindOffsets"` // Lead minutes (e.g. [30]); empty = disabled by default
+	AllDayReminderTime   string `json:"allDayReminderTime"`   // "HH:MM" local wall time, default "09:00"
+}
+
+type TaskReminderNotice struct {
+	ID            string `json:"id"`
+	TaskID        string `json:"taskId"`
+	Title         string `json:"title"`
+	DueAt         int64  `json:"dueAt"`
+	DueDate       string `json:"dueDate,omitempty"`
+	OffsetMinutes int    `json:"offsetMinutes"` // >= 0 for lead offset; -1 for snoozed reminder
+	Snoozed       bool   `json:"snoozed,omitempty"`
+	TriggeredAt   int64  `json:"triggeredAt"` // Unix ms
 }

@@ -54,6 +54,7 @@
     "qrcode.react": "4.2.0",
     "radix-ui": "1.8.0",
     "react": "19.2.6",
+    "react-day-picker": "^9.14.0",
     "react-dom": "19.2.6",
     "react-i18next": "17.0.8",
     "react-zoom-pan-pinch": "4.0.3",

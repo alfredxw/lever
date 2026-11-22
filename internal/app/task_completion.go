@@ -76,29 +76,36 @@ func (e *execution) addTaskCompletionTool(server *mcp.Server) {
 }
 
 func (a *App) completeNoteTask(ctx context.Context, task model.RunTask) error {
-	note, err := a.TaskNote(ctx, task.NoteID)
+	return a.setNoteTaskCheck(ctx, task.NoteID, task.ID, &task, true)
+}
+
+func (a *App) setNoteTaskCheck(ctx context.Context, noteID, id string, snapshot *model.RunTask, done bool) error {
+	note, err := a.TaskNote(ctx, noteID)
 	if err != nil {
 		return err
 	}
-	if note.State != model.TaskNoteActive || note.Directory != task.Directory {
+	if snapshot != nil && (note.State != model.TaskNoteActive || note.Directory != snapshot.Directory) {
 		return ErrTaskNoteVersion
 	}
-	blocks, _, err := notes.ParseContent(note.Content)
+	blocks, markers, err := notes.ParseContent(note.Content)
 	if err != nil {
 		return err
 	}
-	body := notes.TaskBlocks(blocks, task.ID)
+	body := notes.TaskBlocks(blocks, id)
 	if len(body) == 0 {
 		return conflict("The dispatched task is no longer in this note")
 	}
-	if hash(body) != task.Version {
+	if snapshot != nil && hash(body) != snapshot.Version {
 		return ErrTaskNoteVersion
+	}
+	if markers[id].Done == done {
+		return nil
 	}
 	var attrs map[string]json.RawMessage
 	if err := json.Unmarshal(body[0].Attrs, &attrs); err != nil {
 		return err
 	}
-	attrs["done"] = json.RawMessage("true")
+	attrs["done"], _ = json.Marshal(done)
 	body[0].Attrs, err = json.Marshal(attrs)
 	if err != nil {
 		return err

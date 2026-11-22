@@ -235,6 +235,7 @@ export type PrimaryPage =
 type NavigationProps = {
   page: PrimaryPage;
   providers: ProviderInfo[];
+  taskAlert?: boolean;
   onPreview: (page: PrimaryPage) => void;
   onAgents: () => void;
   onTasks: () => void;
@@ -289,6 +290,7 @@ export function WorkbenchShell({
 function PrimaryNavigation({
   page,
   providers,
+  taskAlert = false,
   onPreview,
   onAgents,
   onTasks,
@@ -337,6 +339,12 @@ function PrimaryNavigation({
       >
         <SquareKanban size={19} strokeWidth={1.6} />
         <span>{t("nav.tasks")}</span>
+        {taskAlert && (
+          <span
+            className="navigation-item-dot"
+            aria-label={t("tasks.reminder.pendingAlert")}
+          />
+        )}
       </button>
       <button
         className={cn("navigation-item", page === "automations" && "active")}

@@ -156,6 +156,19 @@ func TestGitHubTaskSourceKeepsCursorAndChatAcrossFailedPages(t *testing.T) {
 		t.Fatal("adding the repository again changed its identity")
 	}
 	awaitSource("")
+	location = model.TaskLocation{Record: model.TaskRecordExternal}
+	f.boardAction(pr.ID, location, "todo", 200)
+	f.boardAction(pr.ID, location, "close", 200)
+	f.boardAction(pr.ID, location, "delete", 200)
+	f.request("POST", syncPath, nil, 200, nil)
+	awaitSource("")
+	f.request("GET", "/tasks/locate/"+pr.ID, nil, 404, nil)
+	f.request("PUT", "/tasks/external/"+pr.ID, map[string]bool{"done": true}, 404, nil)
+	var originalPR model.ExternalTask
+	f.request("GET", "/tasks/external/"+pr.ID, nil, 200, &originalPR)
+	if originalPR.Done || originalPR.State != "merged" {
+		t.Fatalf("the board action changed the synced record: %+v", originalPR)
+	}
 }
 
 func TestGitHubTaskSourceScopeReconcilesOpenTasksAndPreservesLocalWork(t *testing.T) {

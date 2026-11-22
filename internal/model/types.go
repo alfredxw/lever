@@ -52,6 +52,7 @@ type Profile struct {
 	WorktreeSetup            map[string]string `json:"worktreeSetup,omitempty"` // Keyed by the Git common directory.
 	TaskConcurrency          int               `json:"taskConcurrency,omitempty"`
 	TaskStartIntervalMinutes int               `json:"taskStartIntervalMinutes,omitempty"`
+	TaskQueuePaused          bool              `json:"taskQueuePaused,omitempty"`
 }
 
 const (
@@ -758,16 +759,17 @@ type Overview struct {
 }
 
 type Event struct {
-	SessionID    string        `json:"sessionId,omitempty"`
-	RunID        string        `json:"runId,omitempty"`
-	RequestID    string        `json:"requestId,omitempty"`
-	Sequence     int64         `json:"sequence"`
-	Type         string        `json:"type"`
-	ChatID       string        `json:"chatId,omitempty"`
-	TaskNoteID   string        `json:"taskNoteId,omitempty"`
-	Run          *Run          `json:"run,omitempty"`
-	Request      *Request      `json:"request,omitempty"`
-	Conversation *Conversation `json:"conversation,omitempty"`
+	SessionID    string              `json:"sessionId,omitempty"`
+	RunID        string              `json:"runId,omitempty"`
+	RequestID    string              `json:"requestId,omitempty"`
+	Sequence     int64               `json:"sequence"`
+	Type         string              `json:"type"`
+	ChatID       string              `json:"chatId,omitempty"`
+	TaskNoteID   string              `json:"taskNoteId,omitempty"`
+	Run          *Run                `json:"run,omitempty"`
+	Request      *Request            `json:"request,omitempty"`
+	Conversation *Conversation       `json:"conversation,omitempty"`
+	TaskReminder *TaskReminderNotice `json:"taskReminder,omitempty"`
 }
 
 type FileEntry struct {

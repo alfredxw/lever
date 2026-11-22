@@ -28,11 +28,13 @@ type TaskSourceRef struct {
 
 type TaskSourceItem struct {
 	TaskSourceRef
-	Kind  string `json:"kind"`
-	State string `json:"state"`
-	Title string `json:"title"`
-	URL   string `json:"url"`
-	Body  string `json:"body"`
+	Kind    string `json:"kind"`
+	State   string `json:"state"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Body    string `json:"body"`
+	DueAt   int64  `json:"dueAt,omitempty"`
+	DueDate string `json:"dueDate,omitempty"`
 }
 
 type TaskSourceBatch struct {

@@ -22,7 +22,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, NotebookPen, Plus, Rss, SquareKanban } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,9 +32,9 @@ import {
 } from "@/components/ui/collapsible";
 
 const groups = [
-  { id: "board", label: "tasks.board", add: "tasks.newView", icon: SquareKanban },
-  { id: "note", label: "tasks.notes", add: "tasks.newNote", icon: NotebookPen },
-  { id: "sources", label: "tasks.sources", add: "tasks.addSource", icon: Rss },
+  { id: "board", label: "tasks.board", add: "tasks.newView" },
+  { id: "note", label: "tasks.notes", add: "tasks.newNote" },
+  { id: "sources", label: "tasks.sources", add: "tasks.addSource" },
 ] as const;
 
 export type TaskSection = (typeof groups)[number]["id"];
@@ -188,7 +188,7 @@ export function TaskSidebarGroups({
   return (
     <ul>
       <TaskSidebarItems scope="groups" items={groups}>
-        {({ id, label, add, icon: Icon }, drag) => (
+        {({ id, label, add }, drag) => (
           <Collapsible
             open={expanded[id]}
             onOpenChange={(open) => onOpenChange(id, open)}
@@ -200,14 +200,13 @@ export function TaskSidebarGroups({
                   variant="ghost"
                   className="sidebar-nav-item task-nav-parent"
                 >
-                  <Icon data-icon="inline-start" />
                   <span className="truncate">{t(label)}</span>
                   <ChevronRight className="task-nav-chevron" />
                 </Button>
               </CollapsibleTrigger>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
                 className="task-nav-add"
                 aria-label={t(add)}
                 title={t(add)}

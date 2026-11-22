@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Archive,
   ChevronRight,
+  FileText,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -346,6 +347,7 @@ function TaskNoteRow({
               onKeyDown={pending ? undefined : openNoteMenu}
               title={displayTitle}
             >
+              <FileText className="task-nav-child-icon" aria-hidden="true" />
               {label}
               {unsaved && (
                 <span className="task-unsaved-dot" title={t("tasks.unsaved")} />

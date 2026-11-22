@@ -169,6 +169,16 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       void queryClient.invalidateQueries({ queryKey: ["task-executions"] });
       return;
     }
+    if (event.type === "task-deadlines" || event.type === "task-reminder") {
+      void queryClient.invalidateQueries({ queryKey: ["task-deadlines"] });
+      return;
+    }
+    if (event.type === "task-reminder-settings") {
+      void queryClient.invalidateQueries({
+        queryKey: ["task-reminder-settings"],
+      });
+      return;
+    }
     if (event.type === "task-sources") {
       void queryClient.invalidateQueries({ queryKey: ["task-sources"] });
       return;

@@ -189,6 +189,15 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 		}
 		respond(w, nil, s.App.ReorderTaskQueue(r.Context(), input.AgentID, input.IDs))
 	})
+	mux.HandleFunc("PATCH /api/agents/{id}/task-queue", func(w http.ResponseWriter, r *http.Request) {
+		var input model.AgentTaskQueueSettings
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		agent, err := s.App.UpdateAgentTaskQueue(r.Context(), r.PathValue("id"), input)
+		respond(w, agent, err)
+	})
 	mux.HandleFunc("GET /api/tasks/locate/{id}", func(w http.ResponseWriter, r *http.Request) {
 		note, err := s.App.LocateTask(r.Context(), r.PathValue("id"))
 		respond(w, note, err)
@@ -259,5 +268,45 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 			return
 		}
 		respond(w, nil, s.App.SetExternalTaskDone(r.Context(), r.PathValue("id"), input.Done))
+	})
+	mux.HandleFunc("GET /api/tasks/deadlines", func(w http.ResponseWriter, r *http.Request) {
+		deadlines, err := s.App.TaskDeadlines(r.Context())
+		respond(w, deadlines, err)
+	})
+	mux.HandleFunc("PUT /api/tasks/deadlines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var input model.TaskDeadlineInput
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		saved, err := s.App.SetTaskDeadline(r.Context(), r.PathValue("id"), input)
+		respond(w, saved, err)
+	})
+	mux.HandleFunc("DELETE /api/tasks/deadlines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, nil, s.App.ClearTaskDeadline(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/tasks/deadlines/{id}/snooze", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Minutes int `json:"minutes"`
+		}
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		saved, err := s.App.SnoozeTaskDeadline(r.Context(), r.PathValue("id"), input.Minutes)
+		respond(w, saved, err)
+	})
+	mux.HandleFunc("GET /api/settings/task-reminders", func(w http.ResponseWriter, r *http.Request) {
+		settings, err := s.App.TaskReminderSettings(r.Context())
+		respond(w, settings, err)
+	})
+	mux.HandleFunc("PUT /api/settings/task-reminders", func(w http.ResponseWriter, r *http.Request) {
+		var input model.TaskReminderSettings
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		saved, err := s.App.SaveTaskReminderSettings(r.Context(), input)
+		respond(w, saved, err)
 	})
 }

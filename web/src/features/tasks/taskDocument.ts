@@ -79,6 +79,10 @@ export function taskStatus(
   proposed = false,
 ): TaskStatus {
   if (workflow?.closed) return "closed";
+  if (workflow?.disposition === "todo") {
+    if (workflow.queue) return "queued";
+    return block.done ? "done" : "todo";
+  }
   switch (execution?.status) {
     case "queued":
     case "starting":

@@ -16,15 +16,24 @@ var taskIDPattern = notes.IDPattern
 
 // The caller holds notesMu for note-backed tasks.
 func (a *App) openTaskSource(ctx context.Context, q store.Queryer, record model.TaskRecord, id, noteID string) (model.TaskNote, error) {
+	return a.readBoardSource(ctx, q, record, id, noteID, true)
+}
+
+func (a *App) readBoardSource(ctx context.Context, q store.Queryer, record model.TaskRecord, id, noteID string, requireOpen bool) (model.TaskNote, error) {
 	switch record {
-	case model.TaskRecordExternal, model.TaskRecordWorkItem:
+	case model.TaskRecordExternal, model.TaskRecordWorkItem, model.TaskRecordAutomation:
 		query := "SELECT done FROM external_tasks WHERE id=?"
 		if record == model.TaskRecordWorkItem {
 			query = "SELECT json_extract(data,'$.done') FROM work_items WHERE id=?"
+		} else if record == model.TaskRecordAutomation {
+			if requireOpen {
+				return model.TaskNote{}, invalid("Run an automation from its plan")
+			}
+			query = "SELECT done FROM automation_runs WHERE id=? AND work_item=1 AND run_id IS NOT NULL"
 		}
 		var done bool
 		err := q.QueryRowContext(ctx, query, id).Scan(&done)
-		if errors.Is(err, sql.ErrNoRows) || done {
+		if errors.Is(err, sql.ErrNoRows) || (requireOpen && done) {
 			return model.TaskNote{}, conflict("The task must be present and open")
 		}
 		return model.TaskNote{}, err
@@ -37,7 +46,7 @@ func (a *App) openTaskSource(ctx context.Context, q store.Queryer, record model.
 			return model.TaskNote{}, err
 		}
 		task := catalog.tasks[id]
-		if task.NoteID == "" || task.NoteID != noteID || task.Done || task.Deleted {
+		if task.NoteID == "" || task.NoteID != noteID || (requireOpen && task.Done) || task.Deleted {
 			if catalog.notes[noteID].ID == "" && catalog.unavailable != nil {
 				return model.TaskNote{}, catalog.unavailable
 			}
@@ -68,6 +77,26 @@ func checkTaskUnlinked(ctx context.Context, q store.Queryer, id string) error {
 	return nil
 }
 
+func prepareTaskHandoff(ctx context.Context, tx *sql.Tx, id string) error {
+	var returned bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM task_triage WHERE task_id=? AND disposition='todo' AND closed=0)", id).Scan(&returned); err != nil {
+		return err
+	}
+	if !returned {
+		return checkTaskUnlinked(ctx, tx, id)
+	}
+	if running, err := taskHasUnfinishedRuns(ctx, tx, id); err != nil {
+		return err
+	} else if running {
+		return conflict("Stop the previous execution or wait for it to finish before dispatching again")
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data=json_remove(data,'$.taskId') WHERE kind='topic' AND data->>'taskId'=?", id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE chats SET data=json_remove(data,'$.taskId') WHERE data->>'taskId'=?", id)
+	return err
+}
+
 func checkTaskNotClosed(ctx context.Context, q store.Queryer, id string) error {
 	var closed bool
 	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM task_triage WHERE task_id=? AND closed=1)", id).Scan(&closed); err != nil {
@@ -75,6 +104,17 @@ func checkTaskNotClosed(ctx context.Context, q store.Queryer, id string) error {
 	}
 	if closed {
 		return conflict("Reopen this task first")
+	}
+	return nil
+}
+
+func checkTaskInBoard(ctx context.Context, q store.Queryer, id string) error {
+	var removed bool
+	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM task_triage WHERE task_id=? AND disposition='deleted')", id).Scan(&removed); err != nil {
+		return err
+	}
+	if removed {
+		return sql.ErrNoRows
 	}
 	return nil
 }
@@ -101,7 +141,7 @@ func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecor
 	if err != nil {
 		return taskDelivery{}, err
 	}
-	if err := checkTaskUnlinked(ctx, tx, input.TaskID); err != nil {
+	if err := prepareTaskHandoff(ctx, tx, input.TaskID); err != nil {
 		return taskDelivery{}, err
 	}
 	if err := checkTaskNotClosed(ctx, tx, input.TaskID); err != nil {
@@ -114,6 +154,9 @@ func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecor
 		if note.ID != "" && note.Version != input.Version {
 			return taskDelivery{}, conflict("The task note changed before dispatch")
 		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE task_triage SET disposition='' WHERE task_id=? AND disposition='todo'", input.TaskID); err != nil {
+		return taskDelivery{}, err
 	}
 	if record == model.TaskRecordWorkItem {
 		if err := markTaskAccepted(ctx, tx, input.TaskID); err != nil {
@@ -186,18 +229,20 @@ func checkTaskCompletable(ctx context.Context, tx *sql.Tx, id string) error {
 	if err := checkTaskNotQueued(ctx, tx, id); err != nil {
 		return err
 	}
-	var running bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
-SELECT 1 FROM (`+taskSessions+`) s JOIN runs r USING(session_id)
-WHERE s.task_id=?
-AND r.status IN ('starting','running','waiting_user','cancelling','unknown','queued','steering'))`, id).Scan(&running)
-	if err != nil {
-		return err
-	}
-	if running {
+	running, err := taskHasUnfinishedRuns(ctx, tx, id)
+	if err == nil && running {
 		return conflict("Wait for the task's Agent to finish before marking it complete")
 	}
-	return nil
+	return err
+}
+
+func taskHasUnfinishedRuns(ctx context.Context, q store.Queryer, id string) (bool, error) {
+	var running bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM (`+taskSessions+`) s JOIN runs r USING(session_id)
+WHERE s.task_id=?
+AND r.status IN ('starting','running','waiting_user','cancelling','unknown','paused','queued','steering'))`, id).Scan(&running)
+	return running, err
 }
 
 func (a *App) TaskExecutions(ctx context.Context) ([]model.TaskExecution, error) {
@@ -234,11 +279,15 @@ LEFT JOIN runs r ON r.id=(
 )
 WHERE t.key IS NOT NULL OR e.id IS NOT NULL OR w.id IS NOT NULL
 UNION ALL SELECT `+automationExecution+`,r.sequence`+automationRunJoin+` WHERE r.id IS NOT NULL AND ar.work_item=1
-) ORDER BY sequence DESC
+) execution WHERE NOT EXISTS(SELECT 1 FROM task_triage WHERE task_id=execution.data->>'taskId' AND disposition='deleted')
+ORDER BY sequence DESC
 `, store.JSON(catalog.tasks))
 }
 
 func (a *App) LocateTask(ctx context.Context, taskID string) (model.TaskLocation, error) {
+	if err := checkTaskInBoard(ctx, a.Store.DB, taskID); err != nil {
+		return model.TaskLocation{}, err
+	}
 	location, err := store.Get[model.TaskLocation](ctx, a.Store.DB, `SELECT '{"record":"workItem"}' FROM work_items WHERE id=?
 UNION ALL SELECT '{"record":"external"}' FROM external_tasks WHERE id=?
 UNION ALL SELECT '{"record":"automation"}' FROM automation_runs WHERE id=? AND run_id IS NOT NULL AND work_item=1 LIMIT 1`, taskID, taskID, taskID)

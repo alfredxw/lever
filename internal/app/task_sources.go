@@ -496,7 +496,7 @@ func (a *App) saveTaskSync(ctx context.Context, id string, batch plugin.TaskSour
 	if ctx.Err() != nil {
 		return nil
 	}
-	return a.Store.Write(ctx, func(tx *sql.Tx) error {
+	err := a.Store.Write(ctx, func(tx *sql.Tx) error {
 		current, err := taskSource(ctx, tx, id)
 		if err != nil {
 			return err
@@ -556,4 +556,8 @@ UPDATE task_sources SET name=COALESCE(NULLIF(?,''),name),cursor=?,last_synced_at
 		}
 		return store.Event(tx, model.Event{Type: "task-sources"})
 	})
+	if err == nil && failure == "" {
+		a.wakeTaskReminders()
+	}
+	return err
 }

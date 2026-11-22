@@ -1,12 +1,25 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
   closestCenter,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
   useSensor,
   useSensors,
+  type ClientRect,
+  type CollisionDetection,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -16,21 +29,28 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  ArrowUpRight,
+  AlertCircle,
+  ArrowDownUp,
   Bookmark,
+  CalendarClock,
+  Check,
+  ChevronDown,
+  ChevronUp,
   CircleCheck,
-  CircleAlert,
   CircleDot,
   FileText,
   Folder,
   GitPullRequest,
+  Kanban,
   LayoutGrid,
+  List,
   NotebookPen,
+  Play,
+  Undo2,
   UserRound,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -39,39 +59,62 @@ import {
   TaskSourceKindIssue,
   TaskSourceKindPR,
   type Agent,
-  type ExternalTask,
-  type Plugin,
+  type Request,
+  type TaskDeadlineInput,
   type TaskExecution,
   type TaskNoteSummary,
-  type TaskQueueEntry,
+  type TaskReminderSettings,
   type TaskView,
   type TaskWorkflow,
-  type WorkItem,
 } from "@/api/types.gen";
 import { ErrorNotice, Loading } from "@/components/common";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { RunStatus } from "@/features/chat/RunStatus";
 import { ActivityTime } from "@/components/workbench/ActivityTime";
+import { TaskAgentDock } from "./TaskAgentDock";
+import { changeTaskWorkflow } from "./taskWorkflow";
+import { TaskBoardActions } from "./TaskBoardActions";
 import { TaskAssignee } from "./TaskAssignee";
 import { TaskBoardFilter } from "./TaskBoardFilter";
-import { TaskStatusIcon, taskStatuses } from "./TaskStatusIcon";
+import { TaskDeadlineBadge } from "./TaskDeadlineBadge";
 import {
-  taskBlocks,
-  taskImages,
-  taskNoteSchema,
-  taskStatus,
-  type TaskStatus,
-} from "./taskDocument";
-import type { TaskDispatchTarget } from "./useTaskDispatch";
-import { taskNoteQuery } from "./noteQueries";
-import { useTaskDrafts } from "./useTaskNote";
+  defaultReminderSettings,
+  dueFilterValues,
+  matchesDueFilter,
+  useClearTaskDeadline,
+  useSaveTaskDeadline,
+} from "./taskDeadlines";
+import { TaskListView } from "./TaskListView";
+import { TaskPriorityIcon } from "./TaskPriorityIcon";
+import { TaskQuickCreate } from "./TaskQuickCreate";
+import { taskStatuses } from "./TaskStatusIcon";
+import {
+  columnsByStatus,
+  canHandOffTask,
+  hasUnfinishedTaskRun,
+  compareTasksByDeadline,
+  compareTasksByPriority,
+  formatWaitDuration,
+  needsAttention,
+  queueWaitState,
+  setTaskDoneState,
+  taskColumn,
+  type AgentQueueMetrics,
+  type BoardTask,
+} from "./taskBoardModel";
+import type { TaskStatus } from "./taskDocument";
+import { useTaskDispatch, type TaskDispatchTarget } from "./useTaskDispatch";
+import type { useTaskDrafts } from "./useTaskNote";
 
 type Group = TaskView["group"];
-export type BoardView = Pick<TaskView, "group" | "filters" | "quickFilter">;
+export type BoardSort = "deadline" | "priority";
+export type BoardView = Pick<
+  TaskView,
+  "group" | "sort" | "filters" | "quickFilter"
+>;
 
 const groups = {
   status: CircleDot,
@@ -79,52 +122,37 @@ const groups = {
   agent: UserRound,
 } satisfies Record<Group, LucideIcon>;
 
-type BoardTask = TaskDispatchTarget & {
-  status: TaskStatus;
-  noteTitle?: string;
-  agent?: Agent;
-  execution?: TaskExecution;
-  queue?: TaskQueueEntry;
-  project: string;
-  source: string;
-  kind?: string;
-  remote?: string;
-  reference?: string;
-};
-
-const columnsByStatus = [
-  "todo",
-  "queued",
-  "running",
-  "review",
-  "done",
-] as const;
-
-function taskColumn(status: TaskStatus) {
-  if (status === "unconfirmed") return "todo";
-  if (status === "attention") return "running";
-  return status;
-}
-
-function needsAttention(task: BoardTask) {
-  return task.status === "attention" || !!task.queue?.error;
-}
-
 type TaskCardAction = (
   task: TaskDispatchTarget,
   trigger: HTMLButtonElement,
 ) => void;
 
+type ActiveCardDrag = {
+  id: string;
+  task: BoardTask;
+  rect: ClientRect;
+};
+
 export function TaskBoard({
   name,
+  consumingOnly = false,
+  tasks,
+  drafts,
+  sourceLabels,
+  reminderSettings = defaultReminderSettings,
+  loading,
+  failed,
   notes,
-  noteList,
   agents,
   executions,
   workflows,
+  requests = [],
+  agentMetricsList,
+  agentMetricsMap,
   view,
   search,
   selectedTaskId,
+  visibleTasksRef,
   detail,
   saveLabel,
   saving,
@@ -135,14 +163,24 @@ export function TaskBoard({
   onAssign,
 }: {
   name: string;
+  consumingOnly?: boolean;
+  tasks: BoardTask[];
+  drafts: ReturnType<typeof useTaskDrafts>;
+  sourceLabels: Map<string, string>;
+  reminderSettings?: TaskReminderSettings;
+  loading: boolean;
+  failed?: { error: unknown; refetch: () => unknown };
   notes: TaskNoteSummary[];
-  noteList: { isPending: boolean; error: Error | null; refetch: () => void };
   agents: Agent[];
   executions: Map<string, TaskExecution>;
   workflows: Map<string, TaskWorkflow>;
+  requests?: Request[];
+  agentMetricsList: AgentQueueMetrics[];
+  agentMetricsMap: Map<string, AgentQueueMetrics>;
   view: BoardView;
   search: string;
   selectedTaskId?: string;
+  visibleTasksRef?: MutableRefObject<BoardTask[]>;
   detail?: ReactNode;
   saveLabel?: string;
   saving: boolean;
@@ -153,137 +191,73 @@ export function TaskBoard({
   onAssign: TaskCardAction;
 }) {
   const { t } = useTranslation();
+  const dispatch = useTaskDispatch();
   const { group, filters, quickFilter } = view;
-  const setFilters = (filters: BoardView["filters"]) =>
-    onViewChange({ group, filters, quickFilter });
-  const drafts = useTaskDrafts();
-  const results = useQueries({
-    queries: notes.map((note) => taskNoteQuery(note.id)),
-    combine: (queries) => ({
-      documents: queries.flatMap((query) => (query.data ? [query.data] : [])),
-      pending: queries.some((query) => query.isPending),
-      failed: queries.find((query) => query.isError),
-    }),
-  });
-  const external = useQuery({
-    queryKey: ["external-tasks"],
-    queryFn: ({ signal }) =>
-      api<ExternalTask[]>("/tasks/external", undefined, "GET", signal),
-    refetchOnWindowFocus: true,
-  });
-  const workItems = useQuery({
-    queryKey: ["work-items"],
-    queryFn: ({ signal }) =>
-      api<WorkItem[]>("/tasks/work-items", undefined, "GET", signal),
-  });
-  const plugins = useQuery({
-    queryKey: ["plugins"],
-    queryFn: ({ signal }) =>
-      api<Plugin[]>("/plugins", undefined, "GET", signal),
-  });
-  const sourceLabels = new Map([
-    ["written", t("tasks.source.written")],
-    ["agent", t("tasks.source.agent")],
-    ["github", t("tasks.source.github")],
-    ["automation", t("automations.title")],
-    ...(plugins.data?.flatMap((plugin) =>
-      (plugin.manifest.contributes.taskSources ?? []).map(
-        ({ id, name }) => [id, name] as const,
+  const sort: BoardSort = view.sort === "priority" ? "priority" : "deadline";
+  const setFilters = (nextFilters: BoardView["filters"]) =>
+    onViewChange({ group, sort: view.sort, filters: nextFilters, quickFilter });
+  const setSort = (nextSort: BoardSort) =>
+    onViewChange({ group, sort: nextSort, filters, quickFilter });
+
+  const [display, setDisplay] = useState<"board" | "list">("board");
+  const [showDone, setShowDone] = useState(false);
+  const [activeDrag, setActiveDrag] = useState<ActiveCardDrag>();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const quickAssignFallbackRef = useRef<HTMLButtonElement>(null);
+
+  const saveDeadline = useSaveTaskDeadline();
+  const clearDeadline = useClearTaskDeadline();
+  const handleChangeDeadline = useCallback(
+    (task: BoardTask, next: TaskDeadlineInput | null) => {
+      if (next === null) {
+        clearDeadline.mutate(task.id, {
+          onError: (error) => toast.error(error.message),
+        });
+      } else {
+        saveDeadline.mutate(
+          { taskId: task.id, input: next },
+          { onError: (error) => toast.error(error.message) },
+        );
+      }
+    },
+    [clearDeadline, saveDeadline],
+  );
+
+  const activeAgents = useMemo(
+    () => agents.filter((agent) => !agent.archived),
+    [agents],
+  );
+
+  const requestByRunId = useMemo(() => {
+    const map = new Map<string, Request>();
+    for (const req of requests) {
+      if (req.status === "pending" && req.runId && !map.has(req.runId)) {
+        map.set(req.runId, req);
+      }
+    }
+    return map;
+  }, [requests]);
+
+  const hasCoolingQueue = useMemo(
+    () =>
+      tasks.some(
+        (task) => task.queue?.nextStartAt && task.queue.nextStartAt > nowMs,
       ),
-    ) ?? []),
-  ]);
-  const tasks = useMemo(() => {
-    const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
-    function cardState(
-      task: { id: string; done: boolean },
-      assignee?: string,
-      proposed = false,
-    ) {
-      const execution = executions.get(task.id);
-      const workflow = workflows.get(task.id);
-      const queue = !execution ? workflow?.queue : undefined;
-      const agentId = execution?.agentId ?? queue?.agentId ?? assignee;
-      return {
-        status: taskStatus(task, execution, workflow, proposed),
-        agentId,
-        agent: agentsById.get(agentId ?? ""),
-        queue,
-        execution,
-      };
-    }
-    const written = results.documents.flatMap((saved) => {
-      const draft = drafts.get(saved.id);
-      const note = draft?.note ?? saved;
-      const noteTitle = note.title.trim() || t("tasks.note");
-      return taskBlocks(
-        draft?.doc ?? taskNoteSchema.nodeFromJSON(note.content),
-      ).flatMap((task): BoardTask[] => {
-        if (!task.id || !task.title) return [];
-        return [
-          {
-            id: task.id,
-            record: "note",
-            title: task.title,
-            ...cardState({ id: task.id, done: task.done }, task.agentId),
-            noteId: note.id,
-            noteTitle,
-            images: taskImages(task),
-            project: task.issue?.repository || note.project || "",
-            source: task.issue ? "github" : "written",
-            kind: task.issue ? "issue" : undefined,
-          },
-        ];
-      });
-    });
-    const synced = (external.data ?? []).map(
-      (task): BoardTask => ({
-        id: task.id,
-        record: "external",
-        title: task.title,
-        ...cardState(task),
-        project: task.project,
-        source: task.source,
-        kind: task.kind,
-        remote: task.state,
-        reference: task.reference,
-      }),
-    );
-    const automated: BoardTask[] = [];
-    for (const execution of executions.values()) {
-      if (!execution.automationId || !execution.title) continue;
-      automated.push({
-        id: execution.taskId,
-        record: "automation",
-        title: execution.title,
-        status: taskStatus(execution, execution),
-        agentId: execution.agentId,
-        agent: agentsById.get(execution.agentId),
-        project: "",
-        source: "automation",
-        execution,
-      });
-    }
-    const native = (workItems.data ?? []).map(
-      (item): BoardTask => ({
-        id: item.id,
-        record: "workItem",
-        title: item.title,
-        ...cardState(item, item.assigneeAgentId, true),
-        project: "",
-        source: "agent",
-      }),
-    );
-    return [...native, ...written, ...synced, ...automated];
-  }, [
-    results.documents,
-    drafts,
-    executions,
-    workflows,
-    agents,
-    t,
-    external.data,
-    workItems.data,
-  ]);
+    [tasks, nowMs],
+  );
+  const hasActiveDeadlines = useMemo(
+    () =>
+      tasks.some(
+        (task) => !!task.deadline && task.deadline.urgency !== "done",
+      ),
+    [tasks],
+  );
+  useEffect(() => {
+    if (!hasCoolingQueue && !hasActiveDeadlines) return;
+    const interval = hasCoolingQueue ? 10_000 : 30_000;
+    const timer = window.setInterval(() => setNowMs(Date.now()), interval);
+    return () => window.clearInterval(timer);
+  }, [hasCoolingQueue, hasActiveDeadlines]);
 
   const noteOptions = notes.map(({ id, title }) => ({
     id,
@@ -296,9 +270,20 @@ export function TaskBoard({
     id,
     label: id || t("tasks.noProject"),
   }));
+  const namedProjects = useMemo(
+    () => [...projects].filter(Boolean).sort((a, b) => a.localeCompare(b)),
+    [projects],
+  );
 
   const term = search.trim().toLocaleLowerCase();
   const scoped = tasks.filter((task) => {
+    if (
+      consumingOnly &&
+      task.status !== "queued" &&
+      task.status !== "running" &&
+      task.status !== "attention"
+    )
+      return false;
     if (task.status === "closed" && !filters.status?.includes("closed"))
       return false;
     if (
@@ -307,6 +292,7 @@ export function TaskBoard({
       task.remote &&
       task.remote !== "open" &&
       task.status === "todo" &&
+      workflows.get(task.id)?.disposition !== "todo" &&
       !executions.has(task.id)
     )
       return false;
@@ -318,11 +304,10 @@ export function TaskBoard({
       kind: task.kind ?? "",
       remote: task.remote ?? "",
     };
-    const matchesFilters = (
-      Object.keys(values) as (keyof typeof values)[]
-    ).every(
-      (key) => !filters[key]?.length || filters[key].includes(values[key]),
-    );
+    const matchesFilters =
+      (Object.keys(values) as (keyof typeof values)[]).every(
+        (key) => !filters[key]?.length || filters[key].includes(values[key]),
+      ) && matchesDueFilter(task.deadline, filters.due ?? [], nowMs);
     return (
       matchesFilters &&
       (!term ||
@@ -336,19 +321,33 @@ export function TaskBoard({
         ].some((value) => value?.toLocaleLowerCase().includes(term)))
     );
   });
-  const shown = scoped.filter(
-    (task) =>
-      !filters.status?.length ||
-      filters.status.some(
+
+  const explicitDoneFilter = !!filters.status?.includes("done");
+  const showingDone = showDone || explicitDoneFilter;
+
+  const shown = scoped.filter((task) => {
+    if (filters.status?.length) {
+      return filters.status.some(
         (status) =>
           status === task.status ||
           status === taskColumn(task.status) ||
           (status === "attention" && needsAttention(task)),
-      ),
-  );
-  const attentionCount = scoped.filter(needsAttention).length;
-  const onlyAttention =
-    filters.status?.length === 1 && filters.status[0] === "attention";
+      );
+    }
+    if (
+      (group === "status" || display === "list") &&
+      !showingDone &&
+      task.status === "done"
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  if (visibleTasksRef) {
+    visibleTasksRef.current = shown;
+  }
+
   const queueSizes = new Map<string, number>();
   for (const { queue } of workflows.values()) {
     if (queue?.position)
@@ -357,6 +356,52 @@ export function TaskBoard({
         Math.max(queueSizes.get(queue.agentId) ?? 0, queue.position),
       );
   }
+
+  const reorder = useMutation({
+    mutationFn: ({ agentId, ids }: { agentId: string; ids: string[] }) =>
+      api("/tasks/queue/order", { agentId, ids }, "PUT"),
+    onError: (error) => toast.error(error.message),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ["task-workflows"] }),
+  });
+
+  const acceptTask = useMutation({
+    mutationFn: (task: BoardTask) =>
+      api(
+        "/tasks/workflows/" + task.id,
+        { record: task.record, noteId: task.noteId, action: "accept" },
+        "PATCH",
+      ),
+    onError: (error) => toast.error(error.message),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ["task-workflows"] }),
+  });
+
+  const completeTask = useMutation({
+    mutationFn: ({ task, done }: { task: BoardTask; done: boolean }) =>
+      setTaskDoneState(task, done, t("tasks.sourceRemoved")),
+    onError: (error) => toast.error(error.message),
+  });
+
+  const approveRequest = useMutation({
+    mutationFn: (requestId: string) =>
+      api(`/requests/${requestId}/answer`, { allow: true }),
+    onError: (error) => toast.error(error.message),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-executions"] });
+    },
+  });
+
+  const retryRun = useMutation({
+    mutationFn: (runId: string) =>
+      api(`/runs/${runId}/retry`, { commandId: crypto.randomUUID() }),
+    onError: (error) => toast.error(error.message),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-executions"] });
+    },
+  });
 
   const columns = new Map<string, { label: string; tasks: BoardTask[] }>();
   if (group === "status") {
@@ -367,7 +412,10 @@ export function TaskBoard({
       if (filters.status?.length) {
         if (!visibleColumns.has(status) && !filters.status.includes(status))
           continue;
-      } else if (status === "closed") continue;
+      } else {
+        if (status === "closed") continue;
+        if (status === "done" && !showingDone) continue;
+      }
       columns.set(status, {
         label: t("tasks.status." + status),
         tasks: [],
@@ -394,34 +442,294 @@ export function TaskBoard({
     }
     column.tasks.push(task);
   }
+
+  const queuedIdsByAgent = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const queuedColumn = columns.get("queued")?.tasks ?? [];
+    const byAgent = new Map<string, BoardTask[]>();
+    for (const task of queuedColumn) {
+      if (!task.queue?.position) continue;
+      const list = byAgent.get(task.queue.agentId) ?? [];
+      list.push(task);
+      byAgent.set(task.queue.agentId, list);
+    }
+    for (const [agentId, list] of byAgent) {
+      list.sort(
+        (a, b) =>
+          (a.queue?.position ?? Infinity) - (b.queue?.position ?? Infinity),
+      );
+      map.set(
+        agentId,
+        list.map((item) => item.queue!.id),
+      );
+    }
+    return map;
+  }, [columns]);
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
+    }),
+  );
+
+  const collisionDetection = useCallback<CollisionDetection>((args) => {
+    const hits = args.pointerCoordinates ? pointerWithin(args) : [];
+    const dockHit = hits.find((hit) =>
+      String(hit.id).startsWith("agent-dock:"),
+    );
+    if (dockHit) return [dockHit];
+
+    const draggedTask = args.active.data.current?.task as BoardTask | undefined;
+    if (draggedTask?.queue?.position) {
+      const sameAgentContainer = args.droppableContainers.filter(
+        (item) =>
+          item.data.current?.queueAgentId === draggedTask.queue?.agentId,
+      );
+      const hitSameAgent = hits.some(
+        (hit) =>
+          String(hit.id) === "column:queued" ||
+          sameAgentContainer.some((c) => c.id === hit.id),
+      );
+      if (hitSameAgent && sameAgentContainer.length > 0) {
+        return closestCenter({
+          ...args,
+          droppableContainers: sameAgentContainer,
+        });
+      }
+    }
+
+    const columnHit = hits.find((hit) =>
+      String(hit.id).startsWith("column:"),
+    );
+    if (columnHit) return [columnHit];
+
+    return closestCenter(args);
+  }, []);
+
+  async function enqueueTaskDirect(task: BoardTask, agentId: string) {
+    const agent = activeAgents.find((item) => item.id === agentId);
+    if (!agent) return;
+    try {
+      await dispatch(task, { agentId: agent.id });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function reassignQueuedTask(task: BoardTask, targetAgentId: string) {
+    if (!task.queue) return;
+    const agent = activeAgents.find((item) => item.id === targetAgentId);
+    if (!agent) return;
+    try {
+      await api(
+        "/tasks/workflows/" + task.id,
+        {
+          record: task.record,
+          noteId: task.noteId,
+          action: "withdraw",
+          queueId: task.queue.id,
+        },
+        "PATCH",
+      );
+      await dispatch(task, { agentId: agent.id });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+      void queryClient.invalidateQueries({ queryKey: ["task-workflows"] });
+    }
+  }
+
+  async function withdrawQueuedTask(task: BoardTask) {
+    if (!task.queue) return;
+    try {
+      await api(
+        "/tasks/workflows/" + task.id,
+        {
+          record: task.record,
+          noteId: task.noteId,
+          action: "withdraw",
+          queueId: task.queue.id,
+        },
+        "PATCH",
+      );
+      await queryClient.invalidateQueries({ queryKey: ["task-workflows"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleQuickEnqueue(task: BoardTask, trigger?: HTMLButtonElement) {
+    const directAgent =
+      activeAgents.find((item) => item.id === task.agentId) ??
+      (activeAgents.length === 1 ? activeAgents[0] : undefined);
+    if (directAgent) {
+      void enqueueTaskDirect(task, directAgent.id);
+    } else if (trigger || quickAssignFallbackRef.current) {
+      onAssign(task, trigger ?? quickAssignFallbackRef.current!);
+    }
+  }
+
+  function handleDragEnd(activeId: string, overId: string | undefined, task: BoardTask | undefined) {
+    setActiveDrag(undefined);
+    if (!overId || !task) return;
+
+    if (overId.startsWith("agent-dock:")) {
+      const targetAgentId = overId.slice("agent-dock:".length);
+      if (canHandOffTask(task)) {
+        void enqueueTaskDirect(task, targetAgentId);
+      } else if (task.queue && task.queue.agentId !== targetAgentId) {
+        void reassignQueuedTask(task, targetAgentId);
+      }
+      return;
+    }
+
+    if (task.queue?.position) {
+      const agentId = task.queue.agentId;
+      const ids = queuedIdsByAgent.get(agentId) ?? [];
+      if (ids.includes(overId) && activeId !== overId) {
+        const from = ids.indexOf(activeId);
+        const to = ids.indexOf(overId);
+        if (from >= 0 && to >= 0 && ids.length === (queueSizes.get(agentId) ?? 0)) {
+          reorder.mutate({ agentId, ids: arrayMove(ids, from, to) });
+        }
+        return;
+      }
+      if (overId === "column:todo") {
+        void withdrawQueuedTask(task);
+        return;
+      }
+    }
+
+    if (overId === "column:queued") {
+      if (canHandOffTask(task)) {
+        handleQuickEnqueue(task);
+      }
+      return;
+    }
+
+    if (overId === "column:done") {
+      if (task.status === "review" || task.status === "todo") {
+        completeTask.mutate({ task, done: true });
+      }
+      return;
+    }
+
+    if (overId === "column:todo" && task.status !== "todo") {
+      void changeTaskWorkflow(task, "todo").catch((error: Error) => toast.error(error.message));
+    }
+  }
+
   const filterCount = Object.values(filters).reduce(
     (count, values) => count + values.length,
     0,
   );
   const GroupIcon = groups[group];
-  const loading =
-    noteList.isPending ||
-    results.pending ||
-    external.isPending ||
-    workItems.isPending;
-  const failed = [noteList, results.failed, external, workItems].find(
-    (source) => source?.error,
-  );
 
-  function renderCard(task: BoardTask, sortable = false) {
+  const defaultCreateAgent =
+    filters.agent?.length === 1 && filters.agent[0] !== ""
+      ? filters.agent[0]
+      : undefined;
+  const defaultCreateProject =
+    filters.project?.length === 1 && filters.project[0] !== ""
+      ? filters.project[0]
+      : undefined;
+
+  function moveQueuedTask(agentId: string, queueId: string, delta: -1 | 1) {
+    const ids = queuedIdsByAgent.get(agentId) ?? [];
+    const from = ids.indexOf(queueId);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    if (ids.length !== (queueSizes.get(agentId) ?? 0)) return;
+    reorder.mutate({ agentId, ids: arrayMove(ids, from, to) });
+  }
+
+  function renderCard(
+    task: BoardTask,
+    options?: {
+      sortable?: boolean;
+      onMoveUp?: () => void;
+      onMoveDown?: () => void;
+      onWithdraw?: () => void;
+    },
+  ) {
+    const sortable = options?.sortable ?? false;
+    const canDragCrossColumn = display === "board";
+    const agentMetrics = task.queue
+      ? agentMetricsMap.get(task.queue.agentId)
+      : undefined;
+    const waitState = queueWaitState(task.queue, agentMetrics, nowMs);
+    const pendingRequest = task.execution?.runId
+      ? requestByRunId.get(task.execution.runId)
+      : undefined;
+    const canRetry =
+      !!task.execution?.runId &&
+      !task.execution.automationId &&
+      (task.execution.status === "failed" ||
+        task.execution.status === "interrupted");
+    const canEditDeadline =
+      task.record !== "automation" &&
+      task.status !== "done" &&
+      task.status !== "closed";
     return (
       <TaskCard
         key={task.id}
         task={task}
         group={group}
         sourceLabel={sourceLabels.get(task.source) ?? task.source}
+        nowMs={nowMs}
+        reminderSettings={reminderSettings}
         selected={task.id === selectedTaskId}
         sortable={sortable}
+        draggable={canDragCrossColumn}
+        activeDrag={activeDrag}
+        waitState={waitState}
+        agentMetrics={agentMetrics}
+        pendingRequest={pendingRequest}
+        approving={approveRequest.isPending}
+        retrying={retryRun.isPending}
         onOpen={onOpen}
         onAssign={onAssign}
+        onQuickEnqueue={handleQuickEnqueue}
+        onChangeDeadline={
+          canEditDeadline
+            ? (next) => handleChangeDeadline(task, next)
+            : undefined
+        }
+        onApproveRequest={
+          pendingRequest
+            ? () => approveRequest.mutate(pendingRequest.id)
+            : undefined
+        }
+        onRetryRun={
+          canRetry ? () => retryRun.mutate(task.execution!.runId) : undefined
+        }
+        onMoveUp={options?.onMoveUp}
+        onMoveDown={options?.onMoveDown}
+        onWithdraw={options?.onWithdraw}
+        onAccept={
+          task.status === "unconfirmed"
+            ? () => acceptTask.mutate(task)
+            : undefined
+        }
+        onAcceptAndEnqueue={
+          task.status === "unconfirmed" && activeAgents.length > 0
+            ? (trigger) => handleQuickEnqueue(task, trigger)
+            : undefined
+        }
+        onQuickComplete={
+          task.status === "review"
+            ? () => completeTask.mutate({ task, done: true })
+            : undefined
+        }
       />
     );
   }
+
+  const pendingReorder = reorder.isPending ? reorder.variables : undefined;
 
   const content =
     loading && !shown.length ? (
@@ -442,70 +750,85 @@ export function TaskBoard({
           </Button>
         )}
       </Empty>
+    ) : display === "list" ? (
+      <TaskListView
+        tasks={shown}
+        group={group}
+        sort={sort}
+        agents={agents}
+        agentMetrics={agentMetricsMap}
+        reminderSettings={reminderSettings}
+        selectedTaskId={selectedTaskId}
+        activeDrag={activeDrag}
+        nowMs={nowMs}
+        onOpen={onOpen}
+        onAssign={onAssign}
+        onAccept={(task) => acceptTask.mutate(task)}
+        onQuickComplete={(task) => completeTask.mutate({ task, done: true })}
+        onChangeDeadline={handleChangeDeadline}
+      />
     ) : (
-      <div className="task-board-columns" data-group={group}>
-        {[...columns].map(([key, { label, tasks }]) => {
-          const agent = group === "agent" ? tasks[0]?.agent : undefined;
+      <div
+        className="task-board-columns"
+        data-group={group}
+        data-column-count={columns.size}
+      >
+        {[...columns].map(([key, { label, tasks: columnTasks }]) => {
+          const agent = group === "agent" ? columnTasks[0]?.agent : undefined;
+          const droppableColumn =
+            group === "status" &&
+            (key === "todo" || key === "queued" || key === "done");
+          const comparator =
+            sort === "priority"
+              ? compareTasksByPriority
+              : compareTasksByDeadline;
+          const sortedColumnTasks =
+            group === "status" && key === "running"
+              ? [...columnTasks].sort((a, b) => {
+                  const attDiff =
+                    Number(needsAttention(b)) - Number(needsAttention(a));
+                  if (attDiff !== 0) return attDiff;
+                  return comparator(a, b);
+                })
+              : group === "status" && key === "done"
+                ? columnTasks
+                : [...columnTasks].sort(comparator);
           return (
-            <section className="task-board-column" key={key}>
-              <h2 className="task-board-column-title">
-                {group === "status" ? (
-                  <TaskStatusIcon status={key as TaskStatus} />
-                ) : agent ? (
-                  <AgentAvatar agent={agent} size="sm" />
-                ) : (
-                  <GroupIcon
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                )}
-                <span className="truncate" title={label}>
-                  {label}
-                </span>
-                <small className="task-board-column-count">
-                  {tasks.length}
-                </small>
-              </h2>
-              <div className="task-board-column-scroll">
-                {group === "status" && key === "queued" ? (
-                  <QueuedColumn
-                    tasks={tasks}
-                    queueSizes={queueSizes}
-                    renderCard={renderCard}
-                  />
-                ) : (
-                  <>
-                    {group === "status" &&
-                      key === "todo" &&
-                      tasks.some(({ status }) => status === "unconfirmed") && (
-                        <div className="task-board-subgroup">
-                          <h3 className="task-board-subheading">
-                            <TaskStatusIcon status="unconfirmed" />
-                            {t("tasks.status.unconfirmed")}
-                          </h3>
-                          <ul className="task-board-cards">
-                            {tasks
-                              .filter(({ status }) => status === "unconfirmed")
-                              .map((task) => renderCard(task))}
-                          </ul>
-                        </div>
-                      )}
-                    <ul className="task-board-cards">
-                      {(group === "status" && key === "todo"
-                        ? tasks.filter(({ status }) => status !== "unconfirmed")
-                        : group === "status" && key === "running"
-                          ? [...tasks].sort(
-                              (a, b) =>
-                                Number(needsAttention(b)) -
-                                Number(needsAttention(a)),
-                            )
-                          : tasks
-                      ).map((task) => renderCard(task))}
-                    </ul>
-                  </>
-                )}
-              </div>
-            </section>
+            <BoardColumn
+              key={key}
+              columnKey={key}
+              label={label}
+              count={columnTasks.length}
+              group={group}
+              agent={agent}
+              GroupIcon={GroupIcon}
+              droppable={droppableColumn}
+              activeDragTask={activeDrag?.task}
+            >
+              {columnTasks.length === 0 ? (
+                <div className="task-board-column-empty">
+                  {t(
+                    key === "queued"
+                      ? "tasks.emptyColumnQueued"
+                      : "tasks.emptyColumn",
+                  )}
+                </div>
+              ) : group === "status" && key === "queued" ? (
+                <QueuedColumn
+                  tasks={columnTasks}
+                  queueSizes={queueSizes}
+                  agentMetricsMap={agentMetricsMap}
+                  pendingReorder={pendingReorder}
+                  onMoveItem={moveQueuedTask}
+                  onWithdrawItem={(task) => void withdrawQueuedTask(task)}
+                  renderCard={renderCard}
+                />
+              ) : (
+                <ul className="task-board-cards">
+                  {sortedColumnTasks.map((task) => renderCard(task))}
+                </ul>
+              )}
+            </BoardColumn>
           );
         })}
       </div>
@@ -541,33 +864,30 @@ export function TaskBoard({
           )}
         </div>
         <div className="task-board-controls">
-          {(attentionCount > 0 || onlyAttention) && (
-            <Button
-              variant="outline"
-              aria-pressed={onlyAttention}
-              data-filtered={onlyAttention}
-              onClick={() =>
-                setFilters({
-                  ...filters,
-                  status: onlyAttention ? undefined : ["attention"],
-                })
-              }
-            >
-              <CircleAlert data-icon="inline-start" />
-              {t("tasks.status.attention")}
-              <span className="task-board-count">{attentionCount}</span>
-            </Button>
-          )}
           <TaskBoardFilter
             filters={filters}
             count={filterCount}
             quickFilter={quickFilter}
             onChange={setFilters}
-            onQuickFilterChange={(quickFilter) =>
-              onViewChange({ group, filters, quickFilter })
+            onQuickFilterChange={(nextQuickFilter) =>
+              onViewChange({
+                group,
+                sort: view.sort,
+                filters,
+                quickFilter: nextQuickFilter,
+              })
             }
             onSaveAs={onSaveAs}
             fields={[
+              {
+                id: "due",
+                label: t("tasks.deadline.label"),
+                icon: CalendarClock,
+                options: dueFilterValues.map((id) => ({
+                  id,
+                  label: t("tasks.deadline.filter." + id),
+                })),
+              },
               {
                 id: "status",
                 label: t("tasks.filterStatus"),
@@ -649,12 +969,36 @@ export function TaskBoard({
             type="single"
             variant="outline"
             spacing={0}
-            className="task-board-group"
+            className="task-segmented-toggle task-board-sort"
+            aria-label={t("tasks.sort.label")}
+            value={sort}
+            onValueChange={(value) => {
+              if (value === "deadline" || value === "priority") setSort(value);
+            }}
+          >
+            <ToggleGroupItem value="deadline" title={t("tasks.sort.deadlineHint")}>
+              <ArrowDownUp className="size-3.5" aria-hidden="true" />
+              <span>{t("tasks.sort.deadline")}</span>
+            </ToggleGroupItem>
+            <ToggleGroupItem value="priority" title={t("tasks.sort.priorityHint")}>
+              <span>{t("tasks.sort.priority")}</span>
+            </ToggleGroupItem>
+          </ToggleGroup>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            spacing={0}
+            className="task-segmented-toggle task-board-group"
             aria-label={t("tasks.group")}
             value={group}
             onValueChange={(value) => {
               if (value)
-                onViewChange({ group: value as Group, filters, quickFilter });
+                onViewChange({
+                  group: value as Group,
+                  sort: view.sort,
+                  filters,
+                  quickFilter,
+                });
             }}
           >
             {Object.keys(groups).map((id) => (
@@ -663,20 +1007,200 @@ export function TaskBoard({
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
+          {!filters.status?.length && (group === "status" || display === "list") && (
+            <Button
+              ref={quickAssignFallbackRef}
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="task-show-done-btn"
+              aria-pressed={showingDone}
+              data-active={showingDone || undefined}
+              onClick={() => setShowDone((prev) => !prev)}
+            >
+              {t("tasks.showDone")}
+            </Button>
+          )}
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            spacing={0}
+            className="task-segmented-toggle task-board-display-toggle"
+            aria-label={t("tasks.display")}
+            value={display}
+            onValueChange={(value) => {
+              if (value === "board" || value === "list") setDisplay(value);
+            }}
+          >
+            <ToggleGroupItem value="board">
+              <Kanban className="size-3.5" aria-hidden="true" />
+              <span>{t("tasks.display.board")}</span>
+            </ToggleGroupItem>
+            <ToggleGroupItem value="list">
+              <List className="size-3.5" aria-hidden="true" />
+              <span>{t("tasks.display.list")}</span>
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
       </header>
-      <div className="task-board-workspace">
-        <div className="task-board-body">
-          {failed && shown.length > 0 && (
-            <ErrorNotice
-              error={failed.error}
-              retry={() => void failed.refetch()}
-            />
-          )}
-          {content}
+
+      <DndContext
+        id="task-board-dnd"
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        onDragStart={({ active, activatorEvent }) => {
+          const task = active.data.current?.task as BoardTask | undefined;
+          const el = (activatorEvent.target as HTMLElement | null)?.closest(
+            ".task-board-card, .task-list-row",
+          );
+          if (task && el) {
+            setActiveDrag({
+              id: String(active.id),
+              task,
+              rect: el.getBoundingClientRect(),
+            });
+          }
+        }}
+        onDragMove={({ active }) => {
+          const rect = active.rect.current.translated;
+          if (rect) {
+            setActiveDrag((current) => (current ? { ...current, rect } : current));
+          }
+        }}
+        onDragCancel={() => setActiveDrag(undefined)}
+        onDragEnd={({ active, over }) =>
+          handleDragEnd(
+            String(active.id),
+            over ? String(over.id) : undefined,
+            active.data.current?.task as BoardTask | undefined,
+          )
+        }
+      >
+        <TaskAgentDock
+          metrics={agentMetricsList}
+          selectedAgents={filters.agent ?? []}
+          draggingTask={
+            !!activeDrag &&
+            (canHandOffTask(activeDrag.task) ||
+              activeDrag.task.status === "queued")
+          }
+          onToggleAgentFilter={(agentId) => {
+            const current = filters.agent ?? [];
+            const next = current.includes(agentId)
+              ? current.filter((id) => id !== agentId)
+              : [agentId];
+            setFilters({ ...filters, agent: next.length ? next : undefined });
+          }}
+        />
+
+        <div className="task-board-subbar">
+          <TaskQuickCreate
+            agents={agents}
+            projects={namedProjects}
+            defaultAgentId={defaultCreateAgent}
+            defaultProject={defaultCreateProject}
+            reminderSettings={reminderSettings}
+            onNeedsDispatch={onAssign}
+          />
         </div>
-        {detail}
-      </div>
+
+        <div className="task-board-workspace">
+          <div className="task-board-body">
+            {failed && shown.length > 0 && (
+              <ErrorNotice
+                error={failed.error}
+                retry={() => void failed.refetch()}
+              />
+            )}
+            {content}
+          </div>
+          {detail}
+        </div>
+      </DndContext>
+    </section>
+  );
+}
+
+function BoardColumn({
+  columnKey,
+  label,
+  count,
+  group,
+  agent,
+  GroupIcon,
+  droppable,
+  activeDragTask,
+  children,
+}: {
+  columnKey: string;
+  label: string;
+  count: number;
+  group: Group;
+  agent?: Agent;
+  GroupIcon: LucideIcon;
+  droppable: boolean;
+  activeDragTask?: BoardTask;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const accepts =
+    droppable &&
+    !!activeDragTask &&
+    ((columnKey === "queued" &&
+      canHandOffTask(activeDragTask)) ||
+      (columnKey === "todo" &&
+        activeDragTask.status !== "todo") ||
+      (columnKey === "done" &&
+        (activeDragTask.status === "review" ||
+          activeDragTask.status === "todo")));
+
+  const { setNodeRef, isOver } = useDroppable({
+    id: `column:${columnKey}`,
+    disabled: !droppable,
+    data: { type: "column", columnKey },
+  });
+
+  const dropHint =
+    columnKey === "todo"
+      ? t("tasks.dropColumnTodo")
+      : columnKey === "queued"
+        ? t("tasks.dropColumnQueued")
+        : columnKey === "done"
+          ? t("tasks.dropColumnDone")
+          : "";
+
+  return (
+    <section
+      ref={setNodeRef}
+      className="task-board-column"
+      data-column={columnKey}
+      data-drop-accept={accepts || undefined}
+      data-drop-over={(accepts && isOver) || undefined}
+    >
+      <h2 className="task-board-column-title">
+        {group === "status" ? (
+          <span
+            className="task-dot"
+            data-status={columnKey}
+            aria-hidden="true"
+          />
+        ) : agent ? (
+          <AgentAvatar agent={agent} size="sm" />
+        ) : (
+          <GroupIcon
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
+        )}
+        <span className="truncate" title={label}>
+          {label}
+        </span>
+        <small className="task-board-column-count">{count}</small>
+        {accepts && isOver && dropHint && (
+          <span className="task-board-column-drop-hint">{dropHint}</span>
+        )}
+      </h2>
+      <div className="task-board-column-scroll">{children}</div>
     </section>
   );
 }
@@ -684,11 +1208,27 @@ export function TaskBoard({
 function QueuedColumn({
   tasks,
   queueSizes,
+  agentMetricsMap,
+  pendingReorder,
+  onMoveItem,
+  onWithdrawItem,
   renderCard,
 }: {
   tasks: BoardTask[];
   queueSizes: Map<string, number>;
-  renderCard: (task: BoardTask, sortable?: boolean) => ReactNode;
+  agentMetricsMap: Map<string, AgentQueueMetrics>;
+  pendingReorder?: { agentId: string; ids: string[] };
+  onMoveItem: (agentId: string, queueId: string, delta: -1 | 1) => void;
+  onWithdrawItem: (task: BoardTask) => void;
+  renderCard: (
+    task: BoardTask,
+    options?: {
+      sortable?: boolean;
+      onMoveUp?: () => void;
+      onMoveDown?: () => void;
+      onWithdraw?: () => void;
+    },
+  ) => ReactNode;
 }) {
   const grouped = new Map<string, BoardTask[]>();
   for (const task of tasks) {
@@ -698,12 +1238,18 @@ function QueuedColumn({
     items.push(task);
     grouped.set(agentId, items);
   }
-  return [...grouped].map(([agentId, tasks]) => (
+  return [...grouped].map(([agentId, groupTasks]) => (
     <QueuedGroup
       key={agentId}
       agentId={agentId}
-      tasks={tasks}
+      tasks={groupTasks}
       queueSize={queueSizes.get(agentId) ?? 0}
+      metrics={agentMetricsMap.get(agentId)}
+      pendingOrder={
+        pendingReorder?.agentId === agentId ? pendingReorder.ids : undefined
+      }
+      onMoveItem={onMoveItem}
+      onWithdrawItem={onWithdrawItem}
       renderCard={renderCard}
     />
   ));
@@ -713,12 +1259,28 @@ function QueuedGroup({
   agentId,
   tasks,
   queueSize,
+  metrics,
+  pendingOrder,
+  onMoveItem,
+  onWithdrawItem,
   renderCard,
 }: {
   agentId: string;
   tasks: BoardTask[];
   queueSize: number;
-  renderCard: (task: BoardTask, sortable?: boolean) => ReactNode;
+  metrics?: AgentQueueMetrics;
+  pendingOrder?: string[];
+  onMoveItem: (agentId: string, queueId: string, delta: -1 | 1) => void;
+  onWithdrawItem: (task: BoardTask) => void;
+  renderCard: (
+    task: BoardTask,
+    options?: {
+      sortable?: boolean;
+      onMoveUp?: () => void;
+      onMoveDown?: () => void;
+      onWithdraw?: () => void;
+    },
+  ) => ReactNode;
 }) {
   const { t } = useTranslation();
   const agent = tasks[0].agent;
@@ -728,26 +1290,8 @@ function QueuedGroup({
   const ids = ordered.flatMap(({ queue }) =>
     queue?.position ? [queue.id] : [],
   );
-  const reorder = useMutation({
-    mutationFn: (ids: string[]) =>
-      api("/tasks/queue/order", { agentId, ids }, "PUT"),
-    onError: (error) => toast.error(error.message),
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: ["task-workflows"] }),
-  });
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: { y: 10 } } }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 200, tolerance: 5 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
-    }),
-  );
-  const sortable =
-    ids.length > 1 && ids.length === queueSize && !reorder.isPending;
-  const pendingOrder = reorder.isPending ? reorder.variables : undefined;
+  const sortable = ids.length > 1 && ids.length === queueSize && !pendingOrder;
+
   if (
     pendingOrder &&
     ids.length === pendingOrder.length &&
@@ -769,6 +1313,8 @@ function QueuedGroup({
     );
   }
 
+  const isPaused = metrics?.paused ?? !!agent?.profile.taskQueuePaused;
+
   return (
     <div className="task-board-subgroup">
       <h3 className="task-board-subheading">
@@ -776,26 +1322,34 @@ function QueuedGroup({
         <span className="truncate">
           {agent?.name ?? t("tasks.unavailableAgent")}
         </span>
+        <span className="task-board-subgroup-stat tabular-nums">
+          {isPaused
+            ? t("tasks.queuePaused")
+            : metrics
+              ? `${metrics.running}/${metrics.concurrency}`
+              : null}
+        </span>
       </h3>
-      <DndContext
-        id={`task-queue-${agentId}`}
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={({ active, over }) => {
-          if (!sortable || !over || active.id === over.id) return;
-          const from = ids.indexOf(String(active.id));
-          const to = ids.indexOf(String(over.id));
-          if (from >= 0 && to >= 0) reorder.mutate(arrayMove(ids, from, to));
-        }}
-      >
-        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          <ul className="task-board-cards">
-            {ordered.map((task) =>
-              renderCard(task, sortable && !!task.queue?.position),
-            )}
-          </ul>
-        </SortableContext>
-      </DndContext>
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        <ul className="task-board-cards">
+          {ordered.map((task, index) => {
+            const queueId = task.queue?.id;
+            const canReorder = sortable && !!queueId;
+            return renderCard(task, {
+              sortable: canReorder,
+              onMoveUp:
+                canReorder && index > 0
+                  ? () => onMoveItem(agentId, queueId, -1)
+                  : undefined,
+              onMoveDown:
+                canReorder && index < ordered.length - 1
+                  ? () => onMoveItem(agentId, queueId, 1)
+                  : undefined,
+              onWithdraw: task.queue ? () => onWithdrawItem(task) : undefined,
+            });
+          })}
+        </ul>
+      </SortableContext>
     </div>
   );
 }
@@ -804,29 +1358,89 @@ function TaskCard({
   task,
   group,
   sourceLabel,
+  nowMs,
+  reminderSettings,
   selected,
   sortable,
+  draggable,
+  activeDrag,
+  waitState,
+  agentMetrics,
+  pendingRequest,
+  approving,
+  retrying,
   onOpen,
   onAssign,
+  onQuickEnqueue,
+  onChangeDeadline,
+  onApproveRequest,
+  onRetryRun,
+  onMoveUp,
+  onMoveDown,
+  onWithdraw,
+  onAccept,
+  onAcceptAndEnqueue,
+  onQuickComplete,
 }: {
   task: BoardTask;
   group: Group;
   sourceLabel: string;
+  nowMs: number;
+  reminderSettings: TaskReminderSettings;
   selected: boolean;
   sortable: boolean;
+  draggable: boolean;
+  activeDrag?: ActiveCardDrag;
+  waitState?: ReturnType<typeof queueWaitState>;
+  agentMetrics?: AgentQueueMetrics;
+  pendingRequest?: Request;
+  approving?: boolean;
+  retrying?: boolean;
   onOpen: TaskCardAction;
   onAssign: TaskCardAction;
+  onQuickEnqueue: (task: BoardTask, trigger?: HTMLButtonElement) => void;
+  onChangeDeadline?: (next: TaskDeadlineInput | null) => void;
+  onApproveRequest?: () => void;
+  onRetryRun?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onWithdraw?: () => void;
+  onAccept?: () => void;
+  onAcceptAndEnqueue?: (trigger: HTMLButtonElement) => void;
+  onQuickComplete?: () => void;
 }) {
   const { t } = useTranslation();
-  const {
-    attributes,
-    listeners,
-    transform,
-    transition,
-    isDragging,
-    setNodeRef,
-    setActivatorNodeRef,
-  } = useSortable({ id: task.queue?.id ?? task.id, disabled: !sortable });
+  const dragId = task.queue?.id ?? `card:${task.id}`;
+  const useSortableMode = sortable && !!task.queue?.position;
+  const sortableHook = useSortable({
+    id: dragId,
+    disabled: !useSortableMode,
+    data: { task, queueAgentId: task.queue?.agentId },
+  });
+  const draggableHook = useDraggable({
+    id: dragId,
+    disabled: useSortableMode || !draggable,
+    data: { task },
+  });
+
+  const isDragging = useSortableMode
+    ? sortableHook.isDragging
+    : draggableHook.isDragging;
+  const setNodeRef = useSortableMode
+    ? sortableHook.setNodeRef
+    : draggableHook.setNodeRef;
+  const setActivatorNodeRef = useSortableMode
+    ? sortableHook.setActivatorNodeRef
+    : draggableHook.setActivatorNodeRef;
+  const attributes = useSortableMode
+    ? sortableHook.attributes
+    : draggableHook.attributes;
+  const listeners = useSortableMode
+    ? sortableHook.listeners
+    : draggableHook.listeners;
+  const transform = useSortableMode ? sortableHook.transform : null;
+  const transition = useSortableMode ? sortableHook.transition : undefined;
+
   const cardRef = useCallback(
     (node: HTMLLIElement | null) => {
       setNodeRef(node);
@@ -834,133 +1448,344 @@ function TaskCard({
     },
     [setNodeRef, selected],
   );
-  const SourceIcon =
-    task.source === "automation"
-      ? Zap
-      : task.record === "workItem"
-        ? UserRound
-        : task.kind === "pr"
-          ? GitPullRequest
-          : task.kind === "issue"
-            ? CircleDot
-            : FileText;
+
   const project = group === "project" ? "" : task.project;
   const context =
     project || (!task.reference && (task.noteTitle || sourceLabel));
   const showNote = !!project && !!task.noteTitle && project !== task.noteTitle;
   const runStatus =
-    (task.status === "running" || task.status === "attention") &&
+    (task.status === "running" || task.status === "attention" ||
+      (task.status === "todo" && hasUnfinishedTaskRun(task.execution))) &&
     task.execution?.status;
-  const showStatus = group !== "status" && !runStatus;
-  const canAssign = task.status === "todo" || task.status === "unconfirmed";
+  const showStatus = group !== "status" && (!runStatus || task.status === "todo");
   const groupedQueue = group === "status" && task.status === "queued";
-  const queuePosition = task.queue?.position
-    ? t("tasks.queuePosition", { count: task.queue.position })
-    : undefined;
+  const queueRank = task.queue?.position ? `#${task.queue.position}` : undefined;
+  const isFailed =
+    (task.status === "attention" &&
+      (task.execution?.status === "failed" || task.execution?.status === "interrupted")) ||
+    !!task.queue?.error;
+
+  const floatingRect =
+    isDragging && activeDrag?.id === dragId ? activeDrag.rect : undefined;
+
+  const waitLabel =
+    waitState?.kind === "paused"
+      ? t("tasks.waitReason.paused")
+      : waitState?.kind === "slots"
+        ? agentMetrics
+          ? t("tasks.waitReason.slotsCount", {
+              running: agentMetrics.running,
+              concurrency: agentMetrics.concurrency,
+            })
+          : t("tasks.waitReason.slots")
+        : waitState?.kind === "cooldown"
+          ? t("tasks.waitReason.cooldown", {
+              time: formatWaitDuration(waitState.remainingMs, t),
+            })
+          : undefined;
+
+  const canDrag = useSortableMode || draggable;
+
   return (
     <li
       ref={cardRef}
-      className="task-board-card"
-      data-selected={selected}
-      {...(sortable ? listeners : {})}
+      className="task-board-card-slot"
+      data-dragging={isDragging || undefined}
       style={
-        sortable
-          ? {
-              transform: CSS.Transform.toString(
-                transform && { ...transform, x: 0 },
-              ),
-              transition,
-              zIndex: isDragging ? 1 : undefined,
-            }
-          : undefined
+        floatingRect
+          ? { height: floatingRect.height }
+          : useSortableMode
+            ? {
+                transform: CSS.Transform.toString(
+                  transform && { ...transform, x: 0 },
+                ),
+                transition,
+              }
+            : undefined
       }
     >
-      <Button
-        ref={sortable ? setActivatorNodeRef : undefined}
-        {...(sortable ? attributes : {})}
-        variant="ghost"
-        className="task-board-card-open"
-        aria-haspopup="dialog"
-        aria-expanded={selected}
-        onClick={(event) => onOpen(task, event.currentTarget)}
+      <div
+        className="task-board-card"
+        data-selected={selected}
+        data-dragging={isDragging || undefined}
+        data-status={task.status}
+        data-attention={(needsAttention(task) && !isFailed) || undefined}
+        data-failed={isFailed || undefined}
+        data-overdue={task.deadline?.urgency === "overdue" || undefined}
+        style={
+          floatingRect
+            ? {
+                position: "fixed",
+                left: floatingRect.left,
+                top: floatingRect.top,
+                width: floatingRect.width,
+                height: floatingRect.height,
+                zIndex: 40,
+                pointerEvents: "none",
+              }
+            : undefined
+        }
       >
-        <span className="task-board-card-meta">
-          <span className="task-board-card-context">
-            <SourceIcon className="size-3.5" aria-hidden="true" />
-            {context && (
-              <span className="truncate" title={context}>
-                {context}
+        <Button
+          ref={canDrag ? setActivatorNodeRef : undefined}
+          {...(canDrag ? attributes : {})}
+          {...(canDrag ? listeners : {})}
+          variant="ghost"
+          className="task-board-card-open"
+          aria-haspopup="dialog"
+          aria-expanded={selected}
+          onClick={(event) => onOpen(task, event.currentTarget)}
+        >
+          <span className="task-board-card-meta">
+            <span className="task-board-card-context">
+              {task.priority && <TaskPriorityIcon priority={task.priority} />}
+              {context && (
+                <span className="truncate" title={context}>
+                  {context}
+                </span>
+              )}
+              {task.reference && (
+                <span className="shrink-0 font-mono">{task.reference}</span>
+              )}
+            </span>
+            <span className="task-board-card-badges">
+              {groupedQueue && queueRank && (
+                <span className="task-board-card-position font-mono">
+                  {queueRank}
+                </span>
+              )}
+              {runStatus && <RunStatus status={runStatus} />}
+              {!runStatus && task.status === "review" && (
+                <span className="task-status-chip" data-status="review">
+                  {t("tasks.status.review")}
+                </span>
+              )}
+              {!runStatus && task.status === "unconfirmed" && (
+                <span className="task-status-chip">
+                  {t("tasks.status.unconfirmed")}
+                </span>
+              )}
+              {!runStatus && task.queue?.error && (
+                <span className="task-status-chip" data-status="failed">
+                  {t("tasks.status.attention")}
+                </span>
+              )}
+            </span>
+          </span>
+          <span
+            className="task-board-card-title line-clamp-2"
+            title={task.title}
+          >
+            {task.title}
+          </span>
+          {(showStatus || showNote || task.remote) && (
+            <span className="task-board-card-tags">
+              {showStatus && (
+                <span className="task-status-chip" data-status={task.status}>
+                  <span
+                    className="task-dot"
+                    data-status={task.status}
+                    aria-hidden="true"
+                  />
+                  {t("tasks.status." + task.status)}
+                </span>
+              )}
+              {showNote && (
+                <span className="task-list-tag truncate" title={task.noteTitle}>
+                  {task.noteTitle}
+                </span>
+              )}
+              {task.remote && (
+                <span className="task-list-tag">
+                  {t("tasks.remote." + task.remote)}
+                </span>
+              )}
+            </span>
+          )}
+        </Button>
+
+        {pendingRequest && (
+          <div className="task-card-approval-strip">
+            <span
+              className="task-card-strip-text truncate"
+              title={pendingRequest.detail || pendingRequest.title}
+            >
+              <AlertCircle className="size-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">{pendingRequest.title}</span>
+            </span>
+            {onApproveRequest && (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="task-card-micro-btn task-btn-positive"
+                disabled={approving}
+                onClick={onApproveRequest}
+              >
+                {t("tasks.approveQuick")}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {!pendingRequest && isFailed && (
+          <div className="task-card-retry-strip">
+            <span className="task-card-strip-text truncate">
+              {task.queue?.error ||
+                t("status." + (task.execution?.status ?? "failed"))}
+            </span>
+            {onRetryRun && (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="task-card-micro-btn task-btn-danger"
+                disabled={retrying}
+                onClick={onRetryRun}
+              >
+                {t("tasks.retryQuick")}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {task.status === "queued" && !task.queue?.error && (
+          <div className="task-card-queue-row">
+            <span
+              className="task-board-card-wait truncate"
+              data-reason={waitState?.kind}
+            >
+              {waitLabel || t("tasks.waitReason.ready")}
+            </span>
+            {groupedQueue && (onMoveUp || onMoveDown || onWithdraw) && (
+              <span className="task-card-queue-actions">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="task-card-queue-btn"
+                  disabled={!onMoveUp}
+                  aria-label={t("tasks.moveUp")}
+                  title={t("tasks.moveUp")}
+                  onClick={onMoveUp}
+                >
+                  <ChevronUp className="size-3" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="task-card-queue-btn"
+                  disabled={!onMoveDown}
+                  aria-label={t("tasks.moveDown")}
+                  title={t("tasks.moveDown")}
+                  onClick={onMoveDown}
+                >
+                  <ChevronDown className="size-3" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="task-card-queue-btn"
+                  disabled={!onWithdraw}
+                  aria-label={t("tasks.withdraw")}
+                  title={t("tasks.withdraw")}
+                  onClick={onWithdraw}
+                >
+                  <Undo2 className="size-3" />
+                </Button>
               </span>
             )}
-            {task.reference && (
-              <span className="shrink-0">{task.reference}</span>
-            )}
-          </span>
-          {runStatus && <RunStatus status={runStatus} />}
-          {groupedQueue && queuePosition && (
-            <span className="task-board-card-position">{queuePosition}</span>
-          )}
-          {task.queue?.error && (
-            <Badge variant="outline">
-              <TaskStatusIcon status="attention" />
-              {t("tasks.status.attention")}
-            </Badge>
-          )}
-        </span>
-        <span className="task-board-card-title line-clamp-3" title={task.title}>
-          {task.title}
-        </span>
-        {(showStatus || showNote || task.remote) && (
-          <span className="task-board-card-tags">
-            {showStatus && (
-              <Badge variant="secondary">
-                <TaskStatusIcon status={task.status} />
-                {t("tasks.status." + task.status)}
-              </Badge>
-            )}
-            {showNote && (
-              <Badge
-                variant="secondary"
-                className="min-w-0 shrink"
-                title={task.noteTitle}
-              >
-                <span className="truncate">{task.noteTitle}</span>
-              </Badge>
-            )}
-            {task.remote && (
-              <Badge variant="secondary">
-                {t("tasks.remote." + task.remote)}
-              </Badge>
-            )}
-          </span>
+          </div>
         )}
-        {!groupedQueue && (
-          <span className="task-board-card-footer">
+
+        {task.deadline && (
+          <div className="task-board-card-deadline-row">
+            <TaskDeadlineBadge
+              deadline={task.deadline}
+              nowMs={nowMs}
+              defaultRemindOffsets={reminderSettings.defaultRemindOffsets}
+              allDayReminderTime={reminderSettings.allDayReminderTime}
+              editable={!!onChangeDeadline}
+              onChange={onChangeDeadline}
+            />
+          </div>
+        )}
+
+        <div className="task-board-card-footer">
+          {groupedQueue ? (
+            <span className="task-board-card-source truncate">
+              {sourceLabel}
+            </span>
+          ) : (
             <TaskAssignee agent={task.agent} assigned={!!task.agentId} />
-            {queuePosition ? (
-              <span className="task-board-card-position">{queuePosition}</span>
-            ) : (
-              <ActivityTime
-                timestamp={task.execution?.activityAt}
-                compact
-              />
-            )}
-          </span>
-        )}
-      </Button>
-      {canAssign && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="task-board-card-assign"
-          aria-label={t("tasks.assign")}
-          title={t("tasks.assign")}
-          aria-haspopup="dialog"
-          onClick={(event) => onAssign(task, event.currentTarget)}
-        >
-          <ArrowUpRight />
-        </Button>
-      )}
+          )}
+
+          {task.status === "unconfirmed" && (onAccept || onAcceptAndEnqueue) ? (
+            <span className="task-card-footer-actions">
+              {onAccept && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="task-card-micro-btn"
+                  onClick={onAccept}
+                >
+                  {t("tasks.acceptTask")}
+                </Button>
+              )}
+              {onAcceptAndEnqueue && (
+                <Button
+                  type="button"
+                  size="xs"
+                  className="task-card-micro-btn"
+                  onClick={(event) => onAcceptAndEnqueue(event.currentTarget)}
+                >
+                  {t("tasks.acceptAndEnqueue")}
+                </Button>
+              )}
+            </span>
+          ) : canHandOffTask(task) ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="task-card-micro-btn task-card-inline-action"
+              aria-label={t("tasks.assign")}
+              title={t("tasks.assign")}
+              aria-haspopup={task.agentId ? undefined : "dialog"}
+              onClick={(event) => {
+                if (task.agentId) onQuickEnqueue(task, event.currentTarget);
+                else onAssign(task, event.currentTarget);
+              }}
+            >
+              <Play className="size-2.5 fill-current" aria-hidden="true" />
+              {t("tasks.enqueue")}
+            </Button>
+          ) : onQuickComplete ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="task-card-micro-btn task-btn-positive"
+              aria-label={t("tasks.complete")}
+              title={t("tasks.complete")}
+              onClick={onQuickComplete}
+            >
+              <Check className="size-3" aria-hidden="true" />
+              {t("tasks.reviewQuick")}
+            </Button>
+          ) : !groupedQueue && queueRank ? (
+            <span className="task-board-card-position font-mono">
+              {queueRank}
+            </span>
+          ) : !groupedQueue && task.execution?.activityAt ? (
+            <ActivityTime timestamp={task.execution.activityAt} compact />
+          ) : null}
+          <TaskBoardActions task={task} status={task.status} />
+        </div>
+      </div>
     </li>
   );
 }

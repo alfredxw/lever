@@ -143,6 +143,16 @@ CREATE INDEX IF NOT EXISTS chat_runs ON runs(chat_id, sequence);
 CREATE TABLE IF NOT EXISTS task_triage(
   task_id TEXT PRIMARY KEY, accepted INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS task_deadlines(
+  task_id TEXT PRIMARY KEY,
+  due_at INTEGER NOT NULL DEFAULT 0,
+  due_date TEXT NOT NULL DEFAULT '',
+  remind_offsets_json TEXT,
+  fired_due_at INTEGER NOT NULL DEFAULT 0,
+  fired_offsets_json TEXT NOT NULL DEFAULT '[]',
+  snoozed_until INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS task_deadlines_due ON task_deadlines(due_at);
 CREATE TABLE IF NOT EXISTS task_queue(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_id TEXT NOT NULL REFERENCES agents(id),
   input_hash TEXT NOT NULL, position INTEGER NOT NULL, data TEXT NOT NULL,

@@ -44,9 +44,11 @@ export interface DesktopFrame {
 }
 
 export interface NotificationTarget {
-  chatId: string;
+  kind?: string;
+  chatId?: string;
   topicId?: string;
-  runId: string;
+  runId?: string;
+  taskId?: string;
 }
 
 // ---- Services ----
@@ -93,12 +95,12 @@ export const Dialogs = {
 } as const;
 
 /**
- * Notifications delivers Agent notifications and holds a click until the page
- * can navigate, including a click that launched the app on macOS.
+ * Notifications delivers Agent and task notifications and holds a click until
+ * the page can navigate, including a click that launched the app on macOS.
  */
 export const Notifications = {
-  show(id: string, target: NotificationTarget, title: string, agent: string): Promise<void> {
-    return call("Notifications.Show", id, target, title, agent);
+  show(id: string, target: NotificationTarget, title: string, body: string): Promise<void> {
+    return call("Notifications.Show", id, target, title, body);
   },
   supported(): Promise<boolean> {
     return call("Notifications.Supported");

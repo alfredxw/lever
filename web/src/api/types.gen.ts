@@ -276,6 +276,7 @@ export interface TaskView {
   id: string;
   name: string;
   group: 'status' | 'project' | 'agent';
+  sort?: '' | 'deadline' | 'priority';
   filters: TaskViewFilters;
   quickFilter?: 'agent' | 'kind' | 'status' | 'project' | 'none';
   revision: number /* int64 */;
@@ -288,6 +289,7 @@ export interface TaskViewFilters {
   source?: string[];
   kind?: string[];
   remote?: string[];
+  due?: string[];
 }
 export interface TaskDispatch {
   taskId: string;
@@ -314,15 +316,22 @@ export interface TaskQueueEntry {
   agentId: string;
   position?: number /* int */;
   error?: string;
+  nextStartAt?: number /* int64 */; // Unix milliseconds when start interval permits the next start.
+}
+export interface AgentTaskQueueSettings {
+  taskConcurrency?: number /* int */;
+  taskStartIntervalMinutes?: number /* int */;
+  taskQueuePaused?: boolean;
 }
 export interface TaskWorkflow {
+  disposition?: 'todo' | 'deleted';
   taskId: string;
   accepted: boolean;
   closed: boolean;
   queue?: TaskQueueEntry;
 }
 export interface TaskWorkflowUpdate extends TaskLocation {
-  action: 'accept' | 'close' | 'reopen' | 'withdraw';
+  action: 'accept' | 'close' | 'reopen' | 'withdraw' | 'todo' | 'delete';
   queueId?: string;
 }
 export interface TaskExecution {
@@ -371,12 +380,36 @@ export interface RunLocation {
   runId: string;
   topic?: boolean;
 }
+export const WorkItemPriorityUrgent = "urgent";
+export const WorkItemPriorityHigh = "high";
+export const WorkItemPriorityMedium = "medium";
+export const WorkItemPriorityLow = "low";
+export type WorkItemPriority = typeof WorkItemPriorityUrgent | typeof WorkItemPriorityHigh | typeof WorkItemPriorityMedium | typeof WorkItemPriorityLow;
+export interface UserWorkItemCreate {
+  title: string;
+  originRunId?: string;
+  body?: string;
+  project?: string;
+  priority?: '' | 'urgent' | 'high' | 'medium' | 'low';
+  assigneeAgentId?: string;
+  deadline?: TaskDeadlineInput;
+}
+export interface WorkItemUpdate {
+  done?: boolean;
+  title?: string;
+  body?: string;
+  project?: string;
+  priority?: '' | 'urgent' | 'high' | 'medium' | 'low';
+  assigneeAgentId?: string;
+}
 export interface WorkItem {
   id: string;
   title: string;
   body?: string;
-  createdByAgentId: string;
-  assigneeAgentId: string;
+  project?: string;
+  priority?: '' | 'urgent' | 'high' | 'medium' | 'low';
+  createdByAgentId?: string;
+  assigneeAgentId?: string;
   origin?: RunLocation;
   createdAt: string;
   done: boolean;
@@ -464,6 +497,40 @@ export interface ExternalTask {
   done: boolean;
   url?: string;
   body?: string;
+  dueAt?: number /* int64 */;
+  dueDate?: string;
+}
+/**
+ * TaskDeadline stores local deadline and reminder overrides/state for any task
+ * (work item, note task, or external task).
+ */
+export interface TaskDeadline {
+  taskId: string;
+  dueAt?: number /* int64 */; // Unix ms; 0 means inherit external task dueAt
+  dueDate?: string; // YYYY-MM-DD for all-day deadlines
+  remindOffsets?: number /* int */[]; // nil = inherit global defaults; empty slice = muted
+  firedDueAt?: number /* int64 */;
+  firedOffsets?: number /* int */[];
+  snoozedUntil?: number /* int64 */;
+}
+export interface TaskDeadlineInput {
+  dueAt: number /* int64 */;
+  dueDate?: string;
+  remindOffsets?: number /* int */[]; // nil = use default reminder offsets; non-nil = explicit list
+}
+export interface TaskReminderSettings {
+  defaultRemindOffsets: number /* int */[]; // Lead minutes (e.g. [30]); empty = disabled by default
+  allDayReminderTime: string; // "HH:MM" local wall time, default "09:00"
+}
+export interface TaskReminderNotice {
+  id: string;
+  taskId: string;
+  title: string;
+  dueAt: number /* int64 */;
+  dueDate?: string;
+  offsetMinutes: number /* int */; // >= 0 for lead offset; -1 for snoozed reminder
+  snoozed?: boolean;
+  triggeredAt: number /* int64 */; // Unix ms
 }
 
 //////////
@@ -515,6 +582,7 @@ export interface Profile extends Scope {
   worktreeSetup?: { [key: string]: string}; // Keyed by the Git common directory.
   taskConcurrency?: number /* int */;
   taskStartIntervalMinutes?: number /* int */;
+  taskQueuePaused?: boolean;
 }
 export const DefaultAvatarColor = "gradient-prism";
 export const DefaultAvatarEmoji = "🤖";
@@ -1175,6 +1243,7 @@ export interface Event {
   run?: Run;
   request?: Request;
   conversation?: Conversation;
+  taskReminder?: TaskReminderNotice;
 }
 export interface FileEntry {
   name: string;

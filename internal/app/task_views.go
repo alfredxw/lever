@@ -23,6 +23,11 @@ func (a *App) SaveTaskView(ctx context.Context, id string, view model.TaskView) 
 	default:
 		return model.TaskView{}, invalid("Unknown task grouping")
 	}
+	switch view.Sort {
+	case "", "deadline", "priority":
+	default:
+		return model.TaskView{}, invalid("Unknown task sort order")
+	}
 	switch view.QuickFilter {
 	case "", "agent", "kind", "status", "project", "none":
 	default:

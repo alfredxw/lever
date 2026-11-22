@@ -319,6 +319,11 @@ func (a *App) writeTaskNote(ctx context.Context, id string, input model.TaskNote
 			return result, conflict("This task is already in another note")
 		}
 		if marker.Done && !catalog.tasks[taskID].Done {
+			if err := checkTaskInBoard(ctx, a.Store.DB, taskID); errors.Is(err, sql.ErrNoRows) {
+				continue // Removed from Works. The original note is still editable.
+			} else if err != nil {
+				return result, err
+			}
 			if err := checkTaskNotClosed(ctx, a.Store.DB, taskID); err != nil {
 				return result, err
 			}

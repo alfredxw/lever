@@ -88,7 +88,7 @@ func open(dir string, independent bool) (*App, error) {
 	ctx = provider.WithStateDir(ctx, dir)
 	a := &App{
 		Store: s, ctx: ctx, cancel: cancel, independentProviders: independent, active: map[string]*execution{},
-		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1),
+		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1), taskReminderWake: make(chan struct{}, 1),
 		eventAdapters: builtin.EventSourceAdapters(), personal: make(map[string]*personalWorker), pluginPreviews: make(map[string]*packagePreview),
 	}
 	if err = a.migrateWorkingCopies(ctx); err != nil {

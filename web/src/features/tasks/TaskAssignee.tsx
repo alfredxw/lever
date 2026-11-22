@@ -1,4 +1,3 @@
-import { UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Agent } from "@/api/types.gen";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
@@ -18,7 +17,9 @@ export function TaskAssignee({
       {agent ? (
         <AgentAvatar agent={agent} size="sm" />
       ) : (
-        <UserRound className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="task-avatar-empty" aria-hidden="true">
+          ?
+        </span>
       )}
       <span className="truncate" title={name}>
         {name}

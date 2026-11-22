@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CircleDot, Ellipsis, Plus, Search } from "lucide-react";
+import { Ellipsis, Inbox, Plus, Rss, Search, SquareKanban } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { api, APIError, queryClient } from "@/api/client";
 import type {
   Agent,
   Chat,
+  Request,
   TaskExecution,
   TaskLocation,
   TaskSource,
@@ -45,10 +46,18 @@ import {
 } from "./noteQueries";
 import { TaskBoard, type BoardView } from "./TaskBoard";
 import { TaskDispatchPanel } from "./TaskDispatchPanel";
+import { TaskInbox } from "./TaskInbox";
 import { TaskLabelDialog } from "./TaskLabelDialog";
 import { TaskNoteList } from "./TaskNoteList";
 import type { TaskReveal } from "./TaskNoteView";
 import { TaskNotePane } from "./TaskNotePane";
+import {
+  buildAgentQueueMetrics,
+  pendingRequestRunIds,
+  taskInboxReason,
+  useBoardTasks,
+  type BoardTask,
+} from "./taskBoardModel";
 import { useTaskActivity } from "./taskWorkflow";
 import {
   TaskSidebarGroups,
@@ -73,7 +82,9 @@ import {
 import { removeTaskView, saveTaskView, useTaskViews } from "./useTaskViews";
 import "./tasks.css";
 
-const defaultBoard: BoardView = { group: "status", filters: {} };
+const defaultBoard: BoardView = { group: "status", sort: "deadline", filters: {} };
+
+type PageSection = TaskSection | "inbox";
 
 type ViewDialog =
   | { mode: "new" | "saveAs"; from: BoardView }
@@ -81,6 +92,7 @@ type ViewDialog =
 
 function sameBoard(left: BoardView, right: BoardView) {
   if (left.group !== right.group) return false;
+  if ((left.sort || "deadline") !== (right.sort || "deadline")) return false;
   if ((left.quickFilter ?? "agent") !== (right.quickFilter ?? "agent"))
     return false;
   const fields = Object.keys({
@@ -100,6 +112,7 @@ export default function TasksPage({
   visible,
   agents,
   chats,
+  requests = [],
   revealTask,
   onLocated,
   onOpenChat,
@@ -109,6 +122,7 @@ export default function TasksPage({
   visible: boolean;
   agents: Agent[];
   chats: Chat[];
+  requests?: Request[];
   revealTask?: TaskDestination;
   onLocated: () => void;
   onOpenChat: (execution: TaskExecution, title: string) => void;
@@ -117,15 +131,18 @@ export default function TasksPage({
 }) {
   const { t } = useTranslation();
   const [sidebar, setSidebar] = useState(() => innerWidth >= 760);
-  const [section, setSection] = useState<TaskSection>("note");
+  const [section, setSection] = useState<PageSection>("note");
+  const showInbox = section === "inbox";
   const showBoard = section === "board";
   const showSources = section === "sources";
   const [boardTask, setBoardTask] = useState<TaskTarget>();
   const [assignment, setAssignment] = useState<TaskDispatchTarget>();
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const taskDialogTrigger = useRef<HTMLButtonElement>(null);
+  const visibleBoardTasksRef = useRef<BoardTask[]>([]);
   const dispatch = useTaskDispatch();
   const [viewId, setViewId] = useState<string>();
+  const [activePreset, setActivePreset] = useState(false);
   const [boardEdits, setBoardEdits] = useState<{
     view: BoardView;
     revision: number;
@@ -140,7 +157,9 @@ export default function TasksPage({
       setBoardEdits(undefined);
     }
   }, [viewId, views.data, selectedView]);
-  const savedBoard = selectedView ?? defaultBoard;
+  const savedBoard = activePreset
+    ? defaultBoard
+    : (selectedView ?? defaultBoard);
   const boardView = boardEdits?.view ?? savedBoard;
   const [selected, setSelected] = useState(
     () => localStorage.getItem(selectedTaskNoteKey) ?? "",
@@ -169,6 +188,7 @@ export default function TasksPage({
       setSection("board");
       setSourceId(undefined);
       setViewId(undefined);
+      setActivePreset(false);
       setBoardEdits(undefined);
       setGroupOpen("board", true);
     }
@@ -185,30 +205,110 @@ export default function TasksPage({
     [notes.data],
   );
   const id = resolveTaskNoteId(notes.data, selected, draft.has(selected));
+  const { runQuery, workflowQuery, executions, workflows } =
+    useTaskActivity(visible);
   const deletedBoardSource =
-    boardTask?.noteId &&
-    notes.data?.some(
-      (item) => item.id === boardTask.noteId && item.state === "deleted",
-    );
+    (boardTask && workflows.get(boardTask.id)?.disposition === "deleted") ||
+    (boardTask?.noteId &&
+      notes.data?.some((item) => item.id === boardTask.noteId && item.state === "deleted"));
   useEffect(() => {
     if (deletedBoardSource) {
       setBoardTask(undefined);
       detailTrigger.current = null;
     }
   }, [deletedBoardSource]);
-  const { runQuery, workflowQuery, executions, workflows } =
-    useTaskActivity(visible);
-  const reviews =
-    runQuery.data?.filter(
-      (item) => item.status === "completed" && !item.done,
-    ) ?? [];
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!visible) return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [visible]);
+
+  const boardData = useBoardTasks({
+    visible,
+    notes: liveNotes,
+    noteList: {
+      isPending: notes.isPending,
+      error: notes.error,
+      refetch: notes.refetch,
+    },
+    agents,
+    executions,
+    workflows,
+    nowMs,
+  });
+
+  const requestRunIds = useMemo(
+    () => pendingRequestRunIds(requests),
+    [requests],
+  );
+
+  const agentMetricsList = useMemo(
+    () =>
+      buildAgentQueueMetrics(agents, boardData.tasks, workflows, requestRunIds),
+    [agents, boardData.tasks, workflows, requestRunIds],
+  );
+  const agentMetricsMap = useMemo(
+    () => new Map(agentMetricsList.map((item) => [item.agent.id, item])),
+    [agentMetricsList],
+  );
+
+  const inboxStats = useMemo(() => {
+    let count = 0;
+    let urgent = false;
+    for (const task of boardData.tasks) {
+      const reason = taskInboxReason(task, requestRunIds);
+      if (!reason) continue;
+      count += 1;
+      if (
+        reason === "request" ||
+        reason === "attention" ||
+        reason === "deadline"
+      )
+        urgent = true;
+    }
+    return { count, urgent };
+  }, [boardData.tasks, requestRunIds]);
+  const consumingStats = useMemo(() => {
+    let running = 0;
+    let queued = 0;
+    for (const task of boardData.tasks) {
+      if (task.status === "running" || task.status === "attention") running += 1;
+      else if (task.status === "queued") queued += 1;
+    }
+    return { running, queued, total: running + queued };
+  }, [boardData.tasks]);
+
   useUnsavedTaskWarning();
+
+  function openInbox() {
+    setBoardTask(undefined);
+    detailTrigger.current = null;
+    setActivePreset(false);
+    setSection("inbox");
+    setReveal(undefined);
+    if (innerWidth < 760) setSidebar(false);
+  }
+
+  function openActiveBoard() {
+    setBoardTask(undefined);
+    detailTrigger.current = null;
+    setViewId(undefined);
+    setActivePreset(true);
+    setBoardEdits(undefined);
+    setSection("board");
+    setReveal(undefined);
+    if (innerWidth < 760) setSidebar(false);
+  }
 
   function openBoard(next?: string) {
     setBoardTask(undefined);
     detailTrigger.current = null;
-    if (next !== viewId || showBoard) {
+    if (next !== viewId || showBoard || activePreset) {
       setViewId(next);
+      setActivePreset(false);
       setBoardEdits(undefined);
     }
     setGroupOpen("board", true);
@@ -241,7 +341,7 @@ export default function TasksPage({
   });
   const boardChanged = !sameBoard(boardView, savedBoard);
   const saveLabel =
-    views.isSuccess && (!selectedView || boardChanged)
+    !activePreset && views.isSuccess && (!selectedView || boardChanged)
       ? t(selectedView ? "tasks.updateView" : "tasks.saveView")
       : undefined;
 
@@ -249,6 +349,7 @@ export default function TasksPage({
     (noteId: string, task?: TaskReveal) => {
       setBoardTask(undefined);
       detailTrigger.current = null;
+      setActivePreset(false);
       setSection("note");
       setSelected(noteId);
       setGroupOpen("note", true);
@@ -298,6 +399,7 @@ export default function TasksPage({
   }
   function openSource(id: string) {
     closeBoardTask(false);
+    setActivePreset(false);
     setGroupOpen("sources", true);
     setSection("sources");
     setSourceId(id);
@@ -358,6 +460,18 @@ export default function TasksPage({
   }, [visible, revealTask, openNote, openBoardTask, onLocated, t]);
 
   const onRevealed = useCallback(() => setReveal(undefined), []);
+
+  const boardTaskIndex = boardTask
+    ? visibleBoardTasksRef.current.findIndex((item) => item.id === boardTask.id)
+    : -1;
+  const stepBoardTask = (delta: number) => {
+    const list = visibleBoardTasksRef.current;
+    const next = list[boardTaskIndex + delta];
+    if (next) {
+      setBoardTask({ id: next.id, record: next.record, noteId: next.noteId });
+    }
+  };
+
   return (
     <div
       className="workspace-frame tasks-frame"
@@ -398,6 +512,49 @@ export default function TasksPage({
           </InputGroup>
         </form>
         <nav className="task-sidebar-nav" aria-label={t("nav.tasks")}>
+          <div className="task-sidebar-focus">
+            <div className="task-sidebar-section-label">{t("tasks.focus")}</div>
+            <Button
+              variant="ghost"
+              className="sidebar-nav-item task-focus-item"
+              aria-current={showInbox ? "page" : undefined}
+              onClick={openInbox}
+            >
+              <Inbox data-icon="inline-start" />
+              <span className="truncate">{t("tasks.focus.inbox")}</span>
+              {inboxStats.count > 0 && (
+                <span
+                  className="task-focus-badge tabular-nums"
+                  data-tone="attention"
+                >
+                  {inboxStats.count}
+                </span>
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              className="sidebar-nav-item task-focus-item"
+              aria-current={showBoard && activePreset ? "page" : undefined}
+              onClick={openActiveBoard}
+            >
+              <span
+                className="task-dot task-focus-dot"
+                data-status={consumingStats.running > 0 ? "running" : "queued"}
+                aria-hidden="true"
+              />
+              <span className="truncate">{t("tasks.focus.active")}</span>
+              {consumingStats.total > 0 && (
+                <span
+                  className="task-focus-badge tabular-nums"
+                  data-tone="running"
+                >
+                  {consumingStats.running > 0 && consumingStats.queued > 0
+                    ? `${consumingStats.running}+${consumingStats.queued}`
+                    : consumingStats.total}
+                </span>
+              )}
+            </Button>
+          </div>
           <TaskSidebarGroups
             expanded={expanded}
             onOpenChange={setGroupOpen}
@@ -420,10 +577,16 @@ export default function TasksPage({
                         variant="ghost"
                         className="sidebar-nav-item task-nav-child"
                         aria-current={
-                          showBoard && !selectedView ? "page" : undefined
+                          showBoard && !selectedView && !activePreset
+                            ? "page"
+                            : undefined
                         }
                         onClick={() => openBoard()}
                       >
+                        <SquareKanban
+                          className="task-nav-child-icon"
+                          aria-hidden="true"
+                        />
                         {t("tasks.allView")}
                       </Button>
                     </li>
@@ -442,6 +605,10 @@ export default function TasksPage({
                             title={view.name}
                             onClick={() => openBoard(view.id)}
                           >
+                            <SquareKanban
+                              className="task-nav-child-icon"
+                              aria-hidden="true"
+                            />
                             <span className="truncate">{view.name}</span>
                           </Button>
                           <DropdownMenu>
@@ -521,6 +688,10 @@ export default function TasksPage({
                             title={source.name}
                             onClick={() => openSource(source.id)}
                           >
+                            <Rss
+                              className="task-nav-child-icon"
+                              aria-hidden="true"
+                            />
                             <span className="truncate">{source.name}</span>
                           </Button>
                         )}
@@ -537,36 +708,6 @@ export default function TasksPage({
               ),
             }}
           </TaskSidebarGroups>
-          {!!reviews.length && (
-            <div className="task-sidebar-review">
-              <Button
-                variant="ghost"
-                className="sidebar-nav-item"
-                onClick={(event) => {
-                  const next = reviews[0];
-                  if (next.noteId)
-                    openNote(next.noteId, { id: next.taskId, detail: true });
-                  else
-                    openBoardTask(
-                      {
-                        id: next.taskId,
-                        record:
-                          next.record ??
-                          (next.automationId ? "automation" : "external"),
-                      },
-                      event.currentTarget,
-                    );
-                }}
-              >
-                <CircleDot
-                  data-icon="inline-start"
-                  className="task-review-icon"
-                />
-                {t("tasks.status.review")}
-                <span className="ml-auto tabular-nums">{reviews.length}</span>
-              </Button>
-            </div>
-          )}
         </nav>
       </SecondarySidebar>
       <main className="tasks-content">
@@ -580,23 +721,64 @@ export default function TasksPage({
           ) : (
             <Loading />
           )
+        ) : showInbox ? (
+          workflowQuery.isPending ? (
+            <Loading />
+          ) : (
+            <TaskInbox
+              tasks={boardData.tasks}
+              agents={agents}
+              executions={executions}
+              workflows={workflows}
+              requests={requests}
+              requestRunIds={requestRunIds}
+              agentMetrics={agentMetricsMap}
+              deadlinesById={boardData.deadlinesById}
+              reminderSettings={boardData.reminderSettings}
+              nowMs={nowMs}
+              search={search}
+              onLocate={(noteId, taskId) =>
+                openNote(noteId, { id: taskId, detail: false })
+              }
+              onOpenChat={onOpenChat}
+              onOpenRun={onOpenRun}
+              onOpenAutomation={onOpenAutomation}
+              onOpenOrigin={(item) => {
+                if (!item.origin || !item.createdByAgentId) return;
+                onOpenRun(
+                  { ...item.origin, agentId: item.createdByAgentId },
+                  item.title,
+                );
+              }}
+            />
+          )
         ) : showBoard && workflowQuery.isPending ? (
           <Loading />
         ) : showBoard ? (
           <TaskBoard
-            name={selectedView?.name ?? t("tasks.allView")}
+            name={
+              activePreset
+                ? t("tasks.focus.active")
+                : (selectedView?.name ?? t("tasks.allView"))
+            }
+            consumingOnly={activePreset}
+            tasks={boardData.tasks}
+            drafts={boardData.drafts}
+            sourceLabels={boardData.sourceLabels}
+            reminderSettings={boardData.reminderSettings}
+            loading={boardData.loading}
+            failed={boardData.failed}
             notes={liveNotes}
-            noteList={{
-              isPending: notes.isPending,
-              error: notes.error,
-              refetch: notes.refetch,
-            }}
             agents={agents}
             executions={executions}
             workflows={workflows}
+            requests={requests}
+            agentMetricsList={agentMetricsList}
+            agentMetricsMap={agentMetricsMap}
             view={boardView}
             search={search}
             selectedTaskId={boardTask?.id}
+            visibleTasksRef={visibleBoardTasksRef}
             detail={
               visible &&
               boardTask && (
@@ -606,7 +788,20 @@ export default function TasksPage({
                   agents={agents}
                   execution={executions.get(boardTask.id)}
                   workflow={workflows.get(boardTask.id)}
+                  requests={requests}
+                  agentMetrics={agentMetricsMap}
+                  localDeadline={boardData.deadlinesById.get(boardTask.id)}
+                  reminderSettings={boardData.reminderSettings}
                   onClose={() => closeBoardTask()}
+                  onPrev={
+                    boardTaskIndex > 0 ? () => stepBoardTask(-1) : undefined
+                  }
+                  onNext={
+                    boardTaskIndex >= 0 &&
+                    boardTaskIndex < visibleBoardTasksRef.current.length - 1
+                      ? () => stepBoardTask(1)
+                      : undefined
+                  }
                   onLocate={(noteId, taskId) =>
                     openNote(noteId, { id: taskId, detail: false })
                   }
@@ -623,7 +818,7 @@ export default function TasksPage({
                     onOpenAutomation(id);
                   }}
                   onOpenOrigin={(item) => {
-                    if (!item.origin) return;
+                    if (!item.origin || !item.createdByAgentId) return;
                     closeBoardTask(false);
                     onOpenRun(
                       { ...item.origin, agentId: item.createdByAgentId },

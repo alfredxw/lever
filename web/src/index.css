@@ -309,6 +309,7 @@ button:focus-visible,
   color: var(--muted-foreground);
 }
 .navigation-item {
+  position: relative;
   display: flex;
   flex-shrink: 0;
   align-self: center;
@@ -325,6 +326,16 @@ button:focus-visible,
   transition:
     background-color 150ms,
     color 150ms;
+}
+.navigation-item-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--status-attention);
+  pointer-events: none;
 }
 .navigation-item svg {
   flex-shrink: 0;

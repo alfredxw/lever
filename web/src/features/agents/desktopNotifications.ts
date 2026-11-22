@@ -52,6 +52,7 @@ export function observeAgentNotifications(
       kind,
       agentId: conversation.agentId,
       target: {
+        kind: "chat",
         chatId: conversation.chatId,
         topicId: conversation.kind === "topic" ? conversation.id : undefined,
         runId,

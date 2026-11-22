@@ -523,6 +523,14 @@ func (e *execution) finish(err error) {
 		if !delivered || task == nil || e.run.Selection.Permission == "read_only" {
 			return nil
 		}
+		var ownsAssignment bool
+		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM task_triage WHERE task_id=? AND (closed=1 OR disposition!='')) AND
+(?='automation' OR EXISTS(SELECT 1 FROM (`+taskSessions+`) WHERE task_id=? AND session_id=?))`, task.ID, task.Record, task.ID, e.run.SessionID).Scan(&ownsAssignment); err != nil {
+			return err
+		}
+		if !ownsAssignment {
+			return nil
+		}
 		switch task.Record {
 		case model.TaskRecordAutomation:
 			err = setAutomationRunDone(ctx, tx, task.ID, e.run.ID, true)
