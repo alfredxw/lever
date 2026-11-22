@@ -443,6 +443,9 @@ func (c *acpRuntime) applySelection(ctx context.Context, state *acpState, select
 
 func runACP(ctx context.Context, in Input, sink Sink) error {
 	cwd := workspace.CWD(in.Session.Scope)
+	if isTraeCLI(in.Provider) {
+		in.Provider.Args = traeSkillArguments(in.Provider.Args, in.Skills)
+	}
 	c, err := openACP(ctx, in.Provider, cwd, sink, in.Selection.Permission)
 	if err != nil {
 		return err
@@ -458,13 +461,16 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 			return err
 		}
 	}
-	if len(in.Profile.Skills) > 0 {
+	if len(in.Profile.Skills) > 0 && !acpSkillContext(in.Provider) {
 		return errors.New("This ACP runtime does not support Agent skill directories")
 	}
 	directories := additionalDirectories(in.Session.Scope)
 	var contextDirectories []string
 	if acpDirectoryContext(caps) {
 		contextDirectories, directories = directories, nil
+	}
+	if c.agyCLI && caps.MultiRoot && in.Skills.AntigravityCatalogRoot != "" {
+		directories = append(directories, in.Skills.AntigravityCatalogRoot)
 	}
 	if caps.MultiRoot && in.Skills.AntigravityRoot != "" {
 		directories = append(directories, in.Skills.AntigravityRoot)
@@ -540,6 +546,8 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	}
 	if nativeCommand {
 		prompt[0] = acp.TextBlock(strings.TrimSpace(in.Text))
+	} else if in.Skills.Context != "" {
+		prompt = append(prompt, acp.TextBlock("\n\n"+in.Skills.Context))
 	}
 	if !nativeCommand && caps.FileLinksOnly {
 		for _, path := range contextDirectories {

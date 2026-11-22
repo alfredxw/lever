@@ -76,18 +76,23 @@ func antigravityPermissions(config model.Provider, catalog model.Catalog) model.
 	return catalog
 }
 
+func antigravityCLIHome(cwd string) (string, error) {
+	if dir := os.Getenv("GEMINI_HOME"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cwd, dir)
+		}
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	return filepath.Join(home, ".gemini"), err
+}
+
 // agy's ACP command reads settings from its CLI subdirectory. A per-turn copy
 // changes the preset without changing the account, conversation store, or user settings.
 func antigravityPresetArgs(cwd string, preset *antigravityPreset) ([]string, func(), error) {
-	geminiDir := os.Getenv("GEMINI_HOME")
-	if geminiDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, nil, err
-		}
-		geminiDir = filepath.Join(home, ".gemini")
-	} else if !filepath.IsAbs(geminiDir) {
-		geminiDir = filepath.Join(cwd, geminiDir)
+	geminiDir, err := antigravityCLIHome(cwd)
+	if err != nil {
+		return nil, nil, err
 	}
 	cliDir := filepath.Join(geminiDir, "antigravity-cli")
 	settings := object{}

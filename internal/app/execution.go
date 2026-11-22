@@ -602,17 +602,24 @@ func prepareSkills(assets string, sources []string) error {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	var total int64
-	for _, source := range sources {
-		if err := copySkillPackage(source, filepath.Join(tmp, filepath.Base(source)), &total); err != nil {
-			return err
-		}
+	if err := copySkillPackages(tmp, sources); err != nil {
+		return err
 	}
 	target := filepath.Join(assets, "skills")
 	if err = os.RemoveAll(target); err != nil {
 		return err
 	}
 	return os.Rename(tmp, target)
+}
+
+func copySkillPackages(dir string, sources []string) error {
+	var total int64
+	for _, source := range sources {
+		if err := copySkillPackage(source, filepath.Join(dir, filepath.Base(source)), &total); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func copySkillPackage(source, target string, total *int64) error {

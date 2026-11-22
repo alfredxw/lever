@@ -209,24 +209,22 @@ func discoverPi(ctx context.Context, config model.Provider, cwd string) (model.C
 }
 
 func piCommands(ctx context.Context, p *device.Process) ([]model.NativeCommand, error) {
-	data, err := piRequest(ctx, p, "get_commands")
+	refs, err := piCommandReferences(ctx, p, "")
 	if err != nil {
 		return nil, err
 	}
 	var commands []model.NativeCommand
-	for _, value := range arr(data["commands"]) {
-		command := obj(value)
-		if name := str(command["name"]); name != "" {
-			commands = append(commands, model.NativeCommand{Name: name, Description: str(command["description"])})
+	for _, ref := range refs {
+		name := ref.Name
+		if ref.Kind == "skill" {
+			name = "skill:" + name
 		}
+		commands = append(commands, model.NativeCommand{Name: name, Description: ref.Description})
 	}
 	return commands, nil
 }
 
 func runPi(ctx context.Context, in Input, sink Sink) error {
-	if len(in.Profile.Skills) > 0 {
-		return errors.New("Pi uses its own skill settings")
-	}
 	path, err := Executable(ctx, in.Provider)
 	if err != nil {
 		return err
@@ -260,7 +258,11 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 		}
 	}
 	cwd := workspace.CWD(in.Session.Scope)
-	args := []string{"--session", native}
+	args, err := piSkillArguments(ctx, path, in.Provider, cwd, in.Skills)
+	if err != nil {
+		return err
+	}
+	args = append(args, "--session", native)
 	name, argument := in.command()
 	cliEnv, cliPrompt := piLeverCLI(ctx, in.ContextToken)
 	policy, policyEnv, err := preparePiPolicy(in)
@@ -336,6 +338,15 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	}
 	if prompt["images"] != nil && !piModelImages(obj(state["model"])) {
 		return errors.New("The selected Pi model does not accept images")
+	}
+	if len(in.Skills.Disabled) > 0 {
+		refs, err := piCommandReferences(setup, p, in.Provider.ID)
+		if err != nil {
+			return err
+		}
+		if err = verifySkillPolicy(in.Skills, refs); err != nil {
+			return err
+		}
 	}
 	if name == "goal" || name == "loop" {
 		commands, err := piCommands(setup, p)

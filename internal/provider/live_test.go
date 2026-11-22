@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,43 @@ type liveSink struct {
 	native string
 	mu     sync.Mutex
 	items  map[string]model.Item
+}
+
+func TestLivePiSkillPolicy(t *testing.T) {
+	binary := os.Getenv("LEVER_LIVE_PI_BIN")
+	if binary == "" {
+		t.Skip("set LEVER_LIVE_PI_BIN to check native skill loading offline")
+	}
+	config := model.Provider{Type: "pi", ID: "pi", Command: binary, ConfigDir: t.TempDir()}
+	root := t.TempDir()
+	scope := model.Scope{Roots: []model.Root{{ID: "root", Path: root}}, PrimaryRootID: "root"}
+	plan := SkillPlan{Assets: t.TempDir(), Roots: []string{t.TempDir()}, Disabled: []string{"not-this-one"}}
+	for name, collection := range map[string]string{"user-keep": filepath.Join(config.ConfigDir, "skills"), "not-this-one": plan.Roots[0], "agent-keep": plan.Roots[0]} {
+		dir := filepath.Join(collection, name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, model.SkillEntry), []byte("---\nname: "+name+"\ndescription: Offline verification\n---\nRead this.\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := piSkills(t.Context(), config, scope, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"user-keep", "agent-keep", "not-this-one"} {
+		found := slices.ContainsFunc(refs, func(ref model.Reference) bool {
+			return ref.Kind == "skill" && ref.Name == name && filepath.Base(ref.Path) == model.SkillEntry
+		})
+		if found != (name != "not-this-one") {
+			t.Fatalf("native skill %s available=%t", name, found)
+		}
+	}
+	config.Args = []string{"--no-skills"}
+	refs, err = piSkills(t.Context(), config, scope, plan)
+	if err != nil || slices.ContainsFunc(refs, func(ref model.Reference) bool { return ref.Kind == "skill" && ref.Name == "agent-keep" }) {
+		t.Fatalf("connection disabled automatic skill sources: %v, %v", refs, err)
+	}
 }
 
 func TestLiveComposer(t *testing.T) {

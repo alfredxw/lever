@@ -18,6 +18,10 @@ import (
 	"lever/internal/workspace"
 )
 
+func skillReferenceDisabled(ref model.Reference, disabled []string) bool {
+	return model.SkillDisabled(disabled, ref.Name) || (ref.Path != "" && model.SkillDisabled(disabled, filepath.Base(filepath.Dir(ref.Path))))
+}
+
 func validateSkillReferences(references []model.Reference, disabled []string) error {
 	if len(disabled) == 0 {
 		return nil
@@ -26,8 +30,7 @@ func validateSkillReferences(references []model.Reference, disabled []string) er
 		if ref.Kind != "skill" {
 			continue
 		}
-		if model.SkillDisabled(disabled, ref.Name) ||
-			(ref.Path != "" && model.SkillDisabled(disabled, filepath.Base(filepath.Dir(ref.Path)))) {
+		if skillReferenceDisabled(ref, disabled) {
 			return invalid(fmt.Sprintf("Skill %q is disabled for this Agent. Remove its reference or enable it in Profile.", ref.Name))
 		}
 	}
@@ -51,6 +54,7 @@ func validateMessage(commandID, text string, attachments []string, references []
 }
 
 func (a *App) validateReferences(ctx context.Context, q store.Queryer, references []model.Reference, session model.Session, agent model.Agent, config model.Provider, shareSkills bool) error {
+	var skillPaths map[string]bool
 	if slices.ContainsFunc(references, model.Reference.RequiresMCP) {
 		supported := provider.ConfiguredCapabilities(config).MCP
 		key := catalogKey{config.ID, provider.ConfigurationDirectory(config), workspace.CWD(session.Scope)}
@@ -88,20 +92,32 @@ func (a *App) validateReferences(ctx context.Context, q store.Queryer, reference
 				return invalid("Referenced file is outside this session's scope")
 			}
 		case "skill":
-			if ref.Provider != config.ID {
-				if !shareSkills || ref.Provider == "" {
-					return invalid("Reselect skills for the current runtime")
-				}
+			if ref.Provider != config.ID && (!shareSkills || ref.Provider == "") {
+				return invalid("Reselect skills for the current runtime")
+			}
+			native := provider.Capabilities(config.Type).Skills
+			switch {
+			case shareSkills && (ref.Provider != config.ID || !native):
 				entry, err := os.Lstat(ref.Path)
 				if !filepath.IsAbs(ref.Path) || filepath.Base(ref.Path) != model.SkillEntry || err != nil || !entry.Mode().IsRegular() {
 					return invalid(fmt.Sprintf("Skill %q needs an available SKILL.md to be shared across runtimes", ref.Name))
 				}
-				continue
-			}
-			if !provider.Capabilities(config.Type).Skills {
-				return invalid("This runtime does not support native skills")
-			}
-			if config.Type == "codex" && !filepath.IsAbs(ref.Path) {
+			case !native || config.Type == "pi":
+				if skillPaths == nil {
+					var err error
+					skillPaths, err = a.skillReferencePaths(ctx, session.Scope, config)
+					if err != nil {
+						return err
+					}
+				}
+				dir := filepath.Dir(ref.Path)
+				if (skillPaths[dir] || slices.Contains(agent.Profile.Skills, dir)) && ref.Path == filepath.Join(dir, model.SkillEntry) {
+					if skill := describeSkill(skillAt(dir, false)); skill.Available && skill.Name == ref.Name {
+						break
+					}
+				}
+				return invalid(fmt.Sprintf("Skill %q is no longer available in this session's skill sources", ref.Name))
+			case config.Type == "codex" && !filepath.IsAbs(ref.Path):
 				return invalid("A Codex skill requires its absolute path")
 			}
 		default:

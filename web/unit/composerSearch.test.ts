@@ -76,6 +76,28 @@ test("same-name skills remain selectable with commands winning equal scores", ()
   assert.deepEqual(searchComposerOptions(options, "/"), options);
 });
 
+test("an inline slash after Chinese prose selects only the text at the caret", () => {
+  for (const before of ["请用/rev", "另一段：/rev", "English /rev"]) {
+    assert.deepEqual(matchComposerTrigger(before, before.length + 1), {
+      kind: "command",
+      prefix: "/",
+      query: "rev",
+      start: before.indexOf("/") + 1,
+      end: before.length + 1,
+    });
+  }
+  for (const path of [
+    "src/rev",
+    "https://例子/rev",
+    "src/目录/rev",
+    "中文、英文",
+  ]) {
+    assert.equal(matchComposerTrigger(path, path.length + 1), null, path);
+  }
+  const file = "看@目录/rev";
+  assert.equal(matchComposerTrigger(file, file.length + 1)?.kind, "mention");
+});
+
 test("mention triggers ignore standalone @ followed by space or clause punctuation", () => {
   const standalone = "lever 好像没实际支持 @ 其他Ag";
   assert.equal(matchComposerTrigger(standalone, standalone.length + 1), null);

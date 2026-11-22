@@ -18,6 +18,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "skills.outsideAgentScope": "未接入此 Agent",
   "skills.switchForAgent": "为 {{agent}} 启用 {{name}}",
   "skills.overviewHint": "设置在下一轮执行时生效，同名技能一起启停。",
+  "skills.contextHint":
+    "从下一轮起，Lever 只提供此 Agent 已启用的技能。运行时自行加载的同名技能仍可能可用。",
   "skills.preferenceFailed": "无法保存技能状态",
   "skills.managed": "Lever",
   "skills.external": "外部目录",

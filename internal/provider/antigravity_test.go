@@ -26,7 +26,7 @@ func TestAntigravityUsesOnlyAdvertisedSkillReferences(t *testing.T) {
 	if err := os.WriteFile(file, []byte("notes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	review := model.Reference{Kind: "skill", Name: "review", Provider: "codex", Path: filepath.Join(dir, "review", model.SkillEntry)}
+	review := model.Reference{Kind: "skill", Name: "review", Provider: "agy", Path: filepath.Join(dir, "review", model.SkillEntry)}
 	verify := model.Reference{Kind: "skill", Name: "verify", Provider: "codex", Path: filepath.Join(dir, "verify", model.SkillEntry)}
 	input := Input{
 		Provider: model.Provider{ID: "agy", Type: "antigravity"}, Text: "Review this", Profile: model.Profile{Instructions: "Agent context"}, HistoryContext: "Prior turn",

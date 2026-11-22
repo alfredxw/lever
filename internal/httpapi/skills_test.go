@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +13,253 @@ import (
 	"lever/internal/app"
 	"lever/internal/model"
 )
+
+func TestACPSkillProfileAppliesToNextTurn(t *testing.T) {
+	for _, kind := range []string{"traex", "antigravity", "dsh"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			config := model.Provider{ID: kind, Name: kind}
+			if kind == "traex" {
+				binary := os.Getenv("LEVER_CODEX_PATH")
+				path := filepath.Join(t.TempDir(), "traex"+filepath.Ext(binary))
+				if err := os.Link(binary, path); err != nil {
+					t.Fatal(err)
+				}
+				config = model.Provider{PluginID: "lever.acp", ContributionID: "acp", Type: "acp", Name: kind, Enabled: true, Command: path, Args: []string{"acp", "serve"}}
+				f.request("POST", "/providers", config, 200, &config)
+			}
+			newAgent := func(name string) model.Agent {
+				agent := model.Agent{Name: name, Profile: model.Profile{Provider: config.ID, Scope: model.Scope{PrimaryRootID: "primary", Roots: []model.Root{{ID: "primary", Path: f.root}}}}}
+				f.request("POST", "/agents", agent, 200, &agent)
+				return agent
+			}
+			agent, sibling := newAgent("first"), newAgent("second")
+			chat, siblingChat := f.chat(agent), f.chat(sibling)
+			var managed model.Skill
+			f.request("POST", "/skills", map[string]string{"name": "shared-policy-example"}, 200, &managed)
+			attached := filepath.Join(t.TempDir(), "extra-directory")
+			if err := os.Mkdir(attached, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(attached, model.SkillEntry), []byte("---\nname: private-policy-example\ndescription: Only for the first Agent.\n---\nRead companion.txt."), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(attached, "companion.txt"), []byte("isolated package"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			patch := func(body map[string]any) {
+				body["updatedAt"] = agent.UpdatedAt
+				var saved model.Agent
+				f.request("PATCH", "/agents/"+agent.ID+"/skills", body, 200, &saved)
+				agent = saved
+			}
+			send := func(chatID string) (model.Run, map[string]any) {
+				var run model.Run
+				f.request("POST", "/messages", model.SendInput{ChatID: chatID, Operation: "main", CommandID: app.ID(), Text: "[skill-policy]"}, 200, &run)
+				run = f.wait(run.ID, "completed")
+				return run, acpReceipt(t, run)
+			}
+			patch(map[string]any{"attach": attached})
+			first, receipt := send(chat.ID)
+			catalog := receipt["input"].(string)
+			copyDir := filepath.Join(f.a.Store.Dir, "sessions", first.SessionID, "agent-skills", "skills", filepath.Base(attached))
+			encoded, _ := json.Marshal(filepath.Join(copyDir, model.SkillEntry))
+			if !strings.Contains(catalog, managed.Name) || !strings.Contains(catalog, string(encoded)) || !strings.Contains(catalog, "Only for the first Agent.") {
+				t.Fatalf("missing model-visible catalog or working copy: %s", catalog)
+			}
+			if data, err := os.ReadFile(filepath.Join(copyDir, "companion.txt")); err != nil || string(data) != "isolated package" {
+				t.Fatalf("missing package companion: %s, %v", data, err)
+			}
+			if kind == "antigravity" {
+				dirs, _ := receipt["directories"].([]any)
+				root := filepath.Dir(filepath.Dir(copyDir))
+				if len(dirs) != 1 || dirs[0] != root {
+					t.Fatalf("expected only the session's Skills workspace, got %v", dirs)
+				}
+				data, err := os.ReadFile(filepath.Join(root, ".agents", "skills.json"))
+				var manifest struct{ Entries []struct{ Path string } }
+				if err != nil || json.Unmarshal(data, &manifest) != nil || len(manifest.Entries) != 1 || manifest.Entries[0].Path != "skills" {
+					t.Fatalf("working copies not registered for native discovery: %s, %v", data, err)
+				}
+			}
+			patch(map[string]any{"disabledSkills": []string{managed.Name, "extra-directory"}})
+			_, off := send(chat.ID)
+			if off["native"] != receipt["native"] || strings.Contains(off["input"].(string), managed.Name) || strings.Contains(off["input"].(string), "private-policy-example") {
+				t.Fatalf("disabled entries survived on resume: %v", off)
+			}
+			if _, err := os.Lstat(copyDir); !os.IsNotExist(err) {
+				t.Fatalf("disabled working copy is still reachable: %v", err)
+			}
+			if (kind == "traex" && !strings.Contains(fmt.Sprint(off["args"]), `name="private-policy-example",enabled=false`)) || (kind == "antigravity" && !strings.Contains(fmt.Sprint(off["skillExcludes"]), managed.Name)) {
+				t.Fatalf("native exclusion not applied: %v", off)
+			}
+			_, other := send(siblingChat.ID)
+			if !strings.Contains(other["input"].(string), managed.Name) || strings.Contains(other["input"].(string), "private-policy-example") || other["skillExcludes"] != nil {
+				t.Fatalf("another Agent inherited this profile: %v", other)
+			}
+			patch(map[string]any{"disabledSkills": []string{}, "detach": attached})
+			_, on := send(chat.ID)
+			if on["native"] != receipt["native"] || !strings.Contains(on["input"].(string), managed.Name) || strings.Contains(on["input"].(string), "private-policy-example") || on["skillExcludes"] != nil || strings.Contains(fmt.Sprint(on["args"]), "skills.config=") {
+				t.Fatalf("re-enable/detach not applied: %v", on)
+			}
+		})
+	}
+}
+
+func TestComposerInlineSkillReferences(t *testing.T) {
+	for _, runtime := range []string{"antigravity", "pi", "acp", "dsh"} {
+		t.Run(runtime, func(t *testing.T) {
+			f := newFixture(t)
+			id := runtime
+			if runtime == "acp" {
+				id = f.acpProvider("inline-skills").ID
+			}
+			agent := model.Agent{Name: runtime, Profile: model.Profile{Provider: id, Scope: model.Scope{Roots: []model.Root{{ID: "root", Path: f.root}}, PrimaryRootID: "root"}}}
+			f.request("POST", "/agents", agent, 200, &agent)
+			root := agent.Profile.Roots[0].Path
+			collection := filepath.Join(root, ".agents", "skills")
+			switch runtime {
+			case "antigravity":
+				t.Setenv("GEMINI_HOME", "gemini-home")
+				collection = filepath.Join(root, "gemini-home", "config", "skills")
+			case "pi":
+				collection = filepath.Join(root, ".pi", "skills")
+			}
+			dir := filepath.Join(collection, "selected-package")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			entry := filepath.Join(dir, model.SkillEntry)
+			if err := os.WriteFile(entry, []byte("---\nname: inline-review\ndescription: Selected project package.\n---\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var managed model.Skill
+			f.request("POST", "/skills", map[string]string{"name": "inline-review"}, 200, &managed)
+			var refs []model.Reference
+			query := "/suggestions?kind=slash&provider=" + agent.Profile.Provider
+			f.request("GET", "/agents/"+agent.ID+query, nil, 200, &refs)
+			var selected model.Reference
+			var paths []string
+			for _, ref := range refs {
+				if ref.Kind == "skill" && ref.Name == managed.Name && ref.Provider == agent.Profile.Provider {
+					paths = append(paths, ref.Path)
+					if ref.Path == entry {
+						selected = ref
+					}
+				}
+			}
+			if len(paths) != 2 || selected.Path == "" || !slices.Contains(paths, filepath.Join(managed.Path, model.SkillEntry)) {
+				t.Fatalf("same-name Skill sources: got %v, want %s and the managed manifest", paths, entry)
+			}
+			chat := f.chat(agent)
+			input := model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "before $inline-review after", References: []model.Reference{selected}}
+			var run model.Run
+			f.request("POST", "/messages", input, 200, &run)
+			run = f.wait(run.ID, "completed")
+			var prompt string
+			if runtime == "pi" {
+				var history []string
+				for _, item := range run.Items {
+					if item.Kind == "text" && json.Unmarshal([]byte(item.Text), &history) == nil && len(history) > 0 {
+						prompt = history[len(history)-1]
+					}
+				}
+			} else {
+				prompt = acpReceipt(t, run)["input"].(string)
+			}
+			if !strings.Contains(prompt, input.Text) || (runtime == "antigravity" && !strings.HasPrefix(prompt, "/inline-review-")) || (runtime != "antigravity" && !strings.Contains(prompt, entry)) {
+				t.Fatalf("lost inline text or Skill identity: %s", prompt)
+			}
+			agent.Profile.Roots[0].Path = t.TempDir()
+			f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+			sessionQuery := "/chats/" + chat.ID + query + "&sessionId=" + run.SessionID
+			f.request("GET", sessionQuery, nil, 200, &refs)
+			if !slices.ContainsFunc(refs, func(ref model.Reference) bool { return ref.Path == entry }) {
+				t.Fatal("changing the Agent scope removed a Skill from its existing session")
+			}
+			params := url.Values{"agentId": {agent.ID}, "sessionId": {run.SessionID}, "provider": {id}, "path": {entry}, "name": {selected.Name}}
+			var preview model.Skill
+			f.request("GET", "/skills/reference?"+params.Encode(), nil, 200, &preview)
+			if preview.Path != dir {
+				t.Fatalf("opened %q instead of %q", preview.Path, dir)
+			}
+			agent.Profile.DisabledSkills = []string{filepath.Base(dir)}
+			f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+			f.request("GET", sessionQuery, nil, 200, &refs)
+			if slices.ContainsFunc(refs, func(ref model.Reference) bool { return ref.Path == entry }) {
+				t.Fatal("disabled Skill was suggested on resume")
+			}
+			input.CommandID = app.ID()
+			f.request("POST", "/messages", input, 400, nil)
+			outside := filepath.Join(t.TempDir(), model.SkillEntry)
+			if err := os.WriteFile(outside, []byte("outside the Skill sources"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			input.CommandID, input.References[0].Path = app.ID(), outside
+			f.request("POST", "/messages", input, 400, nil)
+		})
+	}
+}
+
+func TestAntigravitySkillManifestReferences(t *testing.T) {
+	f := newFixture(t)
+	userHome, external := t.TempDir(), t.TempDir()
+	t.Setenv("GEMINI_HOME", userHome)
+	agent := f.acpAgent(model.Provider{ID: "antigravity", Name: "Antigravity"})
+	root := agent.Profile.Roots[0].Path
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"allowed-ok", "allowed-secret", "other"} {
+		write(filepath.Join(root, "packs", name, model.SkillEntry), "---\nname: "+name+"\ndescription: Manifest-selected package\n---\n# "+name)
+	}
+	for _, name := range []string{"user-skill", "outside-skill"} {
+		write(filepath.Join(external, name, model.SkillEntry), "# "+name)
+	}
+	global, _ := json.Marshal(map[string]any{"entries": []any{map[string]any{"path": external, "include_only": []string{"user-skill"}}}})
+	outsidePath, _ := json.Marshal(filepath.Join(external, "outside-skill"))
+	write(filepath.Join(userHome, "config", "skills.json"), string(global))
+	write(filepath.Join(root, ".agents", "skills.json"), `{"inherits":[{"path":"layers/shared.json","include_only":["allowed-.*"],"exclude":["allowed-secret"]}],"entries":[{"path":`+string(outsidePath)+`}]}`)
+	write(filepath.Join(root, "layers", "shared.json"), `{"inherits":[{"path":"../.agents/skills.json"}],"entries":[{"path":"../packs","include_only":["allowed-ok","allowed-secret","other"]}]}`)
+	chat := f.chat(agent)
+	suggestions := func() map[string]model.Reference {
+		t.Helper()
+		var refs []model.Reference
+		f.request("GET", "/chats/"+chat.ID+"/suggestions?kind=skill&provider=antigravity", nil, 200, &refs)
+		byName := map[string]model.Reference{}
+		for _, ref := range refs {
+			byName[ref.Name] = ref
+		}
+		return byName
+	}
+	refs := suggestions()
+	if refs["allowed-ok"].Path != filepath.Join(root, "packs", "allowed-ok", model.SkillEntry) || refs["user-skill"].Path == "" {
+		t.Fatalf("missing selected skills: %+v", refs)
+	}
+	for name, path := range map[string]string{"allowed-secret": filepath.Join(root, "packs"), "other": filepath.Join(root, "packs"), "outside-skill": external} {
+		if refs[name].Path != "" {
+			t.Fatalf("filtered skill %s was suggested", name)
+		}
+		ref := model.Reference{Provider: "antigravity", Kind: "skill", Name: name, Path: filepath.Join(path, name, model.SkillEntry)}
+		f.request("POST", "/messages", model.SendInput{ChatID: chat.ID, CommandID: app.ID(), Operation: "main", Text: "use it", References: []model.Reference{ref}}, 400, nil)
+	}
+	var run model.Run
+	f.request("POST", "/messages", model.SendInput{ChatID: chat.ID, CommandID: app.ID(), Operation: "main", Text: "use it", References: []model.Reference{refs["allowed-ok"]}}, 200, &run)
+	if prompt := acpReceipt(t, f.wait(run.ID, "completed"))["input"].(string); !strings.HasPrefix(prompt, "/allowed-ok-") {
+		t.Fatal("missing selected skill on the wire:", prompt)
+	}
+	t.Setenv("GEMINI_HOME", "project-profile")
+	write(filepath.Join(root, "project-profile", "config", "skills.json"), string(global))
+	if suggestions()["user-skill"].Path != "" {
+		t.Fatal("a project-owned profile granted access outside the workspace")
+	}
+}
 
 func TestSkillScopeAndProfileDisableOnResumedRuns(t *testing.T) {
 	home := t.TempDir()
@@ -165,7 +413,7 @@ func TestSkillLibraryAndFileScopes(t *testing.T) {
 	var catalog []model.Skill
 	f.request("GET", "/skills", nil, 200, &catalog)
 	if len(catalog) != 1 || catalog[0].Managed || !catalog[0].Available ||
-		catalog[0].Description != "Review code changes for compatibility." ||
+		catalog[0].Title != "Team review" || catalog[0].Description != "Review code changes for compatibility." ||
 		!slices.Equal(catalog[0].AgentIDs, []string{agent.ID}) {
 		t.Fatalf("existing Profile attachment missing or misclassified: %#v", catalog)
 	}
@@ -209,7 +457,7 @@ func TestSkillLibraryAndFileScopes(t *testing.T) {
 		"rootPath": managed.Path, "operation": "move", "destination": "renamed.md",
 	}, 400, nil)
 	f.request("GET", "/skills", nil, 200, &catalog)
-	if after.Content != content || catalog[0].Description != "Updated description" {
+	if after.Content != content || catalog[0].Name != "review-code" || catalog[0].Title != "Managed review" || catalog[0].Description != "Updated description" {
 		t.Fatalf("managed edit did not update the file and catalog: %#v %#v", after, catalog)
 	}
 	f.request("GET", file(original, model.SkillEntry), nil, 200, &after)

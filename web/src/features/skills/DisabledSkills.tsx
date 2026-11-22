@@ -30,12 +30,14 @@ export function DisabledSkills({
   attached,
   sources,
   supported,
+  skillContext,
   onChange,
 }: {
   names: string[];
   attached: string[];
   sources: ReturnType<typeof useSkillSources>;
   supported: boolean;
+  skillContext?: boolean;
   onChange: (names: string[]) => void;
 }) {
   const { t } = useTranslation();
@@ -152,7 +154,13 @@ export function DisabledSkills({
           </ul>
         ) : null}
         <p className="profile-note">
-          {t(supported ? "skills.disabledHint" : "skills.unsupported")}
+          {t(
+            !supported
+              ? "skills.unsupported"
+              : skillContext
+                ? "skills.contextHint"
+                : "skills.disabledHint",
+          )}
         </p>
       </CardContent>
     </Card>

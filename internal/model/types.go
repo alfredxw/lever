@@ -232,6 +232,7 @@ type ProviderCapabilities struct {
 	DirectoryContext bool `json:"directoryContext,omitempty"` // Additional paths can be included as context under the runtime's own permissions.
 	MCP              bool `json:"mcp"`
 	Skills           bool `json:"skills"`
+	SkillContext     bool `json:"skillContext,omitempty"`
 	Resume           bool `json:"resume"`
 }
 

@@ -291,7 +291,7 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 	if err != nil {
 		return agent, err
 	}
-	if len(p.Skills) > 0 && !provider.Capabilities(config.Type).Skills {
+	if len(p.Skills) > 0 && !provider.ConfiguredCapabilities(config).Skills {
 		return agent, invalid("This runtime does not support Agent skill directories")
 	}
 	if len(p.Roots) == 0 {

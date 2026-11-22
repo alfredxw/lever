@@ -14,14 +14,32 @@ import (
 )
 
 type SkillPlan struct {
-	Assets            string
-	Roots             []string
-	Bundled           []string
-	Disabled          []string
-	ClaudeDirectories []string
-	ClaudeStage       string
-	AntigravityRoot   string
-	AntigravitySkills map[string]string // selected SKILL.md path to its native command
+	Assets                 string
+	Roots                  []string
+	Bundled                []string
+	Disabled               []string
+	Context                string `json:",omitempty"`
+	ClaudeDirectories      []string
+	ClaudeStage            string
+	AntigravityRoot        string
+	AntigravityCatalogRoot string            `json:",omitempty"`
+	AntigravitySkills      map[string]string // selected SKILL.md path to its native command
+}
+
+func isTraeCLI(config model.Provider) bool {
+	if config.Type != "acp" {
+		return false
+	}
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(config.Command)), ".exe")
+	if name != "traex" && name != "traecli" {
+		return false
+	}
+	index := slices.Index(config.Args, "acp")
+	return slices.Contains(config.Args, "--acp") || (index >= 0 && index+1 < len(config.Args) && config.Args[index+1] == "serve")
+}
+
+func acpSkillContext(config model.Provider) bool {
+	return config.Type == "antigravity" || isTraeCLI(config) || (config.Type == "acp" && config.PluginID == "lever.dsh")
 }
 
 // An explicit configuration directory belongs to its runtime instance.
@@ -35,6 +53,44 @@ func UserSkillDirectory(config model.Provider, kind string) string {
 	return ""
 }
 
+func SkillReferenceDirectories(config model.Provider, cwd, stateDir string) (user []string, project, manifest string) {
+	if isTraeCLI(config) {
+		home := os.Getenv("TRAE_HOME")
+		if home == "" {
+			if userHome, err := os.UserHomeDir(); err == nil {
+				home = filepath.Join(userHome, ".trae")
+			}
+		} else if !filepath.IsAbs(home) {
+			home = filepath.Join(cwd, home)
+		}
+		if home != "" {
+			user = []string{filepath.Join(home, "skills")}
+		}
+		return user, ".trae/skills", ""
+	}
+	if config.Type == "pi" {
+		return []string{UserSkillDirectory(config, "pi")}, ".pi/skills", ""
+	}
+	if config.Type != "antigravity" {
+		return nil, "", ""
+	}
+	command := config.Command
+	if command == "" {
+		command = os.Getenv("LEVER_ANTIGRAVITY_PATH")
+	}
+	home := antigravityProfileDir(stateDir, config.ID)
+	if IsAntigravityCLI(config, command) {
+		home, _ = antigravityCLIHome(cwd)
+		if home != "" {
+			user = append(user, filepath.Join(home, "antigravity-cli", "skills"))
+		}
+	}
+	if home == "" {
+		return nil, ".agent/skills", ""
+	}
+	return append(user, filepath.Join(home, "config", "skills"), filepath.Join(home, "skills")), ".agent/skills", filepath.Join(home, "config", "skills.json")
+}
+
 func codexSkillArguments(plan SkillPlan) []string {
 	if len(plan.Disabled) == 0 {
 		return nil
@@ -44,6 +100,46 @@ func codexSkillArguments(plan SkillPlan) []string {
 		entries = append(entries, "{name="+strconv.Quote(name)+",enabled=false}")
 	}
 	return []string{"-c", "skills.config=[" + strings.Join(entries, ",") + "]"}
+}
+
+func traeSkillArguments(args []string, plan SkillPlan) []string {
+	override := codexSkillArguments(plan)
+	if len(override) == 0 {
+		return args
+	}
+	for index, arg := range slices.Backward(args) {
+		switch {
+		case index > 0 && (args[index-1] == "-c" || args[index-1] == "--config"):
+		case strings.HasPrefix(arg, "--config="):
+			arg = strings.TrimPrefix(arg, "--config=")
+		case strings.HasPrefix(arg, "-c"):
+			arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
+		default:
+			continue
+		}
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "skills":
+			return args
+		case "skills.config":
+			value = strings.TrimSpace(value)
+			if !strings.HasPrefix(value, "[") || !strings.HasSuffix(value, "]") {
+				return args
+			}
+			entries := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value[1:len(value)-1]), ","))
+			if entries != "" {
+				if !strings.HasSuffix(entries, "}") {
+					return args
+				}
+				override[1] = "skills.config=[" + entries + "," + strings.TrimPrefix(override[1], "skills.config=[")
+			}
+			return append(slices.Clone(args), override...)
+		}
+	}
+	return append(slices.Clone(args), override...)
 }
 
 func codexSkillRoots(call func(string, object) (object, error), plan SkillPlan) error {

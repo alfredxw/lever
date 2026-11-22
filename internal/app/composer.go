@@ -1,9 +1,11 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"lever/internal/model"
 	"lever/internal/provider"
@@ -53,7 +55,7 @@ func (a *App) Suggestions(ctx context.Context, chatID, agentID, sessionID, copyI
 		return nil, err
 	}
 	if !provider.Capabilities(config.Type).Skills {
-		return []model.Reference{}, nil
+		return a.directorySkillReferences(ctx, scope, config, agent.Profile)
 	}
 	assets, err := os.MkdirTemp("", "lever-skills-")
 	if err != nil {
@@ -70,6 +72,13 @@ func (a *App) Suggestions(ctx context.Context, chatID, agentID, sessionID, copyI
 		return nil, err
 	}
 	skills, err := provider.Skills(ctx, config, scope, plan)
+	if config.Type == "pi" && err == nil {
+		refs, err := a.directorySkillReferences(ctx, scope, config, agent.Profile)
+		if err != nil {
+			return nil, err
+		}
+		skills = append(refs, slices.DeleteFunc(skills, func(ref model.Reference) bool { return ref.Kind == "skill" })...)
+	}
 	// Store source identities in the draft; execution resolves them to that
 	// run's working copy, including drafts made before a session exists.
 	seen := map[string]bool{}
@@ -93,4 +102,26 @@ func (a *App) Suggestions(ctx context.Context, chatID, agentID, sessionID, copyI
 		}
 	}
 	return out, err
+}
+
+func (a *App) directorySkillReferences(ctx context.Context, scope model.Scope, config model.Provider, profile model.Profile) ([]model.Reference, error) {
+	paths, err := a.skillReferencePaths(ctx, scope, config)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range profile.Skills {
+		paths[path] = true
+	}
+	refs := []model.Reference{}
+	for path := range paths {
+		skill := describeSkill(skillAt(path, false))
+		ref := model.Reference{Kind: "skill", Provider: config.ID, Name: skill.Name, Path: filepath.Join(path, model.SkillEntry), Description: skill.Description}
+		if skill.Available && !skillReferenceDisabled(ref, profile.DisabledSkills) {
+			refs = append(refs, ref)
+		}
+	}
+	slices.SortFunc(refs, func(a, b model.Reference) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Path, b.Path))
+	})
+	return refs, ctx.Err()
 }

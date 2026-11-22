@@ -17,6 +17,8 @@ export const enUS = {
   "skills.allSources": "All sources",
   "skills.outsideAgentScope": "Outside this Agent’s scope",
   "skills.switchForAgent": "Enable {{name}} for {{agent}}",
+  "skills.contextHint":
+    "Starting next turn, Lever supplies only this Agent’s enabled Skills. A same-name Skill loaded by the runtime itself may still be available.",
   "skills.overviewHint":
     "Changes apply on the next run. Skills with the same name share a setting.",
   "skills.preferenceFailed": "Could not save Skill status",

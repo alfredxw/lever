@@ -17,6 +17,8 @@ func Permissions(kind string) []string {
 func NormalizeCatalog(config model.Provider, catalog model.Catalog) model.Catalog {
 	d := drivers[config.Type]
 	if d.acp {
+		configured := ConfiguredCapabilities(config)
+		catalog.Capabilities.Skills, catalog.Capabilities.SkillContext = configured.Skills, configured.SkillContext
 		if !catalog.Capabilities.Files {
 			catalog.Capabilities.Files, catalog.Capabilities.FileLinksOnly = true, true
 		}

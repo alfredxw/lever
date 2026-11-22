@@ -20,11 +20,23 @@ func piFixture() {
 	}
 	path, thinking, active := "", "off", models[0]
 	var systemPrompt string
+	var skills []object
 	for i, arg := range os.Args {
 		if i+1 == len(os.Args) {
 			break
 		}
 		switch arg {
+		case "--skill":
+			root := os.Args[i+1]
+			if filepath.Base(root) == "SKILL.md" {
+				for _, s := range fixtureSkills(filepath.Dir(filepath.Dir(root))) {
+					if s["path"] == root {
+						skills = append(skills, s)
+					}
+				}
+			} else {
+				skills = append(skills, fixtureSkills(root)...)
+			}
 		case "--extension":
 			if ready := os.Getenv("LEVER_PI_POLICY_READY"); ready != "" && filepath.Base(os.Args[i+1]) == "policy.mjs" && !slices.Contains(os.Args, "--fixture-skip-policy") {
 				if err := os.WriteFile(ready, []byte("ready"), 0600); err != nil {
@@ -77,7 +89,11 @@ func piFixture() {
 		}
 		switch command {
 		case "get_commands":
-			reply(object{"commands": []object{{"name": "fixture-command", "source": "extension"}}})
+			commands := []object{{"name": "fixture-command", "source": "extension"}}
+			for _, skill := range skills {
+				commands = append(commands, object{"name": "skill:" + str(skill["name"]), "source": "skill", "sourceInfo": object{"path": skill["path"]}, "description": skill["description"]})
+			}
+			reply(object{"commands": commands})
 		case "get_session_stats":
 			reply(object{"contextUsage": object{"tokens": 1500, "contextWindow": 10000}})
 		case "compact":

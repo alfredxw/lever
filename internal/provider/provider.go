@@ -100,10 +100,13 @@ func (in Input) Message() string {
 		case "file":
 			text += fmt.Sprintf("\n\n[Referenced file %q at %q]", ref.Name, ref.Path)
 		case "skill":
-			if ref.Provider != in.Provider.ID {
-				text += fmt.Sprintf("\n\nRead and follow the %q skill at %q for this request.", ref.Name, in.skillPath(ref))
-			} else if in.Provider.Type == "claude" {
+			switch {
+			case ref.Provider == in.Provider.ID && in.Provider.Type == "codex":
+				continue
+			case ref.Provider == in.Provider.ID && in.Provider.Type == "claude":
 				text += fmt.Sprintf("\n\nUse the /%s skill for this request.", ref.Name)
+			default:
+				text += fmt.Sprintf("\n\nRead and follow the %q skill at %q for this request.", ref.Name, in.skillPath(ref))
 			}
 		case "chat", "topic":
 			text += fmt.Sprintf("\n\n[Referenced %s %q: use read_chat_context with target %q for dialogue.]", ref.Kind, ref.Name, ref.ID)

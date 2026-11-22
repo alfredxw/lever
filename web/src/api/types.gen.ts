@@ -692,6 +692,7 @@ export interface ProviderCapabilities {
   directoryContext?: boolean; // Additional paths can be included as context under the runtime's own permissions.
   mcp: boolean;
   skills: boolean;
+  skillContext?: boolean;
   resume: boolean;
 }
 export interface Attachment {

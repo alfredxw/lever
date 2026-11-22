@@ -16,13 +16,18 @@ export type ComposerTrigger = {
 const MENTION_TRIGGER =
   /(?:^|[\s\ufffc\p{Script=Han}，。；（(])(@)((?:[^\s@\ufffc,?!;，。？！；：、）》】」』]+(?: [^\s@\ufffc,?!;，。？！；：、）》】」』]+)*)?)$/u;
 const COMMAND_TRIGGER = /(?:^|[\s\ufffc])([/、])([^\s\ufffc]*)$/;
+const INLINE_SLASH_TRIGGER =
+  /(?:^|[\s\ufffc])[^\s/@\\\ufffc]*[\p{Script=Han}，。；：（(](\/)([^\s/@\\\ufffc]*)$/u;
 const MAX_MENTION_QUERY = 100;
 
 export function matchComposerTrigger(
   before: string,
   cursor: number,
 ): ComposerTrigger | null {
-  const match = COMMAND_TRIGGER.exec(before) || MENTION_TRIGGER.exec(before);
+  const match =
+    COMMAND_TRIGGER.exec(before) ||
+    MENTION_TRIGGER.exec(before) ||
+    INLINE_SLASH_TRIGGER.exec(before);
   if (!match) return null;
   const [, prefix, query] = match;
   if (prefix === "@" && query.length > MAX_MENTION_QUERY) return null;

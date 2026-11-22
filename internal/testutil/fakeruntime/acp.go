@@ -22,7 +22,7 @@ import (
 
 func acpFixture() {
 	identity := "fixture"
-	nativeCLI := len(os.Args) > 1 && os.Args[1] == "acp"
+	nativeCLI := len(os.Args) > 1 && os.Args[1] == "acp" && !strings.HasPrefix(filepath.Base(os.Args[0]), "traex")
 	processPerSession := slices.Contains(os.Args, "--process-per-session")
 	if nativeCLI && processPerSession && os.Getenv("LEVER_FIXTURE_AGY_LEGACY_ACP") == "1" {
 		fmt.Fprintln(os.Stderr, "flag provided but not defined: -process-per-session")
@@ -370,6 +370,15 @@ func acpFixture() {
 				notify(object{"sessionUpdate": "usage_update", "used": 32, "size": 4096})
 			}
 			receipt = object{"native": native, "input": input, "mode": mode, "model": model, "effort": effort, "cwd": cwd, "directories": directories, "servers": servers, "images": images, "resources": resources, "args": os.Args[1:]}
+			if strings.Contains(input, "[skill-policy]") {
+				for _, directory := range directories {
+					data, err := os.ReadFile(filepath.Join(str(directory), ".agents", "skills.json"))
+					var manifest struct{ Exclude []string }
+					if err == nil && json.Unmarshal(data, &manifest) == nil && len(manifest.Exclude) > 0 {
+						receipt["skillExcludes"] = manifest.Exclude
+					}
+				}
+			}
 			if singleRoot || limited || strings.Contains(input, "[audio-wire]") {
 				receipt["prompt"] = blocks
 			}
