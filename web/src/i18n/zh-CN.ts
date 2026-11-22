@@ -1582,6 +1582,19 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.forwardSend": "转发",
   "chat.elapsed": "用时 {{duration}}",
   "chat.expandVisualization": "展开 HTML 预览",
+  "chat.htmlPreviewMenu": "HTML 预览选项",
+  "chat.htmlPreviewTab": "在 Lever 网页标签中打开",
+  "chat.htmlPreviewQuick": "快速预览",
+  "chat.htmlPreviewInline": "在聊天中预览",
+  "chat.htmlPreviewCollapse": "收起预览",
+  "chat.htmlPreviewMissingImages":
+    "这个附件引用了未随文件上传的图片。请打开工作区里的原版 HTML，或上传已内嵌图片的版本。",
+  "chat.htmlPreviewBrowserTab": "在浏览器新标签页中打开",
+  "chat.htmlPreviewPairBrowser": "配对系统浏览器",
+  "chat.htmlPreviewPairHint":
+    "此浏览器尚未与 Lever 配对。请在 Lever 桌面版的 HTML 预览菜单中选择「配对系统浏览器」；如果从终端启动了 Lever，请在此浏览器中打开终端显示的本机配对链接。完成后回到这里重试。",
+  "chat.htmlPreviewUnavailable":
+    "HTML 文件不存在，或不在此会话允许预览的目录中。",
   "chat.durationHours": "{{count}} 小时",
   "chat.durationMinutes": "{{count}} 分",
   "chat.durationSeconds": "{{count}} 秒",

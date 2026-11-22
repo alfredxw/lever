@@ -1432,6 +1432,9 @@ button:focus-visible,
 .chat-history .user-message [data-slot="bubble"] {
   max-width: clamp(80%, 30rem, 100%);
 }
+.user-message [data-slot="bubble"]:has(.chat-inline-html-preview) {
+  width: 100%;
+}
 .message-body,
 .user-message [data-slot="bubble-content"] {
   font-size: var(--chat-font-size, 14px);

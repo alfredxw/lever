@@ -236,6 +236,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/runs/{run}/preview", s.chatPreview)
 	mux.HandleFunc("GET /api/shared-conversations/{provider}/{id}/preview", s.chatPreview)
+	mux.HandleFunc("GET /api/attachments/{attachment}/preview", s.chatPreview)
 	s.pluginRoutes(mux)
 	mux.HandleFunc("GET /api/agents/{id}/terminal", s.terminal)
 	mux.HandleFunc("DELETE /api/agents/{id}/terminal", s.closeTerminal)
@@ -354,7 +355,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chats/{id}/attachments", upload)
 	mux.HandleFunc("POST /api/agents/{agentId}/attachments", upload)
 	mux.HandleFunc("GET /api/attachments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		file, err := store.Get[model.Attachment](r.Context(), a.Store.DB, "SELECT data FROM attachments WHERE id=? UNION ALL SELECT data FROM draft_attachments WHERE id=?", r.PathValue("id"), r.PathValue("id"))
+		file, err := a.Attachment(r.Context(), r.PathValue("id"))
 		if err != nil {
 			respond(w, nil, err)
 			return

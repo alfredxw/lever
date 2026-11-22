@@ -1,16 +1,26 @@
 import {
   createContext,
   useContext,
-  useRef,
   useState,
   type ComponentProps,
   type MouseEvent,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Dialog } from "@/components/ui/dialog";
+import {
+  defaultComponents,
+  StreamdownContext,
+  type ExtraProps,
+} from "streamdown";
+import { rowMenuHandlers } from "@/components/ui/action-context-menu";
+import { ChatPreviewEndpoint, HtmlPreviewContext } from "./HtmlPreview";
+import {
+  chatHtmlPreview,
+  htmlViewerURL,
+  type HtmlPreview,
+} from "./chatFileLinks";
 import { useImagePreview } from "./ImagePreview";
-import { HtmlPreviewDialogContent } from "./VisualizationBlock";
+import { InlineHtmlPreview, useInlineHtmlPreview } from "./InlineHtmlPreview";
 
 // A linked thumbnail follows its authored link. Standalone images (including a
 // whole <picture>) open the image actually selected by the browser.
@@ -122,37 +132,68 @@ export function ChatPicture({
   );
 }
 
+export function ChatHtmlParagraph({
+  node,
+  ...props
+}: ComponentProps<"p"> & ExtraProps) {
+  const endpoint = useContext(ChatPreviewEndpoint);
+  const { isAnimating } = useContext(StreamdownContext);
+  const paragraph = <defaultComponents.p node={node} {...props} />;
+  for (const child of node?.children ?? []) {
+    if (child.type !== "element" || child.tagName !== "a") continue;
+    const href = child.properties.href;
+    const preview =
+      typeof href === "string" &&
+      chatHtmlPreview(href, endpoint, location.origin);
+    if (preview) {
+      const wholeReport =
+        node?.children.length === 1 && !preview.src.includes("#");
+      return (
+        <InlineHtmlPreview
+          key={preview.src}
+          defaultPreview={!isAnimating && wholeReport ? preview : undefined}
+        >
+          {paragraph}
+        </InlineHtmlPreview>
+      );
+    }
+  }
+  return paragraph;
+}
+
 export function ChatHtmlLink({
-  src,
-  name,
+  preview,
   children,
 }: {
-  src: string;
-  name: string;
+  preview: HtmlPreview;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const link = useRef<HTMLAnchorElement>(null);
+  const actions = useContext(HtmlPreviewContext);
+  const inline = useInlineHtmlPreview();
+  const expanded = inline?.src === preview.src;
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <a
-        ref={link}
-        href={src}
-        aria-haspopup="dialog"
-        onClick={(event) => {
-          if (followInChat(event)) setOpen(true);
-        }}
-      >
-        <InsideChatLink.Provider value>{children}</InsideChatLink.Provider>
-      </a>
-      <HtmlPreviewDialogContent
-        src={src}
-        title={name}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          link.current?.focus({ preventScroll: true });
-        }}
-      />
-    </Dialog>
+    <a
+      href={htmlViewerURL(preview.src)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-expanded={inline ? expanded : undefined}
+      aria-controls={expanded ? inline?.id : undefined}
+      {...(actions &&
+        rowMenuHandlers((anchor) =>
+          actions.menu(
+            preview,
+            anchor,
+            inline && !expanded
+              ? () => inline.toggle(preview, anchor.trigger)
+              : undefined,
+          ),
+        ))}
+      onClick={(event) => {
+        if (inline && followInChat(event))
+          inline.toggle(preview, event.currentTarget);
+      }}
+    >
+      <InsideChatLink.Provider value>{children}</InsideChatLink.Provider>
+    </a>
   );
 }

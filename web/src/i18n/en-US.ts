@@ -1676,6 +1676,19 @@ export const enUS = {
   "chat.forwardSend": "Forward",
   "chat.elapsed": "Elapsed {{duration}}",
   "chat.expandVisualization": "Expand HTML preview",
+  "chat.htmlPreviewMenu": "HTML preview options",
+  "chat.htmlPreviewTab": "Open in Lever web tab",
+  "chat.htmlPreviewQuick": "Quick preview",
+  "chat.htmlPreviewInline": "Preview in chat",
+  "chat.htmlPreviewCollapse": "Collapse preview",
+  "chat.htmlPreviewMissingImages":
+    "This attachment references images that were not uploaded with it. Open the original HTML in the workspace or upload a version with embedded images.",
+  "chat.htmlPreviewBrowserTab": "Open in new browser tab",
+  "chat.htmlPreviewPairBrowser": "Pair system browser with Lever",
+  "chat.htmlPreviewPairHint":
+    "This browser isn’t paired with Lever. In Lever Desktop, choose “Pair system browser with Lever” from the HTML preview menu. If you started Lever from a terminal, open its local pairing link in this browser. Then retry here.",
+  "chat.htmlPreviewUnavailable":
+    "This HTML file is missing or outside the conversation’s preview scope.",
   "chat.durationHours": "{{count}}h",
   "chat.durationMinutes": "{{count}}m",
   "chat.durationSeconds": "{{count}}s",

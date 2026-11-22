@@ -6,17 +6,21 @@ import type { FileSelection } from "@/features/files/filePaths";
 import type { AgentFileSource } from "@/features/files/fileSource";
 import {
   chatFileTarget,
+  chatHtmlPreview,
   chatPreviewURL,
   resolveChatFileLink,
 } from "./chatFileLinks";
 import {
   ChatHtmlLink,
+  ChatHtmlParagraph,
   ChatImage,
   ChatImageLink,
   ChatPicture,
   InsideChatLink,
 } from "./ChatMedia";
-import { ChatPreviewEndpoint, VisualizationBlock } from "./VisualizationBlock";
+import { VisualizationBlock } from "./VisualizationBlock";
+import { ChatPreviewEndpoint } from "./HtmlPreview";
+import { InlineHtmlPreview } from "./InlineHtmlPreview";
 
 export type OpenChatFile = (
   file: FileSelection,
@@ -138,6 +142,7 @@ export function ChatMarkdown({
       if (src && /^https?:\/\//i.test(src)) return src;
     };
     return {
+      p: ChatHtmlParagraph,
       img: ({ src, ...props }) => <ChatImage {...props} src={imageURL(src)} />,
       source: ({ srcSet, media }) => {
         const src = srcSet && /^\S+$/.test(srcSet) && imageURL(srcSet);
@@ -158,20 +163,14 @@ export function ChatMarkdown({
         );
       },
       a: ({ href, children }) => {
+        const preview =
+          href && chatHtmlPreview(href, endpoint, window.location.origin);
+        if (preview)
+          return <ChatHtmlLink preview={preview}>{children}</ChatHtmlLink>;
         const target = targetFor(href);
         if (target) {
           const { path, fragment, location } = target;
           const name = path.split("/").at(-1) || path;
-          if (!location && /\.html?$/i.test(path)) {
-            return (
-              <ChatHtmlLink
-                src={chatPreviewURL(endpoint, "html", path, fragment)}
-                name={name}
-              >
-                {children}
-              </ChatHtmlLink>
-            );
-          }
           if (
             !location &&
             /\.(?:png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(path)
@@ -214,14 +213,16 @@ export function ChatMarkdown({
   }, [endpoint, files]);
   return (
     <ChatPreviewEndpoint.Provider value={endpoint}>
-      <MessageResponse
-        className="chat-response"
-        text={text}
-        running={running}
-        components={components}
-        rehypePlugins={rehypePlugins}
-        BlockComponent={VisualizationBlock}
-      />
+      <InlineHtmlPreview>
+        <MessageResponse
+          className="chat-response"
+          text={text}
+          running={running}
+          components={components}
+          rehypePlugins={rehypePlugins}
+          BlockComponent={VisualizationBlock}
+        />
+      </InlineHtmlPreview>
     </ChatPreviewEndpoint.Provider>
   );
 }

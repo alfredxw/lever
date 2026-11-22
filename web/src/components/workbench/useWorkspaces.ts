@@ -33,6 +33,7 @@ export type WorkspaceTab = {
   | {
       kind: "browser";
       url?: string;
+      htmlPreview?: string;
       sourceConversation?: string;
       file?: never;
       topic?: never;

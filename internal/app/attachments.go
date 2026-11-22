@@ -25,6 +25,10 @@ func (a *App) AttachmentPath(file model.Attachment) string {
 	return filepath.Join(a.Store.Dir, "attachments", file.ID, file.Name)
 }
 
+func (a *App) Attachment(ctx context.Context, id string) (model.Attachment, error) {
+	return store.Get[model.Attachment](ctx, a.Store.DB, "SELECT data FROM attachments WHERE id=? UNION ALL SELECT data FROM draft_attachments WHERE id=?", id, id)
+}
+
 func (a *App) Upload(ctx context.Context, chatID, name string, reader io.Reader) (model.Attachment, error) {
 	return a.upload(ctx, chatID, "", name, reader)
 }

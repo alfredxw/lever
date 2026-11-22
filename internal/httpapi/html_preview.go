@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	_ "embed"
 	"io"
 	"net/http"
@@ -58,7 +59,14 @@ func (s *Server) serveChatPreview(w http.ResponseWriter, r *http.Request, run, k
 	}
 	var root, relative string
 	err := os.ErrNotExist
-	if id := r.PathValue("provider"); id != "" {
+	if id := r.PathValue("attachment"); id != "" {
+		file, lookupErr := s.App.Attachment(r.Context(), id)
+		if lookupErr != nil || kind != "html" || path != file.Name {
+			http.NotFound(w, r)
+			return
+		}
+		root, relative, err = filepath.Dir(s.App.AttachmentPath(file)), file.Name, nil
+	} else if id := r.PathValue("provider"); id != "" {
 		root, relative, err = s.App.SharedPreviewPath(r.Context(), id, r.PathValue("id"), path, image)
 	} else if run != "" {
 		root, relative, err = s.App.RunPreviewPath(r.Context(), run, path, image)
@@ -75,6 +83,28 @@ func (s *Server) serveChatPreview(w http.ResponseWriter, r *http.Request, run, k
 		serveImageAsset(w, r, root, relative)
 		return
 	}
+	if r.URL.Query().Get("info") == "true" {
+		if err == nil {
+			file, _, openErr := workspace.OpenAsset(root, relative)
+			if openErr == nil {
+				defer file.Close()
+				info := struct {
+					Path        string `json:"path"`
+					NeedsImages bool   `json:"needsImages,omitempty"`
+				}{Path: filepath.Join(root, filepath.FromSlash(relative))}
+				if r.PathValue("attachment") != "" {
+					for range previewRasters(io.LimitReader(file, workspace.MaxFileBytes)) {
+						info.NeedsImages = true
+						break
+					}
+				}
+				respond(w, info, nil)
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
 	htmlPreviewHeaders(w, r, visualization)
 	status := http.StatusNotFound
 	if err == nil {
@@ -82,7 +112,7 @@ func (s *Server) serveChatPreview(w http.ResponseWriter, r *http.Request, run, k
 			file, err := workspace.Read(root, relative)
 			if err == nil && !file.Truncated {
 				_, _ = io.WriteString(w, visualizationHead)
-				_, _ = io.WriteString(w, file.Content)
+				_, _ = w.Write(previewImages([]byte(file.Content), root, relative))
 				return
 			}
 			if file.Truncated {
@@ -90,6 +120,16 @@ func (s *Server) serveChatPreview(w http.ResponseWriter, r *http.Request, run, k
 			}
 		} else if file, _, err := workspace.OpenAsset(root, relative); err == nil {
 			defer file.Close()
+			if r.PathValue("attachment") != "" {
+				http.ServeContent(w, r, "", time.Time{}, file)
+				return
+			}
+			if info, err := file.Stat(); err == nil && info.Size() <= workspace.MaxFileBytes {
+				if data, err := io.ReadAll(io.LimitReader(file, workspace.MaxFileBytes+1)); err == nil && len(data) <= workspace.MaxFileBytes {
+					http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(previewImages(data, root, relative)))
+					return
+				}
+			}
 			http.ServeContent(w, r, "", time.Time{}, file)
 			return
 		}

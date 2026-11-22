@@ -68,6 +68,12 @@ export const Dialogs = {
   openPath(path: string): Promise<void> {
     return call("Dialogs.OpenPath", path);
   },
+  openPreviewInBrowser(viewer: string): Promise<void> {
+    return call("Dialogs.OpenPreviewInBrowser", viewer);
+  },
+  pairSystemBrowser(): Promise<void> {
+    return call("Dialogs.PairSystemBrowser");
+  },
   pickDirectories(defaultPath: string, multiple: boolean): Promise<string[]> {
     return call("Dialogs.PickDirectories", defaultPath, multiple);
   },

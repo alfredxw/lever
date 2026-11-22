@@ -2,15 +2,30 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"lever/internal/workspace"
 )
 
-type Dialogs struct{}
+type Dialogs struct{ origin, pairURL string }
+
+func (d *Dialogs) PairSystemBrowser() error {
+	return mygo.Shell.OpenExternal(d.pairURL)
+}
+
+func (d *Dialogs) OpenPreviewInBrowser(viewer string) error {
+	link, err := url.Parse(viewer)
+	if err != nil || link.IsAbs() || link.Host != "" || !strings.HasPrefix(link.Path, "/view/") || strings.Contains(link.Path, `\`) {
+		return errors.New("invalid preview page")
+	}
+	return mygo.Shell.OpenExternal(d.origin + link.String())
+}
 
 type ContextMenuItem struct {
 	ID       string `json:"id"`

@@ -1,29 +1,19 @@
 import { Maximize2 } from "lucide-react";
-import {
-  createContext,
-  useContext,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
+import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Block, type BlockProps } from "streamdown";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  ChatPreviewEndpoint,
+  HtmlPreviewContext,
+  PreviewMenuButton,
+} from "./HtmlPreview";
 import { fileKind } from "@/features/files/preview/fileKind";
 import { HtmlFrame } from "@/features/files/preview/HtmlFrame";
-import { chatPreviewURL } from "./chatFileLinks";
-
-export const ChatPreviewEndpoint = createContext("/api/visualizations");
+import { chatPreviewURL, htmlViewerURL } from "./chatFileLinks";
 
 export function VisualizationBlock(props: BlockProps) {
-  const endpoint = useContext(ChatPreviewEndpoint);
+  const endpoint = useContext(ChatPreviewEndpoint) ?? "/api/visualizations";
   // Streamdown keeps fenced examples together. Only handle a standalone block.
   const marker = /^ {0,3}\uE200visualize\uE202([^\r\n]+)\uE201$/u.exec(
     props.content.trimEnd(),
@@ -68,6 +58,8 @@ function VisualizationPreview({
   wide: boolean;
 }) {
   const { t } = useTranslation();
+  const actions = useContext(HtmlPreviewContext);
+  const preview = { src, title };
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(260);
   useLayoutEffect(() => {
@@ -89,72 +81,37 @@ function VisualizationPreview({
     return () => window.removeEventListener("message", onMessage);
   }, []);
   return (
-    <Dialog>
-      <div
-        className="chat-visualization my-2 min-w-0 overflow-hidden rounded-lg border border-border"
-        data-wide={wide}
-      >
-        <div className="flex items-center gap-2 border-b border-border py-1 pr-1 pl-3 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate" title={title}>
-            {title}
-          </span>
-          <DialogTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t("chat.expandVisualization")}
-              title={t("chat.expandVisualization")}
-            >
-              <Maximize2 />
-            </Button>
-          </DialogTrigger>
-        </div>
-        <HtmlFrame
-          ref={frame}
-          className="chat-visualization-frame block w-full border-0"
-          title={title}
-          src={src}
-          style={{ height }}
-          loading="lazy"
-        />
-      </div>
-      <HtmlPreviewDialogContent src={src} title={title} />
-    </Dialog>
-  );
-}
-
-export function HtmlPreviewDialogContent({
-  src,
-  title,
-  onCloseAutoFocus,
-}: {
-  src: string;
-  title: string;
-  onCloseAutoFocus?: ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
-}) {
-  const dialogTitle = useRef<HTMLHeadingElement>(null);
-  return (
-    <DialogContent
-      className="flex h-[calc(100dvh-2rem)] flex-col gap-2 pt-3 sm:max-w-[calc(100%-2rem)]"
-      aria-describedby={undefined}
-      onCloseAutoFocus={onCloseAutoFocus}
-      onOpenAutoFocus={(event) => {
-        event.preventDefault();
-        dialogTitle.current?.focus();
-      }}
+    <div
+      className="chat-visualization my-2 min-w-0 overflow-hidden rounded-lg border border-border"
+      data-wide={wide}
     >
-      <DialogTitle
-        ref={dialogTitle}
-        tabIndex={-1}
-        className="truncate pr-8 outline-none"
-      >
-        {title}
-      </DialogTitle>
+      <div className="flex items-center gap-2 border-b border-border py-1 pr-1 pl-3 text-xs text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate" title={title}>
+          {title}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t("chat.expandVisualization")}
+          title={t("chat.expandVisualization")}
+          onClick={({ currentTarget }) => {
+            if (actions) actions.quick(preview, currentTarget);
+            else
+              window.open(htmlViewerURL(src), "_blank", "noopener,noreferrer");
+          }}
+        >
+          <Maximize2 />
+        </Button>
+        <PreviewMenuButton preview={preview} />
+      </div>
       <HtmlFrame
-        className="chat-visualization-frame min-h-0 w-full flex-1 rounded-md border"
-        src={src}
+        ref={frame}
+        className="chat-visualization-frame block w-full border-0"
         title={title}
+        src={src}
+        style={{ height }}
+        loading="lazy"
       />
-    </DialogContent>
+    </div>
   );
 }

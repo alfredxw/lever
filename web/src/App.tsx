@@ -147,6 +147,8 @@ import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useEventCallback } from "@/hooks/useEventCallback";
 import { Browser as NativeBrowser } from "@/api/desktop.gen";
 import type { BrowserContext } from "@/features/browser/BrowserPanel";
+import { HtmlPreviewHost, HtmlPreviewPanel } from "@/features/chat/HtmlPreview";
+import type { HtmlPreview } from "@/features/chat/chatFileLinks";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { usePreferences } from "@/features/settings/Preferences";
 import {
@@ -435,7 +437,8 @@ export default function App() {
       if (tab.kind === "chat") title = chatTitles.get(tab.id) ?? title;
       else if (tab.kind === "topic")
         title = topicTitles.get(tab.topic.sessionId) || title;
-      else if (tab.kind === "browser" && tab.url) title = tab.title || tab.url;
+      else if (tab.kind === "browser" && (tab.htmlPreview || tab.url))
+        title = tab.title || tab.url || t("workspace.browser");
       else if (!tab.file && tab.kind !== "shared")
         title = t(`workspace.${tab.kind}`);
       strips[paneOf(tab)].push({ ...tab, title });
@@ -593,6 +596,24 @@ export default function App() {
   const isSelected = (id: string) => id === mainTab?.id || id === sideTab?.id;
   const isVisible = (id: string) =>
     (!maximized && id === mainTab?.id) || (split && id === sideTab?.id);
+  const openHtmlTab = useEventCallback(
+    (owner: string, source: string, preview: HtmlPreview, file: string) => {
+      if (page !== "agents" || selected !== owner || !isVisible(source)) return;
+      const id = `browser:html:${JSON.stringify([source, file])}`;
+      openTab(
+        {
+          id,
+          kind: "browser",
+          title: preview.title,
+          htmlPreview: preview.src,
+          sourceConversation: source,
+        },
+        owner,
+        source === mainTab?.id ? "side" : "main",
+      );
+      focusWorkspaceTab(id);
+    },
+  );
   const { recent, forgetClosed } = useRecentConversations(
     selected,
     page === "agents" && agent && !maximized ? mainTab : undefined,
@@ -1150,7 +1171,7 @@ export default function App() {
     function remove(closed: WorkspaceTabTarget[]) {
       const byAgent = new Map<string, Set<string>>();
       for (const { agentId, tab } of closed) {
-        if (tab.kind === "browser" && isDesktop) {
+        if (tab.kind === "browser" && !tab.htmlPreview && isDesktop) {
           void NativeBrowser.close(tab.id).catch((error) =>
             toast.error(String(error)),
           );
@@ -1885,7 +1906,7 @@ export default function App() {
                           !forward &&
                           !quoteSource &&
                           !workspaceSearch;
-                        return (
+                        const panel = (
                           <Panel
                             key={`${owner}:${t.id}`}
                             className="tab-panel"
@@ -1935,7 +1956,14 @@ export default function App() {
                                 visible={active || t.kind === "draft"}
                                 fallback={<Loading />}
                               >
-                                {t.kind === "browser" && agent ? (
+                                {t.kind === "browser" && t.htmlPreview ? (
+                                  <HtmlPreviewPanel
+                                    preview={{
+                                      src: t.htmlPreview,
+                                      title: t.title,
+                                    }}
+                                  />
+                                ) : t.kind === "browser" && agent ? (
                                   <BrowserPanel
                                     tab={t}
                                     agent={owner}
@@ -2080,6 +2108,22 @@ export default function App() {
                               </MountOnVisit>
                             </KeepConversationOpen>
                           </Panel>
+                        );
+                        const source = conversation || t.kind === "shared";
+                        if (!source && !(t.kind === "browser" && t.htmlPreview))
+                          return panel;
+                        return (
+                          <HtmlPreviewHost
+                            key={`${owner}:${t.id}`}
+                            onOpenTab={
+                              source
+                                ? (preview, file) =>
+                                    openHtmlTab(owner, t.id, preview, file)
+                                : undefined
+                            }
+                          >
+                            {panel}
+                          </HtmlPreviewHost>
                         );
                       })}
                       {/* Keep terminal surfaces mounted across Agent switches and reconnect

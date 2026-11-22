@@ -36,13 +36,14 @@ export function UserMessage({
       aria-label={t("chat.you")}
     >
       <MessageContent>
-        <Attachments files={run.attachments ?? []} />
+        <Attachments files={run.attachments ?? []} defaultExpanded />
         {(run.input || !!run.references?.length || run.quote || children) && (
           <Bubble align="end" variant="muted">
             <BubbleContent className="flex flex-col gap-2">
               {run.quote && <QuotedMessage quote={run.quote} />}
               <MessageInput
                 text={run.input}
+                previewEndpoint={`/api/runs/${encodeURIComponent(run.id)}/preview`}
                 references={run.references}
                 sessionId={sessionId}
               />

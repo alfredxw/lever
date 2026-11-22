@@ -10,6 +10,7 @@ import { ErrorNotice } from "@/components/common";
 import { events } from "@/api/desktop.gen";
 import App from "./App";
 import { PreferencesProvider } from "@/features/settings/Preferences";
+import { StandaloneHtmlPreview } from "@/features/chat/HtmlPreview";
 import "./index.css";
 import "./desktop.css";
 
@@ -49,17 +50,24 @@ function Notifications() {
 }
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
-pair()
+const previewPage = location.pathname.startsWith("/view/");
+(previewPage ? Promise.resolve() : pair())
   .then(() =>
     root.render(
       <React.StrictMode>
         <QueryClientProvider client={queryClient}>
-          <DesktopFrame>
-            <PreferencesProvider>
-              <App />
-            </PreferencesProvider>
-          </DesktopFrame>
-          <Notifications />
+          {previewPage ? (
+            <StandaloneHtmlPreview />
+          ) : (
+            <>
+              <DesktopFrame>
+                <PreferencesProvider>
+                  <App />
+                </PreferencesProvider>
+              </DesktopFrame>
+              <Notifications />
+            </>
+          )}
         </QueryClientProvider>
       </React.StrictMode>,
     ),

@@ -164,7 +164,10 @@ export const SharedTurn = memo(function SharedTurn({
             {prompt.text && (
               <Bubble align="end" variant="muted">
                 <BubbleContent>
-                  <MessageInput text={prompt.text} />
+                  <MessageInput
+                    text={prompt.text}
+                    previewEndpoint={`/api${path}/preview`}
+                  />
                 </BubbleContent>
               </Bubble>
             )}

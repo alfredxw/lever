@@ -122,6 +122,46 @@ func TestChatPreviewFiles(t *testing.T) {
 	reply := "[Screenshot](" + screenshotURL + ")\n\n[HTML](" + tempPageURL + ")"
 	run := f.send(chat.ID, "main", "", reply)
 	f.wait(run.ID, "completed")
+	t.Run("HTML attachment preview uses only the uploaded file", func(t *testing.T) {
+		file := f.upload(chat.ID, page, []byte(html))
+		preview := "/attachments/" + file.ID + "/preview?kind=html&path="
+		var info struct{ Path string }
+		f.request("GET", preview+url.QueryEscape(page)+"&info=true", nil, http.StatusOK, &info)
+		if info.Path != f.a.AttachmentPath(file) {
+			t.Fatalf("attachment path = %s", info.Path)
+		}
+		report := f.upload(chat.ID, "compare.html", []byte(`<img src="screen.png">`))
+		var reportInfo struct{ NeedsImages bool }
+		f.request("GET", "/attachments/"+report.ID+"/preview?kind=html&path=compare.html&info=true", nil, http.StatusOK, &reportInfo)
+		if !reportInfo.NeedsImages {
+			t.Fatal("missing attachment companion images were not reported")
+		}
+		f.request("GET", preview+"another.html&info=true", nil, http.StatusNotFound, nil)
+		f.request("GET", "/attachments/"+file.ID+"/preview?kind=image&path="+url.QueryEscape(page), nil, http.StatusNotFound, nil)
+	})
+	t.Run("file manager receives only a scoped regular HTML file", func(t *testing.T) {
+		endpoint := "/runs/" + run.ID + "/preview?kind=html&info=true&path="
+		var info struct{ Path string }
+		f.request("GET", endpoint+url.QueryEscape(page), nil, http.StatusOK, &info)
+		want, err := filepath.EvalSymlinks(filepath.Join(f.root, page))
+		if err != nil || info.Path != want {
+			t.Fatalf("resolved file = %q, want %q: %v", info.Path, want, err)
+		}
+		for _, path := range []string{tempPage, "drawing.svg", "missing.html"} {
+			f.request("GET", endpoint+url.QueryEscape(path), nil, http.StatusNotFound, nil)
+		}
+		if err := os.Symlink(tempPage, filepath.Join(f.root, "outside.html")); err == nil {
+			f.request("GET", endpoint+"outside.html", nil, http.StatusNotFound, nil)
+		}
+		res, err := http.Get(f.s.URL + "/api" + endpoint + url.QueryEscape(page))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("unpaired metadata status = %d", res.StatusCode)
+		}
+	})
 	for _, tc := range []struct {
 		kind, path, mime, content string
 		status                    int

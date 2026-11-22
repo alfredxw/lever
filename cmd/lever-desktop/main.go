@@ -70,8 +70,9 @@ func main() {
 	mygo.App.SetName("Lever")
 	mygo.App.SetLanguages("en-US", "zh-CN")
 	notifications := &Notifications{}
+	dialogs := &Dialogs{}
 	browser := &Browser{tabs: make(map[string]*browserTab)}
-	mygo.Bind(&Appearance{}, &Dialogs{}, notifications, browser)
+	mygo.Bind(&Appearance{}, dialogs, notifications, browser)
 	// Binding generation must not open the user's database or start a server.
 	if generate {
 		if err := mygo.App.Run(); err != nil {
@@ -96,6 +97,7 @@ func main() {
 		return
 	}
 	defer backend.Close()
+	dialogs.origin, dialogs.pairURL = backend.URL, backend.PairURL
 	if *devOrigin != "" {
 		fmt.Println("Lever Desktop:", backend.URL)
 	}

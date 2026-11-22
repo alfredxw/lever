@@ -11,6 +11,8 @@ type ChatFileTarget = {
   location?: FileLocation;
 };
 
+export type HtmlPreview = { src: string; title: string };
+
 export function chatPreviewURL(
   endpoint: string,
   kind: "image" | "html" | "visualization",
@@ -18,6 +20,62 @@ export function chatPreviewURL(
   fragment = "",
 ) {
   return `${endpoint}?${new URLSearchParams({ kind, path })}${fragment}`;
+}
+
+export function htmlViewerURL(src: string) {
+  return src.replace(/^\/api\//, "/view/");
+}
+
+export function parseHtmlPreviewURL(
+  href: string,
+  origin: string,
+): HtmlPreview | null {
+  if (!/^(?:https?:\/\/|\/(?:api|view)\/)/i.test(href)) return null;
+  try {
+    const url = new URL(href, origin);
+    const endpoint = url.pathname.replace(/^\/view\//, "/api/");
+    if (
+      url.origin !== origin ||
+      url.username ||
+      url.password ||
+      !/^\/api\/(?:(?:runs|attachments)\/[^/]+|shared-conversations\/[^/]+\/[^/]+)\/preview$/.test(
+        endpoint,
+      )
+    )
+      return null;
+    const kind = url.searchParams.get("kind");
+    const path = url.searchParams.get("path");
+    if (
+      (kind !== "html" && kind !== "visualization") ||
+      !path ||
+      (endpoint.startsWith("/api/attachments/") &&
+        (kind !== "html" || /[\\/]/.test(path))) ||
+      path.length > 4096 ||
+      !/\.html?$/i.test(path)
+    )
+      return null;
+    return {
+      src: chatPreviewURL(endpoint, kind, path, url.hash),
+      title: path.split(/[\\/]/).at(-1)!,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function chatHtmlPreview(
+  href: string,
+  endpoint: string | undefined,
+  origin: string,
+) {
+  const explicit = parseHtmlPreviewURL(href, origin);
+  if (explicit || !endpoint) return explicit;
+  const target = chatFileTarget(href, origin);
+  if (!target || target.location || !/\.html?$/i.test(target.path)) return null;
+  return {
+    src: chatPreviewURL(endpoint, "html", target.path, target.fragment),
+    title: target.path.split("/").at(-1)!,
+  };
 }
 
 export function chatFileTarget(

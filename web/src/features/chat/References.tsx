@@ -2,10 +2,10 @@ import { useContext, useMemo } from "react";
 import {
   Box,
   FileText,
-  GitBranch,
   MousePointer2,
   ListTodo,
   MessageCircle,
+  MessagesCircle,
   NotebookPen,
   UsersRound,
 } from "lucide-react";
@@ -21,6 +21,13 @@ import { MessageResponse } from "@/components/ai-elements/message-response";
 import { Button } from "@/components/ui/button";
 import type { ReferenceScope } from "@/features/files/fileSource";
 import { ComposerContext, ReferenceScopeContext } from "./ComposerContext";
+import { ChatHtmlLink, ChatHtmlParagraph } from "./ChatMedia";
+import { InlineHtmlPreview } from "./InlineHtmlPreview";
+import {
+  chatHtmlPreview,
+  htmlViewerURL,
+  parseHtmlPreviewURL,
+} from "./chatFileLinks";
 import {
   isLeverReference,
   markPromptReferences,
@@ -46,7 +53,7 @@ export function ReferenceIcon({
       file: FileText,
       skill: Box,
       chat: MessageCircle,
-      topic: GitBranch,
+      topic: MessagesCircle,
       note: NotebookPen,
       agent: UsersRound,
       browserElement: MousePointer2,
@@ -104,6 +111,35 @@ type MarkdownNode = NonNullable<
   Parameters<AllowElement>[2]
 >["children"][number];
 type MarkdownParent = { children: MarkdownNode[] };
+
+function promptHtmlLinks({ endpoint }: { endpoint?: string }) {
+  function visit(node: MarkdownParent) {
+    for (const child of node.children) {
+      if (child.type !== "element") continue;
+      if (child.tagName === "a" && typeof child.properties.href === "string") {
+        const preview = chatHtmlPreview(
+          child.properties.href,
+          endpoint,
+          location.origin,
+        );
+        if (preview)
+          child.properties.href = location.origin + htmlViewerURL(preview.src);
+      } else visit(child);
+    }
+  }
+  return visit;
+}
+
+const promptLink: Components["a"] = ({ href, children }) => {
+  const preview = href && parseHtmlPreviewURL(href, location.origin);
+  return preview ? (
+    <ChatHtmlLink preview={preview}>{children}</ChatHtmlLink>
+  ) : (
+    <a href={href} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  );
+};
 
 function restorePromptReferences({
   markerPattern,
@@ -171,7 +207,6 @@ function renderReferences(
   );
   // Streamdown caches Markdown processors by plugin name and serialized options.
   const rehypePlugins: StreamdownProps["rehypePlugins"] = [
-    ...Object.values(defaultRehypePlugins),
     [
       restorePromptReferences,
       {
@@ -195,10 +230,12 @@ export function MessageInput({
   text,
   references,
   sessionId,
+  previewEndpoint,
 }: {
   text: string;
   references?: Reference[];
   sessionId?: string;
+  previewEndpoint?: string;
 }) {
   const rendering = useMemo(
     () =>
@@ -207,18 +244,38 @@ export function MessageInput({
         : undefined,
     [text, references, sessionId],
   );
+  const components = useMemo(
+    () => ({
+      a: promptLink,
+      ...(previewEndpoint && { p: ChatHtmlParagraph }),
+      ...rendering?.components,
+    }),
+    [previewEndpoint, rendering],
+  );
+  const plugins = useMemo<StreamdownProps["rehypePlugins"]>(
+    () => [
+      defaultRehypePlugins.raw,
+      [promptHtmlLinks, { endpoint: previewEndpoint }],
+      defaultRehypePlugins.sanitize,
+      defaultRehypePlugins.harden,
+      ...(rendering?.rehypePlugins ?? []),
+    ],
+    [previewEndpoint, rendering],
+  );
   const source = rendering?.source ?? text;
   return (
     <>
       {source && (
-        <MessageResponse
-          text={source}
-          mode="static"
-          className="space-y-2 wrap-anywhere [&_a]:underline [&_a]:underline-offset-3 [&_p]:whitespace-pre-wrap"
-          components={rendering?.components}
-          remarkPlugins={promptRemarkPlugins}
-          rehypePlugins={rendering?.rehypePlugins}
-        />
+        <InlineHtmlPreview>
+          <MessageResponse
+            text={source}
+            mode="static"
+            className="space-y-2 wrap-anywhere [&_a]:underline [&_a]:underline-offset-3 [&_p]:whitespace-pre-wrap"
+            components={components}
+            remarkPlugins={promptRemarkPlugins}
+            rehypePlugins={plugins}
+          />
+        </InlineHtmlPreview>
       )}
       {!!rendering?.trailing.length && (
         <div className="flex flex-wrap items-baseline gap-x-1">
