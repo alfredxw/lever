@@ -414,7 +414,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		q := r.URL.Query()
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		v, err := a.SearchMessages(ctx, q.Get("query"), q.Get("agentId"), q.Get("chatId"))
+		v, err := a.SearchMessages(ctx, q.Get("query"), q.Get("agentId"), q.Get("chatId"), q.Get("kind"))
 		respond(w, v, err)
 	})
 	mux.HandleFunc("PUT /api/chats/{id}/title", func(w http.ResponseWriter, r *http.Request) {

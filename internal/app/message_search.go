@@ -19,7 +19,9 @@ import (
 var searchMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // SearchMessages returns the newest matching turns with one snippet per turn.
-func (a *App) SearchMessages(ctx context.Context, query, agentID, chatID string) ([]model.MessageMatch, error) {
+// A Chat also covers the comparison replies shown in its timeline. A non-empty
+// kind keeps only main, topic, or comparison conversations.
+func (a *App) SearchMessages(ctx context.Context, query, agentID, chatID, kind string) ([]model.MessageMatch, error) {
 	matches := []model.MessageMatch{}
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -30,22 +32,41 @@ func (a *App) SearchMessages(ctx context.Context, query, agentID, chatID string)
 	}
 	match := regexp.MustCompile("(?i)" + regexp.QuoteMeta(query))
 	statement := "SELECT r.data,s.kind FROM runs r JOIN sessions s ON s.id=r.session_id JOIN chats c ON c.id=r.chat_id WHERE " + contextRunFilter
+	switch kind {
+	case "":
+	case "main":
+		statement += " AND s.kind='main'"
+	case "topic":
+		statement += " AND s.kind='topic' AND json_type(s.data,'$.comparison') IS NULL"
+	case "comparison":
+		statement += " AND json_type(s.data,'$.comparison')='object'"
+	default:
+		return nil, invalid("Message kind must be main, topic, or comparison")
+	}
 	var args []any
 	if agentID != "" {
 		statement += " AND c.agent_id=?"
 		args = append(args, agentID)
 	}
 	if chatID != "" {
-		statement += " AND r.chat_id=?"
-		args = append(args, chatID)
+		statement += " AND (r.chat_id=? OR json_extract(s.data,'$.comparison.chatId')=?)"
+		args = append(args, chatID, chatID)
 	}
 	const limit = 40
-	err := walkContextRuns(ctx, a.Store.DB, statement+" ORDER BY r.position DESC", args, func(run model.Run, kind string) (bool, error) {
-		messages := contextMessages(run, kind)
+	// Every comparison Topic starts with the same prompt. Show it once.
+	prompts := map[string]bool{}
+	err := walkContextRuns(ctx, a.Store.DB, statement+" ORDER BY r.position DESC", args, func(run model.Run, sessionKind string) (bool, error) {
+		messages := contextMessages(run, sessionKind)
 		for _, message := range slices.Backward(messages) {
 			hit := match.FindStringIndex(message.Text)
 			if hit == nil {
 				continue
+			}
+			if run.ComparisonID != "" && message.Anchor.ItemID == "" {
+				if prompts[run.ComparisonID] {
+					break
+				}
+				prompts[run.ComparisonID] = true
 			}
 			start, end := messageSnippetBounds(message.Text, hit)
 			snippet := message.Text[start:end]
@@ -59,7 +80,7 @@ func (a *App) SearchMessages(ctx context.Context, query, agentID, chatID string)
 				ChatID: run.ChatID, RunID: run.ID, Text: snippet,
 				Preview: markdownSearchPreview(message.Text, match),
 			}
-			if kind == "topic" {
+			if sessionKind == "topic" {
 				result.TopicID = run.SessionID
 			}
 			matches = append(matches, result)

@@ -66,6 +66,7 @@ const resultTypes = [
   "file",
 ] as const;
 export type SearchType = (typeof resultTypes)[number];
+const messageKinds = ["main", "comparison", "topic"] as const;
 const optionStyle =
   "cursor-default rounded-md outline-none aria-selected:bg-accent aria-selected:text-accent-foreground";
 
@@ -295,6 +296,7 @@ export function WorkspaceSearch({
   const { t } = useTranslation();
   const [scope, setScope] = useState<string>(initialScope);
   const [type, setType] = useState<string>(initialType);
+  const [messageKind, setMessageKind] = useState("");
   const [rootId, setRootId] = useState<string>();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState("");
@@ -306,12 +308,14 @@ export function WorkspaceSearch({
     return () => window.clearTimeout(timer);
   }, [term]);
   const searchMessages = !!term && (type === "all" || type === "message");
+  const kind = type === "message" ? messageKind : "";
   const messages = useQuery({
-    queryKey: ["message-search", scope, debounced],
+    queryKey: ["message-search", scope, kind, debounced],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams({ query: debounced });
       if (scope.startsWith("agent:")) params.set("agentId", scope.slice(6));
       if (scope.startsWith("chat:")) params.set("chatId", scope.slice(5));
+      if (kind) params.set("kind", kind);
       return api<MessageMatch[]>(
         `/search/messages?${params}`,
         undefined,
@@ -725,51 +729,77 @@ export function WorkspaceSearch({
             )}
           </Command.List>
           <div
-            className="flex flex-wrap items-center justify-between gap-2 border-t px-2.5 py-2"
+            className="flex flex-col gap-2 border-t px-2.5 py-2"
             onKeyDown={(event) => event.stopPropagation()}
           >
-            <ToggleGroup
-              type="single"
-              value={type}
-              onValueChange={(value) => value && setType(value)}
-              size="sm"
-              spacing={1}
-              className="flex-wrap"
-              aria-label={t("conversationSearch.type")}
-            >
-              {resultTypes
-                .filter((item) => item !== "file" || fileSource)
-                .map((item) => (
+            {type === "message" && (
+              <ToggleGroup
+                type="single"
+                value={messageKind}
+                onValueChange={setMessageKind}
+                size="sm"
+                spacing={1}
+                className="flex-wrap"
+                aria-label={t("conversationSearch.messageKind")}
+              >
+                {messageKinds.map((item) => (
                   <ToggleGroupItem
                     key={item}
                     value={item}
                     className="rounded-full text-muted-foreground data-[state=on]:text-foreground"
                   >
-                    {t(`conversationSearch.type.${item}`)}
+                    {t(`conversationSearch.messageKind.${item}`)}
                   </ToggleGroupItem>
                 ))}
-            </ToggleGroup>
-            {type === "file" ? (
-              <FileScopePicker
-                roots={roots}
-                selected={root}
-                onChange={setRootId}
-              />
-            ) : (
-              <ScopePicker
-                value={scope}
-                all={{ value: "all", label: t("conversationSearch.allScopes") }}
-                agents={overview.agents.map((agent) => ({
-                  value: `agent:${agent.id}`,
-                  label: agent.name,
-                }))}
-                chats={overview.chats.map((chat) => ({
-                  value: `chat:${chat.id}`,
-                  label: `${agents.get(chat.agentId)?.name} › ${displayChatTitle(chat, t)}`,
-                }))}
-                onChange={setScope}
-              />
+              </ToggleGroup>
             )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <ToggleGroup
+                type="single"
+                value={type}
+                onValueChange={(value) => value && setType(value)}
+                size="sm"
+                spacing={1}
+                className="flex-wrap"
+                aria-label={t("conversationSearch.type")}
+              >
+                {resultTypes
+                  .filter((item) => item !== "file" || fileSource)
+                  .map((item) => (
+                    <ToggleGroupItem
+                      key={item}
+                      value={item}
+                      className="rounded-full text-muted-foreground data-[state=on]:text-foreground"
+                    >
+                      {t(`conversationSearch.type.${item}`)}
+                    </ToggleGroupItem>
+                  ))}
+              </ToggleGroup>
+              {type === "file" ? (
+                <FileScopePicker
+                  roots={roots}
+                  selected={root}
+                  onChange={setRootId}
+                />
+              ) : (
+                <ScopePicker
+                  value={scope}
+                  all={{
+                    value: "all",
+                    label: t("conversationSearch.allScopes"),
+                  }}
+                  agents={overview.agents.map((agent) => ({
+                    value: `agent:${agent.id}`,
+                    label: agent.name,
+                  }))}
+                  chats={overview.chats.map((chat) => ({
+                    value: `chat:${chat.id}`,
+                    label: `${agents.get(chat.agentId)?.name} › ${displayChatTitle(chat, t)}`,
+                  }))}
+                  onChange={setScope}
+                />
+              )}
+            </div>
           </div>
         </Command>
       </DialogContent>
