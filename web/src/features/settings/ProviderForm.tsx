@@ -1,9 +1,17 @@
-import { useId, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { FolderOpen, Plus, Trash2 } from "lucide-react";
 import { isMyGo } from "mygo-runtime";
-import { api } from "@/api/client";
+import { api, queryClient } from "@/api/client";
 import { Dialogs } from "@/api/desktop.gen";
 import type {
   Plugin,
@@ -14,8 +22,13 @@ import type {
 } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { providerConfiguration } from "@/features/runtime/connections";
+import { providersQuery } from "@/features/runtime/queries";
+import { useAutoSave } from "@/hooks/useAutoSave";
+import type { AutoSaveMode } from "@/lib/autoSave";
 import {
   SettingsChoiceRow,
   SettingsGroup,
@@ -38,6 +51,44 @@ type FormProps = {
   onSaved: (p: Provider, login: boolean) => void;
   onClose?: () => void;
 };
+
+type MutablePatch = {
+  name: string;
+  autoCompactWindow?: number;
+  idleCompaction?: string;
+};
+
+function parseAutoCompact(raw: string): { value?: number; valid: boolean } {
+  const text = raw.trim();
+  if (!text) return { value: undefined, valid: true };
+  if (!/^\d+$/.test(text)) return { valid: false };
+  const value = Number(text);
+  if (value < 100000 || value > 1000000) return { valid: false };
+  return { value, valid: true };
+}
+
+function mutableSignature(patch: MutablePatch) {
+  return JSON.stringify([
+    patch.name.trim(),
+    patch.autoCompactWindow ?? 0,
+    patch.idleCompaction ?? "",
+  ]);
+}
+
+function existingLaunch(
+  existing: ProviderInfo | undefined,
+  antigravity: boolean,
+  customExecutable?: boolean,
+) {
+  if (existing && antigravity) {
+    return existing.command === "agy"
+      ? "cli"
+      : existing.command
+        ? "custom"
+        : "managed";
+  }
+  return customExecutable ? "custom" : "cli";
+}
 
 export function ProviderForm(props: FormProps) {
   const types = useQuery(providerTypesQuery);
@@ -85,16 +136,8 @@ function ConnectionForm({
     existing?.command ?? item.command ?? "",
   );
   const [args, setArgs] = useState(existing?.args ?? item.args ?? []);
-  const [launch, setLaunch] = useState(
-    existing && antigravity
-      ? existing.command === "agy"
-        ? "cli"
-        : existing.command
-          ? "custom"
-          : "managed"
-      : customExecutable
-        ? "custom"
-        : "cli",
+  const [launch, setLaunch] = useState(() =>
+    existingLaunch(existing, antigravity, customExecutable),
   );
   const [method, setMethod] = useState(
     existing?.authMethod || "oauth-personal",
@@ -147,12 +190,141 @@ function ConnectionForm({
     (!existing || copy) &&
     managedAuth &&
     (method === "gemini-api-key" || method === "agent-platform");
-  const dirty =
-    !existing ||
-    copy ||
-    existing.name !== name.trim() ||
-    Number(compact) !== (existing.autoCompactWindow ?? 0) ||
-    idle !== (existing.idleCompaction || "default");
+
+  const existingRef = useRef(existing);
+  useLayoutEffect(() => {
+    existingRef.current = existing;
+  });
+  const existingMutableSig = existing
+    ? mutableSignature({
+        name: existing.name,
+        autoCompactWindow: existing.autoCompactWindow,
+        idleCompaction: existing.idleCompaction,
+      })
+    : undefined;
+  const prevExistingSig = useRef(existingMutableSig);
+  const pendingOwnEchoes = useRef<string[]>([]);
+
+  const autoSave = useAutoSave<MutablePatch, Provider>({
+    initialSignature: existingMutableSig,
+    save: (patch) =>
+      api<Provider>("/providers", {
+        ...providerConfiguration(existingRef.current!),
+        ...patch,
+      }),
+    onSaved: (saved) => {
+      const sig = mutableSignature({
+        name: saved.name,
+        autoCompactWindow: saved.autoCompactWindow,
+        idleCompaction: saved.idleCompaction,
+      });
+      if (sig !== prevExistingSig.current) pendingOwnEchoes.current.push(sig);
+      queryClient.setQueryData<ProviderInfo[]>(
+        providersQuery.queryKey,
+        (rows) =>
+          rows?.map((row) =>
+            row.id === saved.id
+              ? {
+                  ...row,
+                  name: saved.name,
+                  autoCompactWindow: saved.autoCompactWindow,
+                  idleCompaction: saved.idleCompaction,
+                }
+              : row,
+          ),
+      );
+      void queryClient.invalidateQueries({ queryKey: providersQuery.queryKey });
+    },
+  });
+
+  useEffect(() => {
+    if (!existing || !existingMutableSig) return;
+    if (existingMutableSig === prevExistingSig.current) return;
+    prevExistingSig.current = existingMutableSig;
+    const echoIndex = pendingOwnEchoes.current.indexOf(existingMutableSig);
+    if (echoIndex !== -1) {
+      pendingOwnEchoes.current.splice(0, echoIndex + 1);
+      return;
+    }
+    pendingOwnEchoes.current = [];
+    autoSave.syncSaved(existingMutableSig);
+    if (!copy && !autoSave.saving && !autoSave.pending && !autoSave.error) {
+      setName(existing.name);
+      setCompact(existing.autoCompactWindow?.toString() ?? "");
+      setIdle(existing.idleCompaction || "default");
+    }
+  }, [
+    existing,
+    existingMutableSig,
+    copy,
+    autoSave.saving,
+    autoSave.pending,
+    autoSave.error,
+    autoSave.syncSaved,
+  ]);
+
+  const prevCopy = useRef(copy);
+  useEffect(() => {
+    if (copy) {
+      autoSave.cancelPending();
+    } else if (prevCopy.current) {
+      scheduleMutable({ name, compact, idle }, "debounced");
+    }
+    prevCopy.current = copy;
+  });
+
+  const parsedCompact = definition?.autoCompactWindow
+    ? parseAutoCompact(compact)
+    : { value: undefined, valid: true };
+  const nameInvalid = !!existing && !copy && !name.trim();
+  const compactInvalid = !!existing && !copy && !parsedCompact.valid;
+
+  function scheduleMutable(
+    next: { name: string; compact: string; idle: string },
+    mode: AutoSaveMode,
+  ) {
+    if (!existing || copy) return;
+    const trimmedName = next.name.trim();
+    const compactResult = definition?.autoCompactWindow
+      ? parseAutoCompact(next.compact)
+      : { value: undefined, valid: true };
+    if (!trimmedName || trimmedName.length > 100 || !compactResult.valid) {
+      autoSave.cancelPending();
+      return;
+    }
+    const patch: MutablePatch = {
+      name: trimmedName,
+      autoCompactWindow: compactResult.value,
+      idleCompaction: next.idle === "default" ? undefined : next.idle,
+    };
+    autoSave.schedule(patch, mutableSignature(patch), mode);
+  }
+
+  function flushOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter" && existing && !copy) {
+      event.preventDefault();
+      autoSave.flush();
+    }
+  }
+
+  function resetIdentity() {
+    if (!existing) return;
+    setCommand(existing.command ?? item.command ?? "");
+    setArgs(existing.args ?? item.args ?? []);
+    setLaunch(existingLaunch(existing, antigravity, customExecutable));
+    setDirectory(existing.configDir ?? "");
+    setShadow(existing.shadowHome ?? "");
+    setMethod(existing.authMethod || "oauth-personal");
+    setProject(existing.gcpProject ?? "");
+    setLocation(existing.gcpLocation ?? "");
+    setApiKey("");
+    setName(existing.name);
+    setCompact(existing.autoCompactWindow?.toString() ?? "");
+    setIdle(existing.idleCompaction || "default");
+    save.reset();
+    autoSave.cancelPending();
+  }
+
   const save = useMutation({
     mutationFn: () =>
       api<Provider>("/providers", {
@@ -176,6 +348,7 @@ function ConnectionForm({
       }),
     onSuccess: (provider) => onSaved(provider, newProfile),
   });
+  const manualSubmit = !existing || copy;
   const disabled = save.isPending;
   const choice = (
     title: string,
@@ -197,20 +370,39 @@ function ConnectionForm({
       className="provider-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (name.trim() && dirty && !disabled) save.mutate();
+        if (!manualSubmit) {
+          autoSave.flush();
+          return;
+        }
+        if (name.trim() && !disabled) save.mutate();
       }}
     >
       <SettingsGroup title={t("providers.configuration")}>
         <SettingsRow id={id + "-name"} title={t("connections.name")}>
-          <Input
-            id={id + "-name"}
-            required
-            maxLength={100}
-            value={name}
-            placeholder={t("connections.nameExample")}
-            disabled={disabled}
-            onChange={(e) => setName(e.target.value)}
-          />
+          <div className="flex w-full flex-col gap-1">
+            <Input
+              id={id + "-name"}
+              required
+              maxLength={100}
+              value={name}
+              placeholder={t("connections.nameExample")}
+              disabled={disabled}
+              aria-invalid={nameInvalid || undefined}
+              aria-describedby={nameInvalid ? id + "-name-error" : undefined}
+              onChange={(e) => {
+                const nextName = e.target.value;
+                setName(nextName);
+                scheduleMutable({ name: nextName, compact, idle }, "debounced");
+              }}
+              onBlur={() => autoSave.flush()}
+              onKeyDown={flushOnEnter}
+            />
+            {nameInvalid && (
+              <FieldError id={id + "-name-error"} className="text-xs">
+                {t("providers.nameRequired")}
+              </FieldError>
+            )}
+          </div>
         </SettingsRow>
         {antigravity &&
           choice("providers.launchSource", launch, setLaunch, [
@@ -325,17 +517,39 @@ function ConnectionForm({
             title={t("providers.autoCompact")}
             description={t("providers.autoCompactHint")}
           >
-            <Input
-              id={id + "-compact"}
-              type="number"
-              min={100000}
-              max={1000000}
-              step={1}
-              value={compact}
-              placeholder={t("common.default")}
-              disabled={disabled}
-              onChange={(e) => setCompact(e.target.value)}
-            />
+            <div className="flex w-full flex-col gap-1">
+              <Input
+                id={id + "-compact"}
+                type="number"
+                min={100000}
+                max={1000000}
+                step={1}
+                value={compact}
+                placeholder={t("common.default")}
+                disabled={disabled}
+                aria-invalid={compactInvalid || undefined}
+                aria-describedby={
+                  compactInvalid
+                    ? `${id}-compact-description ${id}-compact-error`
+                    : `${id}-compact-description`
+                }
+                onChange={(e) => {
+                  const nextCompact = e.target.value;
+                  setCompact(nextCompact);
+                  scheduleMutable(
+                    { name, compact: nextCompact, idle },
+                    "debounced",
+                  );
+                }}
+                onBlur={() => autoSave.flush()}
+                onKeyDown={flushOnEnter}
+              />
+              {compactInvalid && (
+                <FieldError id={id + "-compact-error"} className="text-xs">
+                  {t("providers.invalidAutoCompact")}
+                </FieldError>
+              )}
+            </div>
           </SettingsRow>
         )}
         {definition?.idleCompactionModes && (
@@ -343,7 +557,10 @@ function ConnectionForm({
             title={t("providers.idleCompaction")}
             description={t("providers.idleCompactionHint")}
             value={idle}
-            onChange={setIdle}
+            onChange={(nextIdle) => {
+              setIdle(nextIdle);
+              scheduleMutable({ name, compact, idle: nextIdle }, "immediate");
+            }}
             disabled={disabled}
             options={["default", ...definition.idleCompactionModes].map(
               (value) => ({ value, label: t("providers.idle." + value) }),
@@ -454,18 +671,26 @@ function ConnectionForm({
       </SettingsGroup>
       {browse.error && <ErrorNotice error={browse.error} />}
       {save.error && <ErrorNotice error={save.error} />}
-      {(dirty || !existing) && (
+      {!manualSubmit && !!autoSave.error && (
+        <ErrorNotice error={autoSave.error} retry={autoSave.retry} />
+      )}
+      {!manualSubmit && autoSave.saving && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t("common.saving")}
+        </p>
+      )}
+      {manualSubmit && (
         <div className="provider-form-footer">
           {localAction}
           {copy && <p>{t("providers.identity")}</p>}
           <div className="flex flex-wrap justify-end gap-2">
-            {onClose && (
+            {(onClose || copy) && (
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
                 disabled={disabled}
-                onClick={onClose}
+                onClick={copy ? resetIdentity : onClose}
               >
                 {t("common.cancel")}
               </Button>
@@ -474,11 +699,9 @@ function ConnectionForm({
               {t(
                 copy
                   ? "providers.saveAsNew"
-                  : existing
-                    ? "common.save"
-                    : newProfile
-                      ? "connections.addAndLogin"
-                      : "providers.saveAndDetect",
+                  : newProfile
+                    ? "connections.addAndLogin"
+                    : "providers.saveAndDetect",
               )}
             </Button>
           </div>

@@ -49,7 +49,7 @@ export const enUS = {
   "skills.disable": "Disable Skill",
   "skills.enable": "Re-enable {{name}}",
   "skills.disabledHint":
-    "Disabling a Skill applies to every directory Skill with that name and takes effect on the next run after saving.",
+    "Disabling a Skill applies to every directory Skill with that name and takes effect on the next run.",
   "skills.unsupported":
     "This runtime does not support configuring Skills through Lever.",
   "skills.additional": "Additional Skills",
@@ -597,7 +597,13 @@ export const enUS = {
     "For a Feishu reaction outside the list, enter its case-sensitive key.",
   "personal.prompt": "Channel instructions",
   "personal.promptHint":
-    "Added to the Agent’s instructions for Feishu commands received after saving.",
+    "Added to the Agent’s instructions for subsequent Feishu commands.",
+  "personal.invalidCommands":
+    "Enter unique /commands using letters, numbers, hyphens, or underscores.",
+  "personal.invalidEmoji": "Enter a valid reaction key.",
+  "personal.invalidChatIds":
+    "Enter numeric conversation IDs separated by spaces.",
+  "personal.invalidContextLimit": "Enter a whole number from 1 to 50.",
   "personal.promptExample":
     "Lead with the conclusion and reply in three sentences.",
   "personal.preparing": "Reading conversation context",
@@ -889,6 +895,9 @@ export const enUS = {
   "providers.autoCompact": "Auto-compact after",
   "providers.autoCompactHint":
     "100,000–1,000,000 tokens. Leave empty to use Claude’s default.",
+  "providers.nameRequired": "Enter a connection name.",
+  "providers.invalidAutoCompact":
+    "Enter a whole number between 100,000 and 1,000,000, or leave blank.",
   "providers.auth.oauth-personal": "Google account",
   "providers.auth.oauth-business": "Gemini Enterprise",
   "providers.auth.gemini-api-key": "Gemini API key",
@@ -1080,6 +1089,7 @@ export const enUS = {
   "common.remove": "Remove",
   "common.cancel": "Cancel",
   "common.save": "Save",
+  "common.saving": "Saving…",
   "common.retry": "Retry",
   "common.loading": "Loading",
   "common.local": "This device",
@@ -1515,6 +1525,8 @@ export const enUS = {
   "profile.saving": "Saving",
   "profile.save": "Save Agent",
   "profile.name": "Name",
+  "profile.nameRequired": "Enter an Agent name.",
+  "profile.directoryRequired": "Enter a directory path or remove this row.",
   "profile.moreOptions": "More options",
   "profile.agentDetails": "Agent details",
   "profile.namePlaceholder": "e.g. Coding partner",
@@ -1615,10 +1627,6 @@ export const enUS = {
   "profile.skillDirectory": "Skill directory",
   "profile.removeSkill": "Remove Skill",
   "profile.delegations": "Delegations",
-  "profile.taskQueue": "Task queue",
-  "profile.taskConcurrency": "Maximum concurrent tasks",
-  "profile.taskStartInterval": "Start interval (minutes)",
-  "profile.taskStartUnlimited": "Unlimited",
   "profile.delegationsHint":
     "Create other Agents to enable collaboration here.",
   "profile.confirm": "Confirm before running",
@@ -2025,7 +2033,7 @@ export const enUS = {
   "worktrees.groups": "Directory groups",
   "worktrees.worktrees": "Worktrees",
   "worktrees.unsavedScope":
-    "Save the Agent to use the edited directories here.",
+    "Fix directory changes to use the updated directories here.",
   "worktrees.defaultScope": "Default Scope",
   "worktrees.startsIn": "Starts in {{name}}",
   "worktrees.newGroup": "New directory group",

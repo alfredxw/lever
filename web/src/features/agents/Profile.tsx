@@ -9,7 +9,17 @@ import {
   worktreeOptionsKey,
 } from "@/features/worktrees/queries";
 import { useTranslation } from "react-i18next";
-import { lazy, Suspense, useId, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { flushSync } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -18,9 +28,7 @@ import {
   FolderPlus,
   Ellipsis,
   ExternalLink,
-  Plus,
   Trash2,
-  Save,
   Terminal,
   Archive,
   ChevronDown,
@@ -28,12 +36,17 @@ import {
 } from "lucide-react";
 import { isMyGo, runtime } from "mygo-runtime";
 import { toast } from "sonner";
-import type { Agent } from "@/api/types.gen";
+import type { Agent, Overview } from "@/api/types.gen";
 import { api, queryClient } from "@/api/client";
 import { Dialogs } from "@/api/desktop.gen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -107,6 +120,8 @@ import { ProfileSkills } from "@/features/skills/ProfileSkills";
 import { ScopeSkillSources } from "@/features/skills/ScopeSkillSources";
 import { DisabledSkills } from "@/features/skills/DisabledSkills";
 import { useSkillSources } from "@/features/skills/skillsQuery";
+import { useAutoSave } from "@/hooks/useAutoSave";
+import type { AutoSaveMode } from "@/lib/autoSave";
 
 import { AgentAvatar } from "./AgentAvatar";
 import { CreateAgentOptions } from "./CreateAgentOptions";
@@ -118,16 +133,46 @@ import {
 } from "@/components/ui/popover";
 const AvatarPicker = lazy(() => import("./AvatarPicker"));
 
+function profileContentSignature(agent: Agent, homeDir: string) {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = agent;
+  const worktreeSetup = Object.fromEntries(
+    Object.entries(rest.profile.worktreeSetup ?? {})
+      .map(([repo, cmd]) => [repo, cmd.trim()] as const)
+      .filter(([, cmd]) => cmd !== "")
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  return JSON.stringify({
+    ...rest,
+    name: rest.name.trim(),
+    profile: {
+      ...rest.profile,
+      roots: rest.profile.roots.map((root) => ({
+        id: root.id,
+        path: displayPath(root.path.trim(), homeDir),
+      })),
+      skills: rest.profile.skills ?? [],
+      disabledSkills: rest.profile.disabledSkills ?? [],
+      delegations: rest.profile.delegations ?? [],
+      taskConcurrency: rest.profile.taskConcurrency || 0,
+      taskStartIntervalMinutes: rest.profile.taskStartIntervalMinutes || 0,
+      taskQueuePaused: !!rest.profile.taskQueuePaused,
+      worktreeSetup,
+    },
+  });
+}
+
 function WorktreeSetupFields({
   agentId,
   formId,
   commands,
   onChange,
+  onFlush,
 }: {
   agentId: string;
   formId: string;
   commands: Record<string, string>;
   onChange: (value: Record<string, string>) => void;
+  onFlush?: () => void;
 }) {
   const { t } = useTranslation();
   const [requestId] = useState(() => crypto.randomUUID());
@@ -167,6 +212,13 @@ function WorktreeSetupFields({
               onChange={(event) =>
                 onChange({ ...commands, [repo.gitDir]: event.target.value })
               }
+              onBlur={onFlush}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && onFlush) {
+                  event.preventDefault();
+                  onFlush();
+                }
+              }}
             />
           </label>
         </Field>
@@ -230,7 +282,13 @@ function newAgentDraft(
 
 function rebaseProfileDraft(draft: Agent, previous: Agent, latest: Agent) {
   const contents = ({ updatedAt, archived, profile, ...identity }: Agent) => {
-    const { disabledSkills, ...settings } = profile;
+    const {
+      disabledSkills,
+      taskConcurrency,
+      taskStartIntervalMinutes,
+      taskQueuePaused,
+      ...settings
+    } = profile;
     return JSON.stringify({ identity, settings });
   };
   if (contents(previous) !== contents(latest)) return latest;
@@ -256,7 +314,13 @@ function rebaseProfileDraft(draft: Agent, previous: Agent, latest: Agent) {
     ...draft,
     archived: latest.archived,
     updatedAt: latest.updatedAt,
-    profile: { ...draft.profile, disabledSkills },
+    profile: {
+      ...draft.profile,
+      disabledSkills,
+      taskConcurrency: latest.profile.taskConcurrency,
+      taskStartIntervalMinutes: latest.profile.taskStartIntervalMinutes,
+      taskQueuePaused: latest.profile.taskQueuePaused,
+    },
   };
 }
 
@@ -324,7 +388,21 @@ export function Profile({
   const [baseDraft, setBaseDraft] = useState(savedProfile);
   const draft = (copyMode && copy?.draft) || baseDraft;
   const hasDraft = !copyMode || !!copy;
-  const updateDraft = (update: (current: Agent) => Agent) => {
+  const pendingModeRef = useRef<AutoSaveMode>("immediate");
+  const dirtyByUserRef = useRef(false);
+  const seenUpdatedAts = useRef(
+    new Set(existingAgent ? [existingAgent.updatedAt] : []),
+  );
+  const prevSavedRef = useRef(savedProfile);
+
+  const updateDraft = (
+    update: (current: Agent) => Agent,
+    mode: AutoSaveMode = "immediate",
+  ) => {
+    if (!creating) {
+      pendingModeRef.current = mode;
+      dirtyByUserRef.current = true;
+    }
     if (copyMode) {
       setCopy(
         (current) => current && { ...current, draft: update(current.draft) },
@@ -335,11 +413,6 @@ export function Profile({
   };
   const [enteringPath, setEnteringPath] = useState(false);
   const [editingRoot, setEditingRoot] = useState<string>();
-  if (savedProfile.updatedAt !== agent.updatedAt) {
-    setSavedProfile(agent);
-    // Sidebar archive actions and Skills toggles can be saved while this form is open.
-    setBaseDraft((current) => rebaseProfileDraft(current, savedProfile, agent));
-  }
   const p = draft.profile;
   const available =
     providers.data?.filter((runtime) => runtime.available) ?? [];
@@ -372,10 +445,13 @@ export function Profile({
   );
   const permission =
     p.permission || mapped.permission || catalog.data?.defaultPermission || "";
-  const profileToSave =
-    mapped.permission && !p.permission
-      ? { ...draft, profile: { ...p, permission: mapped.permission } }
-      : draft;
+  const profileToSave = useMemo(
+    () =>
+      mapped.permission && !p.permission
+        ? { ...draft, profile: { ...p, permission: mapped.permission } }
+        : draft,
+    [draft, mapped.permission, p],
+  );
   const models = catalog.data?.models ?? [];
   const selectedModel = models.find((model) => model.id === p.model);
   const hiddenModels = providers.data?.find(
@@ -385,12 +461,20 @@ export function Profile({
     void refreshModels(p.provider, cwd).catch(() => {});
   };
   const desktop = isMyGo();
-  const change = (profile: Partial<Agent["profile"]>) =>
-    updateDraft((d) => ({ ...d, profile: { ...d.profile, ...profile } }));
+  const change = (
+    profile: Partial<Agent["profile"]>,
+    mode: AutoSaveMode = "immediate",
+  ) =>
+    updateDraft((d) => ({ ...d, profile: { ...d.profile, ...profile } }), mode);
   const setDirectory = (id: string, path: string) =>
-    change({
-      roots: p.roots.map((root) => (root.id === id ? { ...root, path } : root)),
-    });
+    change(
+      {
+        roots: p.roots.map((root) =>
+          root.id === id ? { ...root, path } : root,
+        ),
+      },
+      "debounced",
+    );
   const addDirectories = (paths: string[]) => {
     if (!paths.length) return;
     const added = [...new Set(paths)].filter(
@@ -406,7 +490,10 @@ export function Profile({
       return path ? { ...root, path } : root;
     });
     roots.push(...added.map((path) => ({ id: crypto.randomUUID(), path })));
-    change({ roots, primaryRootId: p.primaryRootId || roots[0].id });
+    change(
+      { roots, primaryRootId: p.primaryRootId || roots[0].id },
+      "immediate",
+    );
   };
   const pickDirectory = useMutation({
     mutationFn: (rootId?: string) => {
@@ -422,7 +509,14 @@ export function Profile({
         toast.info(t("profile.directoryAlreadyAdded"));
         return;
       }
-      setDirectory(rootId, path);
+      change(
+        {
+          roots: p.roots.map((root) =>
+            root.id === rootId ? { ...root, path } : root,
+          ),
+        },
+        "immediate",
+      );
     },
     onError: (error) =>
       toast.error(t("profile.directoryPickerError"), {
@@ -436,35 +530,134 @@ export function Profile({
         description: error.message,
       }),
   });
-  const save = useMutation({
-    mutationFn: (value: Agent) =>
-      existingAgent
-        ? api<Agent>(`/agents/${existingAgent.id}`, value, "PUT")
-        : api<Agent>("/agents", value, "POST"),
+
+  function applySavedAgent(saved: Agent, previous: Agent) {
+    if (saved.id) {
+      const providerChanged =
+        previous.profile.provider !== saved.profile.provider;
+      if (providerChanged || previous.profile.model !== saved.profile.model)
+        resetModelPreferences(saved.id);
+      if (
+        providerChanged ||
+        previous.profile.permission !== saved.profile.permission
+      )
+        resetPermissionPreference(saved.id, saved.profile.provider);
+    }
+    queryClient.setQueryData<Overview>(
+      ["overview"],
+      (data) =>
+        data && {
+          ...data,
+          agents: data.agents.map((current) =>
+            current.id === saved.id ? saved : current,
+          ),
+        },
+    );
+    void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    void queryClient.invalidateQueries({ queryKey: copyKey(saved.id) });
+    void queryClient.invalidateQueries({
+      queryKey: worktreeOptionsKey(saved.id),
+    });
+  }
+
+  // Creation mode uses an explicit submit mutation.
+  const createSave = useMutation({
+    mutationFn: (value: Agent) => api<Agent>("/agents", value, "POST"),
     onSuccess: (saved) => {
       setPermissionSource();
-      if (agent.id) {
-        const providerChanged =
-          agent.profile.provider !== saved.profile.provider;
-        if (providerChanged || agent.profile.model !== saved.profile.model)
-          resetModelPreferences(saved.id);
-        if (
-          providerChanged ||
-          agent.profile.permission !== saved.profile.permission
-        )
-          resetPermissionPreference(saved.id, saved.profile.provider);
-      }
-      if (existingAgent) setBaseDraft(saved);
-      void queryClient.invalidateQueries({ queryKey: ["overview"] });
-      void queryClient.invalidateQueries({ queryKey: ["skills"] });
-      void queryClient.invalidateQueries({ queryKey: copyKey(saved.id) });
-      void queryClient.invalidateQueries({
-        queryKey: worktreeOptionsKey(saved.id),
-      });
+      applySavedAgent(saved, agent);
       creation?.onSave(saved);
       toast.success(t("profile.saved"));
     },
   });
+
+  const latestDraftSigRef = useRef(
+    profileContentSignature(profileToSave, homeDir),
+  );
+  const latestDraftProviderRef = useRef(profileToSave.profile.provider);
+  useLayoutEffect(() => {
+    latestDraftSigRef.current = profileContentSignature(profileToSave, homeDir);
+    latestDraftProviderRef.current = profileToSave.profile.provider;
+  });
+
+  const autoSave = useAutoSave<Agent, Agent>({
+    initialSignature: existingAgent
+      ? profileContentSignature(existingAgent, homeDir)
+      : undefined,
+    save: (value) => api<Agent>(`/agents/${value.id}`, value, "PUT"),
+    rebase: (latest, saved) => ({
+      ...latest,
+      updatedAt: saved.updatedAt,
+      profile:
+        latest.profile.provider === saved.profile.provider &&
+        !latest.profile.permission &&
+        saved.profile.permission
+          ? { ...latest.profile, permission: saved.profile.permission }
+          : latest.profile,
+    }),
+    onSaved: (saved, _sent, sentSig) => {
+      archiveSave.reset();
+      const previous = prevSavedRef.current;
+      prevSavedRef.current = saved;
+      seenUpdatedAts.current.add(saved.updatedAt);
+      if (latestDraftProviderRef.current === saved.profile.provider) {
+        setPermissionSource();
+      }
+      setSavedProfile(saved);
+      const savedSig = profileContentSignature(saved, homeDir);
+      autoSave.syncSaved(savedSig);
+      if (latestDraftSigRef.current === sentSig) {
+        dirtyByUserRef.current = false;
+        setBaseDraft(saved);
+      } else {
+        setBaseDraft((current) => ({ ...current, updatedAt: saved.updatedAt }));
+      }
+      applySavedAgent(saved, previous);
+    },
+  });
+
+  // Archive / Restore keeps an explicit action so a 409 conflict (active runs)
+  // never leaves the local toggle out of sync with server state.
+  const archiveSave = useMutation({
+    mutationFn: (value: Agent) =>
+      api<Agent>(`/agents/${existingAgent!.id}`, value, "PUT"),
+    onSuccess: (saved) => {
+      const previous = prevSavedRef.current;
+      prevSavedRef.current = saved;
+      seenUpdatedAts.current.add(saved.updatedAt);
+      dirtyByUserRef.current = false;
+      setPermissionSource();
+      setSavedProfile(saved);
+      setBaseDraft(saved);
+      autoSave.syncSaved(profileContentSignature(saved, homeDir));
+      applySavedAgent(saved, previous);
+    },
+  });
+
+  // Reconcile external updates (e.g. Skills page toggles or sidebar archive).
+  useEffect(() => {
+    if (!existingAgent) return;
+    if (
+      savedProfile.updatedAt === existingAgent.updatedAt ||
+      seenUpdatedAts.current.has(existingAgent.updatedAt)
+    )
+      return;
+    seenUpdatedAts.current.add(existingAgent.updatedAt);
+    const previous = savedProfile;
+    setSavedProfile(existingAgent);
+    prevSavedRef.current = existingAgent;
+    const externalSig = profileContentSignature(existingAgent, homeDir);
+    autoSave.syncSaved(externalSig);
+    setBaseDraft((current) => {
+      const rebased = rebaseProfileDraft(current, previous, existingAgent);
+      if (profileContentSignature(rebased, homeDir) === externalSig) {
+        dirtyByUserRef.current = false;
+      }
+      return rebased;
+    });
+  }, [existingAgent, savedProfile, homeDir, autoSave.syncSaved]);
+
   const installed = providers.data?.find(
     (provider) => provider.id === p.provider,
   );
@@ -483,29 +676,83 @@ export function Profile({
       )
     : [];
   const savedScope = JSON.stringify([
-    agent.profile.primaryRootId,
-    agent.profile.roots,
+    savedProfile.profile.primaryRootId,
+    savedProfile.profile.roots.map((r) => ({
+      id: r.id,
+      path: displayPath(r.path, homeDir),
+    })),
   ]);
-  const directoriesChanged =
-    savedScope !== JSON.stringify([p.primaryRootId, p.roots]);
+  const currentScope = JSON.stringify([
+    p.primaryRootId,
+    p.roots.map((r) => ({
+      id: r.id,
+      path: displayPath(r.path, homeDir),
+    })),
+  ]);
+  const directoriesChanged = savedScope !== currentScope;
   const emptyScope = p.roots.length === 0;
   const choosePrimary = !creating || p.roots.length > 1;
-  const busy = pickDirectory.isPending || save.isPending;
-  const canSave =
+
+  const nameInvalid = !creating && !draft.name.trim();
+  const hasEmptyRoot = p.roots.some((root) => !root.path.trim());
+  const providerUnavailableChange =
+    !creating &&
+    p.provider !== savedProfile.profile.provider &&
+    !installed?.available;
+
+  const canAutoSave =
+    !creating &&
+    !archiveSave.isPending &&
+    !mapped.pending &&
+    !emptyScope &&
+    !nameInvalid &&
+    !hasEmptyRoot &&
+    !providerUnavailableChange;
+
+  useEffect(() => {
+    if (creating) return;
+    if (!dirtyByUserRef.current) return;
+    if (!canAutoSave) {
+      autoSave.cancelPending();
+      return;
+    }
+    const sig = profileContentSignature(profileToSave, homeDir);
+    autoSave.schedule(profileToSave, sig, pendingModeRef.current);
+  }, [
+    creating,
+    canAutoSave,
+    profileToSave,
+    homeDir,
+    autoSave.schedule,
+    autoSave.cancelPending,
+  ]);
+
+  const busy = creating
+    ? pickDirectory.isPending || createSave.isPending
+    : pickDirectory.isPending || archiveSave.isPending;
+  const canCreate =
     !busy &&
     !mapped.pending &&
     hasDraft &&
     !emptyScope &&
-    (!creating ||
-      (!!draft.name.trim() &&
-        !!installed?.available &&
-        p.roots.every((root) => root.path.trim())));
+    !!draft.name.trim() &&
+    !!installed?.available &&
+    !hasEmptyRoot;
+
+  function flushOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (!creating && event.key === "Enter") {
+      event.preventDefault();
+      autoSave.flush();
+    }
+  }
+
   const openDirectoryLabel = t(
     desktop && runtime().platform === "darwin"
       ? "profile.openInFinder"
       : "profile.openDirectory",
   );
   const pathRows = p.roots.map((root) => {
+    const rootInvalid = !creating && !root.path.trim();
     const actions = (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -534,13 +781,16 @@ export function Profile({
           <DropdownMenuItem
             onSelect={() => {
               const roots = p.roots.filter((r) => r.id !== root.id);
-              change({
-                roots,
-                primaryRootId:
-                  p.primaryRootId === root.id
-                    ? (roots[0]?.id ?? "")
-                    : p.primaryRootId,
-              });
+              change(
+                {
+                  roots,
+                  primaryRootId:
+                    p.primaryRootId === root.id
+                      ? (roots[0]?.id ?? "")
+                      : p.primaryRootId,
+                },
+                "immediate",
+              );
             }}
           >
             <Trash2 />
@@ -550,62 +800,79 @@ export function Profile({
       </DropdownMenu>
     );
     return (
-      <Field
-        key={root.id}
-        orientation="horizontal"
-        className="profile-path-row"
-        data-disabled={busy}
-      >
-        {choosePrimary && (
-          <RadioGroupItem
-            aria-label={t("profile.defaultDirectory", {
-              path: displayPath(root.path, homeDir),
-            })}
-            value={root.id}
-          />
-        )}
-        <InputGroup>
-          <InputGroupAddon>
-            <Folder />
-          </InputGroupAddon>
-          <InputGroupInput
-            id={`${scopeId}-root-${root.id}`}
-            form={formId}
-            onInvalid={() => {
-              // Reveal the field in time for the browser to focus it.
-              if (scopeTab !== "directories")
-                flushSync(() => setScopeTab("directories"));
-            }}
-            aria-label={t("profile.scopeDirectory")}
-            placeholder="~/path/to/workspace"
-            title={root.path}
-            value={creating ? root.path : displayPath(root.path, homeDir)}
-            disabled={busy}
-            onFocus={creating ? () => setEditingRoot(root.id) : undefined}
-            onBlur={creating ? () => setEditingRoot(undefined) : undefined}
-            onChange={(event) => setDirectory(root.id, event.target.value)}
-            required
-            pattern=".*\S.*"
-          />
-          {creating && (
-            <InputGroupAddon align="inline-end">
-              {desktop && (
-                <InputGroupButton
-                  size="icon-xs"
-                  aria-label={t("profile.chooseDirectory")}
-                  title={t("profile.chooseDirectory")}
-                  disabled={busy}
-                  onClick={() => pickDirectory.mutate(root.id)}
-                >
-                  <FolderOpen />
-                </InputGroupButton>
-              )}
-              {actions}
-            </InputGroupAddon>
+      <div key={root.id} className="grid gap-1">
+        <Field
+          orientation="horizontal"
+          className="profile-path-row"
+          data-disabled={busy}
+        >
+          {choosePrimary && (
+            <RadioGroupItem
+              aria-label={t("profile.defaultDirectory", {
+                path: displayPath(root.path, homeDir),
+              })}
+              value={root.id}
+            />
           )}
-        </InputGroup>
-        {!creating && actions}
-      </Field>
+          <InputGroup>
+            <InputGroupAddon>
+              <Folder />
+            </InputGroupAddon>
+            <InputGroupInput
+              id={`${scopeId}-root-${root.id}`}
+              form={creating ? formId : undefined}
+              onInvalid={() => {
+                // Reveal the field in time for the browser to focus it.
+                if (scopeTab !== "directories")
+                  flushSync(() => setScopeTab("directories"));
+              }}
+              aria-label={t("profile.scopeDirectory")}
+              aria-invalid={rootInvalid || undefined}
+              aria-describedby={
+                rootInvalid ? `${scopeId}-root-${root.id}-error` : undefined
+              }
+              placeholder="~/path/to/workspace"
+              title={root.path}
+              value={creating ? root.path : displayPath(root.path, homeDir)}
+              disabled={busy}
+              onFocus={creating ? () => setEditingRoot(root.id) : undefined}
+              onBlur={() => {
+                if (creating) setEditingRoot(undefined);
+                else autoSave.flush();
+              }}
+              onKeyDown={flushOnEnter}
+              onChange={(event) => setDirectory(root.id, event.target.value)}
+              required
+              pattern=".*\S.*"
+            />
+            {creating && (
+              <InputGroupAddon align="inline-end">
+                {desktop && (
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label={t("profile.chooseDirectory")}
+                    title={t("profile.chooseDirectory")}
+                    disabled={busy}
+                    onClick={() => pickDirectory.mutate(root.id)}
+                  >
+                    <FolderOpen />
+                  </InputGroupButton>
+                )}
+                {actions}
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+          {!creating && actions}
+        </Field>
+        {rootInvalid && (
+          <FieldError
+            id={`${scopeId}-root-${root.id}-error`}
+            className="text-xs"
+          >
+            {t("profile.directoryRequired")}
+          </FieldError>
+        )}
+      </div>
     );
   });
   const directoryActions = (
@@ -705,7 +972,9 @@ export function Profile({
           name={`${scopeId}-primary-root`}
           value={p.primaryRootId}
           disabled={busy}
-          onValueChange={(primaryRootId) => change({ primaryRootId })}
+          onValueChange={(primaryRootId) =>
+            change({ primaryRootId }, "immediate")
+          }
         >
           {pathRows}
         </RadioGroup>
@@ -792,7 +1061,10 @@ export function Profile({
                         agentId={agent.id}
                         formId={formId}
                         commands={p.worktreeSetup ?? {}}
-                        onChange={(worktreeSetup) => change({ worktreeSetup })}
+                        onChange={(worktreeSetup) =>
+                          change({ worktreeSetup }, "debounced")
+                        }
+                        onFlush={creating ? undefined : autoSave.flush}
                       />
                     </CollapsibleContent>
                   </Collapsible>
@@ -828,7 +1100,7 @@ export function Profile({
           <AvatarPicker
             agent={draft}
             onChange={(avatar) =>
-              updateDraft((current) => ({ ...current, avatar }))
+              updateDraft((current) => ({ ...current, avatar }), "immediate")
             }
           />
         </Suspense>
@@ -840,7 +1112,7 @@ export function Profile({
     <NameInput
       id={`${scopeId}-name`}
       ref={nameInput}
-      form={formId}
+      form={creating ? formId : undefined}
       autoFocus={creating && !focusNameAfterSourceChange.current}
       onFocus={(event) => {
         if (selectCopyName.current) {
@@ -850,10 +1122,14 @@ export function Profile({
       }}
       placeholder={t("profile.namePlaceholder")}
       value={draft.name}
+      aria-invalid={nameInvalid || undefined}
+      aria-describedby={nameInvalid ? `${scopeId}-name-error` : undefined}
       onChange={(e) => {
         const name = e.target.value;
-        updateDraft((current) => ({ ...current, name }));
+        updateDraft((current) => ({ ...current, name }), "debounced");
       }}
+      onBlur={creating ? undefined : () => autoSave.flush()}
+      onKeyDown={flushOnEnter}
       required
       maxLength={100}
     />
@@ -867,7 +1143,14 @@ export function Profile({
           {nameControl}
         </InputGroup>
       ) : (
-        nameControl
+        <>
+          {nameControl}
+          {nameInvalid && (
+            <FieldError id={`${scopeId}-name-error`} className="text-xs">
+              {t("profile.nameRequired")}
+            </FieldError>
+          )}
+        </>
       )}
     </Field>
   );
@@ -894,7 +1177,7 @@ export function Profile({
           const source = agents.find((agent) => agent.id === id);
           if (!source) return;
           focusNameAfterSourceChange.current = true;
-          save.reset();
+          createSave.reset();
           setPermissionSource();
           setCopy(copyFrom(source));
         }}
@@ -922,7 +1205,7 @@ export function Profile({
             permissionSource ??
               (p.provider ? { provider: p.provider, permission } : undefined),
           );
-          change({ provider, model: "", permission: "" });
+          change({ provider, model: "", permission: "" }, "immediate");
         }}
       >
         <SelectTrigger
@@ -972,11 +1255,12 @@ export function Profile({
   const instructionsInput = (
     <Textarea
       id={instructionsId}
-      form={formId}
+      form={creating ? formId : undefined}
       rows={creating ? 2 : 9}
       placeholder={t("profile.instructionsPlaceholder")}
       value={p.instructions}
-      onChange={(e) => change({ instructions: e.target.value })}
+      onChange={(e) => change({ instructions: e.target.value }, "debounced")}
+      onBlur={creating ? undefined : () => autoSave.flush()}
     />
   );
   const refreshButton = (
@@ -1018,7 +1302,7 @@ export function Profile({
             className="flex-1"
             value={p.model ?? ""}
             currentLabel={selectedModel?.name}
-            onChange={(model) => change({ model })}
+            onChange={(model) => change({ model }, "immediate")}
             options={[
               { id: "", label: t("profile.defaultModel") },
               ...(p.model && !selectedModel
@@ -1062,7 +1346,7 @@ export function Profile({
         value={permission}
         onChange={(permission) => {
           setPermissionSource();
-          change({ permission });
+          change({ permission }, "immediate");
         }}
       />
     </>
@@ -1093,57 +1377,16 @@ export function Profile({
       attached={p.skills ?? []}
       sources={skillSources}
       supported={supportsSkills}
-      onChange={(disabledSkills) => change({ disabledSkills })}
+      skillContext={installed?.capabilities.skillContext}
+      onChange={(disabledSkills) => change({ disabledSkills }, "immediate")}
     />
   );
   const additionalSkills = (
     <ProfileSkills
       paths={p.skills ?? []}
       homeDir={homeDir}
-      onChange={(skills) => change({ skills })}
+      onChange={(skills) => change({ skills }, "immediate")}
     />
-  );
-  const queueFields = (
-    <FieldGroup>
-      <Field>
-        <FieldLabel htmlFor={`${scopeId}-task-concurrency`}>
-          {t("profile.taskConcurrency")}
-        </FieldLabel>
-        <Input
-          id={`${scopeId}-task-concurrency`}
-          form={formId}
-          type="number"
-          min={1}
-          step={1}
-          placeholder="1"
-          value={p.taskConcurrency || ""}
-          onChange={(event) =>
-            change({
-              taskConcurrency: event.target.valueAsNumber || undefined,
-            })
-          }
-        />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor={`${scopeId}-task-interval`}>
-          {t("profile.taskStartInterval")}
-        </FieldLabel>
-        <Input
-          id={`${scopeId}-task-interval`}
-          form={formId}
-          type="number"
-          min={0}
-          step={1}
-          placeholder={t("profile.taskStartUnlimited")}
-          value={p.taskStartIntervalMinutes || ""}
-          onChange={(event) =>
-            change({
-              taskStartIntervalMinutes: event.target.valueAsNumber || undefined,
-            })
-          }
-        />
-      </Field>
-    </FieldGroup>
   );
   const delegationFields =
     collaborators.length === 0 ? (
@@ -1164,11 +1407,17 @@ export function Profile({
                 id={`${scopeId}-delegate-${target.id}`}
                 checked={!!rule}
                 onCheckedChange={(checked) =>
-                  change({
-                    delegations: checked
-                      ? [...delegations, { agentId: target.id, confirm: true }]
-                      : delegations.filter((d) => d.agentId !== target.id),
-                  })
+                  change(
+                    {
+                      delegations: checked
+                        ? [
+                            ...delegations,
+                            { agentId: target.id, confirm: true },
+                          ]
+                        : delegations.filter((d) => d.agentId !== target.id),
+                    },
+                    "immediate",
+                  )
                 }
               />
               <FieldLabel
@@ -1188,11 +1437,14 @@ export function Profile({
                     disabled={target.archived}
                     checked={rule.confirm}
                     onCheckedChange={(confirm) =>
-                      change({
-                        delegations: delegations.map((d) =>
-                          d.agentId === target.id ? { ...d, confirm } : d,
-                        ),
-                      })
+                      change(
+                        {
+                          delegations: delegations.map((d) =>
+                            d.agentId === target.id ? { ...d, confirm } : d,
+                          ),
+                        },
+                        "immediate",
+                      )
                     }
                   />
                   {t("profile.confirm")}
@@ -1203,17 +1455,22 @@ export function Profile({
         })}
       </FieldGroup>
     );
+
+  const editError = archiveSave.error ?? autoSave.error;
+
   return (
     <div className={creating ? "agent-create-form" : "profile-form"}>
-      {/* Inline Scope editors own their own form submissions. */}
-      <form
-        id={formId}
-        hidden
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (canSave) save.mutate(profileToSave);
-        }}
-      />
+      {creating && (
+        /* Inline Scope editors own their own form submissions. */
+        <form
+          id={formId}
+          hidden
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (canCreate) createSave.mutate(profileToSave);
+          }}
+        />
+      )}
       {creation ? (
         <>
           <DialogHeader className="agent-create-header">
@@ -1232,7 +1489,7 @@ export function Profile({
               disabled={busy}
               onValueChange={(value) => {
                 if (value !== "new" && value !== "copy") return;
-                save.reset();
+                createSave.reset();
                 setCreateMode(value);
                 creationBody.current?.scrollTo(0, 0);
               }}
@@ -1299,7 +1556,6 @@ export function Profile({
                       {disabledSkills}
                     </>
                   }
-                  queue={queueFields}
                   delegations={delegationFields}
                 />
               </>
@@ -1330,13 +1586,7 @@ export function Profile({
             {scopeCard}
             {disabledSkills}
             {additionalSkills}
-            <Card className="profile-card">
-              <CardHeader>
-                <CardTitle>{t("profile.taskQueue")}</CardTitle>
-              </CardHeader>
-              <CardContent>{queueFields}</CardContent>
-            </Card>
-            <Card className="profile-card">
+            <Card className="profile-card profile-wide">
               <CardHeader>
                 <CardTitle>{t("profile.delegations")}</CardTitle>
               </CardHeader>
@@ -1346,40 +1596,62 @@ export function Profile({
         </>
       )}
       <footer className="profile-actions">
-        {save.error && <ErrorNotice error={save.error} />}
-        {creating ? (
-          <DialogClose asChild>
-            <Button type="button" variant="ghost" disabled={busy}>
-              {t("common.cancel")}
-            </Button>
-          </DialogClose>
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="mr-auto text-muted-foreground"
-            title={t("profile.archiveHint")}
-            onClick={() =>
-              save.mutate({ ...profileToSave, archived: !draft.archived })
-            }
-            disabled={emptyScope || busy || mapped.pending}
-          >
-            <Archive data-icon="inline-start" />
-            {draft.archived ? t("profile.restore") : t("profile.archive")}
-          </Button>
+        {creating && createSave.error && (
+          <ErrorNotice error={createSave.error} />
         )}
-        <Button type="submit" form={formId} disabled={!canSave}>
-          {!creating && <Save data-icon="inline-start" />}
-          {t(
-            save.isPending
-              ? "profile.saving"
-              : creation
-                ? copyMode
-                  ? "agents.createCopy"
-                  : "agents.create"
-                : "profile.save",
-          )}
-        </Button>
+        {!creating && !!editError && (
+          <ErrorNotice
+            error={editError}
+            retry={archiveSave.error ? undefined : autoSave.retry}
+          />
+        )}
+        {creating ? (
+          <>
+            <DialogClose asChild>
+              <Button type="button" variant="ghost" disabled={busy}>
+                {t("common.cancel")}
+              </Button>
+            </DialogClose>
+            <Button type="submit" form={formId} disabled={!canCreate}>
+              {t(
+                createSave.isPending
+                  ? "profile.saving"
+                  : copyMode
+                    ? "agents.createCopy"
+                    : "agents.create",
+              )}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              className="mr-auto text-muted-foreground"
+              title={t("profile.archiveHint")}
+              onClick={() => {
+                autoSave.cancelPending();
+                archiveSave.mutate({
+                  ...profileToSave,
+                  archived: !savedProfile.archived,
+                });
+              }}
+              disabled={
+                !canAutoSave || busy || autoSave.saving || archiveSave.isPending
+              }
+            >
+              <Archive data-icon="inline-start" />
+              {savedProfile.archived
+                ? t("profile.restore")
+                : t("profile.archive")}
+            </Button>
+            {(autoSave.saving || archiveSave.isPending) && (
+              <span role="status" className="text-xs text-muted-foreground">
+                {t("common.saving")}
+              </span>
+            )}
+          </>
+        )}
       </footer>
     </div>
   );

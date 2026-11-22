@@ -14,13 +14,11 @@ export function CreateAgentOptions({
   open,
   onOpenChange,
   skills,
-  queue,
   delegations,
 }: {
   open?: boolean;
   onOpenChange: (open: boolean) => void;
   skills: ReactNode;
-  queue: ReactNode;
   delegations: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -34,11 +32,6 @@ export function CreateAgentOptions({
       label: "profile.skills",
       className: "agent-create-skills",
       fields: skills,
-    },
-    {
-      label: "profile.taskQueue",
-      className: "agent-create-queue",
-      fields: queue,
     },
     {
       label: "profile.delegations",

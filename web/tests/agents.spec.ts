@@ -23,6 +23,7 @@ import type {
   Agent,
   Catalog,
   ChatView,
+  Comparison,
   ComparisonInput,
   ComparisonResult,
   CopyOptions,
@@ -67,7 +68,7 @@ async function createAgent(page: Page, name: string, scope = context().scope) {
     .click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("名称", { exact: true }).fill(name);
-  await dialog.getByRole("textbox", { name: "Scope 目录" }).fill(scope);
+  await dialog.getByRole("textbox", { name: "工作范围目录" }).fill(scope);
   await dialog
     .getByLabel("职责（选填）", { exact: true })
     .fill("Keep changes small and explain the result.");
@@ -132,10 +133,20 @@ async function closeTopic(page: Page) {
   await closeTab(page.locator(`[id="${tab}"]`));
 }
 
+async function openMoreTool(
+  scope: Page | Locator,
+  name = "配置",
+  more = "更多工具",
+) {
+  const page = "goto" in scope ? scope : scope.page();
+  await scope.getByRole("button", { name: more, exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+}
+
 async function openProfileScope(page: Page) {
   const tabs = page.getByRole("tablist", { name: "工作范围", exact: true });
-  if (!(await tabs.isVisible()))
-    await page.getByRole("button", { name: "配置", exact: true }).click();
+  if (!(await tabs.isVisible())) await openMoreTool(page);
   return tabs;
 }
 
@@ -184,14 +195,14 @@ test("Agent creation needs only a name and uses the device home and an installed
   const overview = (await (
     await page.request.get("/api/overview")
   ).json()) as Overview;
-  await expect(dialog.getByRole("textbox", { name: "Scope 目录" })).toHaveValue(
+  await expect(dialog.getByRole("textbox", { name: "工作范围目录" })).toHaveValue(
     overview.homeDir,
   );
   await expect(
     dialog.getByRole("button", { name: "更多选项" }),
   ).toHaveAttribute("aria-expanded", "false");
   const role = dialog.getByRole("textbox", { name: "职责（选填）" });
-  const directory = dialog.getByRole("textbox", { name: "Scope 目录" });
+  const directory = dialog.getByRole("textbox", { name: "工作范围目录" });
   const model = dialog.getByRole("button", { name: "模型", exact: true });
   await expect(role).toBeInViewport({ ratio: 1 });
   await expect(directory).toBeInViewport({ ratio: 1 });
@@ -279,7 +290,7 @@ test("Agent creation replaces the home directory and saves the chosen default", 
   });
   const save = dialog.getByRole("button", { name: "创建 Agent" });
   const paths = dialog.getByRole("textbox", {
-    name: "Scope 目录",
+    name: "工作范围目录",
     exact: true,
   });
   const defaults = dialog
@@ -327,34 +338,25 @@ test("Agent creation replaces the home directory and saves the chosen default", 
   const options = dialog.getByRole("button", { name: "更多选项" });
   await options.click();
   const skills = dialog.getByRole("group", { name: "技能", exact: true });
-  const queue = dialog.getByRole("group", { name: "任务队列", exact: true });
   const delegations = dialog.getByRole("group", {
     name: "委派协作",
     exact: true,
   });
   await expect(
-    skills.getByRole("button", { name: "添加 Skill" }),
+    dialog.getByRole("group", { name: "任务队列", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    skills.getByRole("button", { name: "添加技能" }),
   ).toBeVisible();
   await expect(delegations).toBeVisible();
-  const concurrentTasks = queue.getByRole("spinbutton", {
-    name: "最多同时处理",
-  });
   const skillsBounds = (await skills.boundingBox())!;
-  const queueBounds = (await queue.boundingBox())!;
   const delegationsBounds = (await delegations.boundingBox())!;
-  expect(queueBounds.y).toBeGreaterThanOrEqual(
+  expect(delegationsBounds.y).toBeGreaterThanOrEqual(
     skillsBounds.y + skillsBounds.height,
   );
-  expect(delegationsBounds.y).toBeGreaterThanOrEqual(
-    queueBounds.y + queueBounds.height,
+  expect(Math.abs(delegationsBounds.width - skillsBounds.width)).toBeLessThanOrEqual(
+    2,
   );
-  await concurrentTasks.fill("-1");
-  await options.click();
-  await expect(concurrentTasks).toBeHidden();
-  await save.click();
-  await expect(options).toHaveAttribute("aria-expanded", "true");
-  await expect(concurrentTasks).toBeFocused();
-  await concurrentTasks.fill("2");
   await options.click();
   const saved = page.waitForResponse(
     (response) =>
@@ -366,7 +368,6 @@ test("Agent creation replaces the home directory and saves the chosen default", 
   expect(response.ok()).toBeTruthy();
   const { profile } = (await response.json()) as Agent;
   expect(profile.instructions).toBe("Use the selected workspace.");
-  expect(profile.taskConcurrency).toBe(2);
   expect(profile.roots.map((root) => root.path)).toEqual(
     [scope, otherScope].map((path) => realpathSync(path)),
   );
@@ -409,7 +410,7 @@ test("new Agent uses the current workspace and both copy entries open the same d
   await row.click();
   await create.click();
   const blank = page.getByRole("dialog", { name: "创建 Agent", exact: true });
-  await expect(blank.getByRole("textbox", { name: "Scope 目录" })).toHaveValue(
+  await expect(blank.getByRole("textbox", { name: "工作范围目录" })).toHaveValue(
     realpathSync(otherScope),
   );
   await expect(blank.getByRole("combobox", { name: "运行时" })).toContainText(
@@ -444,7 +445,7 @@ test("new Agent uses the current workspace and both copy entries open the same d
   await expect(blank.getByLabel("职责（选填）")).toHaveValue(
     "Review documentation.",
   );
-  await expect(blank.getByRole("textbox", { name: "Scope 目录" })).toHaveValue(
+  await expect(blank.getByRole("textbox", { name: "工作范围目录" })).toHaveValue(
     realpathSync(otherScope),
   );
   expect(await blank.boundingBox()).toEqual(dialogBounds);
@@ -457,25 +458,26 @@ test("new Agent uses the current workspace and both copy entries open the same d
   await expectSelectedName();
   await copy.getByRole("button", { name: "更多选项" }).click();
   const skills = copy.getByRole("group", { name: "技能", exact: true });
-  const queue = copy.getByRole("group", { name: "任务队列", exact: true });
   const delegations = copy.getByRole("group", {
     name: "委派协作",
     exact: true,
   });
   await expect(
+    copy.getByRole("group", { name: "任务队列", exact: true }),
+  ).toHaveCount(0);
+  await expect(
     skills.getByText("fixture-review", { exact: true }),
   ).toBeVisible();
   await expect(
-    queue.getByRole("spinbutton", { name: "最多同时处理" }),
-  ).toHaveValue("2");
-  await expect(
     delegations.getByRole("checkbox", { name: source.name }),
   ).toBeVisible();
-  const queueBounds = (await queue.boundingBox())!;
+  const skillsBounds = (await skills.boundingBox())!;
   const delegationsBounds = (await delegations.boundingBox())!;
-  expect(queueBounds.y).toBe(delegationsBounds.y);
-  expect(delegationsBounds.x).toBeGreaterThanOrEqual(
-    queueBounds.x + queueBounds.width,
+  expect(delegationsBounds.y).toBeGreaterThanOrEqual(
+    skillsBounds.y + skillsBounds.height,
+  );
+  expect(Math.abs(delegationsBounds.width - skillsBounds.width)).toBeLessThanOrEqual(
+    2,
   );
   await name.fill("发布说明副本");
   const saved = page.waitForResponse(
@@ -709,6 +711,106 @@ test("summarizes up to three subscriptions and lists the rest in Usage", async (
   await expect(summary).toHaveCount(3);
 });
 
+test("Compare Agent picker follows sidebar sorting and fits wrapped labels", async ({
+  page,
+}, testInfo) => {
+  const { scope, url } = context();
+  const prefix = `Compare ${randomUUID().slice(0, 8)}`;
+  const longModel = "LongComparisonModel".repeat(5);
+  const agents: Agent[] = [];
+  await page.goto(url);
+  for (const number of [1, 10, 2, 3, 4, 5, 6]) {
+    const response = await page.request.post("/api/agents", {
+      data: {
+        name: `${prefix} ${number}`,
+        profile: {
+          provider: "codex",
+          model: number === 10 ? longModel : "",
+          permission: "ask",
+          roots: [{ path: scope }],
+          skills: [],
+          delegations: [],
+        },
+      },
+    });
+    expect(response.ok()).toBe(true);
+    agents.push(await response.json());
+  }
+  const manualOrder = [agents[1], agents[0], ...agents.slice(2)];
+  await page.addInitScript(
+    ({ owner, order }) => {
+      localStorage.setItem("lever:agent", owner);
+      localStorage.setItem("lever:agent-sort", "manual");
+      localStorage.setItem("lever:agent-order", JSON.stringify(order));
+    },
+    { owner: agents[0].id, order: manualOrder.map((agent) => agent.id) },
+  );
+  await page.reload();
+  const sidebar = page.locator("#agent-sidebar");
+  const sidebarNames = sidebar.locator(".agent-select");
+  await expect(sidebarNames.filter({ hasText: prefix })).toHaveText(
+    manualOrder.map((agent) => agent.name),
+  );
+
+  const composer = page.locator(".chat-composer-wrap:visible");
+  await composer
+    .getByRole("textbox", { name: "发送消息", exact: true })
+    .fill("/compare");
+  await page.getByRole("option", { name: /^\/compare/ }).click();
+  const picker = page.getByRole("dialog", { name: "参与对比的 Agent" });
+  const pickerNames = picker.locator('[data-slot="field-label"] .truncate');
+  await expect(pickerNames).toHaveText(await sidebarNames.allTextContents());
+  await expect(
+    picker.getByRole("checkbox", { name: `${prefix} 10` }),
+  ).toBeEnabled();
+  const modelLabel = picker.getByText(longModel);
+  expect(
+    await modelLabel.evaluate(
+      (label) =>
+        label.getBoundingClientRect().height >
+        Number.parseFloat(getComputedStyle(label).lineHeight),
+    ),
+  ).toBe(true);
+  expect(
+    await picker.locator('[data-slot="field"]').evaluateAll((rows) =>
+      rows.every((row) => {
+        const bounds = row.getBoundingClientRect();
+        const label = row
+          .querySelector('[data-slot="field-label"]')!
+          .getBoundingClientRect();
+        return label.top >= bounds.top && label.bottom <= bounds.bottom;
+      }),
+    ),
+  ).toBe(true);
+  await picker.screenshot({
+    path: testInfo.outputPath("comparison-agent-picker.png"),
+    animations: "disabled",
+  });
+
+  await page.keyboard.press("Escape");
+  const sortMenu = sidebar.getByRole("button", { name: "Agent 排序" });
+  const addAgents = composer.getByRole("button", { name: "添加 Agent" });
+  for (const sort of ["名称", "最近活跃", "手动排序"]) {
+    await sortMenu.click();
+    await page.getByRole("menuitemradio", { name: sort, exact: true }).click();
+    await addAgents.click();
+    await expect(pickerNames).toHaveText(await sidebarNames.allTextContents());
+    await page.keyboard.press("Escape");
+  }
+  await sidebarNames.first().press("Space");
+  await expect(sidebar.locator(".agent-group.dragging")).toHaveCount(1);
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.locator('[id^="DndLiveRegion-"]').filter({
+      hasText: `droppable area ${agents[0].id}`,
+    }),
+  ).toHaveCount(1);
+  await page.keyboard.press("Space");
+  await expect(sidebarNames.first()).toHaveText(agents[0].name);
+  await addAgents.click();
+  await expect(pickerNames).toHaveText(await sidebarNames.allTextContents());
+});
+
 test("compares ordinary replies from multiple Agents and continues the selected Topic", async ({
   page,
 }, testInfo) => {
@@ -770,7 +872,7 @@ test("compares ordinary replies from multiple Agents and continues the selected 
   );
   await page.reload();
   const newChat = page
-    .getByRole("button", { name: "新 Chat", exact: true })
+    .getByRole("button", { name: "新对话", exact: true })
     .first();
   await newChat.click();
   const composer = page.locator(".chat-composer-wrap:visible");
@@ -779,7 +881,7 @@ test("compares ordinary replies from multiple Agents and continues the selected 
     exact: true,
   });
   const topicMode = composer.getByRole("button", {
-    name: "Topic",
+    name: "话题",
     exact: true,
   });
   const compare = composer.getByRole("button", {
@@ -975,7 +1077,7 @@ test("compares ordinary replies from multiple Agents and continues the selected 
     animations: "disabled",
   });
   await table
-    .getByRole("button", { name: `在 ${reviewer} 的 Topic 继续` })
+    .getByRole("button", { name: `在 ${reviewer} 的话题中继续` })
     .click();
 
   const topic = page.locator(".topic-conversation:visible");
@@ -1101,6 +1203,54 @@ test("compares ordinary replies from multiple Agents and continues the selected 
   await expect(finished.getByText("正在核对接口。")).toBeVisible();
 });
 
+test("opening a local comparison Topic from the sidebar reveals the comparison", async ({
+  page,
+}) => {
+  const reviewerName = "对比定位审阅者";
+  const ownerName = "对比定位发起者";
+  await createAgent(page, reviewerName);
+  await createAgent(page, ownerName);
+  await send(page, "开始对比会话");
+  const overview: Overview = await (
+    await page.request.get("/api/overview")
+  ).json();
+  const owner = overview.agents.find(({ name }) => name === ownerName)!;
+  const reviewer = overview.agents.find(({ name }) => name === reviewerName)!;
+  const chat = overview.chats.find(({ agentId }) => agentId === owner.id)!;
+  const prompt = "比较两个回复";
+  const response = await page.request.post("/api/comparisons", {
+    data: {
+      commandId: randomUUID(),
+      chatId: chat.id,
+      agentIds: [owner.id, reviewer.id],
+      text: prompt,
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const { id, sessionIds }: Comparison = await response.json();
+  const comparison = page
+    .locator(`.tab-panel[data-pane="main"] [data-comparison-id="${id}"]`)
+    .getByRole("heading", { name: "回复对比", exact: true });
+  await expect(comparison).toBeInViewport();
+  await send(
+    page,
+    Array.from({ length: 32 }, (_, index) => `后续记录 ${index + 1}`).join(
+      "\n\n",
+    ),
+  );
+  await expect(comparison).not.toBeInViewport();
+
+  await page
+    .locator(`#agent-sidebar [data-session-id="${sessionIds[0]}"]`)
+    .click();
+  const topic = page.locator(
+    '.tab-panel[data-pane="side"] .topic-conversation',
+  );
+  await expect(topic.locator(".user-message")).toContainText(prompt);
+  await expect(comparison).toBeInViewport();
+  await expect(topic.getByRole("textbox", { name: "回复话题" })).toBeFocused();
+});
+
 test("draft and sent file references open Files opposite the Chat", async ({
   page,
 }) => {
@@ -1169,6 +1319,264 @@ test("draft and sent file references open Files opposite the Chat", async ({
     "package hello",
   );
   await expect(sidePanel.locator(".user-message")).toBeVisible();
+});
+
+test("chat previews HTML inline, resolves report images and copies the actual file path", async ({
+  page,
+}) => {
+  const { scope } = context();
+  const report = "Inline report.html";
+  const image = "inline screen.png";
+  const html =
+    '<h1>对照报告</h1><a href="inline%20screen.png" aria-label="查看原图"><img alt="截图" src="inline%20screen.png"></a>';
+  const path = join(realpathSync(scope), report);
+  writeFileSync(path, html);
+  writeFileSync(
+    join(scope, image),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+w2S8AAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          document.documentElement.dataset.copied = text;
+        },
+      },
+    });
+  });
+  await createAgent(page, "内嵌报告 Agent");
+  const composer = page.locator(".chat-composer-wrap");
+  await composer.getByLabel("选择附件", { exact: true }).setInputFiles(path);
+  await expect(
+    composer.getByRole("button", { name: report, exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(composer.locator("iframe")).toHaveCount(0);
+  await page.route(
+    "**/api/messages",
+    async (route) => {
+      const response = await route.fetch({
+        postData: {
+          ...route.request().postDataJSON(),
+          text: `请查看[工作区报告](${encodeURIComponent(report)})。`,
+        },
+      });
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  await send(page, "查看报告");
+  const turn = page.locator(".run-content").last();
+  const response = turn.locator(".chat-response");
+  const link = response.getByRole("link", { name: "工作区报告" });
+  const panel = response.getByRole("region", { name: report, exact: true });
+  await expect(link).toHaveAttribute("aria-expanded", "false");
+  await expect(response.locator("iframe")).toHaveCount(0);
+  await link.press("Enter");
+  await expect(link).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: report })).toHaveCount(0);
+  const frame = panel.frameLocator("iframe");
+  await expect
+    .poll(() =>
+      frame
+        .getByAltText("截图")
+        .evaluate((node) => (node as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await frame.getByRole("link", { name: "查看原图" }).click();
+  await expect(frame.locator("img")).toBeVisible();
+  await panel.getByRole("button", { name: "HTML 预览选项" }).click();
+  await page.getByRole("menuitem", { name: "复制绝对路径" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-copied", path);
+  await panel.getByRole("button", { name: "收起预览" }).click();
+  await expect(link).toBeFocused();
+  await expect(response.locator("iframe")).toHaveCount(0);
+  await link.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "在聊天中预览" }).click();
+  await expect(frame.getByRole("heading", { name: "对照报告" })).toBeVisible();
+  await link.click();
+  await expect(panel).toHaveCount(0);
+
+  const prompt = turn.locator(".user-message");
+  const attachment = prompt.getByRole("button", { name: report, exact: true });
+  const uploaded = prompt.getByRole("region", { name: report, exact: true });
+  await expect(attachment).toHaveAttribute("aria-expanded", "true");
+  const uploadedFrame = uploaded.frameLocator("iframe");
+  await expect(
+    uploadedFrame.getByRole("heading", { name: "对照报告" }),
+  ).toBeVisible();
+  await expect(uploadedFrame.getByAltText("截图")).toHaveAttribute(
+    "src",
+    "inline%20screen.png",
+  );
+  await expect(uploaded.getByRole("note")).toContainText("未随文件上传的图片");
+  await expect(prompt.getByRole("link", { name: "下载文件" })).toHaveAttribute(
+    "download",
+    report,
+  );
+  await uploaded.getByRole("button", { name: "HTML 预览选项" }).click();
+  await page.getByRole("menuitem", { name: "复制绝对路径" }).click();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-copied",
+    /[/\\]attachments[/\\][\w-]+[/\\]Inline report\.html$/,
+  );
+  await uploaded.getByRole("button", { name: "收起预览" }).click();
+  await expect(attachment).toBeFocused();
+  await expect(uploaded).toHaveCount(0);
+});
+
+test("chat HTML links reuse a side tab and offer quick and paired browser previews", async ({
+  page,
+  browser,
+}) => {
+  const { url, scope } = context();
+  const name = "Preview #1.html";
+  const path = join(realpathSync(scope), name);
+  writeFileSync(
+    path,
+    '<button id="notes" onclick="this.textContent=\'OK\'">Try</button>',
+  );
+  await createAgent(page, "HTML 预览 Agent");
+  const sent = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/messages") &&
+      response.request().method() === "POST",
+  );
+  await send(page, "准备预览");
+  const run: Run = await (await sent).json();
+  const preview = new URL(`/api/runs/${run.id}/preview`, url);
+  preview.search = new URLSearchParams({ kind: "html", path }).toString();
+  const section = new URL(preview);
+  section.hash = "notes";
+  const message = await page.request.post("/api/messages", {
+    data: {
+      operation: "main",
+      chatId: run.chatId,
+      commandId: randomUUID(),
+      text: [
+        `[产物](${encodeURIComponent(name)})`,
+        `[粘贴的预览链接](${preview.href})`,
+        `[指定章节](${section.href})`,
+        "[外部网页](https://example.test/foreign.html)",
+        "```md\n[示例](example-only.html)\n```",
+        `\uE200visualize\uE202${JSON.stringify({ path, title: "内嵌图表" })}\uE201`,
+      ].join("\n\n"),
+    },
+  });
+  expect(message.ok()).toBeTruthy();
+  const reply: Run = await message.json();
+  const turn = page.locator(`[data-run-id="${reply.id}"]`);
+  await expect(turn).toHaveAttribute("data-status", "completed");
+  const replyLink = turn
+    .locator(".chat-response")
+    .getByRole("link", { name: "产物", exact: true });
+  const pasted = turn
+    .locator(".user-message")
+    .getByRole("link", { name: "粘贴的预览链接" });
+  await expect(replyLink).toHaveAttribute("aria-expanded", "true");
+  await expect(pasted).toHaveAttribute("aria-expanded", "true");
+  const prompt = turn.locator(".user-message");
+  const jump = prompt.getByRole("link", { name: "指定章节" });
+  await expect(jump).toHaveAttribute("aria-expanded", "false");
+  const previewId = await pasted.getAttribute("aria-controls");
+  const pastedPanel = prompt.locator(`[id="${previewId}"]`);
+  await expect(
+    pastedPanel.frameLocator("iframe").getByRole("button", { name: "Try" }),
+  ).toBeVisible();
+  await expect(
+    turn.locator(
+      'iframe[src$="#notes"], iframe[src*="foreign.html"], iframe[src*="example-only.html"]',
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await pastedPanel.getByRole("button", { name: "收起预览" }).click();
+  await expect(pasted).toBeFocused();
+  await expect(pasted).toHaveAttribute("aria-expanded", "false");
+  await expect(pastedPanel).toHaveCount(0);
+  await jump.click();
+  await expect(
+    prompt
+      .frameLocator('iframe[src$="#notes"]')
+      .getByRole("button", { name: "Try" }),
+  ).toBeVisible();
+  await jump.click();
+  await expect(prompt.locator('iframe[src$="#notes"]')).toHaveCount(0);
+  const inline = turn.locator(".chat-visualization");
+  await expect(inline.locator("iframe")).toHaveAttribute("title", "内嵌图表");
+  await inline.getByRole("button", { name: "HTML 预览选项" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "复制绝对路径" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await inline.getByRole("button", { name: "展开 HTML 预览" }).click();
+  const expanded = page.getByRole("dialog", { name: "内嵌图表" });
+  await expect(
+    expanded.frameLocator("iframe").getByRole("button", { name: "Try" }),
+  ).toBeVisible();
+  await expanded.press("Escape");
+  await replyLink.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "在 Lever 网页标签中打开" }).click();
+  const panel = page.getByRole("tabpanel", { name, exact: true });
+  await expect(panel).toHaveAttribute("data-pane", "side");
+  await expect(pasted).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await jump.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "在 Lever 网页标签中打开" }).click();
+  await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
+  await expect(panel.locator("iframe")).toHaveAttribute("src", /#notes$/);
+  await expect(panel.locator("iframe")).toHaveAttribute(
+    "sandbox",
+    "allow-scripts",
+  );
+  await panel
+    .frameLocator("iframe")
+    .getByRole("button", { name: "Try" })
+    .click();
+  await expect(
+    panel.frameLocator("iframe").getByRole("button", { name: "OK" }),
+  ).toBeVisible();
+
+  await pasted.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "快速预览" }).click();
+  const dialog = page.getByRole("dialog", { name });
+  await expect(
+    dialog.frameLocator("iframe").getByRole("button", { name: "Try" }),
+  ).toBeVisible();
+  await dialog.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await panel.getByRole("button", { name: "HTML 预览选项" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: /Finder|文件管理器/ }),
+  ).toHaveCount(0);
+  const opened = page.context().waitForEvent("page");
+  await page.getByRole("menuitem", { name: "在浏览器新标签页中打开" }).click();
+  const external = await opened;
+  await expect(
+    external.frameLocator("iframe").getByRole("button", { name: "Try" }),
+  ).toBeVisible();
+  await expect(external).toHaveTitle(name);
+  expect(external.url()).toBe(section.href.replace("/api/", "/view/"));
+  const unpaired = await browser.newContext({ locale: "zh-CN" });
+  try {
+    const viewer = await unpaired.newPage();
+    await viewer.goto(external.url());
+    await expect(viewer.getByRole("alert")).toContainText("尚未与 Lever 配对");
+    await expect(viewer.locator("iframe")).toHaveCount(0);
+    const pairing = await unpaired.newPage();
+    await pairing.goto(url);
+    await expect(pairing).not.toHaveURL(/#token=/);
+    await viewer.getByRole("button", { name: "重试" }).click();
+    await expect(
+      viewer.frameLocator("iframe").getByRole("button", { name: "Try" }),
+    ).toBeVisible();
+  } finally {
+    await unpaired.close();
+  }
 });
 
 test("chat file links open in the side pane at the cited line", async ({
@@ -1370,7 +1778,7 @@ test("desktop shortcuts follow the active pane and saved bindings", async ({
   const search = page.getByRole("dialog", { name: "搜索 Lever" });
   const searchInput = search.getByRole("combobox", { name: "搜索 Lever" });
   const allResults = search.getByRole("radio", { name: "全部", exact: true });
-  const chatResults = search.getByRole("radio", { name: "Chat", exact: true });
+  const chatResults = search.getByRole("radio", { name: "对话", exact: true });
   const fileResults = search.getByRole("radio", { name: "文件", exact: true });
   await page.keyboard.press("Meta+p");
   await expect(chatResults).toBeChecked();
@@ -1458,7 +1866,7 @@ test("desktop shortcuts follow the active pane and saved bindings", async ({
   });
   await searchBinding.click();
   await page.keyboard.press("Meta+n");
-  await expect(page.getByRole("alert")).toContainText("新建 Chat");
+  await expect(page.getByRole("alert")).toContainText("新建对话");
   await page.keyboard.press("Meta+s");
   await expect(page.getByRole("alert")).toContainText("已被保留");
   await page.keyboard.press("Meta+Shift+k");
@@ -1506,11 +1914,11 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await send(page, "发布计划 A");
   await send(page, "正文检索专用内容");
   await send(page, "更新活动预览");
-  await page.getByRole("button", { name: "Topic", exact: true }).click();
+  await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "发布排查");
   await createAgent(page, "搜索测试 Agent B");
   await send(page, "发布计划 B");
-  await page.getByRole("button", { name: "Topic", exact: true }).click();
+  await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "发布排查");
   const agentId = await page.evaluate(() =>
     localStorage.getItem("lever:agent"),
@@ -1546,8 +1954,8 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await expect(chatSearch).toHaveText("");
   await sidebarSearch.click();
   await expect(search.locator("[cmdk-group-heading]")).toHaveText([
-    "Topic",
-    "Chat",
+    "话题",
+    "对话",
     "Agent",
   ]);
   await expect(options.first()).toHaveAttribute("aria-selected", "true");
@@ -1583,11 +1991,11 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await query.press("ArrowDown");
   await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
   await query.fill("发布");
-  await search.getByRole("radio", { name: "Topic", exact: true }).click();
+  await search.getByRole("radio", { name: "话题", exact: true }).click();
   await expect(options).toHaveCount(2);
   await scope.click();
   await page
-    .getByRole("combobox", { name: "查找 Agent 或 Chat" })
+    .getByRole("combobox", { name: "查找 Agent 或对话" })
     .fill("Agent A");
   await page
     .getByRole("option", { name: "搜索测试 Agent A", exact: true })
@@ -1596,7 +2004,7 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await expect(options.first()).toContainText("搜索测试 Agent A › 发布计划 A");
   await scope.click();
   await page
-    .getByRole("combobox", { name: "查找 Agent 或 Chat" })
+    .getByRole("combobox", { name: "查找 Agent 或对话" })
     .fill("发布计划 A");
   await page
     .getByRole("option", { name: "搜索测试 Agent A › 发布计划 A", exact: true })
@@ -1624,13 +2032,13 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await closeTopic(page);
 
   await chatSearch.click();
-  await search.getByRole("radio", { name: "Topic", exact: true }).click();
+  await search.getByRole("radio", { name: "话题", exact: true }).click();
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText("发布排查");
   await expect(
     options.first().getByRole("img", { name: "有新结果待查看" }),
   ).toHaveCount(0);
-  await search.getByRole("radio", { name: "Chat", exact: true }).click();
+  await search.getByRole("radio", { name: "对话", exact: true }).click();
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText("发布计划 A");
   await query.press("Enter");
@@ -1641,6 +2049,18 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await sidebarSearch.click();
   await search.getByRole("radio", { name: "正文", exact: true }).click();
   await query.fill("正文检索专用内容");
+  await expect(options).toHaveCount(1);
+  const messageKinds = search.getByRole("radiogroup", { name: "消息类型" });
+  const mainMessages = messageKinds.getByRole("radio", {
+    name: "主对话",
+    exact: true,
+  });
+  await messageKinds.getByRole("radio", { name: "话题", exact: true }).click();
+  await expect(search.getByText("没有匹配的结果")).toBeVisible();
+  await mainMessages.click();
+  await expect(options).toHaveCount(1);
+  await mainMessages.click();
+  await expect(mainMessages).not.toBeChecked();
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText("发布计划 A");
   await expect(options.first().locator("mark")).toHaveText("正文检索专用内容");
@@ -1668,6 +2088,53 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   ).toBeVisible();
 });
 
+test("workspace toolbar keeps chosen tools in the overflow menu", async ({
+  page,
+}) => {
+  await createAgent(page, "工具栏收纳");
+  const strip = page.locator('.tab-strip[data-pane="main"]');
+  const toolbarButton = (name: string) =>
+    strip.getByRole("button", { name, exact: true });
+  const more = toolbarButton("更多工具");
+  await expect(toolbarButton("文件")).toBeVisible();
+  await expect(toolbarButton("变更")).toHaveCount(0);
+  await expect(toolbarButton("浏览器")).toHaveCount(0);
+  await expect(toolbarButton("配置")).toHaveCount(0);
+
+  await openMoreTool(strip, "浏览器");
+  await expect(
+    strip.getByRole("tab", { name: "浏览器", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(more).toHaveClass(/bg-accent/);
+  // The lazily loaded address field takes focus, which would dismiss a menu.
+  await expect(page.getByLabel("输入网址或 localhost:端口")).toBeFocused();
+
+  await more.click();
+  await page
+    .getByRole("menuitem", { name: "在工具栏显示" })
+    .press("ArrowRight");
+  const option = (name: string) =>
+    page.getByRole("menuitemcheckbox", { name, exact: true });
+  await expect(option("变更")).toHaveCount(0);
+  await expect(option("浏览器")).toHaveAttribute("aria-checked", "false");
+  await option("浏览器").press("Enter");
+  await option("文件").press("Enter");
+  await expect(option("浏览器")).toHaveAttribute("aria-checked", "true");
+  await expect(option("文件")).toHaveAttribute("aria-checked", "false");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(toolbarButton("浏览器")).toBeVisible();
+  await expect(toolbarButton("文件")).toHaveCount(0);
+
+  await page.reload();
+  await expect(toolbarButton("浏览器")).toBeVisible();
+  await expect(toolbarButton("文件")).toHaveCount(0);
+  await openMoreTool(strip, "文件");
+  await expect(
+    strip.getByRole("tab", { name: "文件", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+});
+
 test("workspace Search stays in place and Diff uses Git directories in the Scope", async ({
   page,
 }) => {
@@ -1685,21 +2152,32 @@ test("workspace Search stays in place and Diff uses Git directories in the Scope
     name: "搜索当前 Agent",
     exact: true,
   });
-  const diffButton = page.getByRole("button", { name: "变更", exact: true });
+  const gitButton = page.getByRole("button", { name: "Git 状态", exact: true });
   await expect(searchButton).toBeVisible();
-  await expect(diffButton).toHaveCount(0);
+  await expect(gitButton).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "变更", exact: true }),
+  ).toHaveCount(0);
 
   await send(page, "页签栏会话");
   const chat = main.getByRole("tab", { name: "页签栏会话", exact: true });
   const files = main.getByRole("tab", { name: "文件", exact: true });
   const profile = main.getByRole("tab", { name: "配置", exact: true });
   await mainStrip.getByRole("button", { name: "文件", exact: true }).click();
-  await mainStrip.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(mainStrip);
   await chat.click();
-  const tabWidth = await chat.evaluate((element) => element.offsetWidth);
+  const tabWidth = await chat.evaluate(
+    (element) =>
+      element.closest(".workspace-tab")!.getBoundingClientRect().width,
+  );
   const searchPosition = (await searchButton.boundingBox())!.x;
   await files.click();
-  expect(await chat.evaluate((element) => element.offsetWidth)).toBe(tabWidth);
+  expect(
+    await chat.evaluate(
+      (element) =>
+        element.closest(".workspace-tab")!.getBoundingClientRect().width,
+    ),
+  ).toBe(tabWidth);
   await expect(searchButton).toBeVisible();
   expect((await searchButton.boundingBox())!.x).toBe(searchPosition);
   await searchButton.click();
@@ -1747,10 +2225,11 @@ test("workspace Search stays in place and Diff uses Git directories in the Scope
     { id: "repo", path: scope },
     { id: "docs", path: join(scope, "docs") },
   ]);
+  await gitButton.click();
   const workingDiff = page.waitForResponse((response) => {
     return response.url().includes(`/agents/${agent.id}/diff?`);
   });
-  await diffButton.click();
+  await page.locator(".git-status-popover .git-status-action-row").click();
   const response = await workingDiff;
   expect(new URL(response.url()).searchParams.get("root")).toBe("repo");
   expect(response.ok(), await response.text()).toBeTruthy();
@@ -1762,9 +2241,9 @@ test("workspace Search stays in place and Diff uses Git directories in the Scope
   await page.keyboard.press("Escape");
 
   await updateScope(withGit, agent.profile.roots);
-  await expect(diffButton).toHaveCount(0);
+  await expect(gitButton).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "当前 Scope 没有 Git 仓库" }),
+    page.getByRole("heading", { name: "当前工作范围没有 Git 仓库" }),
   ).toBeVisible();
   await profile.click();
   await expect(searchButton).toBeVisible();
@@ -1779,13 +2258,14 @@ test("Last Turn stays in its Chat and pins its patch until refresh", async ({
   );
   await send(page, "[turn-diff:main.txt]");
   const main = (await (await first).json()) as Run;
-  const topicMode = page.getByRole("button", { name: "Topic", exact: true });
+  const topicMode = page.getByRole("button", { name: "话题", exact: true });
   await topicMode.click();
   await send(page, "[turn-diff:topic.txt]");
 
   const openLatest = async () => {
-    await page.getByRole("button", { name: "变更", exact: true }).click();
-    await page.getByRole("button", { name: "Diff 范围" }).click();
+    await page.getByRole("button", { name: "Git 状态", exact: true }).click();
+    await page.locator(".git-status-popover .git-status-action-row").click();
+    await page.getByRole("button", { name: "变更范围" }).click();
     await page.getByRole("menuitemradio", { name: "最近一轮" }).click();
   };
   await openLatest();
@@ -1793,7 +2273,7 @@ test("Last Turn stays in its Chat and pins its patch until refresh", async ({
     page.getByRole("treeitem", { name, exact: true });
   await expect(file("main.txt")).toBeVisible();
   await expect(file("topic.txt")).toHaveCount(0);
-  await page.getByRole("button", { name: "Diff 范围" }).click();
+  await page.getByRole("button", { name: "变更范围" }).click();
   await expect(
     page.getByRole("menuitemradio", { name: "最近一轮", exact: true }),
   ).toHaveAttribute("aria-checked", "true");
@@ -1819,10 +2299,14 @@ test("Last Turn stays in its Chat and pins its patch until refresh", async ({
     })
     .toBe("completed");
   await expect(file("main.txt")).toBeVisible();
-  await page.getByRole("button", { name: "刷新 Diff" }).click();
+  await page.getByRole("button", { name: "刷新变更" }).click();
   await expect(file("next.txt")).toBeVisible();
 
-  await page.getByRole("button", { name: "新 Chat", exact: true }).click();
+  await page
+    .locator('.tab-strip[data-pane="main"]')
+    .getByRole("button", { name: "打开标签", exact: true })
+    .click();
+  await page.getByRole("menuitem", { name: "新对话", exact: true }).click();
   await openLatest();
   await expect(
     page.getByRole("heading", { name: "还没有已结束的轮次" }),
@@ -1843,9 +2327,9 @@ test("new Chat reuses a persistent input page and creates nothing until the firs
     ).chats.filter((chat) => chat.agentId === agentId);
   expect(await chats()).toHaveLength(0);
   for (let i = 0; i < 3; i++)
-    await page.getByRole("button", { name: "新 Chat", exact: true }).click();
+    await page.getByRole("button", { name: "新对话", exact: true }).click();
   await expect(
-    page.getByRole("tab", { name: "新 Chat", exact: true }),
+    page.getByRole("tab", { name: "新对话", exact: true }),
   ).toHaveCount(1);
   const composer = page.locator(".chat-composer-wrap:visible");
   const input = composer.getByRole("textbox", {
@@ -1883,9 +2367,9 @@ test("new Chat reuses a persistent input page and creates nothing until the firs
   expect(view.runs).toHaveLength(1);
   expect(view.runs[0].attachments[0].chatId).toBe(created[0].id);
   await expect(
-    page.getByRole("tab", { name: "新 Chat", exact: true }),
+    page.getByRole("tab", { name: "新对话", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "新 Chat", exact: true }).click();
+  await page.getByRole("button", { name: "新对话", exact: true }).click();
   await expect(input).toHaveText("");
   expect(await chats()).toHaveLength(1);
 });
@@ -2050,8 +2534,8 @@ test("Agent activity stays compact, preserves navigation and supports default co
   const sidebar = page.locator("#agent-sidebar");
   const group = sidebar.locator(`[data-agent-id="${agentId}"]`);
   const summary = group.locator(".agent-contact-status");
-  const clear = sidebar.getByRole("button", {
-    name: "清除已读会话",
+  const clear = group.getByRole("button", {
+    name: "清除 活动列表 的已读会话",
     exact: true,
   });
   const toggle = group.getByRole("button", {
@@ -2059,7 +2543,10 @@ test("Agent activity stays compact, preserves navigation and supports default co
     exact: true,
   });
   await expect(toggle).toHaveCount(0);
-  await expect(clear).toBeDisabled();
+  await expect(clear).toHaveCount(0);
+  await expect(
+    sidebar.getByRole("button", { name: "清除已读会话", exact: true }),
+  ).toHaveCount(0);
   const toggleSlotBox = (await group
     .locator(".agent-activity-toggle-slot")
     .boundingBox())!;
@@ -2079,7 +2566,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(mainRow).toBeVisible();
   await expect(mainRow.locator(".truncate")).toHaveText(mainTitle);
   await expect(mainRow.locator(".agent-unread")).toHaveCount(0);
-  await expect(clear).toBeEnabled();
+  await expect(clear).toBeVisible();
   const contact = group.locator(".agent-contact");
   await expect(contact).toHaveCSS("padding", "4px 6px");
   await expect(
@@ -2120,18 +2607,16 @@ test("Agent activity stays compact, preserves navigation and supports default co
     String.raw`未读话题 [链接] \server`,
   );
   await expect(summary).toBeHidden();
-  await group
-    .getByRole("button", { name: "清除 活动列表 的已读会话", exact: true })
-    .click();
+  await clear.click();
   await expect(mainRow).toHaveCount(0);
   await expect(runningRow.locator(".animate-spin")).toBeVisible();
   await expect(unreadRow.locator(".agent-unread")).toBeVisible();
-  await expect(clear).toBeDisabled();
+  await expect(clear).toHaveCount(0);
   await expect(group.locator(".agent-activity-item")).toHaveCount(2);
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const toggleBox = (await toggle.boundingBox())!;
   const chatActionBox = (await group
-    .getByRole("button", { name: "打开 活动列表 的 Chat", exact: true })
+    .getByRole("button", { name: "打开 活动列表 的对话", exact: true })
     .boundingBox())!;
   expect(toggleBox.x).toBe(toggleSlotBox.x);
   expect(toggleBox.x + toggleBox.width).toBe(
@@ -2190,7 +2675,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
     running.input,
   );
   await group
-    .getByRole("button", { name: "打开 活动列表 的 Chat", exact: true })
+    .getByRole("button", { name: "打开 活动列表 的对话", exact: true })
     .click();
   await expect(input).toHaveText("保留主会话草稿");
   await submit("再次回复", unread.sessionId);
@@ -2308,7 +2793,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page
     .getByRole("navigation", { name: "设置分类" })
-    .getByRole("button", { name: "外观", exact: true })
+    .getByRole("button", { name: "常规", exact: true })
     .click();
   await page
     .getByRole("radiogroup", { name: "Agent 活动会话默认展开", exact: true })
@@ -2324,7 +2809,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page
     .getByRole("navigation", { name: "设置分类" })
-    .getByRole("button", { name: "外观", exact: true })
+    .getByRole("button", { name: "常规", exact: true })
     .click();
   await page
     .getByRole("radiogroup", { name: "Agent 活动会话默认展开", exact: true })
@@ -2374,7 +2859,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await clear.click();
   await expect(toggle).toHaveCount(0);
   await expect(group.locator(".agent-activity-list")).toHaveCount(0);
-  await expect(clear).toBeDisabled();
+  await expect(clear).toHaveCount(0);
 });
 
 test("Recent shows the generated conversation title when it arrives after the reply", async ({
@@ -2595,8 +3080,15 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
   await expect(busy.locator(".agent-unread")).toBeVisible();
   await busy.click({ button: "right" });
   await item("标为已读").click();
+  await busy.hover();
+  await expect(
+    busy.locator("..").getByRole("button", {
+      name: "从活动列表清除 继续执行 [hang]",
+      exact: true,
+    }),
+  ).toHaveCSS("opacity", "1");
   await busy.click({ button: "right" });
-  await item("从活动列表移除").click();
+  await item("从活动列表清除").click();
   await expect(busy).toHaveCount(0);
   await agent.click({ button: "right" });
   await item("归档 Agent").click();
@@ -2612,7 +3104,7 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
     .getByRole("button", { name: "已归档 Agent", exact: true })
     .click();
   await agent.click({ button: "right" });
-  await expect(item("打开历史 Chat")).toBeVisible();
+  await expect(item("打开历史对话")).toBeVisible();
   await item("恢复 Agent").click();
   await expect(agent).toHaveCount(0);
   await sidebar.getByRole("button", { name: "返回会话", exact: true }).click();
@@ -2732,7 +3224,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
   const priority = sidebar.getByRole("region", { name: "优先", exact: true });
   const today = sidebar.getByRole("region", { name: "今天", exact: true });
-  const clear = sidebar.getByRole("button", {
+  const clearPriority = priority.getByRole("button", {
     name: "清除已读会话",
     exact: true,
   });
@@ -2769,7 +3261,9 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
     .getByRole("menuitem", { name: "全部标为已读", exact: true })
     .click();
   await expect(rows.locator(".agent-unread")).toHaveCount(0);
-  await clear.click();
+  await firstGroup
+    .getByRole("button", { name: "清除 会话归档甲 的已读会话", exact: true })
+    .click();
   await expect(rows).toHaveCount(0);
 
   await createAgent(page, "会话归档乙");
@@ -2792,7 +3286,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   );
   await expect(today.locator(mainRow)).toBeVisible();
   await expect(priority.locator(mainRow)).toHaveCount(0);
-  await clear.click();
+  await clearPriority.click();
   await expect(secondRow).toHaveCount(0);
   await expect(today.locator(secondSelector)).toBeVisible();
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
@@ -2945,14 +3439,14 @@ test("tab menus move the clicked tab between panes and preserve its draft", asyn
   await createAgent(page, "标签页跨栏");
   const main = page.locator('.tab-strip[data-pane="main"]');
   const side = page.locator('.tab-strip[data-pane="side"]');
-  const mainDraft = main.getByRole("tab", { name: "新 Chat", exact: true });
-  const sideDraft = side.getByRole("tab", { name: "新 Chat", exact: true });
+  const mainDraft = main.getByRole("tab", { name: "新对话", exact: true });
+  const sideDraft = side.getByRole("tab", { name: "新对话", exact: true });
   const input = page.getByRole("textbox", { name: "发送消息", exact: true });
   const moveRight = page.getByRole("menuitem", { name: "移动到右侧面板" });
   const moveLeft = page.getByRole("menuitem", { name: "移动到左侧面板" });
 
   await input.fill("跨栏保留草稿");
-  await main.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(main);
   await expect(mainDraft).toHaveAttribute("aria-selected", "false");
   await mainDraft.click({ button: "right" });
   await expect(moveLeft).toHaveCount(0);
@@ -2985,19 +3479,19 @@ test("a new Chat moves between panes and accepts a Topic as its first message", 
     () => localStorage.getItem("lever:agent")!,
   );
   await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
-  await page.getByRole("menuitem", { name: "新 Chat", exact: true }).click();
+  await page.getByRole("menuitem", { name: "新对话", exact: true }).click();
   const draft = page.locator(
     '.tab-panel[data-visible="true"]:has(.new-chat-panel)',
   );
   await expect(draft).toHaveAttribute("data-pane", "side");
   await expect(
-    page.getByRole("tab", { name: "新 Chat", exact: true }),
+    page.getByRole("tab", { name: "新对话", exact: true }),
   ).toHaveCount(1);
   const input = draft.getByRole("textbox", { name: "发送消息", exact: true });
   await input.fill("@hello");
   await page.getByRole("option", { name: "hello.go", exact: true }).click();
   await input.pressSequentially(" 先开启一个话题");
-  await draft.getByRole("button", { name: "Topic", exact: true }).click();
+  await draft.getByRole("button", { name: "话题", exact: true }).click();
   await draft.getByRole("button", { name: "发送", exact: true }).click();
   const chat = page.locator('.tab-panel[data-visible="true"]:has(.chat-panel)');
   await expect(chat).toHaveAttribute("data-pane", "side");
@@ -3006,7 +3500,7 @@ test("a new Chat moves between panes and accepts a Topic as its first message", 
     "completed",
   );
   await expect(
-    chat.getByRole("button", { name: "Topic", exact: true }),
+    chat.getByRole("button", { name: "话题", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   const overview = (await (
     await page.request.get("/api/overview")
@@ -3049,8 +3543,9 @@ test("profile pickers keep the active panel visible and save model and permissio
   await send(page, "```js\nconsole.log('keep the profile visible');\n```");
   const chat = page.locator(".tab-panel:has(.chat-panel)");
   await expect(chat.locator("[aria-live]").first()).toBeAttached();
-  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(page);
   const profile = page.locator('[id="panel-profile"]');
+  await expect(profile.getByText("任务队列", { exact: true })).toHaveCount(0);
 
   const runtime = profile.getByRole("combobox", {
     name: "运行时",
@@ -3096,19 +3591,85 @@ test("profile pickers keep the active panel visible and save model and permissio
   const permissions = profile.getByRole("radiogroup", { name: "权限" });
   const fullAccess = permissions.getByRole("radio", { name: "完全访问" });
   await expect(fullAccess).toHaveAccessibleDescription(/脱离沙箱运行/);
-  await fullAccess.click();
-  await expect(fullAccess).toBeChecked();
   const save = page.waitForResponse(
     (response) =>
       response.request().method() === "PUT" &&
-      new URL(response.url()).pathname.startsWith("/api/agents/"),
+      new URL(response.url()).pathname.startsWith("/api/agents/") &&
+      response.request().postDataJSON()?.profile?.permission === "full_access",
   );
-  await profile
-    .getByRole("button", { name: "保存 Agent", exact: true })
-    .click();
+  await fullAccess.click();
+  await expect(fullAccess).toBeChecked();
+  await expect(
+    profile.getByRole("button", { name: "保存 Agent", exact: true }),
+  ).toHaveCount(0);
   expect(await (await save).json()).toMatchObject({
     profile: { model: "gpt-review", permission: "full_access" },
   });
+});
+
+for (const runtime of ["Antigravity", "Pi", "DeepSeek Harness"]) {
+  test(`running ${runtime} shows only the follow-ups the turn accepts`, async ({
+    page,
+  }) => {
+    await createAgent(page, `运行中追加 ${runtime}`);
+    await page.getByRole("button", { name: "选择模型和运行时" }).click();
+    await page.getByRole("radio", { name: runtime, exact: true }).click();
+    await page.keyboard.press("Escape");
+    const composer = page.locator(".chat-composer-wrap:visible");
+    const input = composer.getByRole("textbox", {
+      name: "发送消息",
+      exact: true,
+    });
+    await input.fill("[steer-open]");
+    await composer.getByRole("button", { name: "发送", exact: true }).click();
+    const turn = page
+      .locator(".chat-panel .conversation > .run-content")
+      .last();
+    await expect(turn).toContainText("before steer");
+    await input.fill("change direction");
+    const steer = composer
+      .locator(".composer-actions")
+      .getByRole("button", { name: "发送到当前执行", exact: true });
+    if (runtime === "DeepSeek Harness") {
+      await expect(steer).toHaveCount(0);
+      await expect(
+        composer.getByRole("button", { name: "加入队列", exact: true }),
+      ).toBeEnabled();
+      await input.fill("");
+      await composer.getByRole("button", { name: "停止执行", exact: true }).click();
+      return;
+    }
+    await steer.click();
+    await expect(turn).toHaveAttribute("data-status", "completed");
+    await expect(turn).toContainText("before steer");
+    await expect(turn).toContainText("after: change direction");
+  });
+}
+
+test("Antigravity delivers a startup Steer to the original turn", async ({ page }) => {
+  const scope = mkdtempSync(join(context().scope, "pending-agy-"));
+  try {
+    await createAgent(page, "等待本轮就绪", scope);
+    await page.getByRole("button", { name: "选择模型和运行时" }).click();
+    await page.getByRole("radio", { name: "Antigravity", exact: true }).click();
+    await page.keyboard.press("Escape");
+    const composer = page.locator(".chat-composer-wrap:visible");
+    const input = composer.getByRole("textbox", { name: "发送消息", exact: true });
+    await input.fill("[defer-steer] [steer-open]");
+    await composer.getByRole("button", { name: "发送", exact: true }).click();
+    await input.fill("follow before ready");
+    await composer.getByRole("button", { name: "当前执行就绪后追加", exact: true }).click();
+    const queued = page.locator("[data-queued-id]", { hasText: "follow before ready" });
+    await expect(queued.getByRole("status")).toHaveText("当前执行就绪后追加");
+    writeFileSync(join(scope, "allow-steer"), "");
+    const turn = page.locator(".chat-panel .conversation > .run-content");
+    await expect(turn).toHaveCount(1);
+    await expect(turn).toHaveAttribute("data-status", "completed");
+    await expect(turn).toContainText("after: follow before ready");
+    await expect(queued).toHaveCount(0);
+  } finally {
+    rmSync(scope, { force: true, recursive: true });
+  }
 });
 
 test("running sends default to Steer and honor the saved action and shortcut", async ({
@@ -3136,7 +3697,7 @@ test("running sends default to Steer and honor the saved action and shortcut", a
   await expect(turn).toHaveAttribute("data-status", "running");
 
   await input.fill("[hang] steered by the primary button");
-  await expect(steerButton).toHaveText("Steer");
+  await expect(steerButton).toHaveText("追加");
   await steerButton.click();
   await expect(turn.locator(".user-message").last()).toContainText(
     "steered by the primary button",
@@ -3151,8 +3712,8 @@ test("running sends default to Steer and honor the saved action and shortcut", a
     name: "运行中发送",
     exact: true,
   });
-  await expect(followUp.getByRole("radio", { name: "Steer" })).toBeChecked();
-  await followUp.getByRole("radio", { name: "Queue" }).click();
+  await expect(followUp.getByRole("radio", { name: "追加" })).toBeChecked();
+  await followUp.getByRole("radio", { name: "排队" }).click();
   await page
     .getByRole("radiogroup", { name: "发送消息快捷键", exact: true })
     .getByRole("radio", { name: /\+ Enter$/ })
@@ -3161,7 +3722,7 @@ test("running sends default to Steer and honor the saved action and shortcut", a
   await page.reload();
 
   await input.fill("queued by the configured send key");
-  await expect(queueButton).toHaveText("Queue");
+  await expect(queueButton).toHaveText("排队");
   await expect(steerButton).toHaveAttribute("title", /\+ Shift \+ Enter$/);
   await input.press("End");
   await input.press("Enter");
@@ -3184,7 +3745,7 @@ test("Topic steering uses the active model and saves the selected model for the 
   await createAgent(page, "追加消息的模型提示");
   const mainComposer = page.locator(".chat-composer-wrap:visible");
   await mainComposer
-    .getByRole("button", { name: "Topic", exact: true })
+    .getByRole("button", { name: "话题", exact: true })
     .click();
   await mainComposer
     .getByRole("textbox", { name: "发送消息", exact: true })
@@ -3272,7 +3833,7 @@ test("main and Topics execute independently with isolated queues, approvals and 
     name: "发送消息",
     exact: true,
   });
-  const mode = composer.getByRole("button", { name: "Topic", exact: true });
+  const mode = composer.getByRole("button", { name: "话题", exact: true });
   const mainRuns = page.locator(".chat-panel .conversation > .run-content");
   await input.fill("[hang] main keeps running");
   await input.press("Enter");
@@ -3329,7 +3890,7 @@ test("main and Topics execute independently with isolated queues, approvals and 
   await expect(
     page
       .locator(".topic-conversation:visible")
-      .getByRole("button", { name: "Topic", exact: true }),
+      .getByRole("button", { name: "话题", exact: true }),
   ).toHaveCount(0);
   await reply.fill("/");
   await expect(page.getByRole("option", { name: /\/model/ })).toBeVisible();
@@ -3380,7 +3941,7 @@ test("main and Topics execute independently with isolated queues, approvals and 
   // Turning a queued main message into a Topic immediately starts its own session.
   await rows
     .first()
-    .getByRole("button", { name: "将排队消息改为 Topic", exact: true })
+    .getByRole("button", { name: "将排队消息改为话题", exact: true })
     .click();
   await expect(
     page
@@ -3572,7 +4133,7 @@ test("quoting a topic message targets its reply and preserves the main draft", a
   const main = page.getByRole("textbox", { name: "发送消息", exact: true });
   const mode = page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "Topic", exact: true });
+    .getByRole("button", { name: "话题", exact: true });
   await mode.click();
   await send(page, "这个话题需要独立讨论。");
   await mode.click();
@@ -3635,7 +4196,7 @@ test("cross-session quotes open the chosen composer and only send on submit", as
   await send(page, "主线确定了接口约定。");
   const main = page.locator(".chat-composer-wrap:visible");
   const input = main.getByRole("textbox", { name: "发送消息", exact: true });
-  const mode = main.getByRole("button", { name: "Topic", exact: true });
+  const mode = main.getByRole("button", { name: "话题", exact: true });
   const dialog = page.getByRole("dialog", { name: "引用到…" });
   const quoteAction = { name: "引用到…", exact: true };
   const source = page
@@ -3667,7 +4228,7 @@ test("cross-session quotes open the chosen composer and only send on submit", as
     .locator(".agent-message")
     .getByRole("button", quoteAction)
     .click();
-  await dialog.getByRole("button", { name: "主聊天", exact: true }).click();
+  await dialog.getByRole("button", { name: "主对话", exact: true }).click();
   await expect(input).toBeFocused();
   await expect(mode).toHaveAttribute("aria-pressed", "false");
   await expect(main.locator(".message-quote")).toContainText(
@@ -3853,7 +4414,7 @@ test("same Chat mixes main messages and topic replies, survives reload, previews
   await send(page, "先梳理这个项目的结构。");
   const mode = page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "Topic", exact: true });
+    .getByRole("button", { name: "话题", exact: true });
   await mode.click();
   await send(page, "单独讨论一下 API 的错误处理。");
   const topic = page.locator(".topic-thread");
@@ -3924,13 +4485,15 @@ test("same Chat mixes main messages and topic replies, survives reload, previews
   await page.getByRole("treeitem", { name: "hello.go", exact: true }).click();
   await expect(page.locator(".monaco-editor")).toBeVisible();
   await expect(page.locator(".monaco-editor")).toContainText("hello Lever");
-  await page.getByRole("button", { name: "变更", exact: true }).click();
+  await page.getByRole("button", { name: "Git 状态", exact: true }).click();
+  await page.locator(".git-status-popover .git-status-action-row").click();
   await expect(page.locator("diffs-container")).toBeVisible();
   await page.screenshot({
     path: "../output/e2e/diff-dark.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "收起侧边分栏", exact: true }).click();
+  await openMoreTool(page);
   await expect(page.getByLabel("系统指令", { exact: true })).toHaveValue(
     "Keep changes small and explain the result.",
   );
@@ -3939,8 +4502,11 @@ test("same Chat mixes main messages and topic replies, survives reload, previews
     .getByRole("button", { name: "收起 Agent 列表", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "保存 Agent", exact: true }),
+    page.getByRole("button", { name: "归档 Agent", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "保存 Agent", exact: true }),
+  ).toHaveCount(0);
   await page.screenshot({
     path: "../output/e2e/profile-narrow.png",
     fullPage: true,
@@ -4028,7 +4594,7 @@ test("one Chat expands, switches and creates independent Topics beside Notes", a
   await page.setViewportSize({ width: 1680, height: 900 });
   await createAgent(page, "分栏讨论");
   await send(page, "发布总览");
-  const mode = page.getByRole("button", { name: "Topic", exact: true });
+  const mode = page.getByRole("button", { name: "话题", exact: true });
   await mode.click();
   await send(page, "确认发布时间");
   await send(page, "核对回滚步骤");
@@ -4102,7 +4668,7 @@ test("one Chat expands, switches and creates independent Topics beside Notes", a
   const totalTabs = await page.locator(".tab-strip [role=tab]").count();
   const expand = cards
     .first()
-    .getByRole("button", { name: "在当前 Chat 展开话题" });
+    .getByRole("button", { name: "在当前对话展开话题" });
   await expand.click();
   const sidebar = page.locator("#agent-sidebar");
   const reply = page.getByRole("textbox", { name: "回复话题", exact: true });
@@ -4353,9 +4919,9 @@ test("disabling automatic Topic opening persists and keeps the current Topic", a
   await page.reload();
 
   await send(page, "工作总览");
-  await page.getByRole("button", { name: "Topic", exact: true }).click();
+  await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "当前话题");
-  await page.getByRole("button", { name: "在当前 Chat 展开话题" }).click();
+  await page.getByRole("button", { name: "在当前对话展开话题" }).click();
   const reply = page.getByRole("textbox", { name: "回复话题", exact: true });
   await reply.fill("留在当前话题的草稿");
   const launcher = page.getByRole("textbox", { name: "新话题", exact: true });
@@ -4375,14 +4941,14 @@ test("a pending Topic creation does not replace a Topic selected while waiting",
 }) => {
   await createAgent(page, "话题切换保护");
   await send(page, "工作总览");
-  await page.getByRole("button", { name: "Topic", exact: true }).click();
+  await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "出发话题");
   await send(page, "随后切换到的话题");
   const cards = page.locator(".topic-thread");
   const selectedId = await cards.nth(1).getAttribute("data-session-id");
   await cards
     .first()
-    .getByRole("button", { name: "在当前 Chat 展开话题" })
+    .getByRole("button", { name: "在当前对话展开话题" })
     .click();
 
   const submitted = Promise.withResolvers<void>();
@@ -4418,7 +4984,7 @@ test("a long Topic title keeps Back visible and scrolls older choices into the s
 }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 800 });
   await createAgent(page, "话题导航");
-  await page.getByRole("button", { name: "Topic", exact: true }).click();
+  await page.getByRole("button", { name: "话题", exact: true }).click();
   const rootTitle =
     "@docs/remote-devices.md 基于这个方案重新 review，看看交互能否更优雅通用。".repeat(
       4,
@@ -4429,7 +4995,7 @@ test("a long Topic title keeps Back visible and scrolls older choices into the s
   const { session, root } = (await (
     await page.request.get(`/api/sessions/${id}`)
   ).json()) as SessionView;
-  await card.getByRole("button", { name: "在当前 Chat 展开话题" }).click();
+  await card.getByRole("button", { name: "在当前对话展开话题" }).click();
   await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
   await page.getByRole("menuitem", { name: "笔记", exact: true }).click();
   const header = page.locator(".chat-topic-header");
@@ -4524,7 +5090,7 @@ test("topic previews stay recent while its tab loads full history and preserves 
   await createAgent(page, "话题记录");
   await page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "Topic", exact: true })
+    .getByRole("button", { name: "话题", exact: true })
     .click();
   await send(page, "完整保留这个话题的讨论记录。");
   const topic = page.locator(".topic-thread");
@@ -4697,7 +5263,7 @@ test("a delegation opens its Agent's Chat while native subagents stay in the Top
   expect(updated.ok()).toBe(true);
 
   const composer = page.locator(".chat-composer-wrap");
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await composer
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill(`[delegate:${buyer.id}] [subagents]`);
@@ -4812,7 +5378,7 @@ test("approval and pause controls operate on the owning run", async ({
   await expect(running).toContainText("Continued from the saved native turn");
   await expect(page.locator(".run-content")).toHaveCount(2);
   const composer = page.locator(".chat-composer-wrap");
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await composer
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill("[approval] 话题内审批");
@@ -5027,7 +5593,7 @@ test("editing a Topic root from its preview keeps its place in the Chat", async 
   await send(page, "Main before Topic");
   const mainComposer = page.locator(".chat-composer-wrap");
   await mainComposer
-    .getByRole("button", { name: "Topic", exact: true })
+    .getByRole("button", { name: "话题", exact: true })
     .click();
   await send(page, "Original Topic root");
   const topic = page.locator(".topic-thread");
@@ -5046,7 +5612,7 @@ test("editing a Topic root from its preview keeps its place in the Chat", async 
   await expect(runs.last()).toHaveAttribute("data-status", "completed");
   await input.fill("Unsent Topic draft");
   await closeTopic(page);
-  const mode = mainComposer.getByRole("button", { name: "Topic", exact: true });
+  const mode = mainComposer.getByRole("button", { name: "话题", exact: true });
   if ((await mode.getAttribute("aria-pressed")) === "true") await mode.click();
   await send(page, "Main after Topic");
 
@@ -5198,7 +5764,7 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
   mkdirSync(scope, { recursive: true });
   await createAgent(page, "话题重试", scope);
   const main = page.locator(".chat-composer-wrap");
-  await main.getByRole("button", { name: "Topic", exact: true }).click();
+  await main.getByRole("button", { name: "话题", exact: true }).click();
   await main.getByRole("textbox", { name: "发送消息" }).fill("[hang] 话题请求");
   await main.getByRole("button", { name: "发送", exact: true }).click();
   const topic = page.locator(".topic-thread");
@@ -5240,7 +5806,7 @@ test("topic submission stays pending across closing and reopening its tab", asyn
   await createAgent(page, "话题发送");
   await page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "Topic", exact: true })
+    .getByRole("button", { name: "话题", exact: true })
     .click();
   await send(page, "测试话题发送过程。");
   const topic = page.locator(".topic-thread");
@@ -5411,8 +5977,8 @@ test("secondary sidebars resize and share the saved width across pages", async (
   await expect(sidebar).toHaveCSS("width", "360px");
 
   for (const [tab, id] of [
-    ["Works", "task-sidebar"],
-    ["Skills", "skills-sidebar"],
+    ["工作", "task-sidebar"],
+    ["技能", "skills-sidebar"],
     ["插件", "plugin-sidebar"],
     ["设置", "settings-sidebar"],
   ]) {
@@ -5449,15 +6015,28 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
   await page
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill("尚未发送的草稿");
+  await expect(
+    page.getByRole("button", { name: "话题", exact: true }),
+  ).toHaveText("对话");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
+  const settingsNav = page.getByRole("navigation", { name: "设置分类" });
+  await expect(settingsNav).toBeVisible();
   await expect(
-    page.getByRole("navigation", { name: "设置分类" }),
+    page.getByRole("heading", { name: "Agent 配置", exact: true }),
   ).toBeVisible();
   await expect(
-    page
-      .getByRole("navigation", { name: "主导航" })
-      .getByRole("button", { name: "设置", exact: true }),
+    page.getByText("配置", { exact: true }).first(),
+  ).toBeVisible();
+  const zhNav = page.getByRole("navigation", { name: "主导航" });
+  await expect(
+    zhNav.getByRole("button", { name: "工作", exact: true }),
+  ).toBeVisible();
+  await expect(
+    zhNav.getByRole("button", { name: "技能", exact: true }),
+  ).toBeVisible();
+  await expect(
+    zhNav.getByRole("button", { name: "设置", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await page
     .getByRole("radiogroup", { name: "语言", exact: true })
@@ -5467,10 +6046,20 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
   await expect(
     page.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("button", { name: "Agents", exact: true })
-    .click();
+  const enNav = page.getByRole("navigation", {
+    name: "Main navigation",
+    exact: true,
+  });
+  await expect(
+    enNav.getByRole("button", { name: "Works", exact: true }),
+  ).toBeVisible();
+  await expect(
+    enNav.getByRole("button", { name: "Skills", exact: true }),
+  ).toBeVisible();
+  await enNav.getByRole("button", { name: "Agents", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Topic", exact: true }),
+  ).toHaveText("Chat");
   await expect(
     page.getByRole("textbox", { name: "Message", exact: true }),
   ).toHaveText("尚未发送的草稿");
@@ -5490,23 +6079,30 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
       exact: true,
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Diff", exact: true }).click();
+  await page.getByRole("button", { name: "Git status", exact: true }).click();
+  await page.locator(".git-status-popover .git-status-action-row").click();
   await expect(
     page.getByRole("button", { name: "Diff scope", exact: true }),
   ).toContainText("Uncommitted");
-  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Hide side pane", exact: true })
+    .click();
+  await openMoreTool(page, "Profile", "More tools");
   await expect(page.getByLabel("Instructions", { exact: true })).toHaveValue(
     "Keep changes small and explain the result.",
   );
   await expect(
-    page.getByRole("button", { name: "Save Agent", exact: true }),
+    page.getByRole("button", { name: "Archive Agent", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Save Agent", exact: true }),
+  ).toHaveCount(0);
   const workspaceTabs = page
     .getByRole("tablist", { name: "Agent workspace", exact: true })
     .getByRole("tab");
   for (let i = 0; i < 8; i++) {
     await page.getByRole("button", { name: "New Chat", exact: true }).click();
-    await expect(workspaceTabs).toHaveCount(5 + i);
+    await expect(workspaceTabs).toHaveCount(4 + i);
     const input = page.getByRole("textbox", { name: "Message", exact: true });
     await input.fill(`Conversation ${i + 1}`);
     await input.press("Enter");
@@ -5515,7 +6111,10 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
       "completed",
     );
   }
-  const scroll = page.locator(".tab-scroll");
+  const scroll = page.getByRole("tablist", {
+    name: "Agent workspace",
+    exact: true,
+  });
   expect(
     await scroll.evaluate(
       (element) => element.scrollWidth > element.clientWidth,
@@ -5604,7 +6203,7 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
     picker.getByRole("radiogroup", { name: "推理强度", exact: true }),
   ).toHaveCount(0);
   await picker.getByRole("button", { name: "GPT Review", exact: true }).click();
-  await picker.getByRole("radio", { name: "Fast", exact: true }).click();
+  await picker.getByRole("radio", { name: "快速", exact: true }).click();
   await page.screenshot({ path: "../output/e2e/composer-model-picker.png" });
   await picker
     .getByRole("radiogroup", { name: "推理强度", exact: true })
@@ -5636,11 +6235,38 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
   await expect(composer.locator(".attachment-chip")).toHaveCount(0);
 
   // The OS file chooser, dropping and pasting share one upload path.
-  await composer.locator(".composer").evaluate((element) => {
+  const editor = composer.getByRole("textbox", { name: "发送消息", exact: true });
+  await editor.evaluate((element) => {
+    const nonFile = new DataTransfer();
+    nonFile.setData("text/plain", "dragged text");
+    element.dispatchEvent(
+      new DragEvent("dragleave", { bubbles: true, dataTransfer: nonFile }),
+    );
+    const enter = new DataTransfer();
+    enter.items.add(new File(["dropped"], "dropped.txt", { type: "text/plain" }));
+    element.dispatchEvent(
+      new DragEvent("dragenter", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: enter,
+      }),
+    );
+    element.dispatchEvent(
+      new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: enter,
+      }),
+    );
+  });
+  await expect(composer.locator(".attachment-drop")).toBeVisible();
+  await editor.evaluate((element) => {
     const transfer = new DataTransfer();
     transfer.items.add(
       new File(["dropped"], "dropped.txt", { type: "text/plain" }),
     );
+    transfer.setData("text/uri-list", "file:///tmp/dropped.txt");
+    transfer.setData("text/plain", "/tmp/dropped.txt");
     element.dispatchEvent(
       new DragEvent("drop", {
         bubbles: true,
@@ -5649,22 +6275,22 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
       }),
     );
   });
+  await expect(composer.locator(".attachment-drop")).toHaveCount(0);
   await expect(composer.locator(".attachment-chip")).toHaveCount(1);
-  await composer
-    .getByRole("textbox", { name: "发送消息", exact: true })
-    .evaluate((element) => {
-      const transfer = new DataTransfer();
-      transfer.items.add(
-        new File(["pasted"], "pasted.txt", { type: "text/plain" }),
-      );
-      element.dispatchEvent(
-        new ClipboardEvent("paste", {
-          bubbles: true,
-          cancelable: true,
-          clipboardData: transfer,
-        }),
-      );
-    });
+  await expect(editor).toHaveText("");
+  await editor.evaluate((element) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(["pasted"], "pasted.txt", { type: "text/plain" }),
+    );
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      }),
+    );
+  });
   await expect(composer.locator(".attachment-chip")).toHaveCount(2);
   await composer
     .getByRole("button", { name: "移除 dropped.txt", exact: true })
@@ -5685,7 +6311,7 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
   await expect(picker).toBeHidden();
   await send(page, "换一个运行时继续刚才的设计。");
   await expect(page.locator(".runtime-handoff")).toHaveCount(1);
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "独立讨论附件的边界。");
   const topic = page.locator(".topic-thread");
   await topic.getByRole("button", { name: "回复", exact: true }).click();
@@ -5699,7 +6325,7 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
   await expect(topic.locator(".topic-preview")).toHaveCount(3);
   await expect(topic).toHaveAttribute("data-status", "completed");
   await closeTopic(page);
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "回到主对话。");
   const chatId = await page.evaluate(async () => {
     const data = await (await fetch("/api/overview")).json();
@@ -6040,29 +6666,24 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
     await permission.click();
     await page.getByRole("menuitemradio", { name }).click();
   };
-  const topic = composer.getByRole("button", { name: "Topic", exact: true });
+  const topic = composer.getByRole("button", { name: "话题", exact: true });
   const picker = page.getByRole("dialog", { name: "选择模型和运行时" });
   const pick = (name: string) =>
     picker.getByRole("radio", { name, exact: true }).click();
-  const newChat = page.getByRole("button", { name: "新 Chat", exact: true });
-  const config = page.getByRole("button", { name: "配置", exact: true });
+  const newChat = page.getByRole("button", { name: "新对话", exact: true });
   const profile = page.locator('[id="panel-profile"]');
   const profilePermissions = profile.getByRole("radiogroup", { name: "权限" });
-  const saveProfile = async () => {
-    const saved = page.waitForResponse(
+  const waitProfileSave = () =>
+    page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
         new URL(response.url()).pathname.startsWith("/api/agents/"),
     );
-    await profile
-      .getByRole("button", { name: "保存 Agent", exact: true })
-      .click();
-    expect((await saved).ok()).toBeTruthy();
-  };
 
-  await config.click();
+  await openMoreTool(page);
+  const saveAsk = waitProfileSave();
   await profilePermissions.getByRole("radio", { name: "按需审批" }).click();
-  await saveProfile();
+  expect((await saveAsk).ok()).toBeTruthy();
   await newChat.click();
   await send(page, "Main session uses GPT Test");
   await topic.click();
@@ -6082,7 +6703,7 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
   await picker
     .getByRole("button", { name: "GPT Review", exact: true })
     .press("ArrowRight");
-  await pick("Fast");
+  await pick("快速");
   await pick("高");
   await model.click();
   await pick("Claude Code");
@@ -6090,7 +6711,7 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
     .getByRole("button", { name: "Claude Opus", exact: true })
     .press("ArrowRight");
   await pick("低");
-  await expect(permission).toHaveAccessibleName("权限 · Auto");
+  await expect(permission).toHaveAccessibleName("权限 · 自动");
   await choosePermission(/^完全访问/);
   await topic.click();
   await expect(model).toContainText("GPT Test");
@@ -6117,7 +6738,7 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
     picker.getByRole("radio", { name: "高", exact: true }),
   ).toBeChecked();
   await expect(
-    picker.getByRole("radio", { name: "Fast", exact: true }),
+    picker.getByRole("radio", { name: "快速", exact: true }),
   ).toBeChecked();
   await pick("高");
   await expect(permission).toHaveAccessibleName("权限 · 完全访问");
@@ -6126,17 +6747,19 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
   await createAgent(page, "独立模型偏好");
   await expect(permission).toHaveAccessibleName("权限 · 代我审批");
   await page.getByRole("button", { name, exact: true }).click();
-  await config.click();
+  await openMoreTool(page);
+  const saveAutoReview = waitProfileSave();
   await profilePermissions.getByRole("radio", { name: "代我审批" }).click();
-  await saveProfile();
+  expect((await saveAutoReview).ok()).toBeTruthy();
   await newChat.click();
   await expect(model).toContainText("GPT Review");
   await expect(permission).toHaveAccessibleName("权限 · 代我审批");
 
-  await config.click();
+  await openMoreTool(page);
   await page.getByRole("button", { name: "模型", exact: true }).click();
+  const saveModel = waitProfileSave();
   await page.getByRole("option", { name: "GPT Test", exact: true }).click();
-  await saveProfile();
+  expect((await saveModel).ok()).toBeTruthy();
   await newChat.click();
   await expect(model).toContainText("GPT Test");
   await expect(composer.locator(".fast-icon")).toHaveCount(0);
@@ -6155,7 +6778,7 @@ test("only a new conversation falls back when its remembered model disappears", 
     .press("ArrowRight");
   await page.getByRole("radio", { name: "低", exact: true }).click();
   await send(page, "Existing Claude Opus session");
-  const newChat = page.getByRole("button", { name: "新 Chat", exact: true });
+  const newChat = page.getByRole("button", { name: "新对话", exact: true });
   await newChat.click();
   const catalog = "**/api/providers/claude/models?*";
   await page.route(catalog, (route) => route.fulfill({ status: 503 }));
@@ -6200,7 +6823,7 @@ test("legacy drafts and pending first sends restore their own selections", async
     name: "发送",
     exact: true,
   });
-  const newChat = page.getByRole("button", { name: "新 Chat", exact: true });
+  const newChat = page.getByRole("button", { name: "新对话", exact: true });
   async function chooseModel(name: string) {
     await model.click();
     await page.getByRole("button", { name, exact: true }).press("ArrowRight");
@@ -6292,7 +6915,7 @@ test("composer permissions follow the selected provider and apply to the next ru
   const option = (name: RegExp) => menu.getByRole("menuitemradio", { name });
   const menuItems = menu.locator('[role^="menuitem"]');
   const codexPresets = [/^按需审批/, /^代我审批/, /^完全访问/];
-  const agyPresets = [/^请求审查/, /^默认/, /^Auto/, /^极速/];
+  const agyPresets = [/^请求审查/, /^默认/, /^自动/, /^极速/];
   const model = composer.getByRole("button", { name: "选择模型和运行时" });
   const runs = page.locator(".chat-panel .conversation > .run-content");
   const receipt = () => runs.last().locator(".message-body:visible");
@@ -6364,7 +6987,7 @@ test("composer permissions follow the selected provider and apply to the next ru
   await expect(receipt()).toContainText('"sandbox":"workspace-write"');
 
   await switchProvider("Claude Code");
-  await expect(trigger).toHaveAccessibleName("权限 · Auto");
+  await expect(trigger).toHaveAccessibleName("权限 · 自动");
   await trigger.click();
   await option(/^自动接受编辑/).click();
   await input.fill("[wire] Claude auto-accept edits");
@@ -6442,7 +7065,7 @@ test("composer permissions follow the selected provider and apply to the next ru
   await option(/^Build changes/).click();
   await expect(runs.last()).toHaveAttribute("data-status", "completed");
   await expect(receipt()).toContainText('"mode":"build-mode"');
-  await page.getByRole("button", { name: "新 Chat", exact: true }).click();
+  await page.getByRole("button", { name: "新对话", exact: true }).click();
   await expect(trigger).toHaveAccessibleName("权限 · Build changes");
   await switchProvider("Claude Code");
   await expect(trigger).toHaveAccessibleName("权限 · 完全访问");
@@ -6452,7 +7075,7 @@ test("Agent runtime settings save the equivalent permission on provider changes"
   page,
 }) => {
   await createAgent(page, "跨运行时权限");
-  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(page);
   const profile = page.locator('[id="panel-profile"]');
   const runtime = profile.getByRole("combobox", { name: "运行时" });
   const permissions = profile.getByRole("radiogroup", { name: "权限" });
@@ -6463,28 +7086,37 @@ test("Agent runtime settings save the equivalent permission on provider changes"
 
   await expect(permissions.getByRole("radio")).toHaveCount(3);
   await permissions.getByRole("radio", { name: "完全访问" }).click();
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname.startsWith("/api/agents/") &&
+      response.request().postDataJSON()?.profile?.provider === "antigravity",
+  );
   await switchProvider("Antigravity");
   await expect(permissions.getByRole("radio")).toHaveCount(4);
   await expect(
     permissions.getByRole("radio", { name: "请求审查" }),
   ).toBeVisible();
   await expect(permissions.getByRole("radio", { name: "极速" })).toBeChecked();
-  const saved = page.waitForResponse(
-    (response) =>
-      response.request().method() === "PUT" &&
-      new URL(response.url()).pathname.startsWith("/api/agents/"),
-  );
-  await profile.getByRole("button", { name: "保存 Agent" }).click();
   const response = await saved;
   expect(response.ok()).toBeTruthy();
   expect(await response.json()).toMatchObject({
     profile: { provider: "antigravity", permission: "turbo" },
   });
+  const savedClaude = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname.startsWith("/api/agents/") &&
+      response.request().postDataJSON()?.profile?.provider === "claude",
+  );
   await switchProvider("Claude Code");
   await expect(
     permissions.getByRole("radio", { name: "完全访问" }),
   ).toBeChecked();
-  await expect(permissions.getByRole("radio", { name: "Auto" })).toBeVisible();
+  expect((await savedClaude).ok()).toBeTruthy();
+  await expect(
+    permissions.getByRole("radio", { name: "自动", exact: true }),
+  ).toBeVisible();
   await expect(permissions.getByRole("radio", { name: "计划" })).toBeVisible();
   await expect(permissions.getByRole("radio", { name: "不询问" })).toHaveCount(
     0,
@@ -6759,7 +7391,7 @@ test("composer action menu orders available commands and browses without editing
     composer.getByRole("button", { name: "添加 Agent" }),
   ).toHaveCount(0);
   await plus.click();
-  await panel.getByRole("option", { name: /继续 Chat/ }).click();
+  await panel.getByRole("option", { name: /继续对话/ }).click();
   await plus.click();
   await panel.getByRole("option", { name: /选择模型/ }).click();
   await expect(page.getByRole("textbox", { name: "搜索模型…" })).toBeFocused();
@@ -6875,10 +7507,10 @@ test("composer toggles directly and keeps inline references through copy, retry 
     exact: true,
   });
   const references = input.locator("[data-reference]");
-  const mode = composer.getByRole("button", { name: "Topic", exact: true });
-  await expect(mode).toHaveText("Chat");
+  const mode = composer.getByRole("button", { name: "话题", exact: true });
+  await expect(mode).toHaveText("对话");
   await mode.click();
-  await expect(mode).toHaveText("Topic");
+  await expect(mode).toHaveText("话题");
   await expect(mode).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await page.route(
@@ -6887,12 +7519,12 @@ test("composer toggles directly and keeps inline references through copy, retry 
     { times: 1 },
   );
   await input.fill("/");
-  const suggestions = page.getByRole("listbox", { name: "命令与 skills" });
+  const suggestions = page.getByRole("listbox", { name: "命令与技能" });
   const commands = suggestions
     .getByRole("group", { name: "命令", exact: true })
     .getByRole("option");
-  await expect(commands.nth(0)).toHaveText("/chat继续 Chat");
-  await expect(commands.nth(1)).toHaveText("/topic开始 Topic");
+  await expect(commands.nth(0)).toHaveText("/chat继续对话");
+  await expect(commands.nth(1)).toHaveText("/topic开启话题");
   await expect(commands.nth(2)).toHaveText("/model选择模型");
   await expect(suggestions.getByRole("alert")).toContainText("无法加载候选项");
   await suggestions.getByRole("button", { name: "重试", exact: true }).click();
@@ -6900,7 +7532,7 @@ test("composer toggles directly and keeps inline references through copy, retry 
   await expect(suggestions).toContainText("/a-related-skill");
   await expect(
     suggestions
-      .getByRole("group", { name: "Skills", exact: true })
+      .getByRole("group", { name: "技能", exact: true })
       .getByRole("option"),
   ).toHaveCount(2);
   await input.press("ArrowUp");
@@ -6917,7 +7549,7 @@ test("composer toggles directly and keeps inline references through copy, retry 
     suggestions.getByRole("group", { name: "命令", exact: true }),
   ).toHaveCount(0);
   await expect(
-    suggestions.getByRole("group", { name: "Skills", exact: true }),
+    suggestions.getByRole("group", { name: "技能", exact: true }),
   ).toBeVisible();
   await expect(suggestions.getByRole("option")).toContainText(
     "/fixture-review",
@@ -6927,7 +7559,7 @@ test("composer toggles directly and keeps inline references through copy, retry 
   await input.fill("/chat");
   await page.getByRole("option", { name: "/chat", exact: false }).waitFor();
   await input.press("Enter");
-  await expect(mode).toHaveText("Chat");
+  await expect(mode).toHaveText("对话");
   await expect(input).toHaveText("");
   await input.fill("/model");
   await input.press("Enter");
@@ -7076,7 +7708,7 @@ test("note and Board mentions retain their own targets through draft reload and 
   const input = page.getByRole("textbox", { name: "发送消息", exact: true });
   const menu = page.getByRole("listbox", { name: "引用与协作" });
   await input.fill(`[wire] 对照@${title}`);
-  await expect(menu.getByRole("group", { name: "Board 工作项" })).toContainText(
+  await expect(menu.getByRole("group", { name: "看板工作项" })).toContainText(
     card,
   );
   await expect(
@@ -7248,9 +7880,9 @@ test("closing a tab restores the most recently selected open tab", async ({
 }) => {
   await createAgent(page, "恢复标签页");
   const main = page.getByRole("tablist", { name: "Agent 工作区", exact: true });
-  const draft = main.getByRole("tab", { name: "新 Chat", exact: true });
+  const draft = main.getByRole("tab", { name: "新对话", exact: true });
   await page.getByRole("button", { name: "文件", exact: true }).click();
-  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(page);
   const profile = main.getByRole("tab", { name: "配置", exact: true });
   await draft.click();
   await profile.click();
@@ -7303,6 +7935,36 @@ test("closing a tab restores the most recently selected open tab", async ({
   await draft.click();
   await expect(page.locator(".files-panel")).toHaveCount(1);
   await expect(page.locator(".files-panel")).toBeHidden();
+});
+
+test("inserts inline Skills in existing text on Antigravity, Pi and DeepSeek Harness", async ({
+  page,
+}) => {
+  await createAgent(page, "行内 Skill");
+  const input = page.getByRole("textbox", { name: "发送消息", exact: true });
+  const picker = page.getByRole("dialog", { name: "选择模型和运行时" });
+  const skills = page.getByRole("group", { name: "技能", exact: true });
+  for (const [runtime, query] of [
+    ["Antigravity", "/fixture-review"],
+    ["Pi", "/skill:fixture-review"],
+    ["DeepSeek Harness", "/fixture-review"],
+  ]) {
+    await page.getByRole("button", { name: "选择模型和运行时" }).click();
+    await picker.getByRole("radio", { name: runtime, exact: true }).click();
+    await page.keyboard.press("Escape");
+    await input.fill("请用处理");
+    await input.press("ArrowLeft");
+    await input.press("ArrowLeft");
+    await input.pressSequentially(query);
+    await skills.getByRole("option", { name: /^\/fixture-review/ }).waitFor();
+    await input.press("Enter");
+    await expect(input).toHaveText("请用fixture-review 处理");
+    await input.press("End");
+    await input.pressSequentially(" /a-related");
+    await skills.getByRole("option", { name: /^\/a-related-skill/ }).click();
+    await expect(input).toHaveText("请用fixture-review 处理 a-related-skill");
+    await expect(input.locator("[data-reference]")).toHaveCount(2);
+  }
 });
 
 test("inline references edit at the caret, delete atomically and undo without ghost invocations", async ({
@@ -7365,15 +8027,20 @@ test("skills refresh between turns and respect runtime changes in both Chat and 
   page,
 }) => {
   await createAgent(page, "技能更新");
-  await page.getByRole("button", { name: "配置", exact: true }).click();
-  await page.getByRole("button", { name: "添加 Skill", exact: true }).click();
+  await openMoreTool(page);
+  await page.getByRole("button", { name: "添加技能", exact: true }).click();
   await page.getByRole("button", { name: "添加已有目录", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "Skill 目录", exact: true })
+    .getByRole("textbox", { name: "技能目录", exact: true })
     .fill(context().skill);
+  const savedSkill = page.waitForResponse(
+    (response) =>
+      /\/api\/agents\/[^/]+$/.test(response.url()) &&
+      response.request().method() === "PUT",
+  );
   await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
-  await page.getByRole("button", { name: "新 Chat", exact: true }).click();
+  expect((await savedSkill).ok()).toBeTruthy();
+  await page.getByRole("button", { name: "新对话", exact: true }).click();
   const composer = page.locator(".chat-composer-wrap");
   const input = composer.getByRole("textbox", {
     name: "发送消息",
@@ -7421,7 +8088,7 @@ test("skills refresh between turns and respect runtime changes in both Chat and 
   await input.press("ControlOrMeta+A");
   await input.press("Backspace");
   await expect(composer.getByRole("alert")).toHaveCount(0);
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await input.fill("/fixture-claude");
   await page.getByRole("option", { name: /\/fixture-claude/ }).click();
   await input.pressSequentially("[wire] 使用 Claude 技能");
@@ -7604,7 +8271,7 @@ test("a narrow Chat pane keeps composer actions in one icon row", async ({
   await createAgent(page, "窄栏输入框");
   const composer = page.locator(".chat-composer-wrap:visible");
   const toolbar = composer.locator(".composer-actions");
-  const mode = toolbar.getByRole("button", { name: "Topic", exact: true });
+  const mode = toolbar.getByRole("button", { name: "话题", exact: true });
   const model = toolbar.getByRole("button", {
     name: "选择模型和运行时",
     exact: true,
@@ -7620,7 +8287,7 @@ test("a narrow Chat pane keeps composer actions in one icon row", async ({
   await divider.press("ArrowRight");
   await divider.press("ArrowRight");
   await expect(mode).toHaveAttribute("aria-pressed", "true");
-  await expect(mode.getByText("Topic", { exact: true })).toBeHidden();
+  await expect(mode.getByText("话题", { exact: true })).toBeHidden();
   await expect(modelName).toBeHidden();
   await expect(composer.locator(".prompt-placeholder")).toHaveCSS(
     "white-space",
@@ -7646,7 +8313,7 @@ test("a narrow Chat pane keeps composer actions in one icon row", async ({
   await page.keyboard.press("Escape");
 
   await divider.dblclick();
-  await expect(mode.getByText("Topic", { exact: true })).toBeVisible();
+  await expect(mode.getByText("话题", { exact: true })).toBeVisible();
   await expect(modelName).toBeVisible();
 });
 
@@ -7765,7 +8432,7 @@ test("topic tabs share panes, animate without scaling, and restore without their
   await send(page, "父 Chat 上下文");
   await page
     .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "Topic", exact: true })
+    .getByRole("button", { name: "话题", exact: true })
     .click();
   await send(page, "独立话题标签");
   const topic = page.locator(".topic-thread");
@@ -7777,47 +8444,27 @@ test("topic tabs share panes, animate without scaling, and restore without their
   const topicTab = page.getByRole("tab", { name: "独立话题标签", exact: true });
   const reply = page.getByRole("textbox", { name: "回复话题", exact: true });
   const layout = page.locator(".workspace-layout");
-  const sampleTransition = (selector: string) =>
-    page.evaluate(async (selector) => {
-      const layout = document.querySelector<HTMLElement>(".workspace-layout")!;
-      const samples: number[] = [];
-      (document.querySelector(selector) as HTMLButtonElement).click();
-      const start = performance.now();
-      do {
-        await new Promise(requestAnimationFrame);
-        samples.push(
-          parseFloat(
-            getComputedStyle(layout).getPropertyValue("--workspace-main"),
-          ),
-        );
-      } while (performance.now() - start < 400);
-      return samples;
-    }, selector);
-  const opening = await sampleTransition(".topic-open");
-  expect(opening.some((width) => width > 50 && width < 100)).toBe(true);
-  expect(opening.at(-1)).toBe(50);
+  await topic.locator(".topic-open").click();
+  await expect(layout).toHaveAttribute("data-view", "split");
+  await expect(layout).toHaveAttribute("data-animated", "true");
   await expect(reply).toBeFocused();
   await expect(topicTab).toHaveCount(1);
   await expect(
     page.locator('.tab-strip[data-pane="side"]').getByRole("tab"),
   ).toHaveCount(1);
-  // Motion changes the shared grid's real dimensions, never the chat's scale.
   expect(
     await page
       .locator(".topic-conversation")
       .evaluate((element) => getComputedStyle(element).transform),
   ).toBe("none");
   await reply.fill("标签草稿");
-  await topicTab.hover();
-  const closing = await sampleTransition(
-    '.tab-strip[data-pane="side"] .tab-close',
-  );
-  expect(closing.some((width) => width > 50 && width < 100)).toBe(true);
-  expect(closing.at(-1)).toBe(100);
+  await closeTab(topicTab);
+  await expect(layout).toHaveAttribute("data-view", "main");
+  await expect(layout).toHaveAttribute("data-animated", "true");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const reduced = await sampleTransition(".topic-open");
-  expect(reduced.filter((width) => width !== 50 && width !== 100)).toEqual([]);
-  expect(reduced.at(-1)).toBe(50);
+  await topic.locator(".topic-open").click();
+  await expect(layout).toHaveAttribute("data-view", "split");
+  await expect(layout).toHaveAttribute("data-animated", "false");
   await expect(reply).toHaveText("标签草稿");
   await closeTopic(page);
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -7842,6 +8489,7 @@ test("topic tabs share panes, animate without scaling, and restore without their
   });
   await divider.press("ArrowRight");
   await expect(divider).toHaveAttribute("aria-valuenow", "55");
+  await expect(layout).toHaveCSS("--workspace-main", "55fr");
   await expect(layout).toHaveAttribute("data-animated", "false");
   await divider.press("ArrowLeft");
   await expect(layout).toHaveCSS("--workspace-main", "50fr");
@@ -8045,7 +8693,7 @@ test("terminal panes retain independent shells and output across reload", async 
   }
 
   const beforeReload = retained.map((id) => sockets.get(id));
-  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await openMoreTool(page);
   await page.reload();
   await expect
     .poll(() =>
@@ -8144,13 +8792,16 @@ test("Worktree setup reconnects on reload and retries only the failed repository
   await page
     .getByRole("textbox", { name: "app with spaces 的初始化命令" })
     .fill(first);
-  await page.getByRole("textbox", { name: "api 的初始化命令" }).fill(second);
   const saved = page.waitForResponse(
     (response) =>
       response.url().endsWith(agentPath) &&
-      response.request().method() === "PUT",
+      response.request().method() === "PUT" &&
+      Object.values(
+        response.request().postDataJSON()?.profile?.worktreeSetup ?? {},
+      ).includes(second),
   );
-  await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
+  await page.getByRole("textbox", { name: "api 的初始化命令" }).fill(second);
+  await page.getByRole("textbox", { name: "api 的初始化命令" }).blur();
   expect((await saved).ok()).toBeTruthy();
   await page.getByRole("tab", { name: "准备工作", exact: true }).click();
   const composer = page.locator(".chat-composer-wrap:visible");
@@ -8158,7 +8809,7 @@ test("Worktree setup reconnects on reload and retries only the failed repository
     name: "发送消息",
     exact: true,
   });
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   await textbox.fill("[worktree-setup]");
   const worktrees = composer.getByRole("button", {
     name: "工作目录组",
@@ -8375,7 +9026,7 @@ test("directory groups reuse worktrees and keep Topic tools in the selected Scop
   expect(
     git(app, "worktree", "list", "--porcelain").match(/^worktree /gm),
   ).toHaveLength(1);
-  await composer.getByRole("button", { name: "Topic", exact: true }).click();
+  await composer.getByRole("button", { name: "话题", exact: true }).click();
   const workspace = composer.getByRole("button", {
     name: "工作目录组",
     exact: true,
@@ -8389,10 +9040,13 @@ test("directory groups reuse worktrees and keep Topic tools in the selected Scop
   });
   const directory = page
     .getByRole("tabpanel", { name: "目录", exact: true })
-    .getByRole("textbox", { name: "Scope 目录", exact: true })
+    .getByRole("textbox", { name: "工作范围目录", exact: true })
     .first();
   const savedDirectory = await directory.inputValue();
   await directory.clear();
+  await expect(
+    page.getByText("请输入目录路径，或移除该行。", { exact: true }),
+  ).toBeVisible();
   await directoryTab.press("ArrowRight");
   const groupsPanel = page.getByRole("tabpanel", {
     name: "目录组",
@@ -8401,9 +9055,14 @@ test("directory groups reuse worktrees and keep Topic tools in the selected Scop
   await expect(
     groupsPanel.getByText("暂无目录组", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
-  await expect(directory).toBeFocused();
+  await expect(
+    page.getByText("修正并完成工作目录保存后，这里会使用更新后的目录。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await directoryTab.click();
   await directory.fill(savedDirectory);
+  await directory.blur();
   await directoryTab.press("ArrowRight");
   const scopeCard = page
     .locator('[data-slot="card"]')
@@ -8562,7 +9221,7 @@ test("directory groups reuse worktrees and keep Topic tools in the selected Scop
     animations: "disabled",
   });
   await page.getByRole("tab", { name: "普通发送", exact: true }).click();
-  await expect(workspace).toHaveText("默认 Scope");
+  await expect(workspace).toHaveText("默认工作范围");
   await expect(workspace).toHaveAttribute("title", /[/\\]app[/\\]web$/);
   await page.setViewportSize({ width: 580, height: 820 });
   await page
@@ -8904,15 +9563,15 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
   );
   await createAgent(page, agentName);
   const nav = page.getByRole("navigation", { name: "主导航" });
-  const skillsMenu = nav.getByRole("button", { name: "Skills", exact: true });
-  const library = page.getByRole("region", { name: "Skills", exact: true });
-  const managed = library.getByRole("group", { name: "Lever", exact: true });
+  const skillsMenu = nav.getByRole("button", { name: "技能", exact: true });
+  const library = page.getByRole("region", { name: "技能", exact: true });
+  const managed = library.getByRole("group", { name: "Lever 托管", exact: true });
   await skillsMenu.click();
   await library
-    .getByRole("button", { name: "添加 Skill", exact: true })
+    .getByRole("button", { name: "添加技能", exact: true })
     .click();
-  await page.getByRole("menuitem", { name: "新建 Skill", exact: true }).click();
-  await page.getByLabel("Skill 名称", { exact: true }).fill(name);
+  await expect(page.getByRole("dialog").getByRole("button", { name: /^新建技能/ })).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("技能名称", { exact: true }).fill(name);
   const created = page.waitForResponse(
     (response) =>
       response.url().endsWith("/api/skills") &&
@@ -8946,12 +9605,12 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
   ).toBeVisible();
 
   await library
-    .getByRole("button", { name: "添加 Skill", exact: true })
+    .getByRole("button", { name: "添加到技能库", exact: true })
     .click();
   await page
-    .getByRole("menuitem", { name: "添加已有目录", exact: true })
+    .getByRole("dialog").getByRole("button", { name: /^添加已有目录/ })
     .click();
-  await page.getByLabel("Skill 目录", { exact: true }).fill(directory);
+  await page.getByLabel("技能目录", { exact: true }).fill(directory);
   await page.getByRole("button", { name: "添加", exact: true }).click();
   await expect(
     library.getByRole("heading", { name: "Team review" }),
@@ -8967,27 +9626,26 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
 
   await nav.getByRole("button", { name: "Agents", exact: true }).click();
   await page
-    .getByRole("button", { name: `打开 ${agentName} 的 Profile`, exact: true })
+    .getByRole("button", { name: `打开 ${agentName} 的配置`, exact: true })
     .click();
-  await page.getByRole("button", { name: "添加 Skill", exact: true }).click();
-  await page.getByRole("combobox", { name: "搜索 Skills" }).fill(name);
-  await page.getByRole("option", { name: `${name} Lever` }).click();
+  await page.getByRole("button", { name: "添加技能", exact: true }).click();
+  await page.getByRole("combobox", { name: "搜索技能" }).fill(name);
   const saved = page.waitForResponse(
     (response) =>
       /\/api\/agents\/[^/]+$/.test(response.url()) &&
       response.request().method() === "PUT",
   );
-  await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
+  await page.getByRole("option", { name: `${name} Lever` }).click();
   const profile = (await (await saved).json()) as Agent;
   expect(profile.profile.skills).toEqual([skill.path]);
 
   await skillsMenu.click();
-  await library.getByRole("button", { name: "Lever", exact: true }).click();
+  await library.getByRole("button", { name: "Lever 托管", exact: true }).click();
   await managed.getByRole("button", { name }).click();
   await library
-    .getByRole("button", { name: "引用此 Skill 的 Agent", exact: true })
+    .getByRole("button", { name: "引用此技能的 Agent", exact: true })
     .click();
-  const usage = page.getByRole("dialog", { name: "引用此 Skill 的 Agent" });
+  const usage = page.getByRole("dialog", { name: "引用此技能的 Agent" });
   await expect(usage.getByText(agentName, { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
@@ -9022,19 +9680,19 @@ test("Skills opens same-name discoveries from each source in Files", async ({
   const { homeDir } = (await overview.json()) as Overview;
   const fixtures = [
     {
-      group: "用户目录",
+      group: "用户全局",
       root: homeDir,
       collection: ".agents",
       content: "User skill",
     },
     {
-      group: "workspace",
+      group: "项目 Scope",
       root: scope,
       collection: ".codex",
       content: "Primary Scope skill",
     },
     {
-      group: `scope-${suffix}`,
+      group: "项目 Scope",
       root: second,
       collection: ".claude",
       content: "Secondary Scope skill",
@@ -9050,37 +9708,35 @@ test("Skills opens same-name discoveries from each source in Files", async ({
     writeFileSync(join(dir, "notes.md"), `# Notes for ${fixture.content}\n`);
   }
   await page
-    .getByRole("button", { name: `打开 ${agentName} 的 Profile`, exact: true })
+    .getByRole("button", { name: `打开 ${agentName} 的配置`, exact: true })
     .click();
-  await enterScopePath(
-    page,
-    page.getByRole("button", { name: "添加目录", exact: true }),
-    second,
-  );
   const saved = page.waitForResponse(
     (response) =>
       /\/api\/agents\/[^/]+$/.test(response.url()) &&
       response.request().method() === "PUT",
   );
-  await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
+  await enterScopePath(
+    page,
+    page.getByRole("button", { name: "添加目录", exact: true }),
+    second,
+  );
   expect((await saved).ok()).toBeTruthy();
 
   await page
     .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "Skills", exact: true })
+    .getByRole("button", { name: "技能", exact: true })
     .click();
-  const library = page.getByRole("region", { name: "Skills", exact: true });
+  const library = page.getByRole("region", { name: "技能", exact: true });
   const folders = library.getByRole("navigation", {
-    name: "Skills",
+    name: "技能",
     exact: true,
   });
   for (const fixture of fixtures) {
-    await folders
-      .getByRole("button", { name: fixture.group, exact: true })
-      .click();
+    const folder = folders.getByRole("button", { name: fixture.group, exact: true });
+    if (await folder.getAttribute("aria-expanded") !== "true") await folder.click();
     const row = folders
       .getByRole("group", { name: fixture.group, exact: true })
-      .getByRole("button", { name });
+      .getByRole("button", { name }).filter({ hasText: fixture.collection });
     await expect(row).toContainText(fixture.collection);
     await row.click();
     await expect(
@@ -9137,21 +9793,19 @@ test("Skills overview filters and saves preferences for the selected Agent", asy
     );
   }
   await page
-    .getByRole("button", { name: `打开 ${agentName} 的 Profile`, exact: true })
+    .getByRole("button", { name: `打开 ${agentName} 的配置`, exact: true })
     .click();
   await page
     .getByLabel("系统指令", { exact: true })
     .fill("Keep this draft while adjusting Skills.");
 
   const nav = page.getByRole("navigation", { name: "主导航" });
-  await nav.getByRole("button", { name: "Skills", exact: true }).click();
-  const overview = page.getByRole("region", { name: "总览", exact: true });
-  await overview.getByRole("searchbox", { name: "搜索 Skills" }).fill(name);
-  const user = overview.getByRole("region", { name: "用户目录", exact: true });
-  const scope = overview.getByRole("region", {
-    name: "workspace",
-    exact: true,
-  });
+  await nav.getByRole("button", { name: "技能", exact: true }).click();
+  const overview = page.getByRole("region", { name: "Skills 技能库", exact: true });
+  await overview.getByRole("searchbox", { name: "搜索技能" }).fill(name);
+  const copies = overview.getByRole("group", { name, exact: true });
+  const user = copies.filter({ has: page.locator(".skill-source-pill", { hasText: "全局" }) });
+  const scope = copies.filter({ has: page.locator(".skill-source-pill", { hasText: "workspace" }) });
   const prefs = overview.getByRole("switch", {
     name: `为 ${agentName} 启用 ${name}`,
     exact: true,
@@ -9163,7 +9817,7 @@ test("Skills overview filters and saves preferences for the selected Agent", asy
   await expect(prefs.last()).not.toBeChecked();
   await overview.getByRole("radio", { name: "已启用", exact: true }).click();
   await expect(
-    overview.getByText("没有匹配的 Skills", { exact: true }),
+    overview.getByText("没有匹配的技能", { exact: true }),
   ).toBeVisible();
   await overview.getByRole("radio", { name: "已禁用", exact: true }).click();
   await expect(prefs).toHaveCount(2);
@@ -9175,13 +9829,12 @@ test("Skills overview filters and saves preferences for the selected Agent", asy
   ).toBeChecked();
   await expect(scope.getByRole("switch")).toHaveCount(0);
   await expect(
-    scope.getByText("未接入此 Agent", { exact: true }),
+    scope.getByRole("button", { name: `将 ${name} 挂载到 ${otherName}`, exact: true }),
   ).toBeVisible();
-  await overview.getByRole("combobox", { name: "来源筛选" }).click();
-  await page.getByRole("option", { name: "workspace", exact: true }).click();
+  await overview.getByRole("radio", { name: "项目", exact: true }).click();
   await expect(user).toHaveCount(0);
-  await scope.getByRole("button", { name, exact: true }).click();
-  const library = page.getByRole("region", { name: "Skills", exact: true });
+  await scope.getByRole("button", { name: "Overview fixture", exact: true }).click();
+  const library = page.getByRole("region", { name: "技能", exact: true });
   await expect(
     library.getByRole("heading", { name: "Overview fixture", exact: true }),
   ).toBeVisible();
@@ -9225,7 +9878,7 @@ test("Profile shows default Skill sources and disables a Skill by name", async (
   expect(created.ok()).toBeTruthy();
   await page
     .getByRole("button", {
-      name: "打开 " + agentName + " 的 Profile",
+      name: "打开 " + agentName + " 的配置",
       exact: true,
     })
     .click();
@@ -9236,7 +9889,7 @@ test("Profile shows default Skill sources and disables a Skill by name", async (
   );
   await page
     .getByRole("button", {
-      name: "默认 Skills · 用户目录和全部 Scope 目录",
+      name: "默认技能 · 用户目录和全部工作范围目录",
       exact: true,
     })
     .click();
@@ -9244,32 +9897,30 @@ test("Profile shows default Skill sources and disables a Skill by name", async (
     page.getByRole("region", { name: "用户目录", exact: true }),
   ).toContainText(/data[\\/]skills/);
   const scopeSources = page.getByRole("region", {
-    name: "Scope 目录",
+    name: "工作范围目录",
     exact: true,
   });
   await expect(scopeSources).toContainText("scope-" + suffix);
   await expect(scopeSources).toContainText(".claude");
 
-  await page.getByRole("button", { name: "禁用 Skill", exact: true }).click();
-  await page.getByRole("combobox", { name: "搜索 Skills" }).fill(userSkill);
+  const waitProfileSave = () =>
+    page.waitForResponse(
+      (response) =>
+        /\/api\/agents\/[^/]+$/.test(response.url()) &&
+        response.request().method() === "PUT",
+    );
+  await page.getByRole("button", { name: "禁用技能", exact: true }).click();
+  await page.getByRole("combobox", { name: "搜索技能" }).fill(userSkill);
+  const disabledSaved = waitProfileSave();
   await page.getByRole("option", { name: userSkill, exact: true }).click();
   const enable = page.getByRole("button", {
     name: "重新启用 " + userSkill,
     exact: true,
   });
   await expect(enable).toBeVisible();
-  const save = async () => {
-    const saved = page.waitForResponse(
-      (response) =>
-        /\/api\/agents\/[^/]+$/.test(response.url()) &&
-        response.request().method() === "PUT",
-    );
-    await page.getByRole("button", { name: "保存 Agent", exact: true }).click();
-    const response = await saved;
-    expect(response.ok()).toBeTruthy();
-    return (await response.json()) as Agent;
-  };
-  const agent = await save();
+  const disabledResponse = await disabledSaved;
+  expect(disabledResponse.ok()).toBeTruthy();
+  const agent = (await disabledResponse.json()) as Agent;
   expect(agent.profile.disabledSkills).toEqual([userSkill]);
   const suggestions = async () => {
     const response = await page.request.get(
@@ -9283,8 +9934,9 @@ test("Profile shows default Skill sources and disables a Skill by name", async (
   const enabled = await suggestions();
   expect(enabled).toContain(secondSkill);
   expect(enabled).not.toContain(userSkill);
+  const enabledSaved = waitProfileSave();
   await enable.click();
-  await save();
+  expect((await enabledSaved).ok()).toBeTruthy();
   expect(await suggestions()).toContain(userSkill);
 });
 

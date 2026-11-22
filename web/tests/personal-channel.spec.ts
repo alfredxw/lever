@@ -71,6 +71,21 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     ).toBe(true);
     await expect(page.getByText("仅本人可唤起", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "扫码连接" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "保存", exact: true }),
+    ).toHaveCount(0);
+    const waitChannelSave = (
+      match?: (body: Record<string, unknown>) => boolean,
+    ) =>
+      page.waitForResponse((response) => {
+        if (
+          !response.url().endsWith(`/api/plugins/${id}/channel`) ||
+          response.request().method() !== "PUT" ||
+          !response.ok()
+        )
+          return false;
+        return !match || match(response.request().postDataJSON());
+      });
     const picker = page.getByRole("button", { name: "选择 Agent" });
     await picker.click();
     const option = page.getByRole("option").first();
@@ -100,11 +115,15 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     await page.getByLabel("渠道提示词", { exact: true }).fill("先给结论。");
     await page.getByRole("radio", { name: "仅本条和引用" }).click();
     await page.getByRole("radio", { name: "指定会话", exact: true }).click();
+    const savedChatIds = waitChannelSave(
+      (body) =>
+        Array.isArray(body.chatIds) &&
+        body.chatIds.length === 2 &&
+        body.chatIds[0] === "111" &&
+        body.chatIds[1] === "222",
+    );
     await page.getByLabel("会话数字 ID（空格分隔）").fill("111 222");
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "保存", exact: true }),
-    ).toBeDisabled();
+    await savedChatIds;
     const view = await (
       await page.request.get(`/api/plugins/${id}/channel`)
     ).json();
@@ -136,13 +155,18 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     await expect(receipts.getByRole("textbox")).toHaveCount(0);
     await reaction.click();
     await page.getByRole("option", { name: "自定义表情" }).click();
-    const save = page.getByRole("button", { name: "保存", exact: true });
-    await expect(save).toBeDisabled();
+    // Choosing custom reaction with an empty key does not overwrite the saved value.
+    const unchanged = await (
+      await page.request.get(`/api/plugins/${id}/channel`)
+    ).json();
+    expect(unchanged.settings.reaction).toBe("OnIt");
+    const savedCustomEmoji = waitChannelSave(
+      (body) => body.reaction === "YouAreTheBest",
+    );
     await receipts
       .getByLabel("表情标识", { exact: true })
       .fill("YouAreTheBest");
-    await save.click();
-    await expect(save).toBeDisabled();
+    await savedCustomEmoji;
     await reopenSettings();
     await expect(
       page.getByRole("button", { name: "选择模型和运行时" }),
@@ -153,18 +177,18 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     await expect(receipts.getByLabel("表情标识", { exact: true })).toHaveValue(
       "YouAreTheBest",
     );
+    const savedInherit = waitChannelSave();
     await page.getByRole("radio", { name: "跟随 Agent" }).click();
-    await save.click();
-    await expect(save).toBeDisabled();
+    await savedInherit;
     const restored = await (
       await page.request.get(`/api/plugins/${id}/channel`)
     ).json();
     expect(restored.settings.routes[0].selection).toBeUndefined();
     expect(restored.settings.reaction).toBe("YouAreTheBest");
     await reaction.click();
+    const savedCleared = waitChannelSave();
     await page.getByRole("option", { name: "关闭", exact: true }).click();
-    await save.click();
-    await expect(save).toBeDisabled();
+    await savedCleared;
     const cleared = await (
       await page.request.get(`/api/plugins/${id}/channel`)
     ).json();

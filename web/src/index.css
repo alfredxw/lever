@@ -2123,7 +2123,6 @@ button:focus-visible,
   gap: 12px;
   margin-block-start: 8px;
 }
-.agent-create-options-content > :first-child,
 .agent-create-skills > [data-slot="collapsible"] {
   grid-column: 1 / -1;
 }
@@ -2158,12 +2157,6 @@ button:focus-visible,
   border: 0;
   padding: 0;
   text-align: start;
-}
-.agent-create-queue > [data-slot="field-group"] {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-  align-items: end;
-  gap: 12px;
 }
 .agent-create-delegations .profile-delegations {
   gap: 0;
@@ -2211,7 +2204,6 @@ button:focus-visible,
   .agent-create-role textarea {
     flex: 1 0 auto;
   }
-  .agent-create-options-content:not([hidden]),
   .agent-create-skills {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
