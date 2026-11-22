@@ -371,6 +371,13 @@ func TestPiModelsAndNativeResume(t *testing.T) {
 		t.Fatalf("unexpected Pi catalog: %+v", catalog)
 	}
 	reasoner := catalog.Models[1]
+	var policies []string
+	for _, permission := range catalog.Permissions {
+		policies = append(policies, permission.ID)
+	}
+	if catalog.DefaultPermission != "ask" || !slices.Equal(policies, []string{"ask", "accept_edits", "full_access"}) || catalog.Models[0].Fast || !reasoner.Fast {
+		t.Fatal("Pi policy or model-specific Fast did not match the runtime", catalog)
+	}
 	if !catalog.Capabilities.Images || catalog.Models[0].Images == nil || *catalog.Models[0].Images ||
 		reasoner.Images == nil || !*reasoner.Images {
 		t.Fatalf("unexpected Pi image support: %+v", catalog.Models)
@@ -407,6 +414,17 @@ func TestPiModelsAndNativeResume(t *testing.T) {
 		t.Fatal(afterReject)
 	}
 	f.wait(f.send(chat.ID, "main", "", "[pi-disconnect]").ID, "unknown")
+}
+
+func TestPiPolicyCannotSilentlyRunUnsupervised(t *testing.T) {
+	f := newFixture(t)
+	config := model.Provider{PluginID: "lever.pi", ContributionID: "pi", Type: "pi", Name: "No policy", Command: os.Getenv("LEVER_PI_PATH"), Args: []string{"--fixture-skip-policy"}, Enabled: true}
+	f.request("POST", "/providers", config, 200, &config)
+	chat := f.chat(f.agent(config.ID))
+	run := f.wait(f.send(chat.ID, "main", "", "do not send").ID, "failed")
+	if !strings.Contains(run.Error, "no prompt was sent") || len(run.Items) != 0 {
+		t.Fatal(run)
+	}
 }
 
 const providerPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="

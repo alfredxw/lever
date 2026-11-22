@@ -39,6 +39,7 @@ type execution struct {
 	setPermission     func(context.Context, string) error
 	permissionChange  chan struct{}
 	token             string
+	contextToken      string
 	done              chan struct{}
 	steers            chan struct{}
 	dirty             bool
@@ -52,7 +53,7 @@ func (e *execution) providerInput(run model.Run) provider.Input {
 	if run.ChannelPrompt != "" {
 		input.Profile.Instructions += "\n\n" + run.ChannelPrompt
 	}
-	if run.Task != nil && run.Selection.Permission != "read_only" && e.provider.Type != "pi" {
+	if run.Task != nil && run.Selection.Permission != "read_only" {
 		input.Profile.Instructions += "\n\nThis turn is assigned a Lever task. Call complete_current_task if available when you have delivered the original assigned task. Leave it open for progress updates, unrelated follow-ups, outstanding input or work, or a review requested by the user."
 	}
 	for _, file := range run.Attachments {
@@ -394,6 +395,7 @@ func (e *execution) execute() error {
 		}
 		input.MCPURL = e.app.URL + "/mcp"
 		input.MCPToken = e.token
+		input.ContextToken = e.contextToken
 		input.RequireMCP = e.canDelegate() || slices.ContainsFunc(run.References, model.Reference.RequiresMCP)
 		if err == nil && input.Provider.Type == "antigravity" {
 			err = e.app.prepareAntigravitySkillReferences(e.ctx, &input)

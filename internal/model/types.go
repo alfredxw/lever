@@ -264,11 +264,19 @@ type BrowserElement struct {
 }
 
 func (ref Reference) RequiresMCP() bool {
+	return ref.MCPTool() != ""
+}
+
+func (ref Reference) MCPTool() string {
 	switch ref.Kind {
-	case "chat", "topic", "note", "workItem", "noteTask", "externalTask", "automationTask", "agent":
-		return true
+	case "chat", "topic":
+		return "read_chat_context"
+	case "note", "workItem", "noteTask", "externalTask", "automationTask":
+		return "read_reference"
+	case "agent":
+		return "delegate_start"
 	}
-	return false
+	return ""
 }
 
 type Session struct {

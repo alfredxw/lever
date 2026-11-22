@@ -20,6 +20,7 @@ func NormalizeCatalog(config model.Provider, catalog model.Catalog) model.Catalo
 		catalog.Capabilities.DirectoryContext = acpDirectoryContext(catalog.Capabilities)
 		catalog.Capabilities.MCP = true
 	} else {
+		catalog.Capabilities = ConfiguredCapabilities(config)
 		catalog.DefaultPermission = d.defaultPermission
 		catalog.Permissions = make([]model.PermissionInfo, 0, len(d.permissions))
 		catalog.LegacyPermissions = nil
@@ -28,7 +29,7 @@ func NormalizeCatalog(config model.Provider, catalog model.Catalog) model.Catalo
 			if id == "auto_review" {
 				mode = "auto"
 			}
-			option := model.PermissionInfo{ID: id, Mode: mode}
+			option := model.PermissionInfo{ID: id, Mode: mode, NextTurnOnly: config.Type == "pi"}
 			switch id {
 			case "read_only", "dont_ask":
 				catalog.LegacyPermissions = append(catalog.LegacyPermissions, option)
@@ -67,7 +68,7 @@ func ResolveSelection(selection, fallback model.Selection, config model.Provider
 	if !isACP && selection.Effort != "" && !slices.Contains(efforts, selection.Effort) {
 		return selection, errors.New("Unsupported reasoning effort")
 	}
-	if (isACP || config.Type == "pi") && selection.Fast {
+	if isACP && selection.Fast {
 		return selection, errors.New("This runtime does not support Fast mode")
 	}
 	return selection, nil

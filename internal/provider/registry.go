@@ -25,7 +25,7 @@ var nativeCapabilities = model.ProviderCapabilities{Steering: true, Images: true
 var drivers = map[string]driver{
 	"codex":       {definition: model.ProviderType{ID: "codex", Name: "Codex", Arguments: true, ShadowHome: true}, permissions: []string{"ask", "auto_review", "read_only", "full_access"}, defaultPermission: "auto_review", capabilities: nativeCapabilities, run: codex, discover: discoverNative, skills: nativeSkills},
 	"claude":      {definition: model.ProviderType{ID: "claude", Name: "Claude Code", Arguments: true, AutoCompactWindow: true, IdleCompactionModes: []string{"onReturn", "beforeCacheExpires", "off"}}, permissions: []string{"ask", "accept_edits", "auto", "plan", "dont_ask", "full_access"}, defaultPermission: "accept_edits", capabilities: nativeCapabilities, run: claude, discover: discoverNative, skills: nativeSkills},
-	"pi":          {definition: model.ProviderType{ID: "pi", Name: "Pi", Arguments: true}, capabilities: model.ProviderCapabilities{Images: true, Files: true, Resume: true}, run: runPi, discover: discoverPi},
+	"pi":          {definition: model.ProviderType{ID: "pi", Name: "Pi", Arguments: true}, permissions: piPermissions, defaultPermission: "ask", capabilities: model.ProviderCapabilities{Images: true, Files: true, DirectoryContext: true, MCP: true, Resume: true}, run: runPi, discover: discoverPi},
 	"acp":         {definition: model.ProviderType{ID: "acp", Name: "ACP", Arguments: true}, acp: true, run: runACP, discover: discoverACP},
 	"antigravity": {definition: model.ProviderType{ID: "antigravity", Name: "Antigravity", AuthMethods: []string{"oauth-personal", "oauth-business", "gemini-api-key", "agent-platform"}}, acp: true, run: runAntigravity, discover: discoverACP},
 }
@@ -48,6 +48,14 @@ func Capabilities(kind string) model.ProviderCapabilities {
 	return caps
 }
 
+func ConfiguredCapabilities(config model.Provider) model.ProviderCapabilities {
+	caps := Capabilities(config.Type)
+	if config.Type == "pi" && !piAllowsMCP(config.Args) {
+		caps.MCP = false
+	}
+	return caps
+}
+
 func Discover(ctx context.Context, config model.Provider, cwd string) (model.Catalog, error) {
 	d, ok := drivers[config.Type]
 	if !ok {
@@ -57,9 +65,6 @@ func Discover(ctx context.Context, config model.Provider, cwd string) (model.Cat
 	defer cancel()
 	catalog, err := d.discover(ctx, config, cwd)
 	catalog.Provider = config.ID
-	if !d.acp {
-		catalog.Capabilities = d.capabilities
-	}
 	return NormalizeCatalog(config, catalog), err
 }
 

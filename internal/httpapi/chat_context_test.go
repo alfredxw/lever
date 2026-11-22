@@ -158,7 +158,7 @@ func TestPiChatContextThroughHostedLocalCLI(t *testing.T) {
 		f.wait(waiting.ID, "interrupted")
 	})
 	var token string
-	if err := f.a.Store.DB.QueryRow("SELECT json_extract(input,'$.MCPToken') FROM runtime_hosts WHERE run_id=?", waiting.ID).Scan(&token); err != nil || token == "" {
+	if err := f.a.Store.DB.QueryRow("SELECT json_extract(input,'$.ContextToken') FROM runtime_hosts WHERE run_id=?", waiting.ID).Scan(&token); err != nil || token == "" {
 		t.Fatalf("Pi worker did not have an execution capability: %v", err)
 	}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, f.s.URL+"/mcp", nil)

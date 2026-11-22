@@ -42,6 +42,7 @@ type Input struct {
 	Skills                                         SkillPlan
 	Steers                                         <-chan struct{} `json:"-"`
 	RunID, Text, Assets, MCPURL, MCPToken, History string
+	ContextToken                                   string `json:",omitempty"`
 	HistoryContext                                 string
 	RequireMCP                                     bool
 	Recovery                                       *Recovery
@@ -107,6 +108,16 @@ func (in Input) Message() string {
 	return text
 }
 
+func additionalDirectories(scope model.Scope) []string {
+	var paths []string
+	for _, root := range scope.Roots {
+		if root.ID != scope.PrimaryRootID {
+			paths = append(paths, root.Path)
+		}
+	}
+	return paths
+}
+
 func (in Input) skillPath(ref model.Reference) string {
 	for _, source := range in.Skills.Bundled {
 		if ref.Path == filepath.Join(source, "SKILL.md") {
@@ -158,7 +169,7 @@ func Run(ctx context.Context, in Input, sink Sink) error {
 }
 
 func Probe(ctx context.Context, config model.Provider) model.ProviderInfo {
-	p := model.ProviderInfo{Provider: config, Auth: "unknown", Capabilities: Capabilities(config.Type), ReportsUsage: reportsProtocolUsage(config.Type)}
+	p := model.ProviderInfo{Provider: config, Auth: "unknown", Capabilities: ConfiguredCapabilities(config), ReportsUsage: reportsProtocolUsage(config.Type)}
 	p.ConfigPath = ConfigurationDirectory(config)
 	if config.AuthMethod == "gemini-api-key" || config.AuthMethod == "agent-platform" {
 		if file, err := antigravityKeyPath(ctx, config.ID); err == nil {

@@ -1048,7 +1048,11 @@ func (a *App) launchLocked(run model.Run, session model.Session, profile model.P
 func (a *App) newExecution(run model.Run, session model.Session, profile model.Profile, config model.Provider, recovery *provider.Recovery) *execution {
 	runCtx, cancel := context.WithCancel(a.ctx)
 	runtimeCtx, interrupt := context.WithCancelCause(runCtx)
-	return &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
+	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
+	if config.Type == "pi" {
+		execution.contextToken = ID() + ID()
+	}
+	return execution
 }
 func (a *App) trackLocked(e *execution, run func() error) {
 	id, sessionID := e.run.ID, e.session.ID

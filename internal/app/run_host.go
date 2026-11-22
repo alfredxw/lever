@@ -62,6 +62,10 @@ func (a *App) restoreRunHosts() error {
 		}
 		e := a.newExecution(run, session, in.Profile, in.Provider, in.Recovery)
 		e.hosted, e.skills, e.token = true, in.Skills, in.MCPToken
+		e.contextToken = in.ContextToken
+		if in.Provider.Type == "pi" && in.ContextToken == "" {
+			e.contextToken, e.token = in.MCPToken, ""
+		}
 		var permission sql.NullString
 		err = a.Store.DB.QueryRow(`SELECT h.history_bytes,c.id FROM runtime_hosts h LEFT JOIN runtime_commands c
    ON c.run_id=h.run_id AND c.kind='permission' WHERE h.run_id=?`, run.ID).Scan(&e.historyBytes, &permission)

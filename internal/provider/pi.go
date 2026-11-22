@@ -190,7 +190,7 @@ func discoverPi(ctx context.Context, config model.Provider, cwd string) (model.C
 			continue
 		}
 		seen[id] = true
-		entry := model.ModelInfo{ID: id, Name: str(m["name"]), Images: new(piModelImages(m)), Default: id == active, Efforts: piEfforts(m)}
+		entry := model.ModelInfo{ID: id, Name: str(m["name"]), Images: new(piModelImages(m)), Default: id == active, Efforts: piEfforts(m), Fast: piModelFast(m)}
 		if entry.Name == "" {
 			entry.Name = id
 		}
@@ -224,12 +224,6 @@ func piCommands(ctx context.Context, p *device.Process) ([]model.NativeCommand, 
 }
 
 func runPi(ctx context.Context, in Input, sink Sink) error {
-	if len(in.Session.Roots) > 1 {
-		return errors.New("Pi requires a single working directory")
-	}
-	if in.RequireMCP {
-		return errors.New("Pi does not support the Lever MCP connection required by this message")
-	}
 	if len(in.Profile.Skills) > 0 {
 		return errors.New("Pi uses its own skill settings")
 	}
@@ -265,12 +259,34 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 			return err
 		}
 	}
+	cwd := workspace.CWD(in.Session.Scope)
 	args := []string{"--session", native}
 	name, argument := in.command()
-	cliEnv, cliPrompt := piLeverCLI(ctx, in.MCPToken)
+	cliEnv, cliPrompt := piLeverCLI(ctx, in.ContextToken)
+	policy, policyEnv, err := preparePiPolicy(in)
+	if err != nil {
+		return err
+	}
+	if policy != "" {
+		defer os.RemoveAll(policy)
+		args = append(args, "--extension", filepath.Join(policy, "policy.mjs"))
+		cliEnv = append(cliEnv, policyEnv...)
+	}
+	bridge, bridgeEnv, err := preparePiMCP(in)
+	if err != nil {
+		return err
+	}
+	if bridge != "" {
+		defer os.RemoveAll(bridge)
+		args = append(args, "--extension", filepath.Join(bridge, "lever.js"))
+		cliEnv = append(cliEnv, bridgeEnv...)
+	}
 	appendPrompt := cliPrompt
 	if name != "" && in.Profile.Instructions != "" {
 		appendPrompt = strings.TrimSpace(in.Profile.Instructions + "\n\n" + cliPrompt)
+	}
+	if paths := additionalDirectories(in.Session.Scope); len(paths) > 0 {
+		appendPrompt = strings.TrimSpace(appendPrompt + "\n\nAdditional workspace directories (paths only, subject to your existing permissions): " + pretty(paths))
 	}
 	if appendPrompt != "" {
 		args = append(args, "--append-system-prompt", appendPrompt)
@@ -281,7 +297,7 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	if in.Selection.Effort != "" {
 		args = append(args, "--thinking", in.Selection.Effort)
 	}
-	p, err := startPi(path, in.Provider, workspace.CWD(in.Session.Scope), cliEnv, args...)
+	p, err := startPi(path, in.Provider, cwd, cliEnv, args...)
 	if err != nil {
 		return err
 	}
@@ -295,6 +311,19 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	}
 	if filepath.Clean(str(state["sessionFile"])) != filepath.Clean(native) {
 		return errors.New("Pi did not open the intended native session")
+	}
+	if policy != "" {
+		if _, err := os.Stat(filepath.Join(policy, "ready")); err != nil {
+			return errors.New("Pi did not load the requested tool or service-tier policy; no prompt was sent")
+		}
+	}
+	if in.Selection.Fast && !piModelFast(obj(state["model"])) {
+		return errors.New("The selected Pi model does not advertise a Fast service tier")
+	}
+	if in.RequireMCP {
+		if _, err := os.Stat(filepath.Join(bridge, "ready")); err != nil {
+			return errors.New("Pi did not load the Lever tools required by this message")
+		}
 	}
 	if file, err := os.Stat(native); err != nil || file.Size() == 0 {
 		return errors.New("Pi did not initialize the native session file")

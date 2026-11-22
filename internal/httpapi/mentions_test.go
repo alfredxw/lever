@@ -152,7 +152,22 @@ func TestMentionChecksRuntimeCapabilityBeforeAcceptingMessagesAndComparisons(t *
 	owner := f.agent("codex")
 	main := f.wait(f.send(f.chat(owner).ID, "main", "", "original discussion").ID, "completed")
 	refs := []model.Reference{{Kind: "chat", ID: main.SessionID, Name: "Discussion"}}
-	limited := f.piAgent()
+	pi := f.piAgent()
+	var accepted model.Run
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), AgentID: pi.ID, Operation: "main", Text: "Read this", References: refs}, 200, &accepted)
+	f.wait(accepted.ID, "completed")
+	limitedConfig := model.Provider{PluginID: "lever.pi", ContributionID: "pi", Type: "pi", Name: "Pi without tools", Command: "pi", Args: []string{"--no-tools"}, Enabled: true}
+	f.request("POST", "/providers", limitedConfig, 200, &limitedConfig)
+	var catalog model.Catalog
+	f.request("GET", "/providers/"+limitedConfig.ID+"/models", nil, 200, &catalog)
+	if catalog.Capabilities.MCP {
+		t.Fatal("disabled Pi tools advertised MCP")
+	}
+	limited := pi
+	limited.ID = ""
+	limited.Name = "Limited"
+	limited.Profile.Provider = limitedConfig.ID
+	f.request("POST", "/agents", limited, 200, &limited)
 	input := model.SendInput{CommandID: app.ID(), AgentID: limited.ID, Operation: "main", Text: "Read this", References: refs}
 	var rejected map[string]string
 	f.request("POST", "/messages", input, 400, &rejected)
@@ -162,7 +177,7 @@ func TestMentionChecksRuntimeCapabilityBeforeAcceptingMessagesAndComparisons(t *
 	f.request("POST", "/comparisons", model.ComparisonInput{CommandID: app.ID(), AgentID: owner.ID, AgentIDs: []string{owner.ID, limited.ID}, Text: "Compare this", References: refs}, 400, nil)
 	var overview model.Overview
 	f.request("GET", "/overview", nil, 200, &overview)
-	if len(overview.Chats) != 1 || len(overview.Conversations) != 1 {
+	if len(overview.Chats) != 2 || len(overview.Conversations) != 2 {
 		t.Fatal("rejected send created a Chat or Topic")
 	}
 }

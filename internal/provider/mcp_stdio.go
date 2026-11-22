@@ -28,12 +28,18 @@ const (
 // MCPStdioHelper bridges an ACP runtime's baseline stdio MCP transport to
 // Lever's per-execution loopback Streamable HTTP MCP endpoint.
 func MCPStdioHelper() bool {
-	if len(os.Args) != 2 || os.Args[1] != mcpStdioFlag {
+	if len(os.Args) != 2 || (os.Args[1] != mcpStdioFlag && os.Args[1] != piToolFlag) {
 		return false
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := bridgeMCPStdio(ctx, os.Getenv(mcpURLEnv), os.Getenv(mcpTokenEnv), &mcp.StdioTransport{}); err != nil {
+	var err error
+	if os.Args[1] == piToolFlag {
+		err = piMCPTool(ctx, os.Getenv(mcpURLEnv), os.Getenv(mcpTokenEnv), os.Stdin, os.Stdout)
+	} else {
+		err = bridgeMCPStdio(ctx, os.Getenv(mcpURLEnv), os.Getenv(mcpTokenEnv), &mcp.StdioTransport{})
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -101,22 +107,13 @@ func (t *mcpBridgeRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	return t.base.RoundTrip(out)
 }
 
-func bridgeMCPStdio(ctx context.Context, rawURL, token string, local mcp.Transport) error {
+func loopbackMCPTransport(rawURL, token string) (*mcp.StreamableClientTransport, *mcpBridgeRoundTripper, error) {
 	if err := validateLoopbackMCPURL(rawURL); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if token == "" {
-		return errors.New("MCP bridge requires an execution capability token")
+		return nil, nil, errors.New("MCP bridge requires an execution capability token")
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	stdioConn, err := local.Connect(ctx)
-	if err != nil {
-		return err
-	}
-	defer stdioConn.Close()
-
 	rt := &mcpBridgeRoundTripper{
 		base:  &http.Transport{DisableKeepAlives: true},
 		token: token,
@@ -125,12 +122,27 @@ func bridgeMCPStdio(ctx context.Context, rawURL, token string, local mcp.Transpo
 		Transport:     rt,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	httpConn, err := (&mcp.StreamableClientTransport{
+	return &mcp.StreamableClientTransport{
 		Endpoint:             rawURL,
 		HTTPClient:           httpClient,
 		DisableStandaloneSSE: true,
 		MaxRetries:           -1,
-	}).Connect(ctx)
+	}, rt, nil
+}
+
+func bridgeMCPStdio(ctx context.Context, rawURL, token string, local mcp.Transport) error {
+	transport, rt, err := loopbackMCPTransport(rawURL, token)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stdioConn, err := local.Connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer stdioConn.Close()
+	httpConn, err := transport.Connect(ctx)
 	if err != nil {
 		return err
 	}

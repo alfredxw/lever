@@ -52,7 +52,7 @@ func validateMessage(commandID, text string, attachments []string, references []
 
 func (a *App) validateReferences(ctx context.Context, q store.Queryer, references []model.Reference, session model.Session, agent model.Agent, config model.Provider, shareSkills bool) error {
 	if slices.ContainsFunc(references, model.Reference.RequiresMCP) {
-		supported := provider.Capabilities(config.Type).MCP
+		supported := provider.ConfiguredCapabilities(config).MCP
 		key := catalogKey{config.ID, provider.ConfigurationDirectory(config), workspace.CWD(session.Scope)}
 		if entry := a.catalogs[key]; entry != nil && entry.confirmed {
 			supported = entry.value.Capabilities.MCP

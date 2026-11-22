@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 func piFixture() {
 	models := []object{
 		{"provider": "local", "id": "plain", "name": "Plain", "input": []string{"text"}},
-		{"provider": "gateway", "id": "org/reasoner", "name": "Reasoner", "input": []string{"text", "image"}, "reasoning": true, "thinkingLevelMap": object{"minimal": nil, "xhigh": "extra"}},
+		{"provider": "gateway", "id": "org/reasoner", "name": "Reasoner", "input": []string{"text", "image"}, "reasoning": true, "thinkingLevelMap": object{"minimal": nil, "xhigh": "extra"}, "serviceTiers": []object{{"id": "priority"}}},
 	}
 	path, thinking, active := "", "off", models[0]
 	var systemPrompt string
@@ -24,6 +25,17 @@ func piFixture() {
 			break
 		}
 		switch arg {
+		case "--extension":
+			if ready := os.Getenv("LEVER_PI_POLICY_READY"); ready != "" && filepath.Base(os.Args[i+1]) == "policy.mjs" && !slices.Contains(os.Args, "--fixture-skip-policy") {
+				if err := os.WriteFile(ready, []byte("ready"), 0600); err != nil {
+					os.Exit(2)
+				}
+			}
+			if ready := os.Getenv("LEVER_PI_READY"); ready != "" && filepath.Base(os.Args[i+1]) == "lever.js" && os.Getenv("LEVER_MCP_TOKEN") != "" {
+				if err := os.WriteFile(ready, []byte("ready"), 0600); err != nil {
+					os.Exit(2)
+				}
+			}
 		case "--session":
 			path = os.Args[i+1]
 		case "--model":

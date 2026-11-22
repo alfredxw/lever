@@ -456,12 +456,7 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	if len(in.Profile.Skills) > 0 {
 		return errors.New("This ACP runtime does not support Agent skill directories")
 	}
-	var directories []string
-	for _, root := range in.Session.Roots {
-		if root.ID != in.Session.PrimaryRootID {
-			directories = append(directories, root.Path)
-		}
-	}
+	directories := additionalDirectories(in.Session.Scope)
 	var contextDirectories []string
 	if acpDirectoryContext(caps) {
 		contextDirectories, directories = directories, nil

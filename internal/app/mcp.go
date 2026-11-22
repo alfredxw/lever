@@ -9,13 +9,21 @@ import (
 )
 
 func (a *App) activeExecutionByToken(authHeader string) *execution {
+	return a.executionWithToken(authHeader, false)
+}
+
+func (a *App) executionWithToken(authHeader string, tools bool) *execution {
 	if authHeader == "" {
 		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, e := range a.active {
-		if subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+e.token)) == 1 && e.ctx.Err() == nil {
+		token := e.token
+		if !tools && e.contextToken != "" {
+			token = e.contextToken
+		}
+		if token != "" && subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+token)) == 1 && e.ctx.Err() == nil {
 			return e
 		}
 	}
@@ -23,8 +31,8 @@ func (a *App) activeExecutionByToken(authHeader string) *execution {
 }
 
 func (a *App) MCP(w http.ResponseWriter, r *http.Request) {
-	owner := a.activeExecutionByToken(r.Header.Get("Authorization"))
-	if owner == nil || !provider.Capabilities(owner.provider.Type).MCP {
+	owner := a.executionWithToken(r.Header.Get("Authorization"), true)
+	if owner == nil || !provider.ConfiguredCapabilities(owner.provider).MCP {
 		http.Error(w, "Invalid or expired execution capability", http.StatusUnauthorized)
 		return
 	}
