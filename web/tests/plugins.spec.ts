@@ -44,7 +44,9 @@ test("plugin groups share card columns at every panel width and after a search",
       ),
     ).toBe(true);
   };
-  await checkIcons(".plugin-card-open", 24);
+  await checkIcons(".plugin-card-mark", 18);
+  await expect(plugins.locator(".plugin-card-mark").first()).toHaveCSS("width", "32px");
+  await expect(plugins.locator(".plugin-signal-label")).toHaveCount(await cards.count());
   await checkIcons("#plugin-index-groups .sidebar-nav-item", 16);
   const geometry = () =>
     cards.evaluateAll((elements) => {
@@ -65,6 +67,11 @@ test("plugin groups share card columns at every panel width and after a search",
       };
     });
   await expect.poll(geometry).toMatchObject({ columns: 3, aligned: true });
+  const groupEdges = await plugins.locator(".plugins-library .plugins-group").evaluateAll((groups) => groups.map((group) => {
+    const { top, bottom } = group.getBoundingClientRect();
+    return { top, bottom };
+  }));
+  expect(groupEdges.every((edge, index) => !index || edge.top > groupEdges[index - 1].bottom)).toBe(true);
   const full = await geometry();
   const search = plugins.getByRole("searchbox");
   await search.fill("lever.imap-mail");
@@ -124,7 +131,7 @@ test("a runtime plugin opens its connections and can add another native account"
   const mainNav = page.getByRole("navigation", { name: "主导航" });
   await mainNav.getByRole("button", { name: "Agents", exact: true }).click();
   await page
-    .getByRole("button", { name: "打开 Lever 的 Profile", exact: true })
+    .getByRole("button", { name: "打开 Lever 的配置", exact: true })
     .click();
   await page.getByRole("combobox", { name: "运行时", exact: true }).click();
   await expect(
@@ -135,7 +142,7 @@ test("a runtime plugin opens its connections and can add another native account"
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page
-    .getByRole("button", { name: "打开 Lever 的 Chat", exact: true })
+    .getByRole("button", { name: "打开 Lever 的对话", exact: true })
     .click();
   const pickerButton = page.getByRole("button", {
     name: "选择模型和运行时",
@@ -163,11 +170,27 @@ test("a runtime plugin opens its connections and can add another native account"
   await expect(
     configuration.getByLabel("配置目录", { exact: true }),
   ).toBeVisible();
-  await configuration.getByLabel("连接名称").fill("工作账户");
-  await details.getByRole("button", { name: "保存", exact: true }).click();
+  const connectionNameInput = configuration.getByLabel("连接名称");
+  await connectionNameInput.fill("工作账户");
+  await expect(
+    details.getByRole("button", { name: "保存", exact: true }),
+  ).toHaveCount(0);
   await expect(
     connections.getByRole("button", { name: /Codex · 工作账户/ }),
   ).toHaveAttribute("aria-pressed", "true");
+  await expect(connectionNameInput).toBeFocused();
+  // Changing launch identity switches to explicit Save as new connection (no auto-save).
+  const executableInput = configuration.getByLabel("可执行文件");
+  const originalExecutable = await executableInput.inputValue();
+  await executableInput.fill("/custom/codex-bin");
+  await expect(
+    details.getByRole("button", { name: "另存为新连接", exact: true }),
+  ).toBeVisible();
+  await details.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(executableInput).toHaveValue(originalExecutable);
+  await expect(
+    details.getByRole("button", { name: "另存为新连接", exact: true }),
+  ).toHaveCount(0);
   await details.getByRole("button", { name: "移除", exact: true }).click();
   await details.getByRole("button", { name: "确认移除", exact: true }).click();
   await expect(
@@ -349,14 +372,14 @@ test("plugin index switches between groups and restores the overview search, pos
     ).toBeVisible();
   }
   await search.fill("lever.");
-  const mail = library.getByRole("group", { name: "IMAP Mail", exact: true });
+  const mail = library.getByRole("group", { name: "IMAP 邮件", exact: true });
   await mail.scrollIntoViewIfNeeded();
   const scroll = plugins.locator(".plugins-scroll");
   const top = await scroll.evaluate((el) => el.scrollTop);
   expect(top).toBeGreaterThan(0);
   await mail.click({ position: { x: 16, y: 34 } });
   await expect(
-    plugins.getByRole("heading", { name: "IMAP Mail", exact: true }),
+    plugins.getByRole("heading", { name: "IMAP 邮件", exact: true }),
   ).toBeFocused();
   await nav.getByRole("button", { name: "Claude Code", exact: true }).click();
   await expect(
@@ -379,9 +402,9 @@ test("plugin index switches between groups and restores the overview search, pos
   ).toBeVisible();
   await search.press("Enter");
   await expect(
-    nav.getByRole("button", { name: "Lark Bot", exact: true }),
+    nav.getByRole("button", { name: "飞书机器人", exact: true }),
   ).toHaveAttribute("aria-current", "page");
-  await nav.getByRole("button", { name: "总览", exact: true }).click();
+  await nav.getByRole("button", { name: "全部插件总览", exact: true }).click();
   await expect(search).toHaveValue("lever.");
   await expect(mail.getByRole("button")).toBeFocused();
   await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBe(top);
@@ -400,20 +423,20 @@ test("compact plugin index supports keyboard selection and the card switch opera
   await search.fill("Lark");
   await search.press("ArrowDown");
   await expect(
-    nav.getByRole("button", { name: "Lark Todos", exact: true }),
+    nav.getByRole("button", { name: "飞书待办", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(
-    plugins.getByRole("heading", { name: "Lark Bot", exact: true }),
+    plugins.getByRole("heading", { name: "飞书机器人", exact: true }),
   ).toBeVisible();
   await expect(nav).toHaveCount(0);
   await plugins.getByRole("button", { name: "返回总览" }).click();
   await expect(
-    plugins.getByRole("group", { name: "Lark Todos", exact: true }),
+    plugins.getByRole("group", { name: "飞书待办", exact: true }),
   ).toBeVisible();
   const enable = plugins.getByRole("switch", {
-    name: "启用插件 Lark Todos",
+    name: "启用插件 飞书待办",
     exact: true,
   });
   const initial = await enable.isChecked();

@@ -586,15 +586,55 @@ export interface Skill {
   id: string;
   path: string;
   name: string;
+  title?: string;
   description: string;
   managed: boolean;
   available: boolean;
   agentIds: string[];
   origin?: SkillOrigin;
+  subscriptionId?: string;
+  subscriptionName?: string;
+  updateAvailable?: boolean;
+  localModified?: boolean;
+  fileCount?: number /* int */;
+}
+export interface UpdateSettings {
+  mode: 'auto' | 'notify' | 'manual';
+  interval: '1h' | '6h' | '24h';
+}
+export interface SkillSubscription {
+  id: string;
+  name: string;
+  source: PluginGitSource;
+  commit: string;
+  tree: string;
+  updatePolicy: 'inherit' | 'auto' | 'notify' | 'manual';
+  lastCheckedAt?: string;
+  lastSyncedAt?: string;
+  available?: boolean;
+  availableCommit?: string;
+  error?: string;
+  skillCount: number /* int */;
+  modifiedCount?: number /* int */;
+}
+export interface SkillSubscriptionInput {
+  name?: string;
+  url: string;
+  path?: string;
+  ref?: string;
+  updatePolicy?: 'inherit' | 'auto' | 'notify' | 'manual';
+}
+export interface SkillSubscriptionSyncResult {
+  subscription: SkillSubscription;
+  added: number /* int */;
+  updated: number /* int */;
+  removed: number /* int */;
+  skippedModified: number /* int */;
 }
 export interface SkillOrigin {
   directory: string;
   scopePath?: string;
+  providers?: string[];
 }
 export interface SkillSource {
   path: string;
@@ -1177,6 +1217,7 @@ export interface Plugin {
   revision?: number /* int64 */;
   current?: PluginRelease;
   previous?: PluginRelease;
+  updatePolicy?: 'inherit' | 'auto' | 'notify' | 'manual';
 }
 /**
  * Ref is the resolved branch or tag name, or a full commit for a pinned revision.

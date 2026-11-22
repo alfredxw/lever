@@ -124,23 +124,28 @@ function ProviderEntry({
 }
 
 export function SettingsProviders({
-  providerId,
+  providerId: controlledProviderId,
   pluginId,
   target,
-  onSelect,
+  onSelect: onSelectProp,
   onShowAll,
   onOpenPlugin,
   visible,
+  embedded = false,
 }: {
   providerId?: string;
   pluginId?: string;
   target?: { id?: string; pluginId?: string };
-  onSelect: (id: string) => void;
-  onShowAll: () => void;
-  onOpenPlugin: (id?: string) => void;
+  onSelect?: (id: string) => void;
+  onShowAll?: () => void;
+  onOpenPlugin?: (id?: string) => void;
   visible: boolean;
+  embedded?: boolean;
 }) {
   const { t } = useTranslation();
+  const [internalProviderId, setInternalProviderId] = useState("");
+  const providerId = controlledProviderId ?? internalProviderId;
+  const onSelect = onSelectProp ?? setInternalProviderId;
   const indexTitle = useId();
   const detail = useRef<HTMLElement>(null);
   const list = useRef<HTMLElement>(null);
@@ -307,8 +312,10 @@ export function SettingsProviders({
   }
 
   function saved(provider: Provider, signIn = false) {
-    if (pluginId && pluginId !== provider.pluginId) onShowAll();
-    void refreshConnections();
+    if (pluginId && pluginId !== provider.pluginId) onShowAll?.();
+    void queryClient
+      .cancelQueries({ queryKey: providersQuery.queryKey })
+      .then(() => refreshConnections());
     showProvider(provider.id);
     if (signIn) login.open(provider);
   }
@@ -370,6 +377,7 @@ export function SettingsProviders({
       choice: choice.key,
       fromPicker: true,
       customExecutable:
+        !!providers.data &&
         availableStatus(choice) === "settings.notInstalled" &&
         !byType(choice.key).some((provider) => provider.installed),
     });
@@ -407,6 +415,316 @@ export function SettingsProviders({
       ),
   );
 
+  const detailContent = (
+    <>
+      {!embedded && (
+        <Button
+          ref={compactBack}
+          size="sm"
+          variant="ghost"
+          className="provider-compact-back"
+          onClick={showList}
+        >
+          <ArrowLeft data-icon="inline-start" />
+          {t("settings.providers")}
+        </Button>
+      )}
+      {(useLocal.error || managed.error) && (
+        <ErrorNotice error={useLocal.error ?? managed.error!} />
+      )}
+      {editor ? (
+        assignable?.plugin.enabled ? (
+          <>
+            {editor.fromPicker && types.length > 1 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="self-start"
+                onClick={() => openEditor({})}
+              >
+                <ArrowLeft data-icon="inline-start" />
+                {t("providers.chooseType")}
+              </Button>
+            )}
+            <ProviderHeading
+              title={t("providers.addNamed", {
+                name: assignable.item.name,
+              })}
+              runtime={runtimeFor(assignable)}
+              embedded={embedded}
+            />
+            <ProviderForm
+              key={assignable.key + !!editor.customExecutable}
+              plugin={assignable.plugin}
+              item={assignable.item}
+              defaultName={
+                editorInstances.length
+                  ? t("providers.newInstanceName", {
+                      name: assignable.item.name,
+                    })
+                  : assignable.item.name
+              }
+              customExecutable={editor.customExecutable}
+              localAction={
+                local ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => showProvider(local.id)}
+                  >
+                    {t("connections.useLocalDefault")}
+                  </Button>
+                ) : (
+                  useLocalButton(assignable)
+                )
+              }
+              onSaved={saved}
+              onClose={showList}
+            />
+          </>
+        ) : (
+          <>
+            <ProviderHeading title={t("providers.add")} embedded={embedded}>
+              <Button variant="ghost" size="sm" onClick={showList}>
+                {t("common.cancel")}
+              </Button>
+            </ProviderHeading>
+            <div className="provider-type-picker panel-surface">
+              {types.map((choice) => {
+                const count = byType(choice.key).length;
+                return (
+                  <ProviderEntry
+                    key={choice.key}
+                    runtime={runtimeFor(choice)}
+                    name={choice.item.name}
+                    description={t(
+                      !choice.plugin.enabled
+                        ? "plugins.off"
+                        : count
+                          ? "providers.instanceCount"
+                          : availableStatus(choice) === "settings.notInstalled"
+                            ? "settings.notInstalled"
+                            : typeSource(choice),
+                      { count },
+                    )}
+                    onClick={() => addType(choice)}
+                  />
+                );
+              })}
+            </div>
+          </>
+        )
+      ) : selected ? (
+        <ProviderDetails
+          key={selected.id}
+          provider={selected}
+          plugin={owner}
+          name={connectionName(selected, rows, t)}
+          catalog={catalog}
+          visible={visible}
+          embedded={embedded}
+          detecting={detectionPending}
+          onDetect={() => {
+            detect();
+            refresh();
+          }}
+          onRefreshModels={refresh}
+          onLogin={() => login.open(selected)}
+          onSpecifyExecutable={
+            owner?.builtin &&
+            types.some(({ key }) => key === contributionKey(selected))
+              ? () =>
+                  openEditor({
+                    choice: contributionKey(selected),
+                    customExecutable: true,
+                  })
+              : undefined
+          }
+          onUseManaged={useManaged}
+          addingManaged={managed.isPending}
+          onSaved={saved}
+          onRemove={() => {
+            onSelect("");
+            setTypeKey(undefined);
+          }}
+          onOpenPlugin={
+            onOpenPlugin ? () => onOpenPlugin(selected.pluginId) : undefined
+          }
+        />
+      ) : type ? (
+        <>
+          <ProviderHeading
+            title={type.item.name}
+            runtime={runtimeFor(type)}
+            description={t(typeSource(type))}
+            embedded={embedded}
+          />
+          <ProviderConnection
+            status={{
+              label: typeStatus ?? "plugins.status.checking",
+              tone: "muted",
+            }}
+            description={
+              found.get(type.key)?.configPath || found.get(type.key)?.path
+            }
+          >
+            {type.plugin.enabled ? (
+              <>
+                {useLocalButton(type)}
+                {installationGuides[type.plugin.id] && !found.has(type.key) && (
+                  <InstallGuide url={installationGuides[type.plugin.id]} />
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    openEditor({
+                      choice: type.key,
+                      customExecutable:
+                        type.plugin.builtin && !isCustomACP(type),
+                    })
+                  }
+                >
+                  {t(
+                    type.plugin.builtin && !isCustomACP(type)
+                      ? "providers.source.custom"
+                      : "providers.add",
+                  )}
+                </Button>
+                {type.plugin.id === "lever.antigravity" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={managed.isPending}
+                    onClick={useManaged}
+                  >
+                    {t("providers.useManagedAntigravity")}
+                  </Button>
+                )}
+              </>
+            ) : !embedded && onOpenPlugin ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onOpenPlugin(type.plugin.id)}
+              >
+                {t("connections.viewPlugin")}
+              </Button>
+            ) : null}
+          </ProviderConnection>
+        </>
+      ) : providers.isPending || pendingSelection || plugins.isPending ? (
+        <>
+          <Skeleton className="h-11 w-44" />
+          <Skeleton className="h-16" />
+          <Skeleton className="h-28" />
+        </>
+      ) : (
+        <ProviderHeading title={t("connections.empty")} embedded={embedded} />
+      )}
+    </>
+  );
+
+  if (embedded) {
+    const canAddDirect = types.length === 1 && types[0].plugin.enabled;
+    return (
+      <div className="provider-embedded" ref={detail as never}>
+        {connectionError && (
+          <ErrorNotice error={connectionError} retry={detect} />
+        )}
+        <div className="provider-inst-heading">
+          <h3>
+            {t("connections.instances")} <span>{rows.length}</span>
+          </h3>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label={t("settings.detect")}
+            title={t("settings.detect")}
+            disabled={detectionPending}
+            onClick={detect}
+          >
+            <RefreshCw
+              className={detectionPending ? "animate-spin" : undefined}
+            />
+            {t("settings.detect")}
+          </Button>
+          {types.some((c) => c.plugin.enabled) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!plugins.data}
+              onClick={(event) =>
+                canAddDirect ? addType(types[0]) : openEditor({}, event)
+              }
+            >
+              <Plus data-icon="inline-start" />
+              {t("connections.add")}
+            </Button>
+          )}
+        </div>
+        <div className="provider-inst-bar">
+          {rows.map((p) => {
+            const model =
+              p.id === selected?.id
+                ? catalog.data
+                : queryClient.getQueryData(modelsQuery(p.id).queryKey);
+            const status = providerStatus(
+              p,
+              model,
+              p.id === selected?.id && catalog.isError,
+            );
+            const name = connectionName(p, rows, t);
+            return (
+              <Button
+                key={p.id}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="provider-inst-chip"
+                aria-pressed={!editor && selected?.id === p.id}
+                onClick={(event) => showProvider(p.id, event.currentTarget)}
+              >
+                <span
+                  className="provider-status-dot"
+                  data-tone={status.tone}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{name}</span>
+              </Button>
+            );
+          })}
+          {unconnected.map((choice) => (
+            <Button
+              key={choice.key}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="provider-inst-chip"
+              aria-pressed={
+                type?.key === choice.key &&
+                (!editor || editor.choice === choice.key)
+              }
+              onClick={(event) => selectType(choice, event.currentTarget)}
+            >
+              <span
+                className="provider-status-dot"
+                data-tone={found.has(choice.key) ? "detected" : "muted"}
+                aria-hidden="true"
+              />
+              <span className="truncate">{choice.item.name}</span>
+            </Button>
+          ))}
+        </div>
+        <div className="provider-embedded-body">{detailContent}</div>
+        {login.dialog}
+      </div>
+    );
+  }
+
   return (
     <div className="provider-workspace" data-detail={detailOpen}>
       <section className="provider-index" aria-labelledby={indexTitle}>
@@ -442,7 +760,7 @@ export function SettingsProviders({
           aria-label={t("connections.mine")}
           ref={list}
         >
-          {scope && (
+          {scope && onShowAll && (
             <Button
               className="provider-filter"
               size="sm"
@@ -555,211 +873,7 @@ export function SettingsProviders({
         aria-label={t("connections.details")}
         ref={detail}
       >
-        <div className="provider-detail-body">
-          <Button
-            ref={compactBack}
-            size="sm"
-            variant="ghost"
-            className="provider-compact-back"
-            onClick={showList}
-          >
-            <ArrowLeft data-icon="inline-start" />
-            {t("settings.providers")}
-          </Button>
-          {(useLocal.error || managed.error) && (
-            <ErrorNotice error={useLocal.error ?? managed.error!} />
-          )}
-          {editor ? (
-            assignable?.plugin.enabled ? (
-              <>
-                {editor.fromPicker && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="self-start"
-                    onClick={() => openEditor({})}
-                  >
-                    <ArrowLeft data-icon="inline-start" />
-                    {t("providers.chooseType")}
-                  </Button>
-                )}
-                <ProviderHeading
-                  title={t("providers.addNamed", {
-                    name: assignable.item.name,
-                  })}
-                  runtime={runtimeFor(assignable)}
-                />
-                <ProviderForm
-                  key={assignable.key + !!editor.customExecutable}
-                  plugin={assignable.plugin}
-                  item={assignable.item}
-                  defaultName={
-                    editorInstances.length
-                      ? t("providers.newInstanceName", {
-                          name: assignable.item.name,
-                        })
-                      : assignable.item.name
-                  }
-                  customExecutable={editor.customExecutable}
-                  localAction={
-                    local ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => showProvider(local.id)}
-                      >
-                        {t("connections.useLocalDefault")}
-                      </Button>
-                    ) : (
-                      useLocalButton(assignable)
-                    )
-                  }
-                  onSaved={saved}
-                  onClose={showList}
-                />
-              </>
-            ) : (
-              <>
-                <ProviderHeading title={t("providers.add")}>
-                  <Button variant="ghost" size="sm" onClick={showList}>
-                    {t("common.cancel")}
-                  </Button>
-                </ProviderHeading>
-                <div className="provider-type-picker panel-surface">
-                  {types.map((choice) => {
-                    const count = byType(choice.key).length;
-                    return (
-                      <ProviderEntry
-                        key={choice.key}
-                        runtime={runtimeFor(choice)}
-                        name={choice.item.name}
-                        description={t(
-                          !choice.plugin.enabled
-                            ? "plugins.off"
-                            : count
-                              ? "providers.instanceCount"
-                              : availableStatus(choice) ===
-                                  "settings.notInstalled"
-                                ? "settings.notInstalled"
-                                : typeSource(choice),
-                          { count },
-                        )}
-                        onClick={() => addType(choice)}
-                      />
-                    );
-                  })}
-                </div>
-              </>
-            )
-          ) : selected ? (
-            <ProviderDetails
-              key={selected.id}
-              provider={selected}
-              plugin={owner}
-              name={connectionName(selected, rows, t)}
-              catalog={catalog}
-              visible={visible}
-              detecting={detectionPending}
-              onDetect={() => {
-                detect();
-                refresh();
-              }}
-              onRefreshModels={refresh}
-              onLogin={() => login.open(selected)}
-              onSpecifyExecutable={
-                owner?.builtin &&
-                types.some(({ key }) => key === contributionKey(selected))
-                  ? () =>
-                      openEditor({
-                        choice: contributionKey(selected),
-                        customExecutable: true,
-                      })
-                  : undefined
-              }
-              onUseManaged={useManaged}
-              addingManaged={managed.isPending}
-              onSaved={saved}
-              onRemove={() => {
-                onSelect("");
-                setTypeKey(undefined);
-              }}
-              onOpenPlugin={() => onOpenPlugin(selected.pluginId)}
-            />
-          ) : type ? (
-            <>
-              <ProviderHeading
-                title={type.item.name}
-                runtime={runtimeFor(type)}
-                description={t(typeSource(type))}
-              />
-              <ProviderConnection
-                status={{
-                  label: typeStatus ?? "plugins.status.checking",
-                  tone: "muted",
-                }}
-                description={
-                  found.get(type.key)?.configPath || found.get(type.key)?.path
-                }
-              >
-                {type.plugin.enabled ? (
-                  <>
-                    {useLocalButton(type)}
-                    {installationGuides[type.plugin.id] &&
-                      !found.has(type.key) && (
-                        <InstallGuide
-                          url={installationGuides[type.plugin.id]}
-                        />
-                      )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        openEditor({
-                          choice: type.key,
-                          customExecutable:
-                            type.plugin.builtin && !isCustomACP(type),
-                        })
-                      }
-                    >
-                      {t(
-                        type.plugin.builtin && !isCustomACP(type)
-                          ? "providers.source.custom"
-                          : "providers.add",
-                      )}
-                    </Button>
-                    {type.plugin.id === "lever.antigravity" && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={managed.isPending}
-                        onClick={useManaged}
-                      >
-                        {t("providers.useManagedAntigravity")}
-                      </Button>
-                    )}
-                  </>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onOpenPlugin(type.plugin.id)}
-                  >
-                    {t("connections.viewPlugin")}
-                  </Button>
-                )}
-              </ProviderConnection>
-            </>
-          ) : providers.isPending || pendingSelection || plugins.isPending ? (
-            <>
-              <Skeleton className="h-11 w-44" />
-              <Skeleton className="h-16" />
-              <Skeleton className="h-28" />
-            </>
-          ) : (
-            <ProviderHeading title={t("connections.empty")} />
-          )}
-        </div>
+        <div className="provider-detail-body">{detailContent}</div>
       </section>
       {login.dialog}
     </div>

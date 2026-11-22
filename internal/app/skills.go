@@ -40,9 +40,33 @@ func normalizeDisabledSkills(names []string) ([]string, error) {
 }
 
 func (a *App) SaveAgentDisabledSkills(ctx context.Context, id, version string, names []string) (model.Agent, error) {
-	names, err := normalizeDisabledSkills(names)
-	if err != nil {
-		return model.Agent{}, err
+	return a.SaveAgentSkillPreferences(ctx, id, version, &names, "", "")
+}
+
+// SaveAgentSkillPreferences updates an Agent's disabledSkills list and/or
+// attaches or detaches an additional skill directory path atomically.
+func (a *App) SaveAgentSkillPreferences(ctx context.Context, id, version string, disabledNames *[]string, attachPath, detachPath string) (model.Agent, error) {
+	var names []string
+	var err error
+	if disabledNames != nil {
+		names, err = normalizeDisabledSkills(*disabledNames)
+		if err != nil {
+			return model.Agent{}, err
+		}
+	}
+	attachPath = strings.TrimSpace(attachPath)
+	detachPath = strings.TrimSpace(detachPath)
+	if attachPath != "" {
+		canonical, err := workspace.Canonical(attachPath)
+		if err != nil || !skillDirectoryAvailable(canonical) {
+			return model.Agent{}, invalid("Choose a directory containing a regular SKILL.md file")
+		}
+		attachPath = canonical
+	}
+	if detachPath != "" {
+		if canonical, err := workspace.Canonical(detachPath); err == nil {
+			detachPath = canonical
+		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -62,13 +86,33 @@ func (a *App) SaveAgentDisabledSkills(ctx context.Context, id, version string, n
 		if err != nil {
 			return err
 		}
-		if !provider.Capabilities(config.Type).Skills {
+		if !provider.ConfiguredCapabilities(config).Skills {
 			return invalid("This runtime does not support Agent skill directories")
 		}
-		if slices.Equal(agent.Profile.DisabledSkills, names) {
+		changed := false
+		if disabledNames != nil && !slices.Equal(agent.Profile.DisabledSkills, names) {
+			agent.Profile.DisabledSkills = names
+			changed = true
+		}
+		if attachPath != "" && !slices.Contains(agent.Profile.Skills, attachPath) {
+			if slices.ContainsFunc(agent.Profile.Skills, func(path string) bool {
+				return path != detachPath && filepath.Base(path) == filepath.Base(attachPath)
+			}) {
+				return invalid("Skill directory names must be unique")
+			}
+			agent.Profile.Skills = append(agent.Profile.Skills, attachPath)
+			changed = true
+		}
+		if detachPath != "" {
+			next := slices.DeleteFunc(slices.Clone(agent.Profile.Skills), func(p string) bool { return p == detachPath })
+			if len(next) != len(agent.Profile.Skills) {
+				agent.Profile.Skills = next
+				changed = true
+			}
+		}
+		if !changed {
 			return nil
 		}
-		agent.Profile.DisabledSkills = names
 		agent.UpdatedAt = now()
 		if _, err := tx.ExecContext(ctx, "UPDATE agents SET data=? WHERE id=?", store.JSON(agent), agent.ID); err != nil {
 			return err
@@ -155,16 +199,39 @@ ORDER BY 1`)
 	if err != nil {
 		return nil, err
 	}
-	configs, err := store.List[model.Provider](ctx, a.Store.DB, `
-SELECT data FROM providers
-WHERE json_extract(data, '$.type') IN ('codex', 'claude') AND json_extract(data, '$.configDir') != ''
-ORDER BY id`)
+	return a.librarySkillDirectories(ctx, model.Scope{Roots: roots})
+}
+
+func (a *App) librarySkillDirectories(ctx context.Context, scope model.Scope) ([]skillDirectory, error) {
+	configs, err := store.List[model.Provider](ctx, a.Store.DB, "SELECT data FROM providers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	// Include the inherited user directories as well as configured runtime accounts.
-	dirs, err := a.skillDirectoriesForScope(model.Scope{Roots: roots}, append([]model.Provider{{}}, configs...)...)
-	return slices.DeleteFunc(dirs, func(dir skillDirectory) bool { return dir.managed }), err
+	var dirs []skillDirectory
+	indexes := map[string]int{}
+	for _, config := range append([]model.Provider{{}}, configs...) {
+		sources, err := a.skillDirectoriesForScope(ctx, scope, config)
+		if err != nil {
+			return nil, err
+		}
+		for _, source := range sources {
+			if source.managed || source.subscription {
+				continue
+			}
+			index, ok := indexes[source.path]
+			if !ok {
+				index = len(dirs)
+				indexes[source.path] = index
+				dirs = append(dirs, source)
+			}
+			dirs[index].packageOnly = dirs[index].packageOnly && source.packageOnly
+			if config.ID != "" {
+				dirs[index].providers = append(dirs[index].providers, config.ID)
+			}
+		}
+	}
+	return dirs, ctx.Err()
 }
 
 func skillDirectoryAvailable(path string) bool {
@@ -178,49 +245,67 @@ func skillDirectoryAvailable(path string) bool {
 	return err == nil && entry.Mode().IsRegular()
 }
 
-func skillMetadata(dir string) (name, description string) {
+func skillMetadata(dir string) (name, description, title string) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer root.Close()
 	file, err := root.Open(model.SkillEntry)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer file.Close()
 	lines := bufio.NewScanner(io.LimitReader(file, 64<<10))
-	if !lines.Scan() || strings.TrimRight(strings.TrimPrefix(lines.Text(), "\uFEFF"), " \t") != "---" {
-		return "", ""
+	if !lines.Scan() {
+		return "", "", ""
+	}
+	line := strings.TrimPrefix(lines.Text(), "\uFEFF")
+	if strings.TrimRight(line, " \t") != "---" {
+		return "", "", skillDocumentTitle(line, lines)
 	}
 	var header strings.Builder
 	for lines.Scan() {
-		if line := strings.TrimRight(lines.Text(), " \t"); line == "---" || line == "..." {
-			var fields struct {
-				Name        string `yaml:"name"`
-				Description string `yaml:"description"`
-			}
+		line = strings.TrimRight(lines.Text(), " \t")
+		if line == "---" || line == "..." {
+			var fields struct{ Name, Description string }
 			if yaml.Unmarshal([]byte(header.String()), &fields) == nil {
-				return strings.TrimSpace(fields.Name), strings.TrimSpace(fields.Description)
+				name, description = strings.TrimSpace(fields.Name), strings.TrimSpace(fields.Description)
 			}
-			return "", ""
+			return name, description, skillDocumentTitle("", lines)
 		}
 		header.WriteString(lines.Text())
 		header.WriteByte('\n')
 	}
-	return "", ""
+	return "", "", ""
 }
 
-func describeSkill(skill model.Skill) model.Skill {
-	skill.Available = skillDirectoryAvailable(skill.Path)
-	if !skill.Available {
-		return skill
+func skillDocumentTitle(line string, lines *bufio.Scanner) string {
+	for strings.TrimSpace(line) == "" && lines.Scan() {
+		line = lines.Text()
 	}
-	name, description := skillMetadata(skill.Path)
+	if heading, ok := strings.CutPrefix(line, "# "); ok {
+		return strings.TrimSpace(heading)
+	}
+	return ""
+}
+
+func withSkillMetadata(skill model.Skill) model.Skill {
+	name, description, title := skillMetadata(skill.Path)
 	if name != "" {
 		skill.Name = name
 	}
 	skill.Description = description
+	skill.Title = title
+	return skill
+}
+
+func describeSkill(skill model.Skill) model.Skill {
+	skill.Available = skillDirectoryAvailable(skill.Path)
+	if skill.Available {
+		skill = withSkillMetadata(skill)
+		skill.FileCount = countSkillFiles(skill.Path)
+	}
 	return skill
 }
 
@@ -229,18 +314,41 @@ func (a *App) Skills(ctx context.Context) ([]model.Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	dirs, err := a.discoveredSkillDirectories(ctx)
+	subDirs, subMeta, err := a.subscribedSkillDirectories(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, dir := range dirs {
-		origin := &model.SkillOrigin{Directory: dir.path, ScopePath: dir.root.Path}
+	for _, dir := range subDirs {
+		origin := &model.SkillOrigin{Directory: dir.path}
 		for path := range dir.packages(ctx) {
 			skill := skillAt(path, false)
 			if existing, ok := entries[skill.ID]; ok {
 				skill = existing
 			}
-			if !skill.Managed && skill.Origin == nil {
+			if meta, ok := subMeta[path]; ok {
+				skill.SubscriptionID = meta.subID
+				skill.SubscriptionName = meta.subName
+				skill.LocalModified = meta.localModified
+				skill.UpdateAvailable = meta.updateAvailable
+			}
+			if skill.Origin == nil {
+				skill.Origin = origin
+			}
+			entries[skill.ID] = skill
+		}
+	}
+	dirs, err := a.discoveredSkillDirectories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range dirs {
+		origin := &model.SkillOrigin{Directory: dir.path, ScopePath: dir.root.Path, Providers: dir.providers}
+		for path := range dir.packages(ctx) {
+			skill := skillAt(path, false)
+			if existing, ok := entries[skill.ID]; ok {
+				skill = existing
+			}
+			if !skill.Managed && skill.SubscriptionID == "" && skill.Origin == nil {
 				skill.Origin = origin
 				entries[skill.ID] = skill
 			}
@@ -266,6 +374,10 @@ func (a *App) Skills(ctx context.Context) ([]model.Skill, error) {
 }
 
 func (a *App) CreateSkill(name string) (model.Skill, error) {
+	return a.CreateSkillWithOptions(name, "", "blank")
+}
+
+func (a *App) CreateSkillWithOptions(name, description, template string) (model.Skill, error) {
 	name = strings.TrimSpace(name)
 	if len(name) > 64 || !skillName.MatchString(name) || !filepath.IsLocal(name) {
 		return model.Skill{}, invalid("Use up to 64 lowercase letters, digits and hyphens for the skill name")
@@ -282,8 +394,25 @@ func (a *App) CreateSkill(name string) (model.Skill, error) {
 		return model.Skill{}, err
 	}
 	defer os.RemoveAll(stage)
-	description := "Use this skill for " + strings.ReplaceAll(name, "-", " ") + "."
-	content := fmt.Sprintf("---\nname: %q\ndescription: %q\n---\n\n# %s\n", name, description, name)
+	description = strings.TrimSpace(description)
+	if description == "" {
+		description = "Use this skill for " + strings.ReplaceAll(name, "-", " ") + "."
+	}
+	var content string
+	switch strings.TrimSpace(template) {
+	case "review":
+		content = fmt.Sprintf("---\nname: %q\ndescription: %q\n---\n\n# %s\n\n## Checklist\n\n- Verify core invariants and edge cases.\n- Check compatibility across all supported runtimes.\n- Flag risks with concrete reproduction steps.\n", name, description, name)
+	case "script":
+		content = fmt.Sprintf("---\nname: %q\ndescription: %q\n---\n\n# %s\n\nRun `scripts/run.sh` when executing this workflow.\n", name, description, name)
+		if err := os.MkdirAll(filepath.Join(stage, "scripts"), 0700); err != nil {
+			return model.Skill{}, err
+		}
+		if err := workspace.CreateText(filepath.Join(stage, "scripts"), "run.sh", "#!/usr/bin/env bash\nset -euo pipefail\necho \"Running "+name+"\"\n"); err != nil {
+			return model.Skill{}, err
+		}
+	default:
+		content = fmt.Sprintf("---\nname: %q\ndescription: %q\n---\n\n# %s\n", name, description, name)
+	}
 	if err := workspace.CreateText(stage, model.SkillEntry, content); err != nil {
 		return model.Skill{}, err
 	}
@@ -293,8 +422,7 @@ func (a *App) CreateSkill(name string) (model.Skill, error) {
 		}
 		return model.Skill{}, err
 	}
-	skill := skillAt(filepath.Join(dir, name), true)
-	skill.Available, skill.Description = true, description
+	skill := describeSkill(skillAt(filepath.Join(dir, name), true))
 	return skill, nil
 }
 
@@ -419,17 +547,31 @@ func (a *App) skillByID(ctx context.Context, id string, source SkillReferenceSco
 	}
 	skill, known := entries[id]
 	if !known {
+		if subDirs, subMeta, subErr := a.subscribedSkillDirectories(ctx); subErr == nil {
+			if found := findSkillDirectory(ctx, subDirs, id); found.Path != "" {
+				if meta, ok := subMeta[found.Path]; ok {
+					found.SubscriptionID = meta.subID
+					found.SubscriptionName = meta.subName
+					found.LocalModified = meta.localModified
+					found.UpdateAvailable = meta.updateAvailable
+				}
+				skill = found
+				known = true
+			}
+		}
+	}
+	if !known {
 		dirs, err := a.discoveredSkillDirectories(ctx)
 		if err != nil {
 			return model.Skill{}, err
 		}
 		skill = findSkillDirectory(ctx, dirs, id)
-		if skill.Path == "" && (source.SessionID != "" || source.WorkingCopyID != "") {
+		if skill.Path == "" && source.AgentID != "" {
 			_, scope, err := a.skillReferenceScope(ctx, source)
 			if err != nil {
 				return model.Skill{}, err
 			}
-			dirs, err := a.skillDirectoriesForScope(scope)
+			dirs, err := a.librarySkillDirectories(ctx, scope)
 			if err != nil {
 				return model.Skill{}, err
 			}
@@ -450,7 +592,7 @@ func (a *App) SkillScope(ctx context.Context, id string, write bool, source Skil
 	if err != nil {
 		return model.Scope{}, err
 	}
-	if write && !skill.Managed {
+	if write && !skill.Managed && skill.SubscriptionID == "" {
 		return model.Scope{}, &Error{403, "External skill directories are read-only"}
 	}
 	return model.Scope{Roots: []model.Root{{ID: id, Path: skill.Path}}, PrimaryRootID: id}, nil

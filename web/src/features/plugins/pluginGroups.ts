@@ -13,13 +13,20 @@ const kinds = {
   { label: string; icon: typeof Bot }
 >;
 
+const kindIds = Object.keys(kinds) as (keyof typeof kinds)[];
+
+export function pluginKindLabel(plugin: Plugin) {
+  const id = kindIds.find((kind) => plugin.manifest.contributes[kind]?.length);
+  return id ? kinds[id].label : "plugins.kind.other";
+}
+
 export function groupPlugins(
   plugins: Plugin[],
   search: string,
   t: TFunction,
   locale?: string,
 ) {
-  const groups = (Object.keys(kinds) as (keyof typeof kinds)[]).map((id) => ({
+  const groups = kindIds.map((id) => ({
     id,
     ...kinds[id],
     entries: [] as Plugin[],

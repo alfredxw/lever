@@ -367,10 +367,24 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
           },
       );
     } else {
-      if (event.type === "agents" || event.type === "providers")
+      if (
+        event.type === "agents" ||
+        event.type === "providers" ||
+        event.type === "skills"
+      ) {
         void queryClient.invalidateQueries({ queryKey: ["skills"] });
+        void queryClient.invalidateQueries({
+          queryKey: ["skill-subscriptions"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["skill-update-settings"],
+        });
+      }
       if (event.type === "providers" || event.type === "plugins") {
         void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+        void queryClient.invalidateQueries({
+          queryKey: ["plugin-update-settings"],
+        });
         void queryClient.invalidateQueries({ queryKey: ["providers"] });
         void queryClient.invalidateQueries({ queryKey: ["models"] });
       }

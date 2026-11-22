@@ -49,7 +49,7 @@ export function ProviderModels({
       setModelVisibility(provider.id, ids, visible),
   });
   return (
-    <section className="provider-section" aria-labelledby={id}>
+    <section className="provider-section provider-models" aria-labelledby={id}>
       <header className="provider-model-heading">
         <div className="provider-model-title">
           <h3 id={id}>{t("providers.models")}</h3>

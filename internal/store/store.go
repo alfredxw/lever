@@ -75,6 +75,7 @@ INSERT OR IGNORE INTO settings(key,value) SELECT '` + StarterAgentPending + `','
 WHERE NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agents');
 CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS skill_directories(path TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS skill_subscriptions(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS working_copies(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS agent_working_copies ON working_copies(agent_id);
 CREATE TABLE IF NOT EXISTS worktrees(

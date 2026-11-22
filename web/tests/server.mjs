@@ -61,6 +61,7 @@ execFileSync(
 );
 linkSync(join(bin, `codex${extension}`), join(bin, `claude${extension}`));
 linkSync(join(bin, `codex${extension}`), join(bin, `agy${extension}`));
+linkSync(join(bin, `codex${extension}`), join(bin, `traex${extension}`));
 linkSync(join(bin, `codex${extension}`), join(bin, `pi${extension}`));
 linkSync(join(bin, `codex${extension}`), join(bin, `dsh${extension}`));
 const pluginDirectory = join(temp, "sample-plugin");
@@ -114,6 +115,19 @@ writeFileSync(
   join(scope, "hello.go"),
   'package hello\n\nfunc Greeting() string { return "hello Lever" }\n',
 );
+const skillRepo = join(temp, "skill-repo");
+mkdirSync(skillRepo);
+const gitSshShim =
+  process.platform !== "win32" && !process.env.GIT_SSH_COMMAND
+    ? join(bin, "git-ssh-fixture.sh")
+    : undefined;
+if (gitSshShim) {
+  writeFileSync(
+    gitSshShim,
+    `#!/bin/sh\nexec git-upload-pack "${skillRepo}"\n`,
+    { mode: 0o700 },
+  );
+}
 const child = spawn(
   join(bin, `lever${extension}`),
   [
@@ -138,6 +152,9 @@ const child = spawn(
       LEVER_ANTIGRAVITY_PATH: join(bin, `agy${extension}`),
       LEVER_PI_PATH: join(bin, `pi${extension}`),
       LEVER_DSH_PATH: join(bin, `dsh${extension}`),
+      ...(gitSshShim
+        ? { GIT_SSH_COMMAND: gitSshShim, GIT_SSH_VARIANT: "ssh" }
+        : {}),
     },
     stdio: ["ignore", "pipe", "inherit"],
   },
@@ -157,6 +174,7 @@ child.stdout.on("data", (buffer) => {
         url: match[1],
         scope,
         skill,
+        skillRepo,
         otherScope,
         pluginDirectory,
       }),

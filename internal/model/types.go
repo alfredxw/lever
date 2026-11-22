@@ -9,19 +9,63 @@ type Root struct {
 const SkillEntry = "SKILL.md"
 
 type Skill struct {
-	ID          string       `json:"id"`
-	Path        string       `json:"path"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Managed     bool         `json:"managed"`
-	Available   bool         `json:"available"`
-	AgentIDs    []string     `json:"agentIds"`
-	Origin      *SkillOrigin `json:"origin,omitempty"`
+	ID               string       `json:"id"`
+	Path             string       `json:"path"`
+	Name             string       `json:"name"`
+	Title            string       `json:"title,omitempty"`
+	Description      string       `json:"description"`
+	Managed          bool         `json:"managed"`
+	Available        bool         `json:"available"`
+	AgentIDs         []string     `json:"agentIds"`
+	Origin           *SkillOrigin `json:"origin,omitempty"`
+	SubscriptionID   string       `json:"subscriptionId,omitempty"`
+	SubscriptionName string       `json:"subscriptionName,omitempty"`
+	UpdateAvailable  bool         `json:"updateAvailable,omitempty"`
+	LocalModified    bool         `json:"localModified,omitempty"`
+	FileCount        int          `json:"fileCount,omitempty"`
+}
+
+type UpdateSettings struct {
+	Mode     string `json:"mode" tstype:"'auto' | 'notify' | 'manual'"`
+	Interval string `json:"interval" tstype:"'1h' | '6h' | '24h'"`
+}
+
+type SkillSubscription struct {
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Source          PluginGitSource `json:"source"`
+	Commit          string          `json:"commit"`
+	Tree            string          `json:"tree"`
+	UpdatePolicy    string          `json:"updatePolicy" tstype:"'inherit' | 'auto' | 'notify' | 'manual'"`
+	LastCheckedAt   string          `json:"lastCheckedAt,omitempty"`
+	LastSyncedAt    string          `json:"lastSyncedAt,omitempty"`
+	Available       bool            `json:"available,omitempty"`
+	AvailableCommit string          `json:"availableCommit,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	SkillCount      int             `json:"skillCount"`
+	ModifiedCount   int             `json:"modifiedCount,omitempty"`
+}
+
+type SkillSubscriptionInput struct {
+	Name         string `json:"name,omitempty"`
+	URL          string `json:"url"`
+	Path         string `json:"path,omitempty"`
+	Ref          string `json:"ref,omitempty"`
+	UpdatePolicy string `json:"updatePolicy,omitempty" tstype:"'inherit' | 'auto' | 'notify' | 'manual'"`
+}
+
+type SkillSubscriptionSyncResult struct {
+	Subscription    SkillSubscription `json:"subscription"`
+	Added           int               `json:"added"`
+	Updated         int               `json:"updated"`
+	Removed         int               `json:"removed"`
+	SkippedModified int               `json:"skippedModified"`
 }
 
 type SkillOrigin struct {
-	Directory string `json:"directory"`
-	ScopePath string `json:"scopePath,omitempty"`
+	Directory string   `json:"directory"`
+	ScopePath string   `json:"scopePath,omitempty"`
+	Providers []string `json:"providers,omitempty"`
 }
 
 type SkillSource struct {
@@ -644,15 +688,16 @@ type UsageWindow struct {
 // Plugin installations retain their identity after uninstall so conversations
 // can display their original provider without executing uninstalled code.
 type Plugin struct {
-	ID        string         `json:"id"`
-	Manifest  PluginManifest `json:"manifest"`
-	Enabled   bool           `json:"enabled"`
-	Installed bool           `json:"installed"`
-	Builtin   bool           `json:"builtin"`
-	Directory string         `json:"directory"`
-	Revision  int64          `json:"revision,omitempty"`
-	Current   *PluginRelease `json:"current,omitempty"`
-	Previous  *PluginRelease `json:"previous,omitempty"`
+	ID           string         `json:"id"`
+	Manifest     PluginManifest `json:"manifest"`
+	Enabled      bool           `json:"enabled"`
+	Installed    bool           `json:"installed"`
+	Builtin      bool           `json:"builtin"`
+	Directory    string         `json:"directory"`
+	Revision     int64          `json:"revision,omitempty"`
+	Current      *PluginRelease `json:"current,omitempty"`
+	Previous     *PluginRelease `json:"previous,omitempty"`
+	UpdatePolicy string         `json:"updatePolicy,omitempty" tstype:"'inherit' | 'auto' | 'notify' | 'manual'"`
 }
 
 // Ref is the resolved branch or tag name, or a full commit for a pinned revision.

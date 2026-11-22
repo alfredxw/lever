@@ -13,21 +13,83 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 		var input struct {
 			UpdatedAt      string    `json:"updatedAt"`
 			DisabledSkills *[]string `json:"disabledSkills"`
+			Attach         string    `json:"attach"`
+			Detach         string    `json:"detach"`
 		}
 		if err := read(w, r, &input); err != nil {
 			respond(w, nil, err)
 			return
 		}
-		if input.DisabledSkills == nil {
-			respond(w, nil, &app.Error{Status: 400, Message: "Provide a list of disabled skill names"})
+		if input.DisabledSkills == nil && strings.TrimSpace(input.Attach) == "" && strings.TrimSpace(input.Detach) == "" {
+			respond(w, nil, &app.Error{Status: 400, Message: "Provide disabledSkills, attach, or detach"})
 			return
 		}
-		agent, err := a.SaveAgentDisabledSkills(r.Context(), r.PathValue("id"), input.UpdatedAt, *input.DisabledSkills)
+		agent, err := a.SaveAgentSkillPreferences(r.Context(), r.PathValue("id"), input.UpdatedAt, input.DisabledSkills, input.Attach, input.Detach)
 		respond(w, agent, err)
 	})
 	mux.HandleFunc("GET /api/skills", func(w http.ResponseWriter, r *http.Request) {
 		skills, err := a.Skills(r.Context())
 		respond(w, skills, err)
+	})
+	mux.HandleFunc("GET /api/skill-update-settings", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.SkillUpdateSettings(r.Context())
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/skill-update-settings", func(w http.ResponseWriter, r *http.Request) {
+		var input model.UpdateSettings
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SaveSkillUpdateSettings(r.Context(), input)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("GET /api/skill-subscriptions", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.SkillSubscriptions(r.Context())
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/skill-subscriptions", func(w http.ResponseWriter, r *http.Request) {
+		var input model.SkillSubscriptionInput
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.CreateSkillSubscription(r.Context(), input)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/skill-subscriptions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Name         *string `json:"name"`
+			UpdatePolicy *string `json:"updatePolicy"`
+		}
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.UpdateSkillSubscription(r.Context(), r.PathValue("id"), input.Name, input.UpdatePolicy)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("DELETE /api/skill-subscriptions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"deleted": true}, a.DeleteSkillSubscription(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/skill-subscriptions/{id}/check", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.CheckSkillSubscription(r.Context(), r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/skill-subscriptions/{id}/sync", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.SyncSkillSubscription(r.Context(), r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/skills/{id}/resolve-update", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Strategy string `json:"strategy"`
+		}
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.ResolveSkillUpdate(r.Context(), r.PathValue("id"), input.Strategy)
+		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/skills/reference", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -50,8 +112,10 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 	})
 	mux.HandleFunc("POST /api/skills", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Name      string `json:"name"`
-			Directory string `json:"directory"`
+			Name        string `json:"name"`
+			Directory   string `json:"directory"`
+			Description string `json:"description"`
+			Template    string `json:"template"`
 		}
 		if err := read(w, r, &input); err != nil {
 			respond(w, nil, err)
@@ -61,7 +125,7 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 		hasDirectory := strings.TrimSpace(input.Directory) != ""
 		switch {
 		case hasName && !hasDirectory:
-			skill, err := a.CreateSkill(input.Name)
+			skill, err := a.CreateSkillWithOptions(input.Name, input.Description, input.Template)
 			respond(w, skill, err)
 		case hasDirectory && !hasName:
 			skill, err := a.AddSkillDirectory(r.Context(), input.Directory)

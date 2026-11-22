@@ -2472,6 +2472,8 @@ export default function App() {
                 showProviderSettings(undefined, pluginId)
               }
               onOpenChat={openChat}
+              onOpenWorks={() => showTasks()}
+              onOpenAutomations={showAutomations}
             />
           )}
           {page === "automations" && (

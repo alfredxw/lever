@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, X } from "lucide-react";
+import { Rss, Search, X } from "lucide-react";
+import type { Plugin, UpdateSettings } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -9,16 +10,23 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { OverviewNavigation } from "@/components/workbench/OverviewNavigation";
-import { PluginIcon, pluginName } from "./PluginCard";
+import { PluginIcon, pluginName, type PluginSignal } from "./PluginCard";
 import type { PluginGroup } from "./pluginGroups";
 
 export function PluginIndex({
   groups,
   selected,
+  subscriptionsActive,
+  updateCount,
+  updateSettings,
+  signalFor,
+  total,
+  subscriptionCount,
   search,
   onSearch,
   onSelect,
   onOverview,
+  onSubscriptions,
   open,
   onOpenChange,
   compact,
@@ -26,10 +34,17 @@ export function PluginIndex({
 }: {
   groups: PluginGroup[];
   selected?: string;
+  subscriptionsActive?: boolean;
+  updateCount: number;
+  updateSettings: UpdateSettings;
+  signalFor: (plugin: Plugin) => PluginSignal;
+  total: number;
+  subscriptionCount: number;
   search: string;
   onSearch: (value: string) => void;
   onSelect: (id: string, trigger: HTMLElement) => void;
   onOverview: () => void;
+  onSubscriptions: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   compact: boolean;
@@ -122,9 +137,39 @@ export function PluginIndex({
   return (
     <OverviewNavigation
       label={t("nav.plugins")}
-      current={!selected}
+      overviewLabel={t("plugins.allPlugins")}
+      count={total}
+      current={!selected && !subscriptionsActive}
       onOverview={onOverview}
-      toolbar={
+      topItems={
+        <Button
+          variant="ghost"
+          className="sidebar-nav-item"
+          aria-current={subscriptionsActive ? "page" : undefined}
+          onClick={onSubscriptions}
+        >
+          <Rss data-icon="inline-start" className="text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-start">
+            {t("plugins.subscriptions")}
+          </span>
+          {updateCount > 0 ? (
+            <span
+              className="plugins-sidebar-badge tabular-nums"
+              aria-hidden="true"
+            >
+              {updateCount}
+            </span>
+          ) : (
+            <span
+              className="text-[11px] text-muted-foreground tabular-nums"
+              aria-hidden="true"
+            >
+              {subscriptionCount}
+            </span>
+          )}
+        </Button>
+      }
+      search={
         <InputGroup className="sidebar-search-control mb-2 shrink-0">
           <InputGroupAddon>
             <Search />
@@ -163,6 +208,37 @@ export function PluginIndex({
           </InputGroupAddon>
         </InputGroup>
       }
+      footer={
+        <div className="flex items-center justify-between gap-2 px-1 text-[11px] text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <span
+              className="plugins-status-dot"
+              data-tone={
+                updateSettings.mode === "auto"
+                  ? "positive"
+                  : updateSettings.mode === "notify"
+                    ? "running"
+                    : "muted"
+              }
+              aria-hidden="true"
+            />
+            <span className="truncate tabular-nums">
+              {t(`updates.policy.${updateSettings.mode}`)}
+              {updateSettings.mode !== "manual"
+                ? ` · ${updateSettings.interval}`
+                : ""}
+            </span>
+          </span>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={onSubscriptions}
+          >
+            {t("updates.policy")}
+          </Button>
+        </div>
+      }
     >
       <div
         id="plugin-index-groups"
@@ -174,26 +250,37 @@ export function PluginIndex({
           <section key={id} aria-labelledby={`plugin-index-${id}`}>
             <h2
               id={`plugin-index-${id}`}
-              className="flex h-7 items-center px-2 text-xs font-medium text-muted-foreground"
+              className="flex h-7 items-center justify-between px-2 text-xs font-medium text-muted-foreground"
             >
               {t(label)}
+              <span aria-hidden="true" className="text-[11px] tabular-nums">
+                {entries.length}
+              </span>
             </h2>
             <ul>
               {entries.map((entry) => {
                 const name = pluginName(entry, t);
+                const signal = signalFor(entry);
                 return (
                   <li key={entry.id}>
                     <Button
                       variant="ghost"
                       className="sidebar-nav-item"
-                      title={name}
+                      title={`${name} · ${signal.label}`}
                       aria-current={entry.id === selected ? "page" : undefined}
                       onClick={(event) =>
                         onSelect(entry.id, event.currentTarget)
                       }
                     >
                       <PluginIcon plugin={entry} size={16} />
-                      <span className="truncate">{name}</span>
+                      <span className="min-w-0 flex-1 truncate text-start">
+                        {name}
+                      </span>
+                      <span
+                        className="plugins-status-dot ms-auto"
+                        data-tone={signal.tone}
+                        aria-hidden="true"
+                      />
                     </Button>
                   </li>
                 );

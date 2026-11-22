@@ -68,7 +68,9 @@ type App struct {
 	eventAdapters        map[[2]string]plugin.EventSourceAdapter
 	taskSyncWake         chan struct{}
 	taskQueueWake        chan struct{}
+	taskReminderWake     chan struct{}
 	taskSync             *taskSourceSync
+	eventPoll            *activeEventPoll
 	automationStarted    bool
 	feishu               feishuChannel
 	personal             map[string]*personalWorker
@@ -125,9 +127,12 @@ func open(dir string, independent bool) (*App, error) {
 		a.Close()
 		return nil, err
 	}
-	a.wg.Add(2)
+	a.advanceReadyDependentRuns()
+	a.wg.Add(4)
 	go a.runTaskSourceSync()
 	go a.runTaskQueue()
+	go a.runTaskReminders()
+	go a.runSubscriptionUpdates()
 	return a, nil
 }
 func (a *App) Close() error {

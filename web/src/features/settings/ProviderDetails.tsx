@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { useMutation, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ExternalLink, LogIn } from "lucide-react";
+import { ChevronRight, ExternalLink, LogIn } from "lucide-react";
 import { api, queryClient } from "@/api/client";
 import type { Catalog, Plugin, Provider, ProviderInfo } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
@@ -50,20 +50,28 @@ export function ProviderHeading({
   title,
   runtime,
   description,
+  embedded,
   children,
 }: {
   title: string;
   runtime?: Runtime;
   description?: string;
+  embedded?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <header className="provider-heading">
-      {runtime && <ProviderMark runtime={runtime} large />}
+    <header className="provider-heading" data-embedded={embedded || undefined}>
+      {runtime && !embedded && <ProviderMark runtime={runtime} large />}
       <div className="provider-heading-text">
-        <h2 tabIndex={-1} data-provider-heading>
-          {title}
-        </h2>
+        {embedded ? (
+          <h3 tabIndex={-1} data-provider-heading>
+            {title}
+          </h3>
+        ) : (
+          <h2 tabIndex={-1} data-provider-heading>
+            {title}
+          </h2>
+        )}
         {description && <p>{description}</p>}
       </div>
       {children}
@@ -153,6 +161,7 @@ export function ProviderDetails({
   name,
   catalog,
   visible,
+  embedded,
   detecting,
   onDetect,
   onRefreshModels,
@@ -169,6 +178,7 @@ export function ProviderDetails({
   name: string;
   catalog: UseQueryResult<Catalog | null>;
   visible: boolean;
+  embedded?: boolean;
   detecting: boolean;
   onDetect: () => void;
   onRefreshModels: () => void;
@@ -178,7 +188,7 @@ export function ProviderDetails({
   addingManaged: boolean;
   onRemove: () => void;
   onSaved: (provider: Provider, login: boolean) => void;
-  onOpenPlugin: () => void;
+  onOpenPlugin?: () => void;
 }) {
   const { t } = useTranslation();
   const item = plugin?.manifest.contributes.providers?.find(
@@ -211,62 +221,139 @@ export function ProviderDetails({
             .join(" · ")
         : undefined;
 
+  const enableControl = (
+    <Switch
+      aria-label={t("providers.enabled", { name: provider.name })}
+      checked={provider.enabled}
+      disabled={toggle.isPending || !plugin?.enabled}
+      onCheckedChange={(enabled) => toggle.mutate(enabled)}
+    />
+  );
+  const connectionActions = (
+    <>
+      {provider.available && !provider.installed && !managed && (
+        <>
+          {install && <InstallGuide url={install} />}
+          {onSpecifyExecutable && (
+            <Button size="sm" variant="outline" onClick={onSpecifyExecutable}>
+              {t("providers.source.custom")}
+            </Button>
+          )}
+          {provider.type === "antigravity" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={addingManaged}
+              onClick={onUseManaged}
+            >
+              {t("providers.useManagedAntigravity")}
+            </Button>
+          )}
+        </>
+      )}
+      {provider.canLogin && (
+        <Button
+          size="sm"
+          variant={signedOut ? "default" : "ghost"}
+          onClick={onLogin}
+        >
+          {signedOut && <LogIn data-icon="inline-start" />}
+          {t(
+            signedOut
+              ? "connections.signIn"
+              : provider.loginStatus === "signedIn"
+                ? "connections.signInAgain"
+                : "providers.openLogin",
+          )}
+        </Button>
+      )}
+    </>
+  );
+  const form = visible && plugin?.installed && item && (
+    <ProviderForm
+      key={provider.id}
+      plugin={plugin}
+      item={item}
+      existing={provider}
+      defaultName={provider.name}
+      onSaved={onSaved}
+    />
+  );
+
   return (
     <>
-      <ProviderHeading
-        title={name}
-        runtime={provider}
-        description={t(providerSource(provider))}
-      >
-        <label className="provider-enable">
-          <span>{t("connections.enable")}</span>
-          <Switch
-            aria-label={t("providers.enabled", { name: provider.name })}
-            checked={provider.enabled}
-            disabled={toggle.isPending || !plugin?.enabled}
-            onCheckedChange={(enabled) => toggle.mutate(enabled)}
-          />
-        </label>
-      </ProviderHeading>
-
-      <ProviderConnection status={status} description={description}>
-        {provider.available && !provider.installed && !managed && (
-          <>
-            {install && <InstallGuide url={install} />}
-            {onSpecifyExecutable && (
-              <Button size="sm" variant="outline" onClick={onSpecifyExecutable}>
-                {t("providers.source.custom")}
-              </Button>
-            )}
-            {provider.type === "antigravity" && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={addingManaged}
-                onClick={onUseManaged}
-              >
-                {t("providers.useManagedAntigravity")}
-              </Button>
-            )}
-          </>
-        )}
-        {provider.canLogin && (
-          <Button
-            size="sm"
-            variant={signedOut ? "default" : "ghost"}
-            onClick={onLogin}
+      {embedded ? (
+        <section className="provider-instance panel-surface" aria-label={name}>
+          <div className="provider-connection-row">
+            <div className="provider-instance-copy">
+              <div className="provider-instance-name">
+                <h3 data-provider-heading tabIndex={-1}>
+                  {name}
+                </h3>
+                <span
+                  className="provider-instance-status"
+                  data-tone={status.tone}
+                >
+                  {t(status.label)}
+                </span>
+              </div>
+              <p>
+                {[
+                  t(providerSource(provider)),
+                  provider.version || catalog.data?.version,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+            <div className="provider-connection-actions">
+              {connectionActions}
+              {enableControl}
+            </div>
+          </div>
+          {form && (
+            <details className="provider-instance-config">
+              <summary>
+                <span className="min-w-0">
+                  <strong>{t("connections.launchSettings")}</strong>
+                  <code
+                    className="block truncate"
+                    title={provider.configDir || provider.configPath}
+                  >
+                    {[
+                      provider.configDir || provider.configPath,
+                      provider.command,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </code>
+                </span>
+                <ChevronRight
+                  className="size-3.5 shrink-0"
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="provider-instance-fields">{form}</div>
+            </details>
+          )}
+        </section>
+      ) : (
+        <>
+          <ProviderHeading
+            title={name}
+            runtime={provider}
+            description={t(providerSource(provider))}
           >
-            {signedOut && <LogIn data-icon="inline-start" />}
-            {t(
-              signedOut
-                ? "connections.signIn"
-                : provider.loginStatus === "signedIn"
-                  ? "connections.signInAgain"
-                  : "providers.openLogin",
-            )}
-          </Button>
-        )}
-      </ProviderConnection>
+            <label className="provider-enable">
+              <span>{t("connections.enable")}</span>
+              {enableControl}
+            </label>
+          </ProviderHeading>
+          <ProviderConnection status={status} description={description}>
+            {connectionActions}
+          </ProviderConnection>
+        </>
+      )}
       {provider.available && managed && visible && (
         <div className="provider-setup panel-surface">
           <AntigravitySetup provider={provider} />
@@ -279,21 +366,7 @@ export function ProviderDetails({
         />
       )}
       {toggle.error && <ErrorNotice error={toggle.error} />}
-      {visible && plugin?.installed && item && (
-        <ProviderForm
-          key={JSON.stringify([
-            provider.id,
-            provider.name,
-            provider.autoCompactWindow,
-            provider.idleCompaction,
-          ])}
-          plugin={plugin}
-          item={item}
-          existing={provider}
-          defaultName={provider.name}
-          onSaved={onSaved}
-        />
-      )}
+      {!embedded && form}
       {provider.available && provider.installed && !signedOut && (
         <ProviderModels
           provider={provider}
@@ -305,6 +378,7 @@ export function ProviderDetails({
         <ProviderActions
           provider={provider}
           plugin={plugin}
+          embedded={embedded}
           onRemove={onRemove}
           onOpenPlugin={onOpenPlugin}
         />
@@ -316,13 +390,15 @@ export function ProviderDetails({
 function ProviderActions({
   provider,
   plugin,
+  embedded,
   onRemove,
   onOpenPlugin,
 }: {
   provider: ProviderInfo;
   plugin?: Plugin;
+  embedded?: boolean;
   onRemove: () => void;
-  onOpenPlugin: () => void;
+  onOpenPlugin?: () => void;
 }) {
   const { t } = useTranslation();
   const [confirm, setConfirm] = useState(false);
@@ -338,7 +414,7 @@ function ProviderActions({
   });
   return (
     <SettingsGroup title={t("connections.manage")}>
-      {plugin?.installed && (
+      {!embedded && plugin?.installed && onOpenPlugin && (
         <SettingsRow title={plugin.manifest.name}>
           <Button
             type="button"

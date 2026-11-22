@@ -17,14 +17,16 @@ import (
 )
 
 type skillDirectory struct {
-	path                  string
-	root                  model.Root
-	managed, claudeNative bool
+	path                                string
+	root                                model.Root
+	managed, subscription, claudeNative bool
+	packageOnly, runtimeNative          bool
+	providers                           []string
 }
 
 // Scope contributes its configured directories. Only Skill collection
 // directories are searched, regardless of the size of the workspace.
-func (a *App) skillDirectoriesForScope(scope model.Scope, configs ...model.Provider) ([]skillDirectory, error) {
+func (a *App) skillDirectoriesForScope(ctx context.Context, scope model.Scope, configs ...model.Provider) ([]skillDirectory, error) {
 	var sources []skillDirectory
 	index := map[string]int{}
 	add := func(dir skillDirectory) {
@@ -37,6 +39,8 @@ func (a *App) skillDirectoriesForScope(scope model.Scope, configs ...model.Provi
 		}
 		if i, ok := index[path]; ok {
 			sources[i].claudeNative = sources[i].claudeNative || dir.claudeNative
+			sources[i].runtimeNative = sources[i].runtimeNative || dir.runtimeNative
+			sources[i].packageOnly = sources[i].packageOnly && dir.packageOnly
 			return
 		}
 		index[path] = len(sources)
@@ -48,12 +52,57 @@ func (a *App) skillDirectoriesForScope(scope model.Scope, configs ...model.Provi
 		return nil, err
 	}
 	add(skillDirectory{path: managed, managed: true})
+	if subsRoot, err := a.skillSubscriptionsRoot(); err == nil {
+		if entries, err := os.ReadDir(subsRoot); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+					add(skillDirectory{path: filepath.Join(subsRoot, entry.Name()), subscription: true})
+				}
+			}
+		}
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		add(skillDirectory{path: filepath.Join(home, ".agents", "skills")})
 	}
+	collections := []string{".agents/skills", ".codex/skills", ".claude/skills", "skills"}
+	agyManifests := map[string]bool{}
+	nativeCollections := map[string]bool{}
+	addNative := func(dir skillDirectory) { dir.runtimeNative = true; add(dir) }
 	for _, config := range configs {
 		add(skillDirectory{path: provider.UserSkillDirectory(config, "codex")})
 		add(skillDirectory{path: provider.UserSkillDirectory(config, "claude"), claudeNative: true})
+		userDirs, projectDir, manifest := provider.SkillReferenceDirectories(config, workspace.CWD(scope), a.Store.Dir)
+		for _, path := range userDirs {
+			addNative(skillDirectory{path: path})
+		}
+		if projectDir == ".trae/skills" || config.Type == "antigravity" {
+			nativeCollections[projectDir], nativeCollections[".agents/skills"] = true, true
+		}
+		if projectDir == ".trae/skills" {
+			if home, err := os.UserHomeDir(); err == nil {
+				addNative(skillDirectory{path: filepath.Join(home, ".agents", "skills")})
+			}
+		}
+		if projectDir != "" && !slices.Contains(collections, projectDir) {
+			collections = append(collections, projectDir)
+		}
+		if manifest != "" && !agyManifests[manifest] {
+			agyManifests[manifest] = true
+			real, err := filepath.EvalSymlinks(manifest)
+			if err != nil {
+				continue
+			}
+			var boundary model.Root
+			for _, root := range scope.Roots {
+				if root.Path != "" && (workspace.Contains(root.Path, manifest) || workspace.Contains(root.Path, real)) {
+					boundary = root
+					break
+				}
+			}
+			if err := addManifestSkills(ctx, manifest, filepath.Dir(manifest), boundary, addNative); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, root := range scope.Roots {
 		if strings.TrimSpace(root.Path) == "" {
@@ -64,8 +113,16 @@ func (a *App) skillDirectoriesForScope(scope model.Scope, configs ...model.Provi
 			continue
 		}
 		root.Path = path
-		for _, relative := range []string{".agents/skills", ".codex/skills", ".claude/skills", "skills"} {
-			add(skillDirectory{path: filepath.Join(path, relative), root: root, claudeNative: relative == ".claude/skills"})
+		for _, relative := range collections {
+			add(skillDirectory{path: filepath.Join(path, relative), root: root, claudeNative: relative == ".claude/skills", runtimeNative: nativeCollections[relative] && (root.ID == scope.PrimaryRootID || len(agyManifests) > 0)})
+		}
+		if len(agyManifests) != 0 {
+			add(skillDirectory{path: filepath.Join(path, ".gemini", "skills"), root: root})
+			for _, dir := range []string{".agents", ".agent"} {
+				if err := addManifestSkills(ctx, filepath.Join(path, dir, "skills.json"), path, root, addNative); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return sources, nil
@@ -73,6 +130,12 @@ func (a *App) skillDirectoriesForScope(scope model.Scope, configs ...model.Provi
 
 func (s skillDirectory) packages(ctx context.Context) iter.Seq[string] {
 	return func(yield func(string) bool) {
+		if s.packageOnly {
+			if ctx.Err() == nil && skillDirectoryAvailable(s.path) {
+				yield(s.path)
+			}
+			return
+		}
 		_ = filepath.WalkDir(s.path, func(path string, entry fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return fs.SkipAll
@@ -124,6 +187,20 @@ func (s skillDirectory) scan(ctx context.Context) []model.Skill {
 	return skills
 }
 
+func (a *App) skillReferencePaths(ctx context.Context, scope model.Scope, config model.Provider) (map[string]bool, error) {
+	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
+	if err != nil {
+		return nil, err
+	}
+	paths := map[string]bool{}
+	for _, dir := range dirs {
+		for path := range dir.packages(ctx) {
+			paths[path] = true
+		}
+	}
+	return paths, ctx.Err()
+}
+
 func (a *App) SkillSources(ctx context.Context, scope model.Scope, runtime string) ([]model.SkillSource, error) {
 	return a.skillSources(ctx, a.Store.DB, scope, runtime)
 }
@@ -134,10 +211,10 @@ func (a *App) skillSources(ctx context.Context, q store.Queryer, scope model.Sco
 		return nil, err
 	}
 	results := []model.SkillSource{}
-	if !provider.Capabilities(config.Type).Skills {
+	if !provider.ConfiguredCapabilities(config).Skills {
 		return results, nil
 	}
-	dirs, err := a.skillDirectoriesForScope(scope, config)
+	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
 	if err != nil {
 		return nil, err
 	}
@@ -153,10 +230,11 @@ func (a *App) prepareSkillPlan(ctx context.Context, scope model.Scope, profile m
 	if err := os.MkdirAll(assets, 0700); err != nil {
 		return plan, cleanup, err
 	}
-	if !provider.Capabilities(config.Type).Skills {
+	caps := provider.ConfiguredCapabilities(config)
+	if !caps.Skills {
 		return plan, cleanup, nil
 	}
-	dirs, err := a.skillDirectoriesForScope(scope, config)
+	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
 	if err != nil {
 		return plan, cleanup, err
 	}
@@ -164,6 +242,7 @@ func (a *App) prepareSkillPlan(ctx context.Context, scope model.Scope, profile m
 	// directory name too, since older skills can omit the name in frontmatter.
 	disabled := append([]string{}, profile.DisabledSkills...)
 	discovered := map[string]bool{}
+	var catalog []skillCatalogEntry
 	filter := func(skill model.Skill) bool {
 		base := filepath.Base(skill.Path)
 		if !model.SkillDisabled(profile.DisabledSkills, skill.Name) && !model.SkillDisabled(profile.DisabledSkills, base) {
@@ -178,24 +257,41 @@ func (a *App) prepareSkillPlan(ctx context.Context, scope model.Scope, profile m
 	}
 	for _, dir := range dirs {
 		plan.Roots = append(plan.Roots, dir.path)
-		if len(profile.DisabledSkills) != 0 || len(profile.Skills) != 0 {
-			for _, skill := range dir.scan(ctx) {
-				discovered[skill.Path] = true
-				filter(skill)
+		if caps.SkillContext || len(profile.DisabledSkills) != 0 || len(profile.Skills) != 0 {
+			for path := range dir.packages(ctx) {
+				if discovered[path] {
+					continue
+				}
+				discovered[path] = true
+				skill := withSkillMetadata(skillAt(path, false))
+				native := dir.runtimeNative && (config.Type != "antigravity" || dir.packageOnly || filepath.Dir(path) == dir.path)
+				if !filter(skill) && caps.SkillContext && !native {
+					catalog = append(catalog, skillCatalogEntry{skill.Name, skill.Description, filepath.Join(path, model.SkillEntry)})
+				}
 			}
 		}
 	}
 	for _, path := range profile.Skills {
-		skill := describeSkill(skillAt(path, false))
+		skill := withSkillMetadata(skillAt(path, false))
 		if filter(skill) || discovered[path] {
 			continue
 		}
 		plan.Bundled = append(plan.Bundled, path)
+		if caps.SkillContext {
+			catalog = append(catalog, skillCatalogEntry{skill.Name, skill.Description, filepath.Join(skillContextDirectory(assets), "skills", filepath.Base(path), model.SkillEntry)})
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return plan, cleanup, err
+	}
+	plan.Disabled = disabled
+	if caps.SkillContext {
+		err = prepareSkillContext(&plan, catalog, config.Type == "antigravity")
+		return plan, cleanup, err
 	}
 	if err := prepareSkills(assets, plan.Bundled); err != nil {
 		return plan, cleanup, err
 	}
-	plan.Disabled = disabled
 	if config.Type != "claude" {
 		return plan, cleanup, ctx.Err()
 	}
