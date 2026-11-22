@@ -35,6 +35,11 @@ func startAntigravityPrompt(t *testing.T) *antigravityPromptPeer {
 
 func startAntigravityPromptWithProbe(t *testing.T, probe func(context.Context) antigravityProbeState) *antigravityPromptPeer {
 	t.Helper()
+	return startConfiguredAntigravityPrompt(t, probe, nil)
+}
+
+func startConfiguredAntigravityPrompt(t *testing.T, probe func(context.Context) antigravityProbeState, configure func(*acpRuntime, *recordingSink) <-chan struct{}) *antigravityPromptPeer {
+	t.Helper()
 	client, peer := net.Pipe()
 	t.Cleanup(func() { _ = peer.Close(); _ = client.Close() })
 	ctx, stop := context.WithCancel(t.Context())
@@ -44,10 +49,14 @@ func startAntigravityPromptWithProbe(t *testing.T, probe func(context.Context) a
 	runtime.session, runtime.active = "test-session", true
 	runtime.background = newAntigravityBackground()
 	runtime.background.probe = probe
+	var steers <-chan struct{}
+	if configure != nil {
+		steers = configure(runtime, sink)
+	}
 	runtime.conn = acp.NewConnection(runtime.handle, client, client)
 	result := make(chan error, 1)
 	go func() {
-		result <- runtime.prompt(ctx, []acp.ContentBlock{acp.TextBlock("test command")}, nil)
+		result <- runtime.prompt(ctx, []acp.ContentBlock{acp.TextBlock("test command")}, nil, steers)
 	}()
 	var frame struct {
 		ID     json.RawMessage

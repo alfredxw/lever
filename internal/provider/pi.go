@@ -358,7 +358,7 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 			prompt["customInstructions"] = argument
 		}
 	}
-	if err := runPiPrompt(ctx, p, prompt, sink); err != nil {
+	if err := runPiPrompt(ctx, p, prompt, sink, in.Steers, piModelImages(obj(state["model"]))); err != nil {
 		return err
 	}
 	// A stats probe is optional and cannot mask a successfully settled turn.
@@ -397,7 +397,7 @@ func piPrompt(in Input) (object, error) {
 	return prompt, nil
 }
 
-func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink) error {
+func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink, steers <-chan struct{}, images bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -406,13 +406,52 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 	}
 	turn := piTranscript{sink: sink, items: map[string]model.Item{}}
 	accepted, started, settled := false, false, false
+	var pending *piSteer
+	var wake <-chan struct{}
+	queued := false
 	for !accepted || !settled {
-		frame, err := readPiFrame(ctx, p)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		var raw []byte
+		var ok bool
+		select {
+		case raw, ok = <-p.Frames:
+		default:
+			if queued && pending == nil && !settled && ctx.Err() == nil {
+				message, err := sink.NextSteer()
+				if err != nil {
+					return err
+				}
+				if message != nil {
+					pending, err = sendPiSteer(p, sink, *message, images)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				queued = false
 			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-wake:
+				queued = true
+				continue
+			case raw, ok = <-p.Frames:
+			}
+		}
+		if !ok {
+			return errors.Join(ErrUnconfirmed, errors.New("Pi exited before settling"), p.Error())
+		}
+		frame, err := decode(raw)
+		if err != nil {
 			return errors.Join(ErrUnconfirmed, err)
+		}
+		if pending != nil {
+			if done, delivery := pending.observe(frame); done {
+				if err := sink.Steered(pending.id, delivery); err != nil {
+					return err
+				}
+				pending = nil
+			}
 		}
 		switch frame["type"] {
 		case "response":
@@ -439,6 +478,7 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 				}
 				accepted = true
 				disposition := str(data["disposition"])
+				started = started || disposition == "started"
 				settled = settled || disposition == "handled"
 				// Older Pi acknowledges extension-consumed input without a disposition.
 				if disposition == "" && !started && !settled {
@@ -462,6 +502,59 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 				return errors.Join(ErrUnconfirmed, err)
 			}
 		}
+		if accepted && started && !settled && wake == nil && steers != nil {
+			if err := sink.SetSteerState(SteerReady); err != nil {
+				return err
+			}
+			wake = steers
+		}
+	}
+	if wake != nil {
+		if err := sink.SetSteerState(SteerUnavailable); err != nil {
+			return err
+		}
 	}
 	return turn.failure
+}
+
+type piSteer struct {
+	id, text         string
+	accepted, echoed bool
+}
+
+func sendPiSteer(process *device.Process, sink Sink, message Input, images bool) (*piSteer, error) {
+	message.Profile.Instructions = ""
+	prompt, err := piPrompt(message)
+	if err == nil && prompt["images"] != nil && !images {
+		err = errors.New("The active Pi model does not accept images")
+	}
+	if err != nil {
+		return nil, sink.Steered(message.RunID, errors.Join(ErrSteerRejected, err))
+	}
+	prompt["type"], prompt["id"] = "steer", message.RunID
+	if err := process.Send(prompt); err != nil {
+		return nil, errors.Join(ErrUnconfirmed, err)
+	}
+	return &piSteer{id: message.RunID, text: str(prompt["message"])}, nil
+}
+
+func (s *piSteer) observe(frame object) (bool, error) {
+	if frame["type"] == "response" && frame["id"] == s.id && frame["command"] == "steer" {
+		data, err := piResponse(frame)
+		if err != nil {
+			return true, errors.Join(ErrSteerRejected, err)
+		}
+		s.accepted = true
+		if data["disposition"] == "handled" {
+			return true, nil
+		}
+	}
+	if message := obj(frame["message"]); frame["type"] == "message_start" && message["role"] == "user" {
+		for _, part := range arr(message["content"]) {
+			if text := obj(part); text["type"] == "text" && text["text"] == s.text {
+				s.echoed = true
+			}
+		}
+	}
+	return s.accepted && s.echoed, nil
 }

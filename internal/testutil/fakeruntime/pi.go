@@ -96,6 +96,7 @@ func piFixture() {
 			send(object{"type": "agent_settled"})
 		case "prompt":
 			input := str(frame["message"])
+			fixtureSteerGate(input)
 			if strings.Contains(input, "[pi-reject]") {
 				send(object{"type": "response", "id": frame["id"], "command": command, "success": false, "error": "Pi fixture rejected prompt"})
 				continue
@@ -105,6 +106,11 @@ func piFixture() {
 				continue
 			}
 			reply(object{"disposition": "started"})
+			if strings.Contains(fixtureCommands(input), "[steer-open]") {
+				send(object{"type": "message_start", "message": object{"role": "assistant"}})
+				send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "toolUse", "content": []object{{"type": "text", "text": "before steer"}}}})
+				continue
+			}
 			if strings.Contains(input, "[pi-question]") {
 				send(object{"type": "extension_ui_request", "id": "checkpoint-question", "method": "input", "title": "Continue this turn?"})
 				continue
@@ -133,6 +139,20 @@ func piFixture() {
 				}
 			}
 			send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "stop", "content": []object{{"type": "thinking", "thinking": "Thinking"}, {"type": "text", "text": string(data)}}}})
+			send(object{"type": "agent_settled"})
+		case "steer":
+			input := str(frame["message"])
+			if strings.Contains(input, "[reject-steer]") {
+				send(object{"type": "response", "id": frame["id"], "command": command, "success": false, "error": "not accepted"})
+			} else {
+				reply(nil)
+				if strings.Contains(input, "[disconnect-steer]") {
+					return
+				}
+				send(object{"type": "message_start", "message": object{"role": "user", "content": []object{{"type": "text", "text": input}}}})
+			}
+			send(object{"type": "message_start", "message": object{"role": "assistant"}})
+			send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "stop", "content": []object{{"type": "text", "text": "after: " + input}}}})
 			send(object{"type": "agent_settled"})
 		}
 	}

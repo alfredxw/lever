@@ -152,8 +152,14 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 			return err
 		}
 	}
-	steered := false
 	pendingSteers := map[string]bool{}
+	var receiptDeadline <-chan time.Time
+	var receiptTimer *time.Timer
+	defer func() {
+		if receiptTimer != nil {
+			receiptTimer.Stop()
+		}
+	}()
 	var steering <-chan struct{}
 	changes := make(chan claudePermissionChange)
 	permissionChanges := (<-chan claudePermissionChange)(changes)
@@ -171,6 +177,8 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	}
 	for {
 		select {
+		case <-receiptDeadline:
+			return errors.Join(ErrUnconfirmed, errors.New("Claude completed without acknowledging the follow-up input"))
 		case change := <-permissionChanges:
 			changing, permissionChanges = &change, nil
 			if err := p.Send(object{"type": "control_request", "request_id": "lever-permission", "request": object{"subtype": "set_permission_mode", "mode": change.mode}}); err != nil {
@@ -199,12 +207,11 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					continue
 				}
 				pendingSteers[message.RunID] = true
-				steered = true
 				loop.idle, loop.possibleWake = false, false
 				if name, _ := message.command(); name == "loop" {
 					loopEnabled = true
 				}
-				err = p.Send(object{"type": "user", "uuid": message.RunID, "priority": "now", "message": object{"role": "user", "content": content}})
+				err = p.Send(object{"type": "user", "uuid": message.RunID, "priority": "next", "message": object{"role": "user", "content": content}})
 				if err != nil {
 					if saveErr := sink.Steered(message.RunID, err); saveErr != nil {
 						return saveErr
@@ -484,6 +491,10 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 				}
 				if id := str(f["uuid"]); pendingSteers[id] {
 					delete(pendingSteers, id)
+					if receiptTimer != nil && len(pendingSteers) == 0 {
+						receiptTimer.Stop()
+						receiptDeadline = nil
+					}
 					if err := sink.Steered(id, nil); err != nil {
 						return err
 					}
@@ -517,13 +528,16 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					}
 					continue
 				}
-				// A priority-now input aborts a segment, not the whole execution.
-				if steered && aborted {
-					continue
+				if aborted {
+					return context.Canceled
 				}
 				// The previous result can cross an input already written to stdin.
 				// Wait until the CLI echoes that input before accepting its result.
 				if len(pendingSteers) > 0 && f["is_error"] != true && str(f["subtype"]) == "success" {
+					if receiptDeadline == nil {
+						receiptTimer = time.NewTimer(30 * time.Second)
+						receiptDeadline = receiptTimer.C
+					}
 					continue
 				}
 				if nativeID == "" {

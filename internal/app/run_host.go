@@ -141,7 +141,7 @@ func (e *execution) followHost() error {
 				err = errors.New("invalid provider worker state: " + phase)
 			}
 		}
-		if err == nil && checkSteers && active && provider.Capabilities(e.provider.Type).Steering {
+		if err == nil && checkSteers && active {
 			for {
 				var msg *provider.Input
 				msg, err = e.NextSteer()
@@ -231,11 +231,17 @@ func (e *execution) applyHostEvent(v hostEvent) error {
 	case "closeRequest":
 		return e.closeHostRequest(value)
 	case "runtime":
-		var state model.SessionRuntime
-		if err := json.Unmarshal([]byte(v.data), &state); err != nil {
+		var update runhost.RuntimeUpdate
+		if err := json.Unmarshal([]byte(v.data), &update); err != nil {
 			return err
 		}
-		return e.UpdateRuntime(func(s *model.SessionRuntime) { *s = state })
+		if err := e.UpdateRuntime(func(s *model.SessionRuntime) { *s = update.SessionRuntime }); err != nil {
+			return err
+		}
+		if update.SteerState != "" {
+			return e.SetSteerState(update.SteerState)
+		}
+		return nil
 	case "changes":
 		var changes []model.RunChanges
 		if err := json.Unmarshal([]byte(v.data), &changes); err != nil {
@@ -267,6 +273,21 @@ func (e *execution) applyHostEvent(v hostEvent) error {
 		e.dirty = true
 		e.mu.Unlock()
 		return e.flush()
+	case "steerable":
+		var ready bool
+		if err := json.Unmarshal([]byte(v.data), &ready); err != nil {
+			return err
+		}
+		if ready {
+			return e.SetSteerState(provider.SteerReady)
+		}
+		return e.SetSteerState(provider.SteerUnavailable)
+	case "steerState":
+		var state provider.SteerState
+		if err := json.Unmarshal([]byte(v.data), &state); err != nil {
+			return err
+		}
+		return e.SetSteerState(state)
 	case "steered":
 		var ack runhost.SteerResult
 		if err := json.Unmarshal([]byte(v.data), &ack); err != nil {
@@ -331,6 +352,9 @@ func (e *execution) closeHostRequest(id string) error {
 		return nil
 	})
 	if err == nil {
+		if e.run.Status == "waiting_user" && next.Status == "running" {
+			e.wakeSteer()
+		}
 		e.run.Status = next.Status
 	}
 	return err

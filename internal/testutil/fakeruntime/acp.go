@@ -79,6 +79,7 @@ func acpFixture() {
 	var directories, servers []any
 	var history []string
 	var promptID any
+	var steerTarget any
 	var receipt object
 	waitingForMode := false
 	var meta any
@@ -151,6 +152,9 @@ func acpFixture() {
 		respond := func(result any) { send(object{"jsonrpc": "2.0", "id": frame["id"], "result": result}) }
 		switch method {
 		case "initialize":
+			if slices.Contains(os.Args, "--hold-initialize") {
+				fixtureSteerGate("[defer-steer]")
+			}
 			caps := object{"loadSession": !slices.Contains(os.Args, "--no-resume"), "promptCapabilities": object{"image": !limited && (!dsh || dshImages), "audio": slices.Contains(os.Args, "--audio"), "embeddedContext": !limited && !dsh}, "sessionCapabilities": object{}}
 			if !limited && (!nativeCLI || processPerSession) {
 				caps["mcpCapabilities"] = object{"http": true}
@@ -174,7 +178,12 @@ func acpFixture() {
 				caps["loadSession"] = false
 				obj(caps["sessionCapabilities"])["resume"] = object{}
 			}
-			respond(object{"protocolVersion": 1, "agentInfo": object{"name": "ACP fixture", "version": version}, "authMethods": []any{}, "agentCapabilities": caps})
+			init := object{"protocolVersion": 1, "agentInfo": object{"name": "ACP fixture", "version": version}, "authMethods": []any{}, "agentCapabilities": caps}
+			if slices.Contains(os.Args, "--steering-extension") {
+				init["agentInfo"] = object{"name": "@agentclientprotocol/codex-acp", "version": "2.4.0"}
+				init["_meta"] = object{"steering": object{"supported": true}}
+			}
+			respond(init)
 		case "authenticate":
 			if antigravity && !nativeCLI && params["methodId"] == "gemini-api-key" {
 				if os.Getenv("GEMINI_API_KEY") != "fixture-gemini-key" || os.Getenv("GOOGLE_API_KEY") != "" {
@@ -306,7 +315,7 @@ func acpFixture() {
 			model = str(params["modelId"])
 			save()
 			respond(object{})
-		case "session/prompt":
+		case "session/prompt", "_session/steering":
 			promptID = frame["id"]
 			blocks, _ := params["prompt"].([]any)
 			input := ""
@@ -323,6 +332,39 @@ func acpFixture() {
 				}
 			}
 			history = append(history, input)
+			if steerTarget != nil {
+				if str(params["sessionId"]) != native {
+					os.Exit(2)
+				}
+				if method == "_session/steering" {
+					if obj(obj(params["_meta"])["steering"])["idleBehavior"] != "promptRequired" {
+						os.Exit(2)
+					}
+					if strings.Contains(input, "[reject-steer]") {
+						respond(object{"outcome": "promptRequired"})
+					} else {
+						respond(object{"outcome": "injected"})
+					}
+				} else {
+					send(object{"jsonrpc": "2.0", "id": steerTarget, "result": object{"stopReason": "end_turn"}})
+				}
+				if strings.Contains(input, "[disconnect-steer]") {
+					return
+				}
+				notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "after: " + input}})
+				if method == "_session/steering" {
+					promptID = steerTarget
+				}
+				send(object{"jsonrpc": "2.0", "id": promptID, "result": object{"stopReason": "end_turn"}})
+				steerTarget = nil
+				continue
+			}
+			if strings.Contains(fixtureCommands(input), "[steer-open]") {
+				fixtureSteerGate(input)
+				steerTarget = promptID
+				notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "before steer"}})
+				continue
+			}
 			if input == "/compact" {
 				notify(object{"sessionUpdate": "available_commands_update", "availableCommands": []object{}})
 				notify(object{"sessionUpdate": "usage_update", "used": 32, "size": 4096})

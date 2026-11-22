@@ -22,7 +22,6 @@ import { isLeverReference } from "./prompt";
 export function QueuedMessages({
   runs,
   activeRun,
-  steeringSupported,
   catalog,
   disabled,
   editing,
@@ -31,7 +30,6 @@ export function QueuedMessages({
 }: {
   runs: Run[];
   activeRun?: Run;
-  steeringSupported?: boolean;
   catalog?: Catalog | null;
   disabled?: boolean;
   editing?: string;
@@ -56,7 +54,10 @@ export function QueuedMessages({
           references: run.references,
           quote: run.quote,
         });
-      return api(`/runs/${run.id}/queue`, { action });
+      return api(`/runs/${run.id}/queue`, {
+        action,
+        steerRunId: action === "send" ? activeRun?.id : undefined,
+      });
     },
     onSuccess: async (_, { run, action }) => {
       if (action === "send") {
@@ -113,7 +114,7 @@ export function QueuedMessages({
                 (run.selection.permission &&
                   currentSelection.permission !== run.selection.permission));
             const canSteer =
-              steeringSupported &&
+              (activeRun?.canSteer || activeRun?.steerPending) &&
               !run.references?.some(isLeverReference) &&
               currentSelection &&
               !differentPolicy &&
@@ -140,6 +141,14 @@ export function QueuedMessages({
                     sessionId={run.sessionId}
                   />
                   <Attachments files={run.attachments} />
+                  {activeRun && run.steerRunId === activeRun.id && (
+                    <p
+                      role="status"
+                      className="mt-1 text-xs text-muted-foreground"
+                    >
+                      {t("queue.steerWhenReady")}
+                    </p>
+                  )}
                   {steerHint && (
                     <p
                       id={steerHintId}
@@ -191,9 +200,17 @@ export function QueuedMessages({
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        aria-label={t("queue.steer")}
+                        aria-label={t(
+                          activeRun?.steerPending
+                            ? "queue.steerWhenReady"
+                            : "queue.steer",
+                        )}
                         aria-describedby={steerHintId}
-                        title={t("queue.steer")}
+                        title={t(
+                          activeRun?.steerPending
+                            ? "queue.steerWhenReady"
+                            : "queue.steer",
+                        )}
                         disabled={busy || !canSteer || !!editing}
                         onClick={() => action.mutate({ run, action: "send" })}
                       >

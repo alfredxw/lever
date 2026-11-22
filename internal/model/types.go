@@ -390,6 +390,8 @@ type Run struct {
 	NativeTurnID        *string      `json:"nativeTurnId,omitempty"`
 	CanPause            bool         `json:"canPause,omitempty"`
 	PauseRequested      bool         `json:"pauseRequested,omitempty"`
+	CanSteer            bool         `json:"canSteer,omitempty"`
+	SteerPending        bool         `json:"steerPending,omitempty"`
 	Continued           bool         `json:"continued,omitempty"`
 	ResumeAfterShutdown bool         `json:"resumeAfterShutdown,omitempty"`
 	Operation           string       `json:"operation,omitempty"`
@@ -511,6 +513,7 @@ type SendInput struct {
 	References    []Reference   `json:"references,omitempty"`
 	Quote         *MessageQuote `json:"quote,omitempty"`
 	Delivery      string        `json:"delivery,omitempty"`
+	SteerRunID    string        `json:"steerRunId,omitempty"`
 	EditRunID     string        `json:"editRunId,omitempty"`
 	ReplaceRunID  string        `json:"replaceRunId,omitempty"`
 }

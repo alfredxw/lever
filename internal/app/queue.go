@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 
 	"lever/internal/model"
 	"lever/internal/provider"
 	"lever/internal/store"
+	"lever/internal/workspace"
 )
 
 func (a *App) pauseQueueLocked(ctx context.Context, sessionID string) error {
@@ -96,7 +98,7 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 				return conflict("This session stopped before its native identity was confirmed. Retry the stopped message or start a new Chat or topic.")
 			}
 		}
-		if err := reserveRun(tx, &run, &session); err != nil {
+		if err := reserveRun(tx, &run, &session, config); err != nil {
 			return err
 		}
 		profile = agent.Profile
@@ -109,7 +111,7 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 	return err
 }
 
-func reserveRun(tx *sql.Tx, run *model.Run, session *model.Session) error {
+func reserveRun(tx *sql.Tx, run *model.Run, session *model.Session, config model.Provider) error {
 	paused, err := store.Get[model.Run](context.Background(), tx, "SELECT data FROM runs WHERE session_id=? AND status='paused'", session.ID)
 	if err == nil {
 		if err := finishPausedRun(tx, paused); err != nil {
@@ -130,6 +132,19 @@ WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','cancell
 		}
 	}
 	run.Status, run.Error, run.SteerRunID = "starting", "", ""
+	run.CanSteer, run.SteerPending = config.Type == "codex" || config.Type == "claude", false
+	switch config.Type {
+	case "pi":
+		command := strings.Fields(runPrompt(*run))
+		run.SteerPending = len(command) == 0 || command[0] != "/compact" || len(run.References)+len(run.Attachments) != 0
+	case "acp", "antigravity":
+		err := tx.QueryRow(`SELECT coalesce(json_extract(data,'$.capabilities.steering'),0) FROM provider_catalogs WHERE provider_id=? AND config_dir=? AND cwd=?`, config.ID, provider.ConfigurationDirectory(config), workspace.CWD(session.Scope)).Scan(&run.SteerPending)
+		if errors.Is(err, sql.ErrNoRows) {
+			run.SteerPending = config.Type == "antigravity" && provider.IsAntigravityCLI(config, config.Command)
+		} else if err != nil {
+			return err
+		}
+	}
 	run.StartedAt = now()
 	session.Selection = run.Selection
 	_, err = tx.Exec("UPDATE sessions SET data=? WHERE id=?", store.JSON(session), session.ID)
@@ -169,13 +184,13 @@ func (e *execution) checkSteer(ctx context.Context, tx *sql.Tx, current model.Ru
 	if current.Selection.Provider != selection.Provider || current.Selection.Permission != selection.Permission {
 		return conflict("Queue the message to change runtimes or permissions during an execution")
 	}
-	if !provider.Capabilities(e.provider.Type).Steering {
-		return invalid("This runtime does not support steering. Queue this message instead.")
+	if !current.CanSteer && !current.SteerPending {
+		return invalid("The current turn cannot accept steering. Queue this message instead.")
 	}
 	return nil
 }
 
-func (a *App) QueueAction(ctx context.Context, runID, action string) error {
+func (a *App) QueueAction(ctx context.Context, runID, action, target string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
@@ -206,6 +221,9 @@ func (a *App) QueueAction(ctx context.Context, runID, action string) error {
 			}
 			for _, e := range a.active {
 				if e.session.ID == run.SessionID {
+					if target != "" && target != e.run.ID {
+						return conflict("The target turn has ended. The message is still queued.")
+					}
 					current, err := store.Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE id=?", e.run.ID)
 					if err != nil {
 						return err
@@ -256,6 +274,39 @@ func saveSteerSelection(tx *sql.Tx, run model.Run) error {
 	return err
 }
 
+func (e *execution) SetSteerState(state provider.SteerState) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	unsupported := e.run.SteerPending && state == provider.SteerUnavailable
+	e.run.CanSteer, e.run.SteerPending = state == provider.SteerReady, state == provider.SteerPending
+	err := e.app.Store.Write(e.ctx, func(tx *sql.Tx) error {
+		if unsupported {
+			if _, err := releaseDeferredSteers(e.ctx, tx, e.run.ID); err != nil {
+				return err
+			}
+		}
+		return store.SaveRun(tx, e.run)
+	})
+	if err == nil && e.run.CanSteer {
+		e.wakeSteer()
+	}
+	return err
+}
+
+func releaseDeferredSteers(ctx context.Context, tx *sql.Tx, target string) (bool, error) {
+	messages, err := store.List[model.Run](ctx, tx, "SELECT data FROM runs WHERE status='queued' AND json_extract(data,'$.steerRunId')=?", target)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		message.SteerRunID, message.Delivery = "", "queue"
+		if err := store.SaveRun(tx, message); err != nil {
+			return false, err
+		}
+	}
+	return len(messages) > 0, nil
+}
+
 func (e *execution) wakeSteer() {
 	select {
 	case e.steers <- struct{}{}:
@@ -266,7 +317,7 @@ func (e *execution) wakeSteer() {
 func (e *execution) NextSteer() (*provider.Input, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.permissionChange != nil || e.run.Status == "cancelling" {
+	if !e.run.CanSteer || e.permissionChange != nil || (e.run.Status != "starting" && e.run.Status != "running") {
 		return nil, nil
 	}
 	var run model.Run

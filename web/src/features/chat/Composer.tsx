@@ -360,11 +360,6 @@ export function Composer({
           )
         ? t("composer.unavailableCollaborator")
         : "";
-  const activeCapabilities =
-    activeRun?.selection.provider === selection.provider
-      ? capabilities
-      : providers?.find((item) => item.id === activeRun?.selection.provider)
-          ?.capabilities;
   const sessionRuntime =
     !comparisonAgents &&
     !topicMode &&
@@ -612,17 +607,13 @@ export function Composer({
   const canSteer =
     !draft.editing &&
     !hasLeverReferences &&
-    capabilities?.steering &&
+    (activeRun?.canSteer || activeRun?.steerPending) &&
     running &&
-    activeRun &&
     !activeRun.channel &&
     activeRun.sessionId === session?.id &&
     ["starting", "running"].includes(activeRun.status) &&
     activeRun.selection.provider === selection.provider &&
-    (activeRun.selection.permission ||
-      sessionPermission ||
-      profilePermission ||
-      "ask") === permission;
+    (activeRun.selection.permission || "") === permission;
   const steerHint =
     canSteer && steerModelHint(t, catalog.data, activeRun.selection, selection);
   const goalControl = /^\/goal(?:\s+(status|show|pause|resume|clear))?$/i.exec(
@@ -648,10 +639,20 @@ export function Composer({
   const defaultAction = defaultDelivery && followUpActions[defaultDelivery];
   const alternateAction =
     alternateDelivery && followUpActions[alternateDelivery];
+  const actionLabel = (action: (typeof followUpActions)["steer" | "queue"]) =>
+    t(
+      action === followUpActions.steer && activeRun?.steerPending
+        ? "queue.steerWhenReady"
+        : action.label,
+    );
   const editLabel = editingSent ? "chat.resendEdit" : "queue.save";
   const sendLabel = comparisonAgents
     ? t("comparison.send", { count: comparisonAgents.length })
-    : t(draft.editing ? editLabel : (defaultAction?.label ?? "chat.send"));
+    : draft.editing
+      ? t(editLabel)
+      : defaultAction
+        ? actionLabel(defaultAction)
+        : t("chat.send");
   const sendButtonText =
     draft.editing || comparisonAgents
       ? sendLabel
@@ -797,6 +798,11 @@ export function Composer({
       operation,
       // A retry keeps its original delivery even if the preference has changed.
       delivery: previousSend ? previousSend.delivery : delivery,
+      steerRunId: previousSend
+        ? previousSend.steerRunId
+        : delivery === "steer"
+          ? activeRun?.id
+          : undefined,
       ...(replaceRunId
         ? { replaceRunId }
         : { editRunId: draft.editing?.runId }),
@@ -813,6 +819,7 @@ export function Composer({
     ) {
       input.commandId = crypto.randomUUID();
       input.delivery = delivery;
+      input.steerRunId = delivery === "steer" ? activeRun?.id : undefined;
     }
     localStorage.setItem(submissionKey, JSON.stringify(input));
     if (override && !replaySelection && override !== nextSelection)
@@ -944,7 +951,6 @@ export function Composer({
         <QueuedMessages
           runs={queuedRuns}
           activeRun={activeRun}
-          steeringSupported={activeCapabilities?.steering}
           catalog={catalog.data}
           disabled={sending || uploading || archived || !!readSubmission(key)}
           editing={draft.editing?.runId}
@@ -1432,10 +1438,10 @@ export function Composer({
                   <InputGroupButton
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={t(alternateAction.label)}
+                    aria-label={actionLabel(alternateAction)}
                     title={[
                       t("settings.followUpShortcutHint", {
-                        action: t(alternateAction.label),
+                        action: actionLabel(alternateAction),
                         shortcut: shortcuts.alternate,
                       }),
                       alternateDelivery === "steer" && steerHint,

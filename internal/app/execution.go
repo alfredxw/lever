@@ -299,6 +299,7 @@ func (e *execution) Ask(ctx context.Context, r model.Request) (model.Answer, err
 		if len(e.requests) == 0 && e.ctx.Err() == nil && e.run.Status == "waiting_user" {
 			e.run.Status = "running"
 			e.dirty = true
+			e.wakeSteer()
 		}
 		e.mu.Unlock()
 	}()
@@ -459,7 +460,7 @@ func (e *execution) finish(err error) {
 	if e.run.Status != "paused" && e.run.FinishedAt == "" {
 		e.run.FinishedAt = now()
 	}
-	e.run.PermissionMutable = false
+	e.run.PermissionMutable, e.run.CanSteer, e.run.SteerPending = false, false, false
 	for i := range e.run.Items {
 		if e.run.Items[i].Status == "running" {
 			if e.run.Items[i].Kind == "subagent" {
@@ -479,7 +480,11 @@ func (e *execution) finish(err error) {
 				return err
 			}
 		}
-		pending, err := store.List[model.Run](context.Background(), tx, "SELECT data FROM runs WHERE status='steering' AND json_extract(data,'$.steerRunId')=?", e.run.ID)
+		released, err := releaseDeferredSteers(ctx, tx, e.run.ID)
+		if err != nil {
+			return err
+		}
+		pending, err := store.List[model.Run](ctx, tx, "SELECT data FROM runs WHERE status='steering' AND json_extract(data,'$.steerRunId')=?", e.run.ID)
 		if err != nil {
 			return err
 		}
@@ -514,7 +519,7 @@ func (e *execution) finish(err error) {
 			return err
 		}
 		task := e.run.Task
-		delivered := e.run.TaskCompletionRequested && e.run.Status == "completed" && len(requests) == 0 && len(pending) == 0
+		delivered := e.run.TaskCompletionRequested && e.run.Status == "completed" && len(requests) == 0 && len(pending) == 0 && !released
 		if !delivered || task == nil || e.run.Selection.Permission == "read_only" {
 			return nil
 		}

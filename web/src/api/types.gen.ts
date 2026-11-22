@@ -829,6 +829,8 @@ export interface Run {
   nativeTurnId?: string;
   canPause?: boolean;
   pauseRequested?: boolean;
+  canSteer?: boolean;
+  steerPending?: boolean;
   continued?: boolean;
   resumeAfterShutdown?: boolean;
   operation?: string;
@@ -939,6 +941,7 @@ export interface SendInput {
   references?: Reference[];
   quote?: MessageQuote;
   delivery?: string;
+  steerRunId?: string;
   editRunId?: string;
   replaceRunId?: string;
 }

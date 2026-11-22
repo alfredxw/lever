@@ -59,6 +59,20 @@ func fixtureTitle(prompt string) string {
 	return title
 }
 
+func fixtureSteerGate(input string) {
+	if !strings.Contains(fixtureCommands(input), "[defer-steer]") {
+		return
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat("allow-steer"); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	os.Exit(2)
+}
+
 var outMu sync.Mutex
 
 func send(v any) { outMu.Lock(); defer outMu.Unlock(); _ = json.NewEncoder(os.Stdout).Encode(v) }
@@ -718,7 +732,7 @@ func delegate(config object, target string) (string, error) {
 
 func claude() {
 	native := fmt.Sprintf("claude-%d", time.Now().UnixNano())
-	var resumed, pausable bool
+	var resumed, pausable, toolInFlight bool
 	modelName, effort, permission := "", "", ""
 	instructions := ""
 	settings := object{}
@@ -822,6 +836,14 @@ func claude() {
 				send(object{"type": "result", "subtype": "success", "session_id": native, "result": text})
 			}
 		case "user":
+			if toolInFlight {
+				toolInFlight = false
+				if f["priority"] != "next" {
+					send(object{"type": "result", "subtype": "error_during_execution", "is_error": true, "terminal_reason": "aborted_tools"})
+					continue
+				}
+				send(object{"type": "user", "message": object{"content": []object{{"type": "tool_result", "tool_use_id": "original-tool", "content": "original tool finished"}}}})
+			}
 			if str(f["priority"]) == "now" {
 				send(object{"type": "result", "terminal_reason": "aborted_streaming", "subtype": "success", "session_id": native})
 			}
@@ -880,6 +902,11 @@ func claude() {
 				continue
 			}
 			if strings.Contains(fixtureCommands(text), "[hang]") {
+				continue
+			}
+			if strings.Contains(fixtureCommands(text), "[steer-tool]") {
+				toolInFlight = true
+				send(object{"type": "assistant", "message": object{"id": "before-steer", "content": []object{{"type": "text", "text": "before steer"}, {"type": "tool_use", "name": "Read", "id": "original-tool"}}}})
 				continue
 			}
 			send(object{"type": "stream_event", "event": object{"type": "message_start", "message": object{"id": "msg-1"}}})

@@ -900,6 +900,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "queue.paused": "队列已暂停 · {{count}} 条",
   "queue.resume": "继续队列",
   "queue.steer": "发送到当前执行",
+  "queue.steerWhenReady": "当前执行就绪后追加",
   "queue.steerUsesActiveModel":
     "追加时沿用 {{current}} 的当前设置，所选设置供下一轮使用。",
   "queue.steerModelChangesNextTurn":

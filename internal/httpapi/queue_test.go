@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +31,165 @@ func (f *fixture) waitNative(sessionID string) model.Session {
 	}
 	f.t.Fatal("runtime did not bind its native session")
 	return model.Session{}
+}
+
+func TestNegotiatedSteer(t *testing.T) {
+	for _, kind := range []string{"antigravity", "pi", "acp"} {
+		t.Run(kind, func(t *testing.T) {
+			f := openFixture(t, app.OpenServer).withLocalProviders()
+			var agent model.Agent
+			switch kind {
+			case "pi":
+				agent = f.piAgent()
+			case "antigravity":
+				agent = f.acpAgent(model.Provider{ID: kind, Name: kind})
+			case "acp":
+				agent = f.acpAgent(f.acpProvider("with-extension", "--steering-extension"))
+			}
+			chat := f.chat(agent)
+			for _, follow := range []string{"change direction", "[reject-steer]", "[disconnect-steer]"} {
+				if kind == "antigravity" && follow == "[reject-steer]" || kind == "acp" && follow == "[disconnect-steer]" {
+					continue
+				}
+				active := f.send(chat.ID, "topic", "", "[steer-open]")
+				for deadline := time.Now().Add(8 * time.Second); ; time.Sleep(15 * time.Millisecond) {
+					f.request("GET", "/runs/"+active.ID, nil, 200, &active)
+					if active.CanSteer {
+						break
+					}
+					if time.Now().After(deadline) || !model.Active(active.Status) {
+						t.Fatalf("did not become steerable: %s: %s", active.Status, active.Error)
+					}
+				}
+				var steer model.Run
+				f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "reply", SessionID: active.SessionID, Delivery: "queue", Text: follow}, 200, &steer)
+				f.request("POST", "/runs/"+steer.ID+"/queue", map[string]string{"action": "send"}, 200, nil)
+				if follow == "[disconnect-steer]" {
+					f.wait(active.ID, "unknown")
+					if got := f.wait(steer.ID, "steered"); got.Error == "" {
+						t.Fatal("ambiguous steer was confirmed")
+					}
+					continue
+				}
+				completed := f.wait(active.ID, "completed")
+				if completed.CanSteer || !hasPauseTestOutput(completed, "before steer") {
+					t.Fatal(completed)
+				}
+				if follow == "[reject-steer]" {
+					if got := f.wait(steer.ID, "completed"); got.SteerRunID != "" {
+						t.Fatal(got)
+					}
+					continue
+				}
+				if got := f.wait(steer.ID, "steered"); got.SteerRunID != active.ID || got.Error != "" || !hasPauseTestOutput(completed, "after: "+follow) {
+					t.Fatal(got, completed)
+				}
+			}
+		})
+	}
+}
+
+func TestDeferredSteerIsBoundToOneRun(t *testing.T) {
+	for _, kind := range []string{"antigravity", "pi"} {
+		t.Run(kind, func(t *testing.T) {
+			f := openFixture(t, app.OpenServer).withLocalProviders()
+			var agent model.Agent
+			if kind == "pi" {
+				agent = f.piAgent()
+			} else {
+				agent = f.acpAgent(model.Provider{ID: kind, Name: kind})
+			}
+			chat := f.chat(agent)
+			first := f.send(chat.ID, "main", "", "[defer-steer] [steer-open]")
+			if !first.SteerPending || first.CanSteer {
+				t.Fatal(first)
+			}
+			var queued, deferred model.Run
+			input := model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Delivery: "queue", Text: "next turn only"}
+			f.request("POST", "/messages", input, 200, &queued)
+			input.CommandID, input.Text, input.Delivery, input.SteerRunID = app.ID(), "change direction", "steer", first.ID
+			f.request("POST", "/messages", input, 200, &deferred)
+			if deferred.Status != "queued" || deferred.SteerRunID != first.ID {
+				t.Fatal(deferred)
+			}
+			var taken bool
+			if err := f.a.Store.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM runtime_commands WHERE kind='steer' AND run_id=?)`, first.ID).Scan(&taken); err != nil || taken {
+				t.Fatal("delivery before native readiness", taken, err)
+			}
+			if err := os.WriteFile(filepath.Join(f.root, "allow-steer"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			completed := f.wait(first.ID, "completed")
+			if completed.SteerPending || !hasPauseTestOutput(completed, "after: change direction") || hasPauseTestOutput(completed, "next turn only") {
+				t.Fatal(completed)
+			}
+			if got := f.wait(deferred.ID, "steered"); got.Error != "" {
+				t.Fatal(got)
+			}
+			if got := f.wait(queued.ID, "completed"); got.SteerRunID != "" {
+				t.Fatal(got)
+			}
+			input.CommandID = app.ID()
+			f.request("POST", "/messages", input, 409, nil)
+		})
+	}
+}
+
+func TestClaudeSteerPreservesInFlightTool(t *testing.T) {
+	f := newFixture(t)
+	chat := f.chat(f.agent("claude"))
+	first := f.send(chat.ID, "main", "", "[steer-tool]")
+	f.waitNative(first.SessionID)
+	var follow model.Run
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "new instruction", Delivery: "steer", SteerRunID: first.ID}, 200, &follow)
+	got := f.wait(first.ID, "completed")
+	if !hasPauseTestOutput(got, "before steer") || !hasPauseTestOutput(got, "new instruction") {
+		t.Fatal(got)
+	}
+	if ack := f.wait(follow.ID, "steered"); ack.Error != "" {
+		t.Fatal(ack)
+	}
+	for _, item := range got.Items {
+		if item.Kind == "tool" && item.Status == "completed" && strings.Contains(item.Text, "original tool finished") {
+			return
+		}
+	}
+	t.Fatal("no successful receipt from the original tool", got.Items)
+}
+
+func TestDeferredSteerFallsBackAfterChangedHandshake(t *testing.T) {
+	f := openFixture(t, app.OpenServer).withLocalProviders()
+	config := f.acpProvider("changed-handshake", "--hold-initialize")
+	chat := f.chat(f.acpAgent(config))
+	gate := filepath.Join(f.root, "allow-steer")
+	if err := os.WriteFile(gate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.request("GET", "/providers/"+config.ID+"/models?cwd="+url.QueryEscape(f.root), nil, 200, nil)
+	if _, err := f.a.Store.DB.Exec(`UPDATE provider_catalogs SET data=json_set(data,'$.capabilities.steering',json('true')) WHERE provider_id=?`, config.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gate); err != nil {
+		t.Fatal(err)
+	}
+	first := f.send(chat.ID, "main", "", "[steer-open]")
+	var follow model.Run
+	f.request("POST", "/messages", model.SendInput{ChatID: chat.ID, CommandID: app.ID(), Operation: "main", Text: "next turn if unsupported", Delivery: "steer", SteerRunID: first.ID}, 200, &follow)
+	if err := os.WriteFile(gate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.waitNative(first.SessionID)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(15 * time.Millisecond) {
+		var current model.Run
+		f.request("GET", "/runs/"+follow.ID, nil, 200, &current)
+		if current.Status == "queued" && current.Delivery == "queue" && current.SteerRunID == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(current)
+		}
+	}
+	f.request("POST", "/runs/"+first.ID+"/stop", map[string]bool{}, 200, nil)
 }
 
 func TestSessionsExecuteAndQueueIndependently(t *testing.T) {

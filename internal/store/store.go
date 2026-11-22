@@ -587,13 +587,18 @@ func (s *Store) Recover(ctx context.Context) ([]RestartRun, error) {
 		if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('true')) WHERE id IN (SELECT session_id FROM runs WHERE status IN ('queued','steering','starting','running','waiting_user','cancelling')) AND id NOT IN (SELECT r.session_id FROM runs r JOIN runtime_hosts h ON r.id=h.run_id)"); err != nil {
 			return err
 		}
-		steers, err := List[model.Run](ctx, tx, "SELECT data FROM runs WHERE status='steering' AND coalesce(json_extract(data,'$.steerRunId'),'') NOT IN (SELECT run_id FROM runtime_hosts)")
+		steers, err := List[model.Run](ctx, tx, `SELECT data FROM runs WHERE (status='steering' OR (status='queued' AND json_extract(data,'$.steerRunId') IS NOT NULL))
+			AND coalesce(json_extract(data,'$.steerRunId'),'') NOT IN (SELECT run_id FROM runtime_hosts)`)
 		if err != nil {
 			return err
 		}
 		for _, run := range steers {
-			run.Status = "steered"
-			run.Error = "Delivery was not confirmed before the backend stopped; this input will not be replayed."
+			if run.Status == "queued" {
+				run.SteerRunID, run.Delivery = "", "queue"
+			} else {
+				run.Status = "steered"
+				run.Error = "Delivery was not confirmed before the backend stopped; this input will not be replayed."
+			}
 			if err := SaveRun(tx, run); err != nil {
 				return err
 			}
@@ -604,6 +609,7 @@ func (s *Store) Recover(ctx context.Context) ([]RestartRun, error) {
 		}
 		for _, run := range runs {
 			run.Status = "unknown"
+			run.CanSteer, run.SteerPending = false, false
 			for i := range run.Items {
 				if (run.Items[i].Kind == "user" || run.Items[i].Kind == "subagent") && run.Items[i].Status == "running" {
 					run.Items[i].Status = "unknown"

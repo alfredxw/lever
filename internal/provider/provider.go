@@ -58,6 +58,14 @@ func SupportsTurnContinuation(kind string) bool {
 	return kind == "codex" || kind == "claude"
 }
 
+type SteerState string
+
+const (
+	SteerUnavailable SteerState = "unavailable"
+	SteerPending     SteerState = "pending"
+	SteerReady       SteerState = "ready"
+)
+
 func (in Input) CanPauseTurn() bool {
 	if !SupportsTurnContinuation(in.Provider.Type) {
 		return false
@@ -143,6 +151,7 @@ type Sink interface {
 	TurnDiff(string) error
 	Ask(context.Context, model.Request) (model.Answer, error)
 	EnablePermissionChanges(func(context.Context, string) error)
+	SetSteerState(SteerState) error
 	NextSteer() (*Input, error)
 	Steered(string, error) error
 }

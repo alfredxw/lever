@@ -953,6 +953,7 @@ export const enUS = {
   "queue.paused": "{{count}} queued · Paused",
   "queue.resume": "Resume queue",
   "queue.steer": "Send into current turn",
+  "queue.steerWhenReady": "Send into this turn when ready",
   "queue.steerUsesActiveModel":
     "Steer uses the current {{current}} settings. Your selection applies to the next turn.",
   "queue.steerModelChangesNextTurn":

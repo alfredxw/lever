@@ -559,13 +559,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/runs/{id}/queue", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Action string `json:"action"`
+			Action     string `json:"action"`
+			SteerRunID string `json:"steerRunId,omitempty"`
 		}
 		if err := read(w, r, &in); err != nil {
 			respond(w, nil, err)
 			return
 		}
-		respond(w, map[string]bool{"accepted": true}, a.QueueAction(r.Context(), r.PathValue("id"), in.Action))
+		respond(w, map[string]bool{"accepted": true}, a.QueueAction(r.Context(), r.PathValue("id"), in.Action, in.SteerRunID))
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/queue/resume", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"accepted": true}, a.ResumeQueue(r.Context(), r.PathValue("id")))

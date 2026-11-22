@@ -122,6 +122,11 @@ func TestProviderSurvivesBackendExit(t *testing.T) {
 	}
 	oldPID := backend.Process.Pid
 	killBackend()
+	// A detached worker from an earlier build can still have this standalone
+	// event in front of its final output when the backend reattaches.
+	if _, err := db.Exec(`INSERT INTO runtime_events(run_id,kind,data) VALUES(?,'steerState','"unavailable"')`, background.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.WriteFile(filepath.Join(root, "continue-provider"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -12,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
+	"github.com/google/uuid"
 	"lever/internal/model"
 )
 
@@ -74,6 +77,7 @@ func TestLiveComposer(t *testing.T) {
 	t.Logf("model=%s effort=%s fast=%t image=%s", chosen.ID, selection.Effort, selection.Fast, text)
 }
 
+func (s *liveSink) SetSteerState(SteerState) error                              { return nil }
 func (s *liveSink) NextSteer() (*Input, error)                                  { return nil, nil }
 func (s *liveSink) Steered(string, error) error                                 { return nil }
 func (s *liveSink) TurnDiff(string) error                                       { return nil }
@@ -159,6 +163,125 @@ func TestLiveRuntimes(t *testing.T) {
 	}
 }
 
+type liveSteerSink struct {
+	*liveSink
+	wake     chan struct{}
+	manual   bool
+	message  *Input
+	receipts int
+}
+
+func (s *liveSteerSink) SetSteerState(state SteerState) error {
+	if state == SteerReady && !s.manual && s.message != nil {
+		s.wake <- struct{}{}
+	}
+	return nil
+}
+
+func (s *liveSteerSink) NextSteer() (*Input, error) {
+	message := s.message
+	s.message = nil
+	return message, nil
+}
+
+func (s *liveSteerSink) Steered(_ string, delivery error) error {
+	s.receipts++
+	return delivery
+}
+
+type liveClaudeToolSink struct{ *liveSteerSink }
+
+const liveClaudeCommand = "echo started > ready.txt && sleep 8 && echo original > proof.txt"
+
+func (s *liveClaudeToolSink) Ask(_ context.Context, request model.Request) (model.Answer, error) {
+	var input struct{ Command string }
+	allow := request.Title == "Bash" && json.Unmarshal([]byte(request.Detail), &input) == nil && input.Command == liveClaudeCommand
+	return model.Answer{Allow: allow}, nil
+}
+
+func TestLiveClaudeSteerDuringTool(t *testing.T) {
+	if os.Getenv("LEVER_LIVE_TEST") != "1" {
+		t.Skip("set LEVER_LIVE_TEST=1 for a real runtime smoke test")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	cwd := t.TempDir()
+	sink := &liveClaudeToolSink{&liveSteerSink{liveSink: &liveSink{items: map[string]model.Item{}}, manual: true, wake: make(chan struct{}, 1), message: &Input{RunID: uuid.NewString(), Text: "Keep the original Bash command running. Include ORCHID-427 in your reply. Do not call another tool."}}}
+	in := Input{RunID: uuid.NewString(), Provider: model.Provider{ID: "claude", Type: "claude", Enabled: true}, Session: model.Session{Scope: model.Scope{PrimaryRootID: "root", Roots: []model.Root{{ID: "root", Path: cwd}}}}, Selection: model.Selection{Provider: "claude", Permission: "ask"}, Assets: cwd, Text: "Use Bash once to run exactly this foreground command in the current directory, without changing it or moving it to the background: `" + liveClaudeCommand + "`. Once it finishes reply DONE.", Steers: sink.wake}
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, in, sink) }()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if _, err := os.Stat(filepath.Join(cwd, "ready.txt")); err != nil {
+				continue
+			}
+		case err := <-done:
+			t.Fatalf("Claude ended without starting the tool: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		break
+	}
+	sink.wake <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	sink.assertBackgroundSteer(t, cwd)
+}
+
+func (s *liveSteerSink) assertBackgroundSteer(t *testing.T, cwd string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(cwd, "proof.txt"))
+	var output strings.Builder
+	for _, item := range s.items {
+		if item.Kind == "text" {
+			output.WriteString(item.Text)
+		}
+	}
+	if string(data) != "original\n" || err != nil || s.receipts != 1 || !strings.Contains(output.String(), "ORCHID-427") {
+		t.Fatalf("file=%q (%v), receipts=%d, reply=%q", data, err, s.receipts, output.String())
+	}
+}
+
+func TestLiveAntigravitySteer(t *testing.T) {
+	testLiveSteer(t, "antigravity", "agy")
+}
+
+func TestLiveCodexSteer(t *testing.T) {
+	testLiveSteer(t, "codex", "codex")
+}
+
+func testLiveSteer(t *testing.T, kind, command string) {
+	t.Helper()
+	if os.Getenv("LEVER_LIVE_TEST") != "1" {
+		t.Skip("set LEVER_LIVE_TEST=1 for a real runtime smoke test")
+	}
+	cwd := t.TempDir()
+	ctx, cancel := context.WithTimeout(WithStateDir(context.Background(), t.TempDir()), 3*time.Minute)
+	defer cancel()
+	sink := &liveSteerSink{liveSink: &liveSink{items: map[string]model.Item{}}, wake: make(chan struct{}, 1), message: &Input{RunID: uuid.NewString(), Text: "Change of plan. Stop listing names and reply with exactly ORCHID-427. Do not use tools."}}
+	if kind == "codex" {
+		sink.manual = true
+		sink.wake <- struct{}{}
+	}
+	err := Run(ctx, Input{RunID: uuid.NewString(), Provider: model.Provider{ID: kind, Type: kind, Command: command, Enabled: true}, Session: model.Session{ID: "live-steer", Scope: model.Scope{PrimaryRootID: "root", Roots: []model.Root{{ID: "root", Path: cwd}}}}, Assets: cwd, Text: "Without using tools, write a numbered list of twenty imaginary island names.", Steers: sink.wake}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	for _, item := range sink.items {
+		if item.Kind == "text" {
+			output.WriteString(item.Text)
+		}
+	}
+	if sink.receipts != 1 || !strings.Contains(output.String(), "ORCHID-427") {
+		t.Fatalf("receipts=%d, reply=%q", sink.receipts, output.String())
+	}
+}
+
 func TestLiveAntigravityBackgroundContinuation(t *testing.T) {
 	if os.Getenv("LEVER_LIVE_TEST") != "1" {
 		t.Skip("set LEVER_LIVE_TEST=1 for a real runtime smoke test")
@@ -205,4 +328,59 @@ func TestLiveAntigravityBackgroundContinuation(t *testing.T) {
 		t.Fatalf("run finished before final post-background reply: %s", text.String())
 	}
 	t.Logf("native=%s output=%q", sink.native, text.String())
+}
+
+func TestLiveAntigravitySteerDuringBackground(t *testing.T) {
+	if os.Getenv("LEVER_LIVE_TEST") != "1" {
+		t.Skip("set LEVER_LIVE_TEST=1 for a real runtime smoke test")
+	}
+	cwd := t.TempDir()
+	ctx, cancel := context.WithTimeout(WithStateDir(t.Context(), t.TempDir()), 3*time.Minute)
+	defer cancel()
+	sink := &liveSteerSink{liveSink: &liveSink{items: map[string]model.Item{}}, manual: true, wake: make(chan struct{}, 1), message: &Input{RunID: "follow", Text: "Keep the original command running. Include ORCHID-427 in your reply. Do not start another command."}}
+	config := model.Provider{ID: "antigravity", Type: "antigravity", Command: "agy", Enabled: true}
+	client, err := openACP(ctx, config, cwd, sink, "turbo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	state, err := client.sessionState(ctx, cwd, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := openAntigravitySessionDB(client.ctx, config, string(state.SessionID))
+	client.mu.Lock()
+	client.session, client.active = state.SessionID, true
+	client.background.probe = db.watchBackground()
+	client.mu.Unlock()
+	if err := client.applySelection(ctx, &state, model.Selection{Permission: client.preset.nativeMode, Model: "gemini-3.8-flash", Effort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- client.prompt(ctx, []acp.ContentBlock{acp.TextBlock(`Call run_command once with CommandLine="sleep 18 && echo original > proof.txt" and WaitMsBeforeAsync=500. Once it backgrounds, reply "WAITING" and end your turn to await the completion notification. When notified, reply "FINISHED". Do not poll or launch other tools.`)}, nil, sink.wake)
+	}()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			client.mu.Lock()
+			waiting := client.background.waiting && len(client.background.runningPastUsage) > 0
+			client.mu.Unlock()
+			if !waiting {
+				continue
+			}
+		case err := <-done:
+			t.Fatalf("native prompt ended without a live background command: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		break
+	}
+	sink.wake <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	sink.assertBackgroundSteer(t, cwd)
 }

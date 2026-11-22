@@ -19,13 +19,14 @@ func newRecordingSink() *recordingSink {
 	return &recordingSink{byID: map[string]model.Item{}}
 }
 
-func (s *recordingSink) Bind(string) error                                         { return nil }
-func (s *recordingSink) BindTurn(string) error                                     { return nil }
-func (s *recordingSink) UpdateRuntime(func(*model.SessionRuntime)) error           { return nil }
-func (s *recordingSink) TurnDiff(string) error                                     { return nil }
+func (s *recordingSink) Bind(string) error                                           { return nil }
+func (s *recordingSink) BindTurn(string) error                                       { return nil }
+func (s *recordingSink) UpdateRuntime(func(*model.SessionRuntime)) error             { return nil }
+func (s *recordingSink) TurnDiff(string) error                                       { return nil }
 func (s *recordingSink) EnablePermissionChanges(func(context.Context, string) error) {}
-func (s *recordingSink) NextSteer() (*Input, error)                                { return nil, nil }
-func (s *recordingSink) Steered(string, error) error                               { return nil }
+func (s *recordingSink) SetSteerState(SteerState) error                              { return nil }
+func (s *recordingSink) NextSteer() (*Input, error)                                  { return nil, nil }
+func (s *recordingSink) Steered(string, error) error                                 { return nil }
 func (s *recordingSink) Ask(context.Context, model.Request) (model.Answer, error) {
 	return model.Answer{}, nil
 }

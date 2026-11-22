@@ -795,6 +795,9 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 		}
 		disabledSkills := agent.Profile.DisabledSkills
 		steering := current != nil && input.Delivery == "steer" && input.EditRunID == ""
+		if input.SteerRunID != "" && (!steering || input.SteerRunID != current.ID) {
+			return conflict("The target turn has ended. Queue this message or choose another turn.")
+		}
 		if steering {
 			active := a.active[current.ID]
 			if err := active.checkSteer(ctx, tx, *current, selection, input.References); err != nil {
@@ -908,7 +911,7 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 				session.QueuePaused = true
 			}
 			if origin.retry != nil || replaced.ID != "" || origin.taskQueue != nil || startAfterPause {
-				if err = reserveRun(tx, &run, &session); err != nil {
+				if err = reserveRun(tx, &run, &session, config); err != nil {
 					return err
 				}
 				launchProfile, launchProvider = agent.Profile, config

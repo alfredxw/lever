@@ -382,6 +382,19 @@ func (w *worker) controls() error {
 	}
 	return dbErr
 }
+// Keep the runtime snapshot readable by older backends that may reattach to
+// this worker. Steering is a turn-local hint added to the mailbox payload.
+type RuntimeUpdate struct {
+	model.SessionRuntime
+	SteerState provider.SteerState `json:"steerState,omitempty"`
+}
+
+func (w *worker) SetSteerState(state provider.SteerState) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.emitLocked("runtime", RuntimeUpdate{SessionRuntime: w.runtime, SteerState: state})
+}
+
 func (w *worker) NextSteer() (*provider.Input, error) {
 	var raw string
 	err := w.db.QueryRow("UPDATE runtime_commands SET taken=1 WHERE seq=(SELECT min(seq) FROM runtime_commands WHERE run_id=? AND kind='steer' AND taken=0) RETURNING data", w.id).Scan(&raw)

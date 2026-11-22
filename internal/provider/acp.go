@@ -36,6 +36,7 @@ type acpRuntime struct {
 	session       acp.SessionId
 	active        bool
 	modeTouched   bool
+	promptStarted chan struct{}
 	agyCLI        bool
 	commands      map[acp.SessionId][]model.NativeCommand
 	skillCommands map[string]bool
@@ -197,7 +198,7 @@ func (c *acpRuntime) failure(err error) error {
 
 func (c *acpRuntime) capabilities() model.ProviderCapabilities {
 	a := c.initial.AgentCapabilities
-	return model.ProviderCapabilities{Images: a.PromptCapabilities.Image, Audio: a.PromptCapabilities.Audio, Files: true, FileLinksOnly: !a.PromptCapabilities.EmbeddedContext, MultiRoot: a.SessionCapabilities.AdditionalDirectories != nil, MCP: true, Resume: a.LoadSession || a.SessionCapabilities.Resume != nil}
+	return model.ProviderCapabilities{Steering: c.steerMethod() != "", Images: a.PromptCapabilities.Image, Audio: a.PromptCapabilities.Audio, Files: true, FileLinksOnly: !a.PromptCapabilities.EmbeddedContext, MultiRoot: a.SessionCapabilities.AdditionalDirectories != nil, MCP: true, Resume: a.LoadSession || a.SessionCapabilities.Resume != nil}
 }
 
 func acpDirectoryContext(caps model.ProviderCapabilities) bool {
@@ -448,6 +449,15 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	}
 	defer c.close()
 	caps := c.capabilities()
+	if in.Steers != nil {
+		state := SteerUnavailable
+		if caps.Steering {
+			state = SteerPending
+		}
+		if err := sink.SetSteerState(state); err != nil {
+			return err
+		}
+	}
 	if len(in.Profile.Skills) > 0 {
 		return errors.New("This ACP runtime does not support Agent skill directories")
 	}
@@ -585,7 +595,7 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 			c.mu.Unlock()
 		}
 	}
-	err = c.prompt(ctx, prompt, outcome)
+	err = c.prompt(ctx, prompt, outcome, in.Steers)
 	var checkpoint *antigravityAuthCheckpoint
 	if errors.As(err, &checkpoint) && c.agyCLI && caps.Resume && name == "" && c.canContinueAfterAuthFailure() {
 		checkpoint.native = native
@@ -593,11 +603,8 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	return err
 }
 
-func (c *acpRuntime) prompt(ctx context.Context, prompt []acp.ContentBlock, outcome func(acp.StopReason) error) error {
-	result, err := acp.SendRequest[acp.PromptResponse](c.conn, c.ctx, "session/prompt", acp.PromptRequest{SessionId: c.session, Prompt: prompt})
-	if err == nil {
-		_, err = c.awaitPromptBoundary(result, nil, false)
-	}
+func (c *acpRuntime) prompt(ctx context.Context, prompt []acp.ContentBlock, outcome func(acp.StopReason) error, steers <-chan struct{}) error {
+	result, err := c.runPrompts(prompt, steers)
 	c.mu.Lock()
 	if c.err == nil && err == nil {
 		c.err = c.finishMessage()
@@ -839,6 +846,11 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 		}
 		if !c.active || update.SessionId != c.session {
 			return nil, nil
+		}
+		u := &update.Update
+		if c.promptStarted != nil && (u.UserMessageChunk != nil || u.AgentMessageChunk != nil || u.AgentThoughtChunk != nil || u.ToolCall != nil || u.Plan != nil) {
+			close(c.promptStarted)
+			c.promptStarted = nil
 		}
 		if err := c.update(update.Update); err != nil {
 			c.err = err
