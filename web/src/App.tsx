@@ -1807,13 +1807,9 @@ export default function App() {
                             onPrefetch={prefetchStripTab}
                             leading={
                               (pane === "main" || maximized) && (
-                                <motion.div
+                                <div
                                   className="tab-leading"
                                   aria-hidden="true"
-                                  initial={false}
-                                  animate={{
-                                    "--tab-leading-progress": sidebar ? 0 : 1,
-                                  }}
                                 />
                               )
                             }

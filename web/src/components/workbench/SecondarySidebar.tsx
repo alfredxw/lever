@@ -8,12 +8,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { motion } from "motion/react";
 import { PanelLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { usePreferences } from "@/features/settings/Preferences";
-import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 
 const narrow = window.matchMedia("(max-width: 760px)");
 const subscribe = (notify: () => void) => {
@@ -35,6 +33,15 @@ type ResizeGesture = {
   startWidth: number;
 };
 
+function readSidebarSize(element: HTMLElement): SidebarSize {
+  const style = getComputedStyle(element);
+  return {
+    width: element.offsetWidth,
+    min: Math.round(Number.parseFloat(style.minWidth)),
+    max: Math.round(Number.parseFloat(style.maxWidth)),
+  };
+}
+
 function clampWidth(width: number, { min, max }: SidebarSize) {
   return Math.max(min, Math.min(max, Math.round(width)));
 }
@@ -54,7 +61,6 @@ export function SecondarySidebar({
 }) {
   const { t } = useTranslation();
   const { updatePreferences } = usePreferences();
-  const reduceMotion = usePrefersReducedMotion();
   const content = useRef<HTMLDivElement>(null);
   const gesture = useRef<ResizeGesture>(null);
   const [size, setSize] = useState<SidebarSize>();
@@ -77,20 +83,17 @@ export function SecondarySidebar({
       return;
     }
     const measure = () => {
-      const width = element.offsetWidth;
-      if (width === 0) {
+      const next = readSidebarSize(element);
+      if (!next.width) {
         finishResize();
         return;
       }
-      const style = getComputedStyle(element);
-      const min = Math.round(Number.parseFloat(style.minWidth));
-      const max = Math.round(Number.parseFloat(style.maxWidth));
       setSize((previous) =>
-        previous?.width === width &&
-        previous.min === min &&
-        previous.max === max
+        previous?.width === next.width &&
+        previous.min === next.min &&
+        previous.max === next.max
           ? previous
-          : { width, min, max },
+          : next,
       );
     };
     measure();
@@ -119,10 +122,13 @@ export function SecondarySidebar({
   const saveWidth = (width: number | null) =>
     updatePreferences({ secondarySidebarWidth: width });
 
-  const widthAtPointer = (event: PointerEvent<HTMLDivElement>) => {
+  const widthAtPointer = (
+    event: PointerEvent<HTMLDivElement>,
+    bounds = size,
+  ) => {
     const drag = gesture.current;
-    if (drag?.pointerId !== event.pointerId || !size) return;
-    return clampWidth(drag.startWidth + event.clientX - drag.startX, size);
+    if (drag?.pointerId !== event.pointerId || !bounds) return;
+    return clampWidth(drag.startWidth + event.clientX - drag.startX, bounds);
   };
 
   return (
@@ -139,15 +145,9 @@ export function SecondarySidebar({
       >
         <PanelLeft />
       </Button>
-      <motion.aside
+      <aside
         id={id}
         className="secondary-sidebar"
-        initial={false}
-        animate={{ width: open ? "auto" : 0 }}
-        transition={{
-          duration: reduceMotion ? 0 : 0.24,
-          ease: [0.22, 1, 0.36, 1],
-        }}
         inert={!open}
         aria-hidden={!open}
       >
@@ -188,7 +188,11 @@ export function SecondarySidebar({
               if (next !== undefined) setPreviewWidth(next);
             }}
             onPointerUp={(event) => {
-              const next = widthAtPointer(event);
+              if (!content.current) return;
+              const next = widthAtPointer(
+                event,
+                readSidebarSize(content.current),
+              );
               if (next === undefined) return;
               const start = gesture.current?.startWidth;
               finishResize();
@@ -204,16 +208,17 @@ export function SecondarySidebar({
             }}
             onDoubleClick={() => saveWidth(null)}
             onKeyDown={(event) => {
-              if (!size || gesture.current) return;
-              const width = content.current?.offsetWidth ?? size.width;
+              if (!content.current || gesture.current) return;
+              const bounds = readSidebarSize(content.current);
+              const { width } = bounds;
               let next = width;
               if (event.key === "ArrowLeft") next -= 8;
               else if (event.key === "ArrowRight") next += 8;
-              else if (event.key === "Home") next = size.min;
-              else if (event.key === "End") next = size.max;
+              else if (event.key === "Home") next = bounds.min;
+              else if (event.key === "End") next = bounds.max;
               else return;
               event.preventDefault();
-              next = clampWidth(next, size);
+              next = clampWidth(next, bounds);
               if (next !== width) saveWidth(next);
             }}
           />
@@ -227,7 +232,7 @@ export function SecondarySidebar({
             {children}
           </div>
         </div>
-      </motion.aside>
+      </aside>
     </>
   );
 }

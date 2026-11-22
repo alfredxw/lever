@@ -35,8 +35,15 @@ async function seedChats(
   page: Page,
   chatCount = 6,
   turnsPerChat = standardTurns,
-  sidebar?: "all" | "recent",
-  mixedHistory = false,
+  {
+    sidebar,
+    mixedHistory,
+    pageSize,
+  }: {
+    sidebar?: "all" | "recent";
+    mixedHistory?: boolean;
+    pageSize?: number;
+  } = {},
 ) {
   const { url, scope } = JSON.parse(
     readFileSync(
@@ -110,7 +117,7 @@ async function seedChats(
       selection,
       createdAt: timestamp,
     };
-    const limit = Number(url.searchParams.get("limit") ?? 40);
+    const limit = pageSize ?? Number(url.searchParams.get("limit") ?? 40);
     const before = Number(url.searchParams.get("before")) || turnsPerChat + 1;
     const first = Math.max(1, before - limit);
     const runs: Run[] = Array.from({ length: before - first }, (_, index) => {
@@ -333,11 +340,140 @@ test.skip(
   "Timing budgets use the production build.",
 );
 
+test("sidebars animate the actual widths of two long Chats and keep the latest replies visible", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.setViewportSize({ width: 1130, height: 900 });
+  const turns = 92;
+  const chats = await seedChats(page, 2, turns, { pageSize: turns });
+  await page
+    .getByRole("tab", { name: chats[1].title, exact: true })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "移动到右侧面板" }).click();
+  await page.locator(".workspace-layout").evaluate(async (node) => {
+    await Promise.all(
+      node.getAnimations().map((animation) => animation.finished),
+    );
+  });
+  for (const chat of chats) {
+    const panel = page.locator(`#panel-${chat.id}`);
+    await expect(panel.locator(".run-content").first()).toBeVisible();
+    await panel.locator(".chat-scroll").evaluate((scroll) => {
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+    const latest = panel.locator(`[data-run-id="${chat.id}-${turns}"]`);
+    await expect(latest).toHaveAttribute("data-index", String(turns - 1));
+    await expect(latest).toBeInViewport();
+  }
+
+  const toggle = (button: Locator, reduced = false) =>
+    button.evaluate(
+      async (element, { reduced, runId }) => {
+        const layout =
+          document.querySelector<HTMLElement>(".workspace-layout")!;
+        const sidebar = document.getElementById("agent-sidebar")!;
+        const target =
+          element.getAttribute("aria-controls") === sidebar.id
+            ? sidebar
+            : layout;
+        const panes = Array.from(
+          layout.querySelectorAll<HTMLElement>(".tab-strip[data-pane]"),
+        );
+        const measure = () => ({
+          list: sidebar.offsetWidth,
+          workspace: layout.clientWidth,
+          headers: panes.map((header) => header.offsetWidth),
+          chats: panes.map(
+            (header) =>
+              layout.querySelector<HTMLElement>(
+                `.tab-panel[data-pane="${header.dataset.pane}"][data-visible="true"] .chat-scroll`,
+              )?.offsetWidth ?? 0,
+          ),
+          lineHeight:
+            layout.querySelector<HTMLElement>(
+              `[data-run-id="${runId}"] .chat-response p`,
+            )?.offsetHeight ?? 0,
+        });
+        const before = measure();
+        (element as HTMLButtonElement).click();
+        await Promise.resolve();
+        const transition = target
+          .getAnimations()
+          .find(
+            (animation) =>
+              (animation as CSSTransition).transitionProperty ===
+              "grid-template-columns",
+          );
+        if (reduced && transition)
+          throw new Error("Unexpected width animation with reduced motion");
+        if (!reduced && !transition) throw new Error("Missing width animation");
+        const during = [];
+        if (transition) {
+          transition.pause();
+          const duration = Number(transition.effect!.getTiming().duration);
+          for (const progress of [0.12, 0.35, 0.65]) {
+            transition.currentTime = duration * progress;
+            during.push(measure());
+          }
+          transition.finish();
+        }
+        return { before, during, after: measure() };
+      },
+      { reduced, runId: `${chats[0].id}-${turns}` },
+    );
+
+  const sidebar = page.locator('button[aria-controls="agent-sidebar"]');
+  const { before: split, during, after: wider } = await toggle(sidebar);
+  expect(wider.list).toBe(0);
+  expect(wider.workspace).toBe(split.workspace + split.list);
+  for (const frame of during) {
+    expect(frame.chats).toEqual(frame.headers);
+    for (const [index, width] of frame.chats.entries()) {
+      expect(width).toBeGreaterThan(split.chats[index]);
+      expect(width).toBeLessThan(wider.chats[index]);
+    }
+  }
+  expect((await toggle(sidebar)).after.chats).toEqual(split.chats);
+
+  const close = page.getByRole("button", { name: "收起侧边分栏", exact: true });
+  const open = page.getByRole("button", { name: "展开侧边分栏", exact: true });
+  const { during: closing, after: single } = await toggle(close);
+  expect(single.chats).toEqual([split.workspace, 0]);
+  expect(
+    closing.some(
+      (frame) =>
+        frame.chats[0] > split.chats[0] &&
+        frame.chats[0] < single.chats[0] &&
+        frame.lineHeight > 0 &&
+        frame.lineHeight < split.lineHeight,
+    ),
+  ).toBe(true);
+  expect((await toggle(open)).after.chats).toEqual(split.chats);
+  const maximize = await toggle(
+    page.getByRole("button", { name: "最大化面板" }),
+  );
+  expect(maximize.after.chats).toEqual([0, split.workspace]);
+  expect(
+    (await toggle(page.getByRole("button", { name: "还原面板大小" }))).after
+      .chats,
+  ).toEqual(split.chats);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect((await toggle(sidebar, true)).after.list).toBe(0);
+  expect((await toggle(sidebar, true)).after.chats).toEqual(split.chats);
+  expect((await toggle(close, true)).after.chats).toEqual(single.chats);
+  expect((await toggle(open, true)).after.chats).toEqual(split.chats);
+  for (const chat of chats)
+    await expect(
+      page.locator(`[data-run-id="${chat.id}-${turns}"]`),
+    ).toBeInViewport();
+});
+
 test("a mixed-height timeline prepends in place and jumps to the measured end in one click", async ({
   page,
 }) => {
   const turns = 92;
-  const [chat] = await seedChats(page, 1, turns, undefined, true);
+  const [chat] = await seedChats(page, 1, turns, { mixedHistory: true });
   const panel = page.locator(`#panel-${chat.id}`);
   const viewport = panel.locator(".chat-scroll");
   const latest = panel.locator(`[data-message-id="${chat.id}-${turns}"]`);
@@ -536,7 +672,7 @@ for (const sidebar of ["all", "recent"] as const) {
   }) => {
     test.setTimeout(90_000);
     const turns = 132;
-    const chats = await seedChats(page, 600, turns, sidebar);
+    const chats = await seedChats(page, 600, turns, { sidebar });
     const row = (chat: Chat) =>
       page.locator(`#agent-sidebar button[data-session-id="${chat.id}-main"]`);
     const panel = (chat: Chat) => page.locator(`#panel-${chat.id}`);

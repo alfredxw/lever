@@ -1,5 +1,4 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { motion } from "motion/react";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 
 export function WorkspaceLayout({
@@ -16,6 +15,7 @@ export function WorkspaceLayout({
   children: ReactNode;
 }) {
   const view = maximized ? "side" : split ? "split" : "main";
+  const main = maximized ? 0 : split ? ratio : 100;
   const reduceMotion = usePrefersReducedMotion();
   const [transition, setTransition] = useState({
     scope,
@@ -37,30 +37,21 @@ export function WorkspaceLayout({
     });
   }
   return (
-    <motion.div
+    <div
       className="workspace-layout"
       data-view={view}
       data-animated={transition.animated && !reduceMotion}
-      initial={false}
-      transition={{
-        duration: transition.animated && !reduceMotion ? 0.24 : 0,
-        ease: [0.22, 1, 0.36, 1],
-      }}
-      animate={{
-        "--workspace-main": `${view === "main" ? 100 : view === "side" ? 0 : ratio}fr`,
-        "--workspace-side": `${view === "side" ? 100 : view === "main" ? 0 : 100 - ratio}fr`,
-        "--workspace-divider": view === "split" ? "1px" : "0px",
-        "--workspace-main-header": view === "side" ? "0px" : "36px",
-        "--workspace-side-header": view === "main" ? "0px" : "36px",
-      }}
       style={
         {
-          "--workspace-duration":
-            transition.animated && !reduceMotion ? "240ms" : "0ms",
+          "--workspace-main": `${main}fr`,
+          "--workspace-side": `${100 - main}fr`,
+          "--workspace-divider": view === "split" ? "1px" : "0px",
+          "--workspace-main-header": view === "side" ? "0px" : "36px",
+          "--workspace-side-header": view === "main" ? "0px" : "36px",
         } as CSSProperties
       }
     >
       {children}
-    </motion.div>
+    </div>
   );
 }

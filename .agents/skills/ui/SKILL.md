@@ -53,7 +53,7 @@ Avoid unnecessary secondary labels and descriptions. Let the layout do the expla
 
 - 用动效说明状态变化或空间关系。悬停、聚焦和选中沿用共享组件的 CSS 过渡，菜单、提示和弹窗沿用 shadcn/Radix 的开合动画。 [Button](../../../web/src/components/ui/button.tsx) · [Dialog](../../../web/src/components/ui/dialog.tsx)
 - 需要对布局变化或条件内容的进出场做过渡时，使用仓库已接入的 `motion/react`。用 `layout` 处理局部布局变化，需要退场时用 `AnimatePresence` 和带稳定 `key` 的子元素。用 `initial={false}` 让首屏已有内容直接呈现。 [Composer](../../../web/src/features/chat/Composer.tsx) · [布局动画](https://motion.dev/docs/react-layout-animations) · [退场动画](https://motion.dev/docs/react-animate-presence)
-- 位移与淡入淡出优先用 `transform` 和 `opacity`。控件反馈通常约 150 ms，面板开合通常约 240 ms，并沿用工作区的缓出曲线。需要改变侧栏或分栏占用的空间时，复用现有布局过渡。 [工作区 MotionConfig](../../../web/src/App.tsx) · [分栏布局](../../../web/src/components/workbench/WorkspaceLayout.tsx)
+- 位移与淡入淡出优先用 `transform` 和 `opacity`，控件反馈通常约 150 ms。工作台侧栏和分栏收展复用 240 ms 的网格过渡，正文随面板实际宽度换行；手动调宽直接跟随指针。 [分栏布局](../../../web/src/components/workbench/WorkspaceLayout.tsx)
 - 输入框焦点这类可连续反向的切换，从约 100 ms 的无延迟缓出开始。成对控件按实际内容高度同步展开和收起，中途反向时从当前尺寸接续。用单行和多行草稿分别快速切换，检查键盘与鼠标操作时的焦点、光标和消息区位置。 [Chat 输入框](../../../web/src/features/chat/composer.css)
 - 列表和标签页排序沿用现有 `dnd-kit` 实现，由排序组件控制原元素的位移和相邻项的让位过渡。 [WorkspaceTabs](../../../web/src/components/workbench/WorkspaceTabs.tsx)
 - 尊重系统「减少动态效果」设置。CSS 沿用 `prefers-reduced-motion`，自定义 Motion 过渡复用 `usePrefersReducedMotion`，在开启时直接呈现最终状态。验证快速切换和关闭动画时，界面状态、键盘焦点和操作反馈仍正确。 [全局 CSS](../../../web/src/index.css) · [系统动效偏好](../../../web/src/hooks/usePrefersReducedMotion.ts)
