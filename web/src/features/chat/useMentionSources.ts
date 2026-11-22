@@ -63,7 +63,7 @@ export function useMentionSources(
             (topic ? session.title : chat) ||
             t(topic ? "chat.topic" : "workspace.newChat"),
           description: [
-            topic ? "Topic" : "Chat",
+            t(topic ? "chat.topic" : "workspace.chat"),
             topic && chat,
             agents.get(session.agentId),
           ]

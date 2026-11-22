@@ -782,7 +782,7 @@ export default function App() {
     const id = draftChatId(agentId);
     replaceTab(
       id,
-      { id: chatId, kind: "chat", title: "New chat" },
+      { id: chatId, kind: "chat", title: t("workspace.newChat") },
       agentId,
       fallbackPane,
     );

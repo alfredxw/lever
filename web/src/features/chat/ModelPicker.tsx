@@ -657,7 +657,7 @@ export function ModelPicker({
                 }
               >
                 <Zap size={14} />
-                Fast
+                {t("models.fast")}
               </RadioGroup.Item>
             </RadioGroup.Root>
             {catalog.data && (

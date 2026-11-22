@@ -208,7 +208,7 @@ export function FeishuChannel({
             </div>
             <ArrowRight aria-hidden="true" />
             <div>
-              <dt>Lever Chat</dt>
+              <dt>{t("channels.leverChat")}</dt>
               <dd>{chatTitle}</dd>
             </div>
           </dl>

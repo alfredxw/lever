@@ -406,7 +406,7 @@ export function SettingsPage({
                 title={t("settings.agentDefaults")}
                 description={t("settings.agentDefaultsDescription")}
               >
-                <Badge variant="outline">Profile</Badge>
+                <Badge variant="outline">{t("workspace.profile")}</Badge>
               </SettingsRow>
               <SettingsRow
                 title={t("settings.permissions")}

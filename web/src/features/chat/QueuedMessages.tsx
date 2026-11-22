@@ -179,7 +179,11 @@ export function QueuedMessages({
                       ) : (
                         <MessageCircle />
                       )}
-                      {run.operation === "topic" ? "Topic" : "Chat"}
+                      {t(
+                        run.operation === "topic"
+                          ? "chat.topic"
+                          : "workspace.chat",
+                      )}
                     </Button>
                   )}
                   {editable && (

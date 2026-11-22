@@ -63,7 +63,7 @@ test("sidebar note actions preserve a task and its Chat through archive and rest
   const agent: Agent = await agentResponse.json();
 
   await page.reload();
-  const works = page.getByRole("button", { name: "Works", exact: true });
+  const works = page.getByRole("button", { name: "工作", exact: true });
   await works.click();
   const sidebar = page.locator("#task-sidebar");
   const noteButton = (title: string) =>
@@ -80,7 +80,7 @@ test("sidebar note actions preserve a task and its Chat through archive and rest
   const sourcesHeader = noteButton("来源");
   for (const cancel of [true, false]) {
     await sourcesHeader.hover({ position: { x: 25, y: 15 } });
-    const to = (await noteButton("Board").boundingBox())!;
+    const to = (await noteButton("看板").boundingBox())!;
     await page.mouse.down();
     await page.mouse.move(to.x + 25, to.y + to.height / 2, { steps: 16 });
     await expect(
@@ -91,7 +91,7 @@ test("sidebar note actions preserve a task and its Chat through archive and rest
     if (cancel) await page.keyboard.press("Escape");
     await page.mouse.up();
     await expect(headers).toHaveText(
-      cancel ? ["Board", "笔记", "来源"] : ["来源", "Board", "笔记"],
+      cancel ? ["看板", "笔记", "来源"] : ["来源", "看板", "笔记"],
     );
     await expect(sourcesHeader).toHaveAttribute("aria-expanded", "true");
     await expect(noteButton("工作笔记")).toHaveAttribute(
@@ -175,7 +175,7 @@ test("sidebar note actions preserve a task and its Chat through archive and rest
   expect(other.path).toBe(created.path);
   await page.reload();
   await works.click();
-  await expect(headers).toHaveText(["来源", "Board", "笔记"]);
+  await expect(headers).toHaveText(["来源", "看板", "笔记"]);
   await noteButton("最近删除").click();
   await sidebar.getByRole("button", { name: "恢复", exact: true }).click();
   await expect(noteButton(renamedTitle)).toBeVisible();

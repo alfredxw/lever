@@ -1294,7 +1294,7 @@ export function Composer({
                           <MessageCircle data-icon="inline-start" />
                         )}
                         <span className="composer-action-detail">
-                          {draft.topic ? "Topic" : "Chat"}
+                          {t(draft.topic ? "chat.topic" : "workspace.chat")}
                         </span>
                       </motion.span>
                     </AnimatePresence>

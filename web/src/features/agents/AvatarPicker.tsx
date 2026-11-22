@@ -190,9 +190,15 @@ export default function AvatarPicker({
     <div className="space-y-3">
       <Tabs value={mode} onValueChange={setMode}>
         <TabsList className="w-full" aria-label={t("agents.avatarType")}>
-          <TabsTrigger value="emoji">Emoji</TabsTrigger>
-          <TabsTrigger value="lucide">Icons</TabsTrigger>
-          <TabsTrigger value="monogram">Monogram</TabsTrigger>
+          <TabsTrigger value="emoji">
+            {t("agents.avatarType.emoji")}
+          </TabsTrigger>
+          <TabsTrigger value="lucide">
+            {t("agents.avatarType.lucide")}
+          </TabsTrigger>
+          <TabsTrigger value="monogram">
+            {t("agents.avatarType.monogram")}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="lucide" className="space-y-3">
           <Input
