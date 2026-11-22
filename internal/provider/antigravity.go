@@ -107,7 +107,7 @@ const antigravityAuthPrefix = "Open the following link to authenticate the ACP s
 const antigravityBrowserMarker = "__LEVER_ANTIGRAVITY_AUTH_URL__"
 
 var errAntigravitySignIn = errors.New("Sign in to Antigravity in Settings → Providers before continuing")
-var errAntigravityCLISignIn = errors.New("Sign in through the local Antigravity CLI with agy --login, then refresh models")
+var errAntigravityCLISignIn = errors.New("For Google sign-in, run agy acp --login in a local terminal")
 
 // AntigravityBrowserHelper handles Python's BROWSER callback without opening a
 // browser during catalog reads or background turns. Only setup exposes the URL.

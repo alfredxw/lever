@@ -269,7 +269,7 @@ func nativeLoginArgs(config model.Provider, path string) ([]string, bool) {
 		return []string{"tui"}, true
 	case "lever.antigravity":
 		if IsAntigravityCLI(config, path) {
-			return []string{"--login"}, true
+			return []string{"acp", "--login"}, true
 		}
 	}
 	return nil, false

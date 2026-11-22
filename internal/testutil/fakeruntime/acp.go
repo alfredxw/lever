@@ -242,6 +242,10 @@ func acpFixture() {
 				}
 				_ = json.Unmarshal(data, &saved)
 				history, mode, model, effort = saved.History, saved.Mode, saved.Model, saved.Effort
+				if nativeCLI && len(history) != 0 && strings.HasPrefix(fixtureCommands(history[0]), "[agy-token-login]") {
+					send(object{"jsonrpc": "2.0", "id": frame["id"], "error": object{"code": -32000, "message": "Authentication required", "data": "private-fixture-detail"}})
+					continue
+				}
 				for _, text := range history {
 					notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "REPLAY MUST NOT APPEAR: " + text}})
 				}
@@ -343,6 +347,15 @@ func acpFixture() {
 				}
 			}
 			command := fixtureCommands(input)
+			if nativeCLI && strings.HasPrefix(fixtureCommands(history[0]), "[agy-token-") {
+				receipt["pid"] = os.Getpid()
+				if strings.HasPrefix(command, "[agy-token-pending]") {
+					notify(object{"sessionUpdate": "tool_call", "toolCallId": "unconfirmed", "title": "Unconfirmed tool", "status": "pending"})
+				}
+				if err := fixtureAntigravityFailure(native, history); err != nil {
+					panic(err)
+				}
+			}
 			switch {
 			case strings.HasPrefix(command, "[chat-context]"):
 				result, err := chatContextReceipt(acpContextTransport(servers), input, strings.TrimSpace(strings.TrimPrefix(command, "[chat-context]")))

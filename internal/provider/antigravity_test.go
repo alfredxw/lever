@@ -217,3 +217,32 @@ func TestAntigravityOutcomeIgnoresOldErrorsAndFailsNewErrors(t *testing.T) {
 		t.Fatal("refusal marked completed")
 	}
 }
+
+func TestAntigravityErrorStepPreservesOnlyStatus(t *testing.T) {
+	for _, tt := range []struct{ name, payload, want string }{
+		{"credentials", "\x00UNAUTHENTICATED (code 401): Request had invalid authentication credentials.\nHeaders: private", "Antigravity returned UNAUTHENTICATED (HTTP 401)."},
+		{"wire length", "\x12\x41UNAVAILABLE (code 503): temporarily unavailable", "Antigravity returned UNAVAILABLE (HTTP 503)."},
+		{"legacy", "Error 503, Message: internal detail, Status: UNAVAILABLE\nprivate stack", "Antigravity returned UNAVAILABLE (HTTP 503)."},
+		{"unknown", "unknown private failure", errAntigravityProvider.Error()},
+		{"outside prefix", strings.Repeat(" ", 16384) + "UNAUTHENTICATED (code 401): private", errAntigravityProvider.Error()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAntigravityChildFixture(t)
+			watch := watchAntigravityOutcomeDB(t.Context(), f.store)
+			probe := f.store.watchSubagents("test-session")
+			f.declare(1, "launch", "child", "SUBAGENT_STATE_ALIVE")
+			f.step(2, 17, nil, []byte(tt.payload))
+			_, backgroundErr := probe(t.Context(), map[string]int{"launch": 1}, "")
+			for _, err := range []error{watch(acp.StopReasonEndTurn), backgroundErr} {
+				if err == nil || err.Error() != tt.want {
+					t.Errorf("got %v, want %s", err, tt.want)
+				}
+			}
+			if tt.name == "credentials" {
+				if err := watch(acp.StopReasonRefusal); err == nil || err.Error() != tt.want {
+					t.Errorf("typed stop reason hid the upstream status: %v", err)
+				}
+			}
+		})
+	}
+}

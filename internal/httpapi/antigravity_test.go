@@ -14,7 +14,73 @@ import (
 
 	"lever/internal/app"
 	"lever/internal/model"
+	"lever/internal/provider"
 )
+
+func TestAntigravityTokenRecovery(t *testing.T) {
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", t.TempDir())
+	t.Setenv("GEMINI_HOME", t.TempDir())
+	t.Setenv("GEMINI_API_KEY", "")
+	f := newFixture(t)
+	config := model.Provider{ID: "antigravity", Name: "Antigravity"}
+	agent := f.acpAgent(config)
+	for _, test := range []struct {
+		name, status, failure string
+		prompts               int
+	}{
+		{"once", "completed", "", 2},
+		{"persistent", "failed", "agy acp --login", 2},
+		{"login", "failed", "agy acp --login", 1},
+		{"pending", "failed", "agy acp --login", 1},
+		{"forbidden", "failed", "PERMISSION_DENIED (HTTP 403)", 1},
+		{"text", "completed", "", 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			chat := f.chat(agent)
+			file := f.upload(chat.ID, "original.txt", []byte("original attachment"))
+			text := "[agy-token-" + test.name + "] original request mentioning UNAUTHENTICATED (code 401):"
+			var sent model.Run
+			f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: text, AttachmentIDs: []string{file.ID}}, 200, &sent)
+			run := f.wait(sent.ID, test.status)
+			if (test.failure == "" && run.Error != "") || !strings.Contains(run.Error, test.failure) || strings.Contains(run.Error, "private-fixture-detail") {
+				t.Fatalf("unexpected run error: %s", run.Error)
+			}
+			type receipt struct {
+				Native, Input  string
+				PID, Resources int
+				History        []string
+			}
+			var replies []receipt
+			tools := 0
+			for _, item := range run.Items {
+				if item.Kind == "tool" && item.Status == "completed" {
+					tools++
+				}
+				if item.Kind == "text" {
+					var reply receipt
+					if err := json.Unmarshal([]byte(item.Text), &reply); err != nil {
+						t.Fatal("unexpected transcript replay or overwritten output", err)
+					}
+					replies = append(replies, reply)
+				}
+			}
+			if len(replies) != test.prompts || tools != test.prompts || !strings.Contains(replies[0].Input, text) || replies[0].Resources != 1 {
+				t.Fatalf("got %d prompts, %d tools; expected %d original/continuation receipts", len(replies), tools, test.prompts)
+			}
+			if len(replies) == 2 {
+				first, next := replies[0], replies[1]
+				if first.Native == "" || first.Native != next.Native || first.PID == 0 || first.PID == next.PID || next.Resources != 0 ||
+					strings.Contains(next.Input, "original") || !strings.Contains(next.Input, agent.Profile.Instructions) || !strings.Contains(next.Input, "Do not repeat completed actions") || !slices.Equal(next.History, []string{first.Input, next.Input}) {
+					t.Fatal("did not continue the saved conversation in a fresh process without resending the original input")
+				}
+			}
+		})
+	}
+	cmd, err := provider.LoginCommand(t.Context(), model.Provider{PluginID: "lever.antigravity", Type: "antigravity", Command: "agy"})
+	if err != nil || !slices.Equal(cmd.Args[1:], []string{"acp", "--login"}) {
+		t.Fatalf("wrong native ACP login command: %v, %v", cmd, err)
+	}
+}
 
 func TestAntigravityAutomaticallyDetectsAndReusesNativeCLI(t *testing.T) {
 	f := newFixture(t)

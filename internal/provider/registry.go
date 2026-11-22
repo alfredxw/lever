@@ -27,7 +27,7 @@ var drivers = map[string]driver{
 	"claude":      {definition: model.ProviderType{ID: "claude", Name: "Claude Code", Arguments: true, AutoCompactWindow: true, IdleCompactionModes: []string{"onReturn", "beforeCacheExpires", "off"}}, permissions: []string{"ask", "accept_edits", "auto", "plan", "dont_ask", "full_access"}, defaultPermission: "accept_edits", capabilities: nativeCapabilities, run: claude, discover: discoverNative, skills: nativeSkills},
 	"pi":          {definition: model.ProviderType{ID: "pi", Name: "Pi", Arguments: true}, capabilities: model.ProviderCapabilities{Images: true, Files: true, Resume: true}, run: runPi, discover: discoverPi},
 	"acp":         {definition: model.ProviderType{ID: "acp", Name: "ACP", Arguments: true}, acp: true, run: runACP, discover: discoverACP},
-	"antigravity": {definition: model.ProviderType{ID: "antigravity", Name: "Antigravity", AuthMethods: []string{"oauth-personal", "oauth-business", "gemini-api-key", "agent-platform"}}, acp: true, run: runACP, discover: discoverACP},
+	"antigravity": {definition: model.ProviderType{ID: "antigravity", Name: "Antigravity", AuthMethods: []string{"oauth-personal", "oauth-business", "gemini-api-key", "agent-platform"}}, acp: true, run: runAntigravity, discover: discoverACP},
 }
 
 func Types() []model.ProviderType {

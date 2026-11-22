@@ -158,3 +158,51 @@ func TestLiveRuntimes(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveAntigravityBackgroundContinuation(t *testing.T) {
+	if os.Getenv("LEVER_LIVE_TEST") != "1" {
+		t.Skip("set LEVER_LIVE_TEST=1 for a real runtime smoke test")
+	}
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(WithStateDir(context.Background(), stateDir), 3*time.Minute)
+	defer cancel()
+
+	sink := &liveSink{items: map[string]model.Item{}}
+	targetFile := filepath.Join(cwd, "a.txt")
+	in := Input{
+		Provider: model.Provider{ID: "antigravity", Type: "antigravity", Command: "agy", Enabled: true},
+		Session: model.Session{
+			ID:    "live-agy-bg",
+			Scope: model.Scope{PrimaryRootID: "root", Roots: []model.Root{{ID: "root", Path: cwd}}},
+		},
+		Selection: model.Selection{Provider: "antigravity", Model: "gemini-3.8-flash", Effort: "high", Permission: "turbo"},
+		Text: `Follow these exact steps strictly in order:
+1. Call run_command with CommandLine="sleep 12 && echo STEP1" and WaitMsBeforeAsync=500. When it goes to the background, reply "Waiting for STEP1" and end your turn to wait for its completion notification.
+2. When STEP1 finishes, reply "STEP1 finished, writing file" AND call write_file to create "` + targetFile + `" with content "hello".
+3. Next, call run_command with CommandLine="sleep 3 && echo STEP2" and WaitMsBeforeAsync=500. When STEP2 goes to the background, reply "Waiting for STEP2" and end your turn.
+4. When STEP2 finishes, reply "ALL_VERIFIED_DONE".`,
+	}
+
+	if err := Run(ctx, in, sink); err != nil {
+		t.Fatalf("antigravity background continuation failed: %v", err)
+	}
+	data, err := os.ReadFile(targetFile)
+	if err != nil || strings.TrimSpace(string(data)) != "hello" {
+		t.Fatalf("expected %s to contain hello, got %q (err=%v)", targetFile, string(data), err)
+	}
+	var text strings.Builder
+	for _, item := range sink.items {
+		if item.Kind == "text" {
+			text.WriteString(item.Text)
+			text.WriteString("\n")
+		}
+		if item.Kind == "tool" && item.Status != "completed" {
+			t.Fatalf("tool did not finish cleanly: %+v", item)
+		}
+	}
+	if !strings.Contains(text.String(), "ALL_VERIFIED_DONE") {
+		t.Fatalf("run finished before final post-background reply: %s", text.String())
+	}
+	t.Logf("native=%s output=%q", sink.native, text.String())
+}

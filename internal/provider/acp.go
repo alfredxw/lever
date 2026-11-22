@@ -34,6 +34,8 @@ type acpRuntime struct {
 	antigravity   bool
 	session       acp.SessionId
 	active        bool
+	modeTouched   bool
+	agyCLI        bool
 	commands      map[acp.SessionId][]model.NativeCommand
 	skillCommands map[string]bool
 	commandUpdate chan struct{}
@@ -94,6 +96,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 		sink:          sink,
 		cwd:           cwd,
 		antigravity:   config.Type == "antigravity",
+		agyCLI:        IsAntigravityCLI(config, path) && (config.Type == "antigravity" || slices.Contains(config.Args, "acp")),
 		items:         map[string]model.Item{},
 		tools:         map[string]*acpToolState{},
 		subagents:     map[string]*subagent{},
@@ -557,6 +560,9 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 		sink.EnablePermissionChanges(func(ctx context.Context, permission string) error {
 			c.mu.Lock()
 			active := c.active
+			if active {
+				c.modeTouched = true
+			}
 			c.mu.Unlock()
 			if !active {
 				return errors.New("The ACP prompt is no longer active")
@@ -573,17 +579,29 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	}
 	var outcome func(acp.StopReason) error
 	if in.Provider.Type == "antigravity" {
-		outcome = watchAntigravityOutcome(c.ctx, in.Provider, native)
+		sessionDB := openAntigravitySessionDB(c.ctx, in.Provider, native)
+		outcome = watchAntigravityOutcomeDB(c.ctx, sessionDB)
+		if c.background != nil {
+			c.mu.Lock()
+			c.background.probe = sessionDB.watchBackground()
+			c.background.childProbe = sessionDB.watchSubagents(native)
+			c.mu.Unlock()
+		}
 	}
-	return c.prompt(ctx, prompt, outcome)
+	err = c.prompt(ctx, prompt, outcome)
+	var checkpoint *antigravityAuthCheckpoint
+	if errors.As(err, &checkpoint) && c.agyCLI && caps.Resume && name == "" && c.canContinueAfterAuthFailure() {
+		checkpoint.native = native
+	}
+	return err
 }
 
 func (c *acpRuntime) prompt(ctx context.Context, prompt []acp.ContentBlock, outcome func(acp.StopReason) error) error {
 	result, err := acp.SendRequest[acp.PromptResponse](c.conn, c.ctx, "session/prompt", acp.PromptRequest{SessionId: c.session, Prompt: prompt})
-	c.mu.Lock()
-	if err == nil && result.StopReason == acp.StopReasonEndTurn && c.background != nil && c.err == nil {
-		err = c.waitForAntigravityBackgroundLocked()
+	if err == nil {
+		_, err = c.awaitPromptBoundary(result, nil, false)
 	}
+	c.mu.Lock()
 	if c.err == nil && err == nil {
 		c.err = c.finishMessage()
 	}
@@ -705,8 +723,7 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 		if active && c.sink != nil && len(params.Options) > 0 {
 			finishErr = c.finishMessage()
 			if finishErr == nil && c.background != nil {
-				c.background.requests++
-				c.background.signal()
+				c.background.startRequest()
 				defer c.finishAntigravityRequest()
 			}
 		}

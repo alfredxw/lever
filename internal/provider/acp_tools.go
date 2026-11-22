@@ -157,6 +157,16 @@ func (c *acpRuntime) emitAntigravitySubagent(state *acpToolState) error {
 	output := acpToolOutputText(state)
 	switch state.Status {
 	case acp.ToolCallStatusCompleted, acp.ToolCallStatusFailed:
+		if state.Status == acp.ToolCallStatusCompleted && c.background != nil && c.background.childProbe != nil && acpNormalizedToolName(state.Title) == "invoke_subagent" &&
+			(c.background.childCalls[state.ID] > 0 || antigravityLaunchReceipt(state, output)) {
+			// The completed call acknowledges the launch. The child's actual
+			// report is delivered separately to the parent's native session.
+			c.background.childCalls[state.ID] = max(1, len(arr(obj(state.RawInput)["Subagents"])))
+			break
+		}
+		if c.background != nil {
+			delete(c.background.childCalls, state.ID)
+		}
 		agent.finish(acpToolStatus(state.Status), output)
 	default:
 		if output != "" {
@@ -164,6 +174,12 @@ func (c *acpRuntime) emitAntigravitySubagent(state *acpToolState) error {
 		}
 	}
 	return agent.publish(c.sink)
+}
+
+// Some versions return the native creation receipt as text or a structured
+// result. Others acknowledge the launch with an empty tool_call_update.
+func antigravityLaunchReceipt(tool *acpToolState, output string) bool {
+	return output == "" || str(obj(tool.RawOutput)["conversationId"]) != "" || strings.Contains(output, "Created the following subagent:\n{")
 }
 
 func normalizeACPToolItem(state *acpToolState, cwd string) model.Item {
