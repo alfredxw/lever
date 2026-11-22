@@ -311,7 +311,7 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 			return err
 		}
 		if len(blockers) != 0 {
-			return conflict("These connections or channels require a new installation: " + strings.Join(blockers, ", "))
+			return conflict("These connections, channels, or automations require a new installation: " + strings.Join(blockers, ", "))
 		}
 		if err := a.pluginIdleLocked(ctx, tx, p); err != nil {
 			return err
@@ -322,6 +322,11 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 		p.Revision++
 		if _, err = tx.ExecContext(ctx, "DELETE FROM provider_catalogs WHERE provider_id IN (SELECT id FROM providers WHERE json_extract(data,'$.pluginId')=?)", id); err != nil {
 			return err
+		}
+		if len(m.Contributes.EventSources) != 0 {
+			if err = resetEventSourcePolls(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		switched = true
 		return savePlugin(ctx, tx, p)
@@ -335,6 +340,9 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 		}
 	}
 	a.stopPersonalLocked(id)
+	if a.eventPoll != nil && a.eventPoll.pluginID == id {
+		a.eventPoll.cancel()
+	}
 	if p.Enabled && len(m.Contributes.Channels) != 0 {
 		a.resumePersonalLocked(id)
 	}
@@ -364,6 +372,25 @@ func pluginBlockers(ctx context.Context, q store.Queryer, p model.Plugin, m mode
 		next := m.Contributes.Channels
 		if len(next) == 0 || next[0].ID != old[0].ID || next[0].Driver != old[0].Driver {
 			blockers = append(blockers, fmt.Sprintf("%s (%s)", old[0].Name, old[0].ID))
+		}
+	}
+	automations, err := store.List[model.Automation](ctx, q, "SELECT data FROM automations WHERE state<>'archived' AND json_extract(data,'$.trigger.source.pluginId')=? ORDER BY rowid", p.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range automations {
+		source := item.Trigger.Source
+		if source == nil {
+			continue
+		}
+		oldIdx := slices.IndexFunc(p.Manifest.Contributes.EventSources, func(v model.EventSourceContribution) bool {
+			return v.ID == source.ContributionID
+		})
+		newIdx := slices.IndexFunc(m.Contributes.EventSources, func(v model.EventSourceContribution) bool {
+			return v.ID == source.ContributionID
+		})
+		if newIdx < 0 || (oldIdx >= 0 && m.Contributes.EventSources[newIdx].Driver != p.Manifest.Contributes.EventSources[oldIdx].Driver) {
+			blockers = append(blockers, fmt.Sprintf("%s (%s)", item.Name, source.ContributionID))
 		}
 	}
 	return blockers, nil

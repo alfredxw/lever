@@ -677,9 +677,11 @@ type PluginContributions struct {
 }
 
 type EventSourceContribution struct {
-	ID     string             `json:"id"`
-	Name   string             `json:"name"`
-	Fields []EventSourceField `json:"fields"`
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Driver  string             `json:"driver,omitempty"`
+	Command string             `json:"command,omitempty"`
+	Fields  []EventSourceField `json:"fields"`
 }
 
 type EventSourceField struct {

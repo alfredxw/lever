@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"lever/internal/model"
 	"lever/internal/plugin"
@@ -19,6 +21,48 @@ import (
 )
 
 const automationPollInterval = time.Minute
+
+type activeEventPoll struct {
+	pluginID string
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func (a *App) eventSourceCacheDir(pluginID string) string {
+	return filepath.Join(a.Store.Dir, "event-sources", pluginID)
+}
+
+func (a *App) eventSourceAdapter(p model.Plugin, contributionID, automationID string) plugin.EventSourceAdapter {
+	if adapter := a.eventAdapters[[2]string{p.ID, contributionID}]; adapter != nil {
+		return adapter
+	}
+	if p.Builtin || p.Directory == "" {
+		return nil
+	}
+	index := slices.IndexFunc(p.Manifest.Contributes.EventSources, func(item model.EventSourceContribution) bool {
+		return item.ID == contributionID
+	})
+	if index < 0 {
+		return nil
+	}
+	item := p.Manifest.Contributes.EventSources[index]
+	if item.Driver != plugin.EventSourcePollDriver || item.Command == "" {
+		return nil
+	}
+	return plugin.StdioPollEventSource{
+		Directory:      p.Directory,
+		ContributionID: item.ID,
+		Command:        item.Command,
+		CacheDir:       a.eventSourceCacheDir(p.ID),
+		AutomationID:   automationID,
+	}
+}
+
+func resetEventSourcePolls(ctx context.Context, tx *sql.Tx, pluginID string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE automation_event_sources SET poll_at=0
+WHERE automation_id IN (SELECT id FROM automations WHERE json_extract(data,'$.trigger.source.pluginId')=?)`, pluginID)
+	return err
+}
 
 // Passwords are kept in private files. SQLite stores the reference and the
 // names of configured fields so clients can edit without receiving secrets.
@@ -33,11 +77,10 @@ func (a *App) prepareAutomationSource(ctx context.Context, tx *sql.Tx, id string
 	if err != nil {
 		return nil, err
 	}
-	key := [2]string{source.PluginID, source.ContributionID}
 	index := slices.IndexFunc(p.Manifest.Contributes.EventSources, func(item model.EventSourceContribution) bool {
 		return item.ID == source.ContributionID
 	})
-	if index < 0 || a.eventAdapters[key] == nil {
+	if index < 0 || a.eventSourceAdapter(p, source.ContributionID, id) == nil {
 		return nil, invalid("Choose an available event type")
 	}
 	fields := p.Manifest.Contributes.EventSources[index].Fields
@@ -55,6 +98,9 @@ func (a *App) prepareAutomationSource(ctx context.Context, tx *sql.Tx, id string
 			return nil, err
 		}
 		source.Config[field.ID] = value
+	}
+	if len(source.Config) == 0 {
+		source.Config = nil
 	}
 	var priorSecrets map[string]string
 	if old != nil && old.PluginID == source.PluginID && old.ContributionID == source.ContributionID && maps.Equal(old.Config, source.Config) {
@@ -177,6 +223,7 @@ func (a *App) finishAutomationCredentials(change automationCredentialChange, err
 type automationSourceSync struct {
 	ID       string                      `json:"id"`
 	Source   model.AutomationEventSource `json:"source"`
+	Plugin   model.Plugin                `json:"plugin"`
 	SecretID string                      `json:"secretId"`
 	Cursor   string                      `json:"cursor"`
 	Error    string                      `json:"error"`
@@ -184,7 +231,7 @@ type automationSourceSync struct {
 }
 
 const automationSourceSelect = `SELECT json_object(
-  'id',a.id,'source',json_extract(a.data,'$.trigger.source'),'secretId',src.secret_id,
+  'id',a.id,'source',json_extract(a.data,'$.trigger.source'),'plugin',json(p.data),'secretId',src.secret_id,
   'cursor',src.cursor,'error',src.error,
   'pending',(SELECT COUNT(*) FROM automation_events e WHERE e.automation_id=a.id AND e.payload IS NOT NULL)
 ) AS source FROM automation_event_sources src JOIN automations a ON a.id=src.automation_id` +
@@ -218,13 +265,30 @@ ORDER BY src.poll_at,a.rowid LIMIT 1`, time.Now().Unix(), maxAutomationPending)
 func (a *App) pollAutomationSource(source automationSourceSync) error {
 	ctx, cancel := context.WithTimeout(a.ctx, 12*time.Second)
 	defer cancel()
+	active := &activeEventPoll{pluginID: source.Source.PluginID, cancel: cancel, done: make(chan struct{})}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		close(active.done)
+		return nil
+	}
+	a.eventPoll = active
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		if a.eventPoll == active {
+			a.eventPoll = nil
+		}
+		a.mu.Unlock()
+		close(active.done)
+	}()
 	config := maps.Clone(source.Source.Config)
 	if config == nil {
 		config = make(map[string]string)
 	}
 	secrets, secretErr := a.readAutomationSecrets(source.SecretID)
 	maps.Copy(config, secrets)
-	adapter := a.eventAdapters[[2]string{source.Source.PluginID, source.Source.ContributionID}]
+	adapter := a.eventSourceAdapter(source.Plugin, source.Source.ContributionID, source.ID)
 	batch, failure := plugin.EventBatch{}, "The event source adapter is unavailable"
 	limit := min(32, maxAutomationPending-source.Pending)
 	if secretErr != nil {
@@ -233,8 +297,10 @@ func (a *App) pollAutomationSource(source automationSourceSync) error {
 		var err error
 		batch, err = adapter.Poll(ctx, config, source.Cursor, limit)
 		switch {
-		case ctx.Err() != nil:
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			failure = "The event source request timed out"
+		case ctx.Err() != nil:
+			return nil
 		case err != nil:
 			failure = err.Error()
 		default:
@@ -242,16 +308,25 @@ func (a *App) pollAutomationSource(source automationSourceSync) error {
 		}
 	}
 	if failure == "" {
-		if len(batch.Events) > limit || batch.Cursor == "" {
+		if len(batch.Events) > limit || batch.Cursor == "" || len(batch.Cursor) > 1024 || !utf8.ValidString(batch.Cursor) {
 			failure = "The event source returned an invalid batch"
 		}
-		for _, event := range batch.Events {
-			if event.Key == "" || len(event.Key) > 200 || len(event.Payload) > MaxAutomationEventBytes || !json.Valid(event.Payload) {
+		for i := range batch.Events {
+			event := &batch.Events[i]
+			var compact bytes.Buffer
+			if event.Key == "" || len(event.Key) > 200 || !utf8.ValidString(event.Key) ||
+				len(event.Payload) > MaxAutomationEventBytes || !utf8.Valid(event.Payload) ||
+				json.Compact(&compact, event.Payload) != nil || compact.Len() > MaxAutomationEventBytes {
 				failure = "The event source returned an invalid event"
 				break
 			}
+			event.Payload = compact.Bytes()
 		}
 	}
+	return a.commitAutomationPoll(source, batch, failure)
+}
+
+func (a *App) commitAutomationPoll(source automationSourceSync, batch plugin.EventBatch, failure string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.ctx.Err() != nil {
@@ -265,8 +340,9 @@ func (a *App) pollAutomationSource(source automationSourceSync) error {
 		if err != nil {
 			return err
 		}
-		// A result from an older mailbox or credential must not move the current cursor.
+		// A result from an older mailbox, plugin release, or credential must not move the current cursor.
 		if current.Source.PluginID != source.Source.PluginID || current.Source.ContributionID != source.Source.ContributionID ||
+			current.Plugin.Revision != source.Plugin.Revision || current.Plugin.Directory != source.Plugin.Directory ||
 			!maps.Equal(current.Source.Config, source.Source.Config) || current.SecretID != source.SecretID || current.Cursor != source.Cursor {
 			return nil
 		}

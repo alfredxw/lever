@@ -86,6 +86,9 @@ func (a *App) InstallPlugin(ctx context.Context, manifest model.PluginManifest, 
 	if len(manifest.Contributes.Channels) != 0 && directory == "" {
 		return model.Plugin{}, invalid("Install a local channel from its package directory")
 	}
+	if len(manifest.Contributes.EventSources) != 0 && directory == "" {
+		return model.Plugin{}, invalid("Install an event source plugin from its package directory")
+	}
 	if err := validatePluginProviders(manifest); err != nil {
 		return model.Plugin{}, err
 	}
@@ -132,6 +135,11 @@ func savePlugin(ctx context.Context, tx *sql.Tx, p model.Plugin) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE plugins SET data=? WHERE id=?", store.JSON(p), p.ID); err != nil {
 		return err
 	}
+	if len(p.Manifest.Contributes.EventSources) != 0 {
+		if err := store.Event(tx, model.Event{Type: "automations"}); err != nil {
+			return err
+		}
+	}
 	return store.Event(tx, model.Event{Type: "plugins"})
 }
 
@@ -148,10 +156,11 @@ func checkPluginRuns(ctx context.Context, q store.Queryer, id string) error {
 
 func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bool) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	var configurations []model.Provider
 	removePersonal := false
+	removeEventSources := false
 	var removed model.Plugin
+	var waitPoll <-chan struct{}
 	err := a.Store.Write(ctx, func(tx *sql.Tx) error {
 		p, err := store.Get[model.Plugin](ctx, tx, "SELECT data FROM plugins WHERE id=?", id)
 		if err != nil {
@@ -173,12 +182,14 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 				return err
 			}
 		}
+		wasEnabled := p.Enabled
 		p.Enabled = enabled
 		if uninstall {
 			removed = p
 			p.Installed = false
 			p.Enabled = false
 			removePersonal = len(p.Manifest.Contributes.Channels) != 0
+			removeEventSources = len(p.Manifest.Contributes.EventSources) != 0
 			if removePersonal {
 				config, err := store.Get[personalConfig](ctx, tx, "SELECT data FROM channel_connections WHERE kind=?", id)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -193,20 +204,23 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 					return err
 				}
 			}
+		} else if enabled && !wasEnabled && len(p.Manifest.Contributes.EventSources) != 0 {
+			if err := resetEventSourcePolls(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		return savePlugin(ctx, tx, p)
 	})
 	if err == nil {
 		if !enabled || uninstall {
 			a.stopPersonalLocked(id)
-			if removePersonal {
-				err = os.RemoveAll(filepath.Join(a.Store.Dir, "personal-channels", id))
+			if a.eventPoll != nil && a.eventPoll.pluginID == id {
+				a.eventPoll.cancel()
+				waitPoll = a.eventPoll.done
 			}
 		} else {
 			a.resumePersonalLocked(id)
 		}
-		a.removePackage(removed.Current)
-		a.removePackage(removed.Previous)
 		for _, config := range configurations {
 			a.cancelProviderSetupLocked(config.ID)
 		}
@@ -224,6 +238,21 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 			a.startFeishuLocked()
 		}
 	}
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if waitPoll != nil {
+		<-waitPoll
+	}
+	if removePersonal {
+		err = errors.Join(err, os.RemoveAll(filepath.Join(a.Store.Dir, "personal-channels", id)))
+	}
+	if removeEventSources {
+		err = errors.Join(err, os.RemoveAll(a.eventSourceCacheDir(id)))
+	}
+	a.removePackage(removed.Current)
+	a.removePackage(removed.Previous)
 	return err
 }
 

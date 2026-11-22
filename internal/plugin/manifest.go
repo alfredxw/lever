@@ -20,6 +20,7 @@ import (
 
 const ManifestFile = "lever-plugin.json"
 const PersonalChannelDriver = "personal-stdio-v1"
+const EventSourcePollDriver = "poll-stdio-v1"
 
 var identifier = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
@@ -64,6 +65,11 @@ func readDirectory(directory string, managed bool) (model.PluginManifest, string
 	}
 	for _, channel := range manifest.Contributes.Channels {
 		if _, err := PackageExecutable(directory, channel.Command); err != nil {
+			return manifest, "", err
+		}
+	}
+	for _, source := range manifest.Contributes.EventSources {
+		if _, err := PackageExecutable(directory, source.Command); err != nil {
 			return manifest, "", err
 		}
 	}
@@ -124,29 +130,32 @@ func Validate(manifest model.PluginManifest) error {
 	if strings.TrimSpace(manifest.Name) == "" || len(manifest.Name) > 100 || manifest.Version == "" || len(manifest.Version) > 100 {
 		return errors.New("Plugin name and version are required (up to 100 characters)")
 	}
+	if len(manifest.Description) > 1000 {
+		return errors.New("Plugin description can be up to 1000 characters")
+	}
 	if len(manifest.Contributes.TaskSources) != 0 {
 		return errors.New("Task sources currently require a built-in adapter")
 	}
-	if len(manifest.Contributes.EventSources) != 0 {
-		return errors.New("Event sources currently require a built-in adapter")
-	}
 	if channels := manifest.Contributes.Channels; len(channels) != 0 {
-		if len(channels) != 1 || len(manifest.Contributes.Providers) != 0 || channels[0].Driver != PersonalChannelDriver ||
+		if len(channels) != 1 || len(manifest.Contributes.Providers) != 0 || len(manifest.Contributes.EventSources) != 0 ||
+			channels[0].Driver != PersonalChannelDriver ||
 			!identifier.MatchString(channels[0].ID) || strings.TrimSpace(channels[0].Name) == "" || len(channels[0].Name) > 100 ||
-			!filepath.IsLocal(channels[0].Command) || len(manifest.Description) > 1000 {
+			!filepath.IsLocal(channels[0].Command) {
 			return errors.New("Declare one personal-stdio-v1 channel with a package-relative command")
 		}
 		return nil
 	}
-	if len(manifest.Description) > 1000 || len(manifest.Contributes.Providers) == 0 || len(manifest.Contributes.Providers) > 32 {
-		return errors.New("Declare 1–32 providers or one local personal channel and a description up to 1000 characters")
+	providers := manifest.Contributes.Providers
+	eventSources := manifest.Contributes.EventSources
+	if (len(providers) == 0 && len(eventSources) == 0) || len(providers) > 32 || len(eventSources) > 32 {
+		return errors.New("Declare 1–32 providers or event sources, or one local personal channel")
 	}
-	seen := map[string]bool{}
-	for _, item := range manifest.Contributes.Providers {
-		if !identifier.MatchString(item.ID) || seen[item.ID] || strings.TrimSpace(item.Name) == "" || len(item.Name) > 100 {
+	seenProviders := map[string]bool{}
+	for _, item := range providers {
+		if !identifier.MatchString(item.ID) || seenProviders[item.ID] || strings.TrimSpace(item.Name) == "" || len(item.Name) > 100 {
 			return errors.New("Provider contributions require unique IDs and names")
 		}
-		seen[item.ID] = true
+		seenProviders[item.ID] = true
 		known := false
 		for _, kind := range provider.Types() {
 			known = known || kind.ID == item.Driver
@@ -156,6 +165,41 @@ func Validate(manifest model.PluginManifest) error {
 		}
 		if item.Driver == "acp" && strings.TrimSpace(item.Command) == "" {
 			return errors.New("ACP provider contributions require an executable")
+		}
+	}
+	seenSources := map[string]bool{}
+	for _, item := range eventSources {
+		if !identifier.MatchString(item.ID) || seenSources[item.ID] || strings.TrimSpace(item.Name) == "" || len(item.Name) > 100 {
+			return errors.New("Event source contributions require unique IDs and names")
+		}
+		seenSources[item.ID] = true
+		if item.Driver != EventSourcePollDriver {
+			return fmt.Errorf("Unsupported event source driver: %s", item.Driver)
+		}
+		if strings.TrimSpace(item.Command) == "" || !filepath.IsLocal(item.Command) {
+			return errors.New("Event source contributions require a package-relative command")
+		}
+		if len(item.Fields) > 32 {
+			return errors.New("Event sources can declare up to 32 fields")
+		}
+		seenFields := map[string]bool{}
+		for _, field := range item.Fields {
+			if !identifier.MatchString(field.ID) || seenFields[field.ID] || strings.TrimSpace(field.Label) == "" || len(field.Label) > 100 {
+				return errors.New("Event source fields require unique IDs and labels")
+			}
+			seenFields[field.ID] = true
+			if field.Kind != "text" && field.Kind != "secret" {
+				return fmt.Errorf("Unsupported event source field kind: %s", field.Kind)
+			}
+			if field.Kind == "secret" && field.Default != "" {
+				return errors.New("Secret event source fields cannot define a default value")
+			}
+			if len(field.Default) > 512 || strings.ContainsAny(field.Default, "\x00\r\n") {
+				return fmt.Errorf("Invalid default value for event source field %s", field.ID)
+			}
+			if len(field.Placeholder) > 200 || strings.ContainsAny(field.Placeholder, "\x00\r\n") {
+				return fmt.Errorf("Invalid placeholder for event source field %s", field.ID)
+			}
 		}
 	}
 	return nil

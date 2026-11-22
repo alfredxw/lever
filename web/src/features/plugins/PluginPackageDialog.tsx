@@ -63,6 +63,12 @@ function entries(t: TFunction, manifest?: PluginManifest) {
       [item.name, item.driver, item.command].filter(Boolean).join(" · "),
     );
   }
+  for (const item of manifest?.contributes.eventSources ?? []) {
+    items.set(
+      t("plugins.kind.eventSources") + " / " + item.id,
+      [item.name, item.driver, item.command].filter(Boolean).join(" · "),
+    );
+  }
   return items;
 }
 

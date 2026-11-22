@@ -296,3 +296,109 @@ func TestReloadLinkedPluginRetainsIdentityAndValidatesConnections(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestGitPluginEventSourceUpdatesRollbackAndUninstall(t *testing.T) {
+	f := newFixture(t)
+	repo := newPluginRepository(t)
+	manifestV1 := `{"manifestVersion":1,"id":"test.git-events","name":"Git Alerts","version":"1.0.0","contributes":{"eventSources":[{"id":"alert","name":"Alert","driver":"poll-stdio-v1","command":"bin/poll","fields":[{"id":"topic","label":"Topic","kind":"text","required":true}]}]}}`
+	pollV1 := `#!/bin/sh
+set -eu
+input=$(cat)
+printf 'v1\n' >> "$LEVER_EVENT_SOURCE_CACHE/runs"
+case "$input" in
+  *'"cursor":""'*)
+    printf '{"cursor":"v1-0","more":true,"events":[]}\n'
+    ;;
+  *'"cursor":"v1-0"'*)
+    printf '{"cursor":"v1-1","events":[{"key":"k1","payload":{"release":"v1"}}]}\n'
+    ;;
+  *)
+    printf '{"cursor":"v1-1","events":[]}\n'
+    ;;
+esac
+`
+	repo.write("alerts/lever-plugin.json", manifestV1, 0600)
+	repo.write("alerts/bin/poll", pollV1, 0700)
+	c1 := repo.commit("v1")
+
+	pv := f.previewPackage(model.Plugin{}, map[string]any{"url": pluginRepoURL, "path": "alerts"})
+	if pv.Release.Commit != c1 || len(pv.Manifest.Contributes.EventSources) != 1 {
+		t.Fatalf("unexpected git event source preview: %+v", pv)
+	}
+	p := f.applyPackage(pv, 200)
+	agent := f.agent("codex")
+	plan := f.createAutomation(model.AutomationInput{
+		Name: "Deploy Watch", Prompt: "Inspect alert.",
+		Destination: model.AutomationDestination{Mode: "topic", AgentID: agent.ID},
+		Trigger: model.AutomationTrigger{Kind: "event", BatchSize: 1, Source: &model.AutomationEventSource{
+			PluginID: p.ID, ContributionID: "alert",
+			Config: map[string]string{"topic": "deploys"},
+		}},
+	})
+	first := f.waitAutomationRuns(plan.ID, 1)[0]
+	run := f.wait(first.Execution.RunID, "completed")
+	if !strings.Contains(run.Input, `[{"release":"v1"}]`) {
+		t.Fatalf("unexpected v1 poll payload: %s", run.Input)
+	}
+
+	// Compatible update preserves cursor and triggers next event.
+	pollV2 := `#!/bin/sh
+set -eu
+input=$(cat)
+printf 'v2\n' >> "$LEVER_EVENT_SOURCE_CACHE/runs"
+case "$input" in
+  *'"cursor":"v1-1"'*)
+    printf '{"cursor":"v2-1","events":[{"key":"k2","payload":{"release":"v2"}}]}\n'
+    ;;
+  *)
+    printf '{"cursor":"v2-1","events":[]}\n'
+    ;;
+esac
+`
+	repo.write("alerts/lever-plugin.json", strings.Replace(manifestV1, `"1.0.0"`, `"2.0.0"`, 1), 0600)
+	repo.write("alerts/bin/poll", pollV2, 0700)
+	repo.commit("v2")
+	pv2 := f.previewPackage(p, map[string]any{})
+	if len(pv2.Blockers) != 0 {
+		t.Fatalf("compatible event source update had blockers: %+v", pv2.Blockers)
+	}
+	updated := f.applyPackage(pv2, 200)
+	second := f.waitAutomationRuns(plan.ID, 2)[0]
+	run2 := f.wait(second.Execution.RunID, "completed")
+	if !strings.Contains(run2.Input, `[{"release":"v2"}]`) {
+		t.Fatalf("unexpected v2 poll payload: %s", run2.Input)
+	}
+
+	// Breaking update removing the in-use event source is blocked.
+	manifestBroken := `{"manifestVersion":1,"id":"test.git-events","name":"Git Alerts","version":"3.0.0","contributes":{"eventSources":[{"id":"renamed","name":"Renamed","driver":"poll-stdio-v1","command":"bin/poll","fields":[]}]}}`
+	repo.write("alerts/lever-plugin.json", manifestBroken, 0600)
+	repo.commit("breaking")
+	broken := f.previewPackage(updated, map[string]any{})
+	if len(broken.Blockers) != 1 || !strings.Contains(broken.Blockers[0], plan.Name) {
+		t.Fatalf("expected automation blocker, got: %+v", broken.Blockers)
+	}
+	f.applyPackage(broken, 409)
+
+	// Rollback to v1 succeeds.
+	var rolled model.Plugin
+	f.request("POST", "/plugins/"+p.ID+"/rollback", map[string]int64{"revision": updated.Revision}, 200, &rolled)
+	if rolled.Current.Commit != c1 {
+		t.Fatalf("rollback did not restore v1: %+v", rolled)
+	}
+
+	// Uninstall cleans up both managed package directory and event source cache.
+	cacheDir := filepath.Join(f.a.Store.Dir, "event-sources", p.ID)
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Fatalf("expected event source cache dir to exist: %v", err)
+	}
+	f.request("DELETE", "/plugins/"+p.ID, nil, 200, nil)
+	if _, err := os.Stat(rolled.Directory); !os.IsNotExist(err) {
+		t.Fatalf("managed package directory remained after uninstall: %v", err)
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("event source cache remained after uninstall: %v", err)
+	}
+	if got := f.automation(plan.ID); !got.SourceDisabled {
+		t.Fatalf("automation not marked sourceDisabled after uninstall: %+v", got)
+	}
+}

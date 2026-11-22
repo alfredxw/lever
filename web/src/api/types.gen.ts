@@ -1092,6 +1092,8 @@ export interface PluginContributions {
 export interface EventSourceContribution {
   id: string;
   name: string;
+  driver?: string;
+  command?: string;
   fields: EventSourceField[];
 }
 export interface EventSourceField {
