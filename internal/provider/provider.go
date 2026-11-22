@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,6 +147,13 @@ func Run(ctx context.Context, in Input, sink Sink) error {
 	}
 	in.Selection = selection
 	in.Profile.Scope = in.Session.Scope
+	// The process driving the turn can outlive the backend that started it.
+	// Each concurrent turn owns its own system sleep assertion.
+	if release, err := device.PreventIdleSleep(ctx); err == nil {
+		defer release()
+	} else if ctx.Err() == nil {
+		slog.Warn("could not prevent idle sleep during provider run", "run", in.RunID, "error", err)
+	}
 	return d.run(ctx, in, sink)
 }
 

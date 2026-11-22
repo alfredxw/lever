@@ -11,6 +11,7 @@ require (
 	github.com/egoist/mygo v0.7.4
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
