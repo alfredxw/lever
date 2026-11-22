@@ -506,6 +506,17 @@ export default function App() {
             ? source.id
             : lastConversation.current.get(selected),
       };
+    if (
+      tab.kind === "terminal" &&
+      (source?.kind === "topic" || source?.kind === "chat")
+    )
+      return {
+        ...tab,
+        sessionId:
+          source.kind === "topic"
+            ? source.topic.sessionId
+            : (source.expandedTopicId ?? tab.sessionId),
+      };
     if (tab.kind !== "diff" || source?.kind === "shared") return tab;
     if (source?.kind === "chat" && source.expandedTopicId)
       return toolTab("diff", source.expandedTopicId);
@@ -517,6 +528,26 @@ export default function App() {
     if (chatId)
       return { ...tab, id: `diff:chat:${chatId}`, reviewChatId: chatId };
     return toolTab("diff", source?.sessionId ?? sessionIdFor(source));
+  }
+  function openTerminalPreview(
+    url: string,
+    agentId: string,
+    terminal: WorkspaceTab,
+  ) {
+    const { id, title } = toolTab("browser");
+    const session = overview.data?.conversations.find(
+      (item) => item.agentId === agentId && item.id === terminal.sessionId,
+    );
+    const sourceConversation = terminal.sessionId
+      ? session?.kind === "main"
+        ? session.chatId
+        : "topic:" + terminal.sessionId
+      : lastConversation.current.get(agentId);
+    openTab(
+      { id, title, kind: "browser", url, sourceConversation },
+      agentId,
+      paneOf(terminal) === "main" ? "side" : "main",
+    );
   }
   function showWorkspaceSearch({
     type = "all",
@@ -1930,6 +1961,11 @@ export default function App() {
                         const retained = recent.some(
                           (entry) => entry.tab.id === t.id,
                         );
+                        const browserSourceTopic =
+                          t.kind === "browser" &&
+                          t.sourceConversation?.startsWith("topic:")
+                            ? t.sourceConversation.slice("topic:".length)
+                            : undefined;
                         const readable =
                           active &&
                           focused &&
@@ -2020,7 +2056,15 @@ export default function App() {
                                     }
                                     onFocus={() => focusPane(paneOf(t))}
                                     onAdd={
-                                      current && !agent.archived
+                                      current &&
+                                      !agent.archived &&
+                                      (!browserSourceTopic ||
+                                        overview.data?.conversations.some(
+                                          (item) =>
+                                            item.agentId === owner &&
+                                            item.kind === "topic" &&
+                                            item.id === browserSourceTopic,
+                                        ))
                                         ? (context) =>
                                             addBrowserContext(
                                               context,
@@ -2216,6 +2260,18 @@ export default function App() {
                                           active && activePane === paneOf(item)
                                         }
                                         dark={dark}
+                                        onOpenLocalPreview={
+                                          isDesktop
+                                            ? (url) => {
+                                                if (active)
+                                                  openTerminalPreview(
+                                                    url,
+                                                    agentId,
+                                                    item,
+                                                  );
+                                              }
+                                            : undefined
+                                        }
                                         onNew={() =>
                                           openTab(
                                             toolTab("terminal", item.sessionId),

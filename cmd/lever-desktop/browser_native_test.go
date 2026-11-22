@@ -95,7 +95,12 @@ func TestNativeBrowserWorkbench(t *testing.T) {
 			time.Sleep(40 * time.Millisecond)
 		}
 		body, _ := mygo.EvalAs[string](shell, "document.body.innerText.slice(-800)")
-		layout, _ := shell.Eval(`({hidden:document.hidden, surface:document.querySelector('.browser-surface')?.getBoundingClientRect().toJSON(), overlays:[...document.querySelectorAll('[role=menu],[role=listbox],[role=dialog],[data-sonner-toast]')].map(el=>[el.getAttribute('role')||el.tagName,el.getAttribute('data-state')])})`)
+		layout, _ := shell.Eval(`({
+			hidden:document.hidden,
+			surface:document.querySelector('.tab-panel[data-visible=true] .browser-surface')?.getBoundingClientRect().toJSON(),
+			overlays:[...document.querySelectorAll('[role=menu],[role=listbox],[role=dialog],[data-sonner-toast]')].map(el=>[el.getAttribute('role')||el.tagName,el.getAttribute('data-state')]),
+			terminalRows:[...document.querySelectorAll('.tab-panel[data-visible=true] .xterm-rows > div')].slice(0,8).map(row=>row.textContent),
+		})`)
 		var pages []*mygo.Page
 		mygo.RunOnMain(func() {
 			for _, tab := range workbenchBrowser.tabs {
@@ -130,6 +135,8 @@ func TestNativeBrowserWorkbench(t *testing.T) {
 	control := func(label string) string {
 		return fmt.Sprintf(`[...document.querySelectorAll('button')].find(el=>el.offsetWidth && el.getAttribute('aria-label')===%q)`, label)
 	}
+	wait("Agents navigation", func() bool { return check("Boolean(" + control("Agents") + ")") })
+	eval(control("Agents") + ".click()")
 	wait("browser entry", func() bool { return check("Boolean(" + control("Browser") + ")") })
 	if runtime.GOOS == "darwin" {
 		wait("workbench received native window controls inset", func() bool {
@@ -216,11 +223,138 @@ func TestNativeBrowserWorkbench(t *testing.T) {
 			t.Fatal("adding to a draft sent a message")
 		}
 	}
-	eval(`const button=[...document.querySelectorAll('button')].find(el=>el.offsetWidth && el.getAttribute('aria-label')==='Send');if(!button || button.disabled)throw Error('send unavailable');button.click();return true`)
+	send := control("Send")
+	wait("draft attachments are ready to send", func() bool { return check(send + `?.disabled===false`) })
+	eval(send + ".click()")
 	wait("sent reference accepted by backend", func() bool {
 		body, _ := mygo.EvalAs[string](shell, `fetch('/api/overview').then(r=>r.json()).then(async o=>{const chat=o.chats.find(c=>c.agentId===localStorage.getItem('lever:agent'));return chat?await fetch('/api/chats/'+chat.id).then(r=>r.text()):''})`)
 		return strings.Contains(body, `"selector":"#checkout"`) && strings.Contains(body, `"name":"screenshot.png"`)
 	})
+
+	// Terminal defers the initial connection by a frame. An occluded test
+	// window may suspend animation frames while still rendering in WebKit.
+	eval(`if (document.hidden) {
+		window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 16);
+		window.cancelAnimationFrame = id => clearTimeout(id);
+	} return true`)
+	chatID, err := mygo.EvalAs[string](shell, fmt.Sprintf(`fetch('/api/overview').then(r=>r.json()).then(o=>o.chats.find(c=>c.agentId===%q).id)`, agent.ID))
+	if err != nil || chatID == "" {
+		t.Fatalf("find preview chat %q: %v", chatID, err)
+	}
+	newTopic := func(name string) model.Run {
+		t.Helper()
+		out, err := mygo.EvalAs[model.Run](shell, fmt.Sprintf(`fetch('/api/messages',{
+			method:'POST',headers:{'Content-Type':'application/json'},
+			body:JSON.stringify({chatId:%q,commandId:crypto.randomUUID(),operation:'topic',text:%q}),
+		}).then(r=>r.json())`, chatID, name))
+		if err != nil || out.SessionID == "" {
+			t.Fatalf("create preview topic %q: %+v %v", name, out, err)
+		}
+		return out
+	}
+	topicA, topicB := newTopic("Terminal preview A"), newTopic("Terminal preview B")
+	tab := func(id string) string {
+		return fmt.Sprintf(`document.getElementById('tab-'+encodeURIComponent(%q))`, id)
+	}
+	panel := func(id string) string {
+		return fmt.Sprintf(`document.getElementById('panel-'+encodeURIComponent(%q))`, id)
+	}
+	openTopic := func(run model.Run) {
+		eval(tab(chatID) + ".click()")
+		card := fmt.Sprintf(`[...document.querySelectorAll('.chat-panel .topic-thread[data-status="completed"]')].find(el=>el.offsetWidth && el.textContent.includes(%q))?.querySelector('.topic-open')`, run.Input)
+		wait("topic card for "+run.Input, func() bool { return check("Boolean(" + card + ")") })
+		eval(card + ".click()")
+		wait("open "+run.Input, func() bool { return check(panel("topic:"+run.SessionID) + `?.dataset.visible==='true'`) })
+	}
+	openTerminal := func(run model.Run, address string) string {
+		openTopic(run)
+		menu := fmt.Sprintf(`document.querySelector('.tab-strip[data-pane="'+%s.dataset.pane+'"] button[aria-label="Open tab"]')`, panel("topic:"+run.SessionID))
+		eval(menu + `.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))`)
+		entry := `[...document.querySelectorAll('[role=menuitem]')].find(el=>el.textContent==='Terminal')`
+		wait("terminal menu", func() bool { return check("Boolean(" + entry + ")") })
+		eval(entry + ".click()")
+		terminal := fmt.Sprintf(`JSON.parse(localStorage.getItem('lever:workspaces'))[%q].tabs.find(t=>t.kind==='terminal' && t.sessionId===%q)`, agent.ID, run.SessionID)
+		wait("scoped terminal ready", func() bool {
+			return check(terminal + `?.terminalLayout?.started===true && !!document.querySelector('.tab-panel[data-visible=true] .terminal-panel .xterm-helper-textarea:not([readonly])') && !document.querySelector('.tab-panel[data-visible=true] .terminal-status')`)
+		})
+		terminalID, err := mygo.EvalAs[string](shell, terminal+".id")
+		if err != nil || terminalID == "" {
+			t.Fatalf("terminal tab ID: %q %v", terminalID, err)
+		}
+		command := `printf '\033[2J\033[H%s\n' '` + address + `'`
+		if runtime.GOOS == "windows" {
+			command = "echo " + address
+		}
+		eval(fmt.Sprintf(`
+			const input=%s.querySelector('.xterm-helper-textarea');
+			input.focus();
+			const clipboard=new DataTransfer();
+			clipboard.setData('text/plain', %q);
+			input.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:clipboard}));
+			const enter=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true});
+			Object.defineProperty(enter,'keyCode',{value:13});
+			input.dispatchEvent(enter);
+			return true`, panel(terminalID), command))
+		return terminalID
+	}
+	openPreview := func(run model.Run, terminalID, address string, verifyPlainClick bool) {
+		eval(tab(terminalID) + ".click()")
+		row := fmt.Sprintf(`[...%s.querySelectorAll('.xterm-rows > div')].find((row,index,rows) => {
+			const text = rows.slice(index,index+3).map(line=>line.textContent.trim()).join('');
+			return row.textContent.trimStart().startsWith('http') && text.startsWith(%q);
+		})`, panel(terminalID), address)
+		wait("printed address "+address, func() bool { return check("Boolean(" + row + ")") })
+		mouse := func(types []string, modifier bool) string {
+			events, _ := json.Marshal(types)
+			return fmt.Sprintf(`const row=%s;
+				const rect=row.getBoundingClientRect();
+				for(const type of %s) row.dispatchEvent(new MouseEvent(type,{
+					button:0,bubbles:true,cancelable:true,clientX:rect.left+20,clientY:rect.top+rect.height/2,
+					metaKey:%t,ctrlKey:%t,
+				}));
+				return row.closest('.terminal-surface').title.includes('Lever Browser');`,
+				row, events, modifier && runtime.GOOS == "darwin", modifier && runtime.GOOS != "darwin")
+		}
+		wait("preview link hover hint", func() bool { return check(mouse([]string{"mousemove"}, false)) })
+		if verifyPlainClick {
+			eval(mouse([]string{"mousedown", "mouseup"}, false))
+			if check(fmt.Sprintf(`[...document.querySelectorAll('.browser-address')].some(input=>input.value===%q)`, address)) {
+				t.Fatal("plain click opened the preview")
+			}
+		}
+		eval(mouse([]string{"mousedown", "mouseup"}, true))
+		browser := fmt.Sprintf(`[...document.querySelectorAll('.tab-panel[data-visible=true] .browser-address')].find(input=>input.value===%q)?.closest('.tab-panel')`, address)
+		wait("preview opened beside the terminal", func() bool {
+			return check(fmt.Sprintf(`const browser=%s; return !!browser && browser.dataset.pane!==%s.dataset.pane && %s.dataset.visible==='true'`, browser, panel(terminalID), panel(terminalID)))
+		})
+		capture := browser + `?.querySelector('button[aria-label="Add screenshot to chat"]')`
+		wait("preview can capture the page", func() bool {
+			ready := false
+			mygo.RunOnMain(func() {
+				for _, tab := range workbenchBrowser.tabs {
+					if tab.state.URL == address && !tab.state.Loading && tab.viewport.Width > 0 {
+						ready = true
+					}
+				}
+			})
+			return ready && check(capture+`?.disabled===false`)
+		})
+		eval(capture + ".click()")
+		wait("preview screenshot in the draft of "+run.Input, func() bool {
+			return check(panel("topic:"+run.SessionID) + `?.querySelector('button[aria-label="Remove screenshot.png"]')?.offsetWidth>0`)
+		})
+	}
+
+	secondSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<!doctype html><title>Second preview</title><p>Second preview</p>`)
+	}))
+	defer secondSite.Close()
+	addressA, addressB := site.URL+"/first?mode=review#details", secondSite.URL+"/second"
+	terminalA := openTerminal(topicA, addressA)
+	openTopic(topicB) // A's preview should still target A even when B was visited last.
+	openPreview(topicA, terminalA, addressA, true)
+	terminalB := openTerminal(topicB, addressB)
+	openPreview(topicB, terminalB, addressB, false)
 }
 
 func TestNativeBrowserTab(t *testing.T) {

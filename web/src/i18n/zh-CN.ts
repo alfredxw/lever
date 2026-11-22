@@ -1280,6 +1280,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "terminal.close": "关闭终端窗格",
   "terminal.connecting": "正在启动 Shell…",
   "terminal.input": "终端输入",
+  "terminal.openLocalPreview": "在 Lever 浏览器中打开（{{modifier}} + 单击）",
   "terminal.exited": "已退出（{{code}}）",
   "terminal.disconnected": "连接已断开",
   "terminal.reconnecting": "正在重连…",

@@ -10,10 +10,18 @@ import {
 import { useTranslation } from "react-i18next";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { browserAddress } from "@/features/browser/browserAddress";
+import { isMac } from "@/features/settings/shortcuts";
+import { useEventCallback } from "@/hooks/useEventCallback";
 import "@xterm/xterm/css/xterm.css";
+
+// Match complete loopback URLs without surrounding log punctuation.
+const loopbackLinkPattern =
+  /(?<![\w/?#=&%])https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#][^\s"'<>`\\]*?)?(?=[.,;!?)\]}]*(?:[\s"'<>`]|$))/i;
 
 type Status =
   | { type: "connecting" | "reconnecting" | "ready" | "disconnected" | "ended" }
@@ -52,6 +60,7 @@ export default function TerminalPane({
   onSelect,
   readOnly = false,
   onResult,
+  onOpenLocalPreview,
 }: {
   path: string;
   terminalId: string;
@@ -66,6 +75,7 @@ export default function TerminalPane({
   onSelect?: () => void;
   readOnly?: boolean;
   onResult?: (result: TerminalResult) => void;
+  onOpenLocalPreview?: (url: string) => void;
 }) {
   const { t } = useTranslation();
   const container = useRef<HTMLDivElement>(null);
@@ -75,6 +85,24 @@ export default function TerminalPane({
   notifyStarted.current = onStarted;
   const notifyResult = useRef(onResult);
   notifyResult.current = onResult;
+  const localPreviewEnabled = Boolean(onOpenLocalPreview);
+  const openLocalPreview = useEventCallback(
+    (event: MouseEvent, link: string) => {
+      if (event.button !== 0 || !(isMac ? event.metaKey : event.ctrlKey))
+        return;
+      const url = browserAddress(link);
+      if (
+        !url ||
+        !["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname)
+      )
+        return;
+      event.preventDefault();
+      onOpenLocalPreview?.(url);
+    },
+  );
+  const localPreviewHint = useEventCallback(() =>
+    t("terminal.openLocalPreview", { modifier: isMac ? "⌘" : "Ctrl" }),
+  );
   const [attempt, setAttempt] = useState(0);
   const [restarting, setRestarting] = useState(false);
   const [trimmed, setTrimmed] = useState(false);
@@ -96,6 +124,17 @@ export default function TerminalPane({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    if (localPreviewEnabled) {
+      term.loadAddon(
+        new WebLinksAddon(openLocalPreview, {
+          urlRegex: loopbackLinkPattern,
+          hover: () => {
+            element.title = localPreviewHint();
+          },
+          leave: () => element.removeAttribute("title"),
+        }),
+      );
+    }
     term.open(element);
     terminal.current = term;
     let socket: WebSocket | undefined;
@@ -259,9 +298,18 @@ export default function TerminalPane({
       themeObserver?.disconnect();
       socket?.close();
       term.dispose();
+      element.removeAttribute("title");
       terminal.current = null;
     };
-  }, [path, terminalId, attempt, readOnly]);
+  }, [
+    path,
+    terminalId,
+    attempt,
+    readOnly,
+    localPreviewEnabled,
+    openLocalPreview,
+    localPreviewHint,
+  ]);
 
   useEffect(() => {
     terminal.current?.textarea?.setAttribute(

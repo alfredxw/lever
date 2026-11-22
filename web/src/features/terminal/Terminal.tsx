@@ -84,8 +84,9 @@ export default function Terminal({
   onLayoutChange,
   onNew,
   onClose,
+  onOpenLocalPreview,
   ...session
-}: Pick<ComponentProps<typeof TerminalPane>, "dark"> & {
+}: Pick<ComponentProps<typeof TerminalPane>, "dark" | "onOpenLocalPreview"> & {
   agentId: string;
   sessionId?: string;
   focused: boolean;
@@ -220,6 +221,7 @@ export default function Terminal({
             }}
             selected={panes.length > 1 && selected === id}
             onSelect={() => setSelected(id)}
+            onOpenLocalPreview={onOpenLocalPreview}
             path={terminalPath(session.agentId, session.sessionId)}
             dark={session.dark}
           />

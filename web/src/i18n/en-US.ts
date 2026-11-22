@@ -1343,6 +1343,7 @@ export const enUS = {
   "terminal.close": "Close terminal pane",
   "terminal.connecting": "Starting shell…",
   "terminal.input": "Terminal input",
+  "terminal.openLocalPreview": "Open in Lever Browser ({{modifier}}-click)",
   "terminal.exited": "Exited ({{code}})",
   "terminal.disconnected": "Connection closed",
   "terminal.reconnecting": "Reconnecting…",
