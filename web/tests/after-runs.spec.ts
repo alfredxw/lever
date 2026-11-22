@@ -174,14 +174,22 @@ test("/after hides when idle, preselects same-directory running tasks via + and 
   await expect(picker).toContainText("Add unit tests");
   await expect(picker).not.toContainText("Other repo work");
 
-  // Verify the + Add tasks popover splits "当前目录" and "其他运行中任务".
-  await picker.getByRole("button", { name: "添加任务", exact: true }).click();
+  // Verify the + Add tasks popover splits "当前目录" and "其他任务", supports Select All,
+  // and keeps the trigger button at a fixed position while toggling items.
+  const addTasksBtn = picker.getByRole("button", {
+    name: "添加任务",
+    exact: true,
+  });
+  const boxBefore = await addTasksBtn.boundingBox();
+  expect(boxBefore).not.toBeNull();
+  await addTasksBtn.click();
   const popover = page.getByRole("dialog", {
     name: "选择要等待的任务",
     exact: true,
   });
   await expect(popover).toContainText("当前目录");
-  await expect(popover).toContainText("其他运行中任务");
+  await expect(popover).toContainText("其他任务");
+  await expect(popover).toContainText("已选 2 / 3");
   await expect(
     popover.getByRole("checkbox", { name: /Fix auth/ }),
   ).toBeChecked();
@@ -191,6 +199,30 @@ test("/after hides when idle, preselects same-directory running tasks via + and 
   await expect(
     popover.getByRole("checkbox", { name: /Other repo work/ }),
   ).not.toBeChecked();
+
+  // Select All -> all 3 tasks checked, trigger button stays pinned in place.
+  await popover.getByRole("button", { name: "全选", exact: true }).click();
+  await expect(popover).toContainText("已选 3 / 3");
+  await expect(
+    popover.getByRole("checkbox", { name: /Other repo work/ }),
+  ).toBeChecked();
+  const boxAfterSelectAll = await addTasksBtn.boundingBox();
+  expect(boxAfterSelectAll?.x).toBe(boxBefore?.x);
+  expect(boxAfterSelectAll?.y).toBe(boxBefore?.y);
+
+  // Clear All -> 0 checked, trigger button still stays pinned in place.
+  await popover.getByRole("button", { name: "取消全选", exact: true }).click();
+  await expect(popover).toContainText("已选 0 / 3");
+  const boxAfterClearAll = await addTasksBtn.boundingBox();
+  expect(boxAfterClearAll?.x).toBe(boxBefore?.x);
+  expect(boxAfterClearAll?.y).toBe(boxBefore?.y);
+
+  // Re-check tasks continuously without the button moving.
+  await popover.getByRole("checkbox", { name: /Fix auth/ }).click();
+  await popover.getByRole("checkbox", { name: /Add unit tests/ }).click();
+  const boxAfterContinuous = await addTasksBtn.boundingBox();
+  expect(boxAfterContinuous?.x).toBe(boxBefore?.x);
+  expect(boxAfterContinuous?.y).toBe(boxBefore?.y);
   await page.keyboard.press("Escape");
 
   // Cancel via active icon button, then re-activate via typing /after command!
@@ -220,24 +252,69 @@ test("/after hides when idle, preselects same-directory running tasks via + and 
   ).toHaveCount(0);
 
   // Waiting Topic card appears in the Chat timeline showing 0 / 2.
-  const waitingTopic = page.locator(".topic-thread", {
-    hasText: "commit and push",
-  });
+  const waitingTopic = page
+    .locator(".topic-thread", { hasText: "commit and push" })
+    .first();
   await expect(waitingTopic).toBeVisible();
   await expect(waitingTopic).toContainText("等待 0 / 2 个任务执行成功");
+
+  // Waiting Topic ALSO appears in the left Agent sidebar sub-list with its waiting indicator
+  // and counts as running on the Agent row.
+  const repoGroup = page.locator(`.agent-group[data-agent-id="${repoAgent.id}"]`);
+  const waitingSidebarItem = repoGroup.locator(".agent-activity-item", {
+    hasText: "commit and push",
+  });
+  await expect(waitingSidebarItem).toBeVisible();
+  await expect(
+    waitingSidebarItem.getByRole("img", { name: "等待前置任务", exact: true }),
+  ).toBeVisible();
+  await expect(repoGroup.locator(".agent-working-count")).toContainText("1");
+
+  // Another /after task can select this waiting task (chaining A & B -> commit and push -> tag release)!
+  await textbox.click();
+  await textbox.pressSequentially("/after");
+  await page.getByRole("option", { name: /\/after/ }).click();
+  await expect(picker).toContainText("commit and push");
+  await picker.getByRole("button", { name: "添加任务", exact: true }).click();
+  await expect(popover).toContainText("等待中 (0/2)");
+  await popover.getByRole("button", { name: "清空", exact: true }).click();
+  await popover.getByRole("checkbox", { name: /commit and push/ }).click();
+  await page.keyboard.press("Escape");
+  await textbox.pressSequentially("tag release");
+  await composer
+    .getByRole("button", { name: "等 1 个任务成功后发送", exact: true })
+    .click();
+
+  const chainedTopic = page.locator(".topic-thread", {
+    hasText: "tag release",
+  });
+  await expect(chainedTopic).toBeVisible();
+  await expect(chainedTopic).toContainText("等待 0 / 1 个任务执行成功");
+  const chainedSidebarItem = repoGroup.locator(".agent-activity-item", {
+    hasText: "tag release",
+  });
+  await expect(chainedSidebarItem).toBeVisible();
+  await expect(
+    chainedSidebarItem.getByRole("img", { name: "等待前置任务", exact: true }),
+  ).toBeVisible();
+  await expect(repoGroup.locator(".agent-working-count")).toContainText("2");
 
   // Approve Task A -> waiting card updates to 1 / 2 and remains queued.
   await approveRun(page, taskA.id);
   await expect(waitingTopic).toContainText("等待 1 / 2 个任务执行成功");
   await expect(waitingTopic).toHaveAttribute("data-status", "queued");
+  await expect(chainedTopic).toHaveAttribute("data-status", "queued");
 
-  // Approve Task B -> waiting card automatically starts and completes!
+  // Approve Task B -> commit and push runs & completes, then tag release automatically runs & completes!
   await approveRun(page, taskB.id);
   await expect(waitingTopic).toHaveAttribute("data-status", "completed", {
     timeout: 15_000,
   });
+  await expect(chainedTopic).toHaveAttribute("data-status", "completed", {
+    timeout: 15_000,
+  });
 
-  // Now verify fail-closed + "忽略失败并运行".
+  // Now verify fail-closed + sidebar blocked indicator + cancel unstarted waiting Topic + "忽略失败并运行".
   const taskC = await sendRun(page, {
     commandId: crypto.randomUUID(),
     chatId: taskA.chatId,
@@ -264,11 +341,40 @@ test("/after hides when idle, preselects same-directory running tasks via + and 
     hasText: "push risky refactor",
   });
   await expect(blockedTopic).toContainText("等待 0 / 1 个任务执行成功");
+  const blockedSidebarItem = repoGroup.locator(".agent-activity-item", {
+    hasText: "push risky refactor",
+  });
+  await expect(
+    blockedSidebarItem.getByRole("img", { name: "等待前置任务", exact: true }),
+  ).toBeVisible();
 
-  // Stop Task C -> blockedTopic must stay queued and show fail-closed alert + "忽略失败并运行".
+  // Also queue a second waiting Topic so we can verify cancelling removes it from sidebar.
+  await textbox.click();
+  await textbox.pressSequentially("/after");
+  await page.getByRole("option", { name: /\/after/ }).click();
+  await textbox.pressSequentially("cancel me before start");
+  await composer
+    .getByRole("button", { name: /等 \d+ 个任务成功后发送/ })
+    .click();
+  const cancelTopic = page.locator(".topic-thread", {
+    hasText: "cancel me before start",
+  });
+  const cancelSidebarItem = repoGroup.locator(".agent-activity-item", {
+    hasText: "cancel me before start",
+  });
+  await expect(cancelSidebarItem).toBeVisible();
+  await cancelTopic
+    .getByRole("button", { name: "取消等待任务", exact: true })
+    .click();
+  await expect(cancelSidebarItem).toHaveCount(0);
+
+  // Stop Task C -> blockedTopic must stay queued, show fail-closed alert, and show "等待受阻" in sidebar.
   await stopRun(page, taskC.id);
   await expect(blockedTopic).toContainText("已停止自动启动");
   await expect(blockedTopic).toHaveAttribute("data-status", "queued");
+  await expect(
+    blockedSidebarItem.getByRole("img", { name: "等待受阻", exact: true }),
+  ).toBeVisible();
 
   await blockedTopic
     .getByRole("button", { name: "忽略失败并运行", exact: true })

@@ -1002,6 +1002,7 @@ export interface RunDependency {
   topic?: boolean;
   title: string;
   status: string;
+  blocked?: boolean;
 }
 /**
  * TurnPatch summarizes the native Codex diff. The raw patch is stored separately

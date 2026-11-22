@@ -1,4 +1,5 @@
 import type { Overview } from "@/api/types.gen";
+import { isRunWaiting, isRunWaitingBlocked } from "@/features/chat/waitRuns";
 
 // The shell needs activity indicators and titles. A streamed change to the
 // body of a reply should only notify the conversation displaying that reply.
@@ -11,6 +12,8 @@ export function selectWorkbenchOverview({ runs, ...overview }: Overview) {
       chatId: run.chatId,
       sessionId: run.sessionId,
       status: run.status,
+      waiting: isRunWaiting(run),
+      waitingBlocked: isRunWaitingBlocked(run),
       canPause: run.canPause && !run.channel,
       nativeTurnId: run.status === "paused" ? run.nativeTurnId : undefined,
       quiet: run.quiet,

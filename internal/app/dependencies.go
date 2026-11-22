@@ -54,6 +54,25 @@ func validateAfterRuns(ctx context.Context, tx *sql.Tx, afterRunIDs []string, ed
 		switch dep.Status {
 		case "failed", "interrupted", "cancelled", "unknown", "paused":
 			return conflict("One of the selected tasks did not finish successfully")
+		case "queued":
+			var blocked bool
+			err := tx.QueryRowContext(ctx, `WITH RECURSIVE upstream(id) AS (
+  SELECT rd.after_run_id FROM run_dependencies rd WHERE rd.run_id=?
+  UNION
+  SELECT rd.after_run_id FROM run_dependencies rd JOIN upstream u ON rd.run_id=u.id
+) SELECT COALESCE((SELECT json_extract(data,'$.queuePaused') FROM sessions WHERE id=?),0)=1 OR EXISTS(
+  SELECT 1 FROM upstream u
+  JOIN runs ur ON ur.id=u.id
+  JOIN sessions us ON us.id=ur.session_id
+  WHERE ur.status IN ('failed','interrupted','cancelled','unknown','paused')
+     OR (ur.status='queued' AND COALESCE(json_extract(us.data,'$.queuePaused'),0)=1)
+)`, depID, dep.SessionID).Scan(&blocked)
+			if err != nil {
+				return err
+			}
+			if blocked {
+				return conflict("One of the selected tasks is blocked by an unfinished task")
+			}
 		}
 		if editing.ID != "" && dep.SessionID == sessionID && dep.Status == "queued" && dep.Sequence >= editing.Sequence {
 			return invalid("Cannot wait for a later queued message in the same conversation")

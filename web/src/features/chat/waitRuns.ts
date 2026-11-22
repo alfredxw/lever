@@ -68,8 +68,16 @@ export function isWaitableRunStatus(status: string) {
   return WAITABLE_STATUSES.has(status);
 }
 
-export function isDependencyBlocked(status: string) {
-  return BLOCKED_STATUSES.has(status);
+export function isDependencyBlocked(status: string, blocked?: boolean) {
+  return Boolean(blocked) || BLOCKED_STATUSES.has(status);
+}
+
+export function isRunWaiting(run: Pick<Run, "status" | "waitingOn">) {
+  return run.status === "queued" && (run.waitingOn?.length ?? 0) > 0;
+}
+
+export function isRunWaitingBlocked(run: Pick<Run, "status" | "waitingOn">) {
+  return isRunWaiting(run) && dependencyProgress(run.waitingOn).blocked > 0;
 }
 
 export function dependencyProgress(waitingOn?: RunDependency[]) {
@@ -79,7 +87,7 @@ export function dependencyProgress(waitingOn?: RunDependency[]) {
   let blocked = 0;
   for (const dep of deps) {
     if (dep.status === "completed") completed++;
-    else if (isDependencyBlocked(dep.status)) blocked++;
+    else if (isDependencyBlocked(dep.status, dep.blocked)) blocked++;
   }
   return {
     total,
@@ -115,6 +123,30 @@ export function runDisplayTitle(
   return raw.length > 80 ? `${raw.slice(0, 80)}…` : raw;
 }
 
+function descendantRunIds(rootId: string, runs: Run[]) {
+  const excluded = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const run of runs) {
+      if (excluded.has(run.id)) continue;
+      const deps =
+        run.afterRunIds ?? run.waitingOn?.map((dep) => dep.runId) ?? [];
+      if (deps.some((id) => excluded.has(id))) {
+        excluded.add(run.id);
+        changed = true;
+      }
+    }
+  }
+  return excluded;
+}
+
+function waitableRank(run: Run) {
+  if (ACTIVE_STATUSES.has(run.status)) return 0;
+  if (isRunWaiting(run)) return 1;
+  return 2;
+}
+
 export function listWaitableRuns(
   overview: Pick<Overview, "agents" | "chats" | "conversations" | "runs"> | undefined,
   currentScope: Scope,
@@ -124,11 +156,26 @@ export function listWaitableRuns(
   const currentPaths = currentScope.roots.map((root) => root.path);
   const agents = new Map(overview.agents.map((agent) => [agent.id, agent]));
   const chats = new Map(overview.chats.map((chat) => [chat.id, chat]));
+  const pausedSessions = new Set(
+    overview.runs
+      .filter((run) => run.status === "paused")
+      .map((run) => run.sessionId),
+  );
+  const excludedRuns = options?.excludeRunId
+    ? descendantRunIds(options.excludeRunId, overview.runs)
+    : undefined;
   const result: WaitableRun[] = [];
   for (const run of overview.runs) {
     if (run.quiet || run.superseded || run.steerRunId) continue;
     if (!WAITABLE_STATUSES.has(run.status)) continue;
-    if (options?.excludeRunId && run.id === options.excludeRunId) continue;
+    if (isRunWaitingBlocked(run)) continue;
+    if (
+      run.status === "queued" &&
+      !isRunWaiting(run) &&
+      pausedSessions.has(run.sessionId)
+    )
+      continue;
+    if (excludedRuns?.has(run.id)) continue;
     if (options?.excludeSessionId && run.sessionId === options.excludeSessionId)
       continue;
     const agent = agents.get(run.agentId);
@@ -148,9 +195,9 @@ export function listWaitableRuns(
   }
   result.sort((a, b) => {
     if (a.sameScope !== b.sameScope) return a.sameScope ? -1 : 1;
-    const aActive = ACTIVE_STATUSES.has(a.run.status) ? 0 : 1;
-    const bActive = ACTIVE_STATUSES.has(b.run.status) ? 0 : 1;
-    if (aActive !== bActive) return aActive - bActive;
+    const aRank = waitableRank(a.run);
+    const bRank = waitableRank(b.run);
+    if (aRank !== bRank) return aRank - bRank;
     return a.run.sequence - b.run.sequence;
   });
   return result;
@@ -158,9 +205,9 @@ export function listWaitableRuns(
 
 export function defaultWaitRunIds(candidates: WaitableRun[]) {
   const sameScope = candidates.filter((item) => item.sameScope);
-  const activeSameScope = sameScope.filter((item) =>
-    ACTIVE_STATUSES.has(item.run.status),
+  const primarySameScope = sameScope.filter(
+    (item) => ACTIVE_STATUSES.has(item.run.status) || isRunWaiting(item.run),
   );
-  const picked = activeSameScope.length > 0 ? activeSameScope : sameScope;
+  const picked = primarySameScope.length > 0 ? primarySameScope : sameScope;
   return picked.map((item) => item.run.id);
 }

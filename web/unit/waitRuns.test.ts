@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   defaultWaitRunIds,
   dependencyProgress,
+  isRunWaiting,
+  isRunWaitingBlocked,
   listWaitableRuns,
   sharesDirectory,
 } from "../src/features/chat/waitRuns.ts";
@@ -113,7 +115,86 @@ test("dependencyProgress counts completed, blocked, and pending dependencies", (
       { runId: "1", sessionId: "s1", chatId: "c1", agentId: "a1", title: "A", status: "completed" },
       { runId: "2", sessionId: "s2", chatId: "c1", agentId: "a1", title: "B", status: "running" },
       { runId: "3", sessionId: "s3", chatId: "c1", agentId: "a1", title: "C", status: "failed" },
+      { runId: "4", sessionId: "s4", chatId: "c1", agentId: "a1", title: "D", status: "queued", blocked: true },
     ]),
-    { total: 3, completed: 1, blocked: 1, pending: 1 },
+    { total: 4, completed: 1, blocked: 2, pending: 1 },
+  );
+});
+
+test("listWaitableRuns includes active waiting tasks, excludes blocked/paused queues and downstream cycles", () => {
+  const scope: Scope = {
+    roots: [{ id: "r1", path: "/repo/lever" }],
+    primaryRootId: "r1",
+  };
+  const overview: Pick<Overview, "agents" | "chats" | "conversations" | "runs"> = {
+    agents: [makeAgent("a1", "Coder", "/repo/lever")],
+    chats: [
+      { id: "c1", agentId: "a1", title: "Main", source: "user", createdAt: "", updatedAt: "" },
+    ],
+    conversations: [],
+    runs: [
+      makeRun({ id: "r-run", sessionId: "s1", chatId: "c1", agentId: "a1", status: "running", sequence: 1, input: "active task", scopePaths: ["/repo/lever"] }),
+      makeRun({
+        id: "r-wait",
+        sessionId: "s2",
+        chatId: "c1",
+        agentId: "a1",
+        status: "queued",
+        sequence: 2,
+        input: "waiting task",
+        scopePaths: ["/repo/lever"],
+        afterRunIds: ["r-run"],
+        waitingOn: [{ runId: "r-run", sessionId: "s1", chatId: "c1", agentId: "a1", title: "active task", status: "running" }],
+      }),
+      makeRun({
+        id: "r-wait-child",
+        sessionId: "s3",
+        chatId: "c1",
+        agentId: "a1",
+        status: "queued",
+        sequence: 3,
+        input: "chained waiting task",
+        scopePaths: ["/repo/lever"],
+        afterRunIds: ["r-wait"],
+        waitingOn: [{ runId: "r-wait", sessionId: "s2", chatId: "c1", agentId: "a1", title: "waiting task", status: "queued" }],
+      }),
+      makeRun({
+        id: "r-wait-blocked",
+        sessionId: "s4",
+        chatId: "c1",
+        agentId: "a1",
+        status: "queued",
+        sequence: 4,
+        input: "blocked waiting task",
+        scopePaths: ["/repo/lever"],
+        afterRunIds: ["r-dead"],
+        waitingOn: [{ runId: "r-dead", sessionId: "s9", chatId: "c1", agentId: "a1", title: "dead", status: "queued", blocked: true }],
+      }),
+      makeRun({ id: "r-paused", sessionId: "s5", chatId: "c1", agentId: "a1", status: "paused", sequence: 5, input: "paused task", scopePaths: ["/repo/lever"] }),
+      makeRun({ id: "r-queued-behind-pause", sessionId: "s5", chatId: "c1", agentId: "a1", status: "queued", sequence: 6, input: "stuck behind pause", scopePaths: ["/repo/lever"] }),
+    ],
+  };
+
+  assert.equal(isRunWaiting(overview.runs[1]), true);
+  assert.equal(isRunWaitingBlocked(overview.runs[1]), false);
+  assert.equal(isRunWaitingBlocked(overview.runs[3]), true);
+
+  const candidates = listWaitableRuns(overview, scope);
+  assert.deepEqual(
+    candidates.map((item) => item.run.id),
+    ["r-run", "r-wait", "r-wait-child"],
+  );
+  // Same-directory active and actively waiting tasks are all preselected.
+  assert.deepEqual(defaultWaitRunIds(candidates), [
+    "r-run",
+    "r-wait",
+    "r-wait-child",
+  ]);
+
+  // Editing r-wait must exclude r-wait and its transitive dependent r-wait-child.
+  const editingWait = listWaitableRuns(overview, scope, { excludeRunId: "r-wait" });
+  assert.deepEqual(
+    editingWait.map((item) => item.run.id),
+    ["r-run"],
   );
 });

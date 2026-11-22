@@ -461,6 +461,7 @@ type RunDependency struct {
 	Topic     bool   `json:"topic,omitempty"`
 	Title     string `json:"title"`
 	Status    string `json:"status"`
+	Blocked   bool   `json:"blocked,omitempty"`
 }
 
 func (run Run) UserMessage() *Message {

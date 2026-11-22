@@ -89,6 +89,7 @@ import { WaitRunPicker } from "./WaitRunPicker";
 import {
   defaultWaitRunIds,
   isDependencyBlocked,
+  isRunWaitingBlocked,
   listWaitableRuns,
   runDisplayTitle,
 } from "./waitRuns";
@@ -399,13 +400,14 @@ export function Composer({
   const resolvedAfterRuns = useMemo(() => {
     const map = new Map<
       string,
-      Pick<RunDependency, "runId" | "title" | "status">
+      Pick<RunDependency, "runId" | "title" | "status" | "blocked">
     >();
     for (const run of overview.data?.runs ?? []) {
       map.set(run.id, {
         runId: run.id,
         title: runDisplayTitle(run, overview.data),
         status: run.status,
+        blocked: isDependencyBlocked(run.status) || isRunWaitingBlocked(run),
       });
     }
     for (const item of waitCandidates) {
@@ -413,6 +415,7 @@ export function Composer({
         runId: item.run.id,
         title: item.title,
         status: item.run.status,
+        blocked: false,
       });
     }
     for (let i = 0; i < missingAfterIds.length; i++) {
@@ -422,6 +425,7 @@ export function Composer({
           runId: run.id,
           title: runDisplayTitle(run, overview.data),
           status: run.status,
+          blocked: isDependencyBlocked(run.status) || isRunWaitingBlocked(run),
         });
       }
     }
@@ -434,9 +438,10 @@ export function Composer({
     afterRunIds === undefined &&
     waitCandidates.length > 0;
   const blockedAfterRun = Boolean(
-    afterRunIds?.some((id) =>
-      isDependencyBlocked(resolvedAfterRuns.get(id)?.status ?? ""),
-    ),
+    afterRunIds?.some((id) => {
+      const info = resolvedAfterRuns.get(id);
+      return isDependencyBlocked(info?.status ?? "", info?.blocked);
+    }),
   );
   const afterError = blockedAfterRun ? t("after.blockedDraft") : "";
   const capabilities = catalog.data?.capabilities ?? runtime?.capabilities;
@@ -790,7 +795,7 @@ export function Composer({
   const sendButtonText =
     draft.editing || comparisonAgents
       ? sendLabel
-      : afterRunIds?.length
+      : afterRunIds !== undefined
         ? t("after.sendShort")
         : defaultAction && t(defaultAction.shortLabel);
   const promptEmpty = !prompt.text.trim() && !prompt.references.length;

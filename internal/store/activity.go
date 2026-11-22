@@ -65,8 +65,21 @@ WHERE id=? AND activity IS NULL`, run.AgentID, run.SessionID)
 	if run.Quiet && run.Status != "failed" && run.Status != "unknown" && run.Status != "waiting_user" {
 		return nil
 	}
-	if run.Superseded || run.Status == "queued" || run.Status == "steering" || run.Status == "steered" || run.Status == "cancelled" {
+	if run.Superseded || run.Status == "steering" || run.Status == "steered" {
 		return nil
+	}
+	if run.Status == "cancelled" {
+		_, err := tx.Exec(`UPDATE sessions SET activity=NULL, title_run_id=NULL
+WHERE id=? AND activity IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM runs WHERE session_id=? AND status NOT IN ('steering','steered','cancelled')
+)`, run.SessionID, run.SessionID)
+		return err
+	}
+	if run.Status == "queued" {
+		if len(run.AfterRunIDs) == 0 {
+			return nil
+		}
+		return updateWaitingActivity(tx, run)
 	}
 	message := lastMessage(run)
 	messageChanged := previous.Sequence == 0 || previous.Status == "queued" || message != lastMessage(previous)
@@ -113,6 +126,45 @@ WHERE id=? AND activity IS NULL`, run.AgentID, run.SessionID)
 		}
 	}
 	return saveActivity(tx, activity)
+}
+
+func updateWaitingActivity(tx *sql.Tx, run model.Run) error {
+	activity, err := Get[model.Conversation](context.Background(), tx, "SELECT COALESCE(activity,'null') FROM sessions WHERE id=?", run.SessionID)
+	if err != nil {
+		return err
+	}
+	var kind, sessionTitle, titleRunID string
+	if err := tx.QueryRow("SELECT kind,COALESCE(json_extract(data,'$.title'),''),COALESCE(title_run_id,'') FROM sessions WHERE id=?", run.SessionID).Scan(&kind, &sessionTitle, &titleRunID); err != nil {
+		return err
+	}
+	if activity.ID == "" {
+		activity = model.Conversation{
+			ID:        run.SessionID,
+			ChatID:    run.ChatID,
+			AgentID:   run.AgentID,
+			Kind:      kind,
+			Title:     sessionTitle,
+			Preview:   messagePreview(lastMessage(run).text),
+			MessageAt: time.Now().UTC().Format(activityTime),
+		}
+		if activity.Title == "" {
+			activity.Title = messagePreview(promptTitle(run))
+			if kind == "topic" {
+				if _, err := tx.Exec("UPDATE sessions SET title_run_id=? WHERE id=?", run.ID, run.SessionID); err != nil {
+					return err
+				}
+			}
+		}
+		return saveActivity(tx, activity)
+	}
+	if titleRunID == run.ID {
+		if sessionTitle == "" {
+			activity.Title = messagePreview(promptTitle(run))
+		}
+		activity.Preview = messagePreview(lastMessage(run).text)
+		return saveActivity(tx, activity)
+	}
+	return nil
 }
 
 // Backfill sessions that predate the projection, then upgrade any existing

@@ -48,11 +48,14 @@ export function WaitingDependencies({
 
   function renderChip(dep: RunDependency) {
     const title = dep.title || dep.runId.slice(0, 8);
-    const statusText = t(`status.${dep.status}`, { defaultValue: dep.status });
-    const depBlocked = isDependencyBlocked(dep.status);
+    const depBlocked = isDependencyBlocked(dep.status, dep.blocked);
+    const statusText =
+      dep.status === "queued"
+        ? t(depBlocked ? "after.statusBlocked" : "after.statusWaiting")
+        : t(`status.${dep.status}`, { defaultValue: dep.status });
     const content = (
       <>
-        <DependencyStatusIcon status={dep.status} />
+        <DependencyStatusIcon status={dep.status} blocked={dep.blocked} />
         <span className="max-w-40 truncate">{title}</span>
       </>
     );

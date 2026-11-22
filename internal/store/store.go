@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -437,7 +438,7 @@ func SaveRun(tx *sql.Tx, run model.Run) error {
 	if err := Event(tx, model.Event{Type: "run", ChatID: run.ChatID, Run: &run}); err != nil {
 		return err
 	}
-	if previous.Sequence == 0 || previous.Status != run.Status {
+	if previous.Sequence == 0 || previous.Status != run.Status || !slices.Equal(previous.AfterRunIDs, run.AfterRunIDs) {
 		if err := notifyDelegation(tx, run.ID); err != nil {
 			return err
 		}
@@ -449,9 +450,16 @@ func SaveRun(tx *sql.Tx, run model.Run) error {
 }
 
 func notifyDependentRuns(tx *sql.Tx, afterRunID string) error {
-	rows, err := tx.Query(`SELECT r.id, r.chat_id FROM run_dependencies d
-JOIN runs r ON r.id=d.run_id
-WHERE d.after_run_id=? AND r.status='queued'`, afterRunID)
+	rows, err := tx.Query(`WITH RECURSIVE downstream(id, chat_id) AS (
+  SELECT r.id, r.chat_id FROM run_dependencies d
+  JOIN runs r ON r.id=d.run_id
+  WHERE d.after_run_id=? AND r.status='queued'
+  UNION
+  SELECT r.id, r.chat_id FROM run_dependencies d
+  JOIN runs r ON r.id=d.run_id
+  JOIN downstream ds ON d.after_run_id=ds.id
+  WHERE r.status='queued'
+) SELECT id, chat_id FROM downstream`, afterRunID)
 	if err != nil {
 		return err
 	}
@@ -603,7 +611,9 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 				}
 				conversations[sessionID] = &v
 			}
-			e.Conversation = conversations[sessionID]
+			if conversations[sessionID].ID != "" {
+				e.Conversation = conversations[sessionID]
+			}
 		}
 	}
 	return result, nil
@@ -849,7 +859,26 @@ const runWaitingOnExpr = `(SELECT json_group_array(json(dep_json)) FROM (
       json_extract(dep.data,'$.references[0].name'),
       ''
     ), 1, 120),
-    'status', dep.status
+    'status', dep.status,
+    'blocked', json(CASE
+      WHEN dep.status IN ('failed','interrupted','cancelled','unknown','paused') THEN 'true'
+      WHEN dep.status='queued' AND (
+        COALESCE(json_extract(ds.data,'$.queuePaused'),0)=1
+        OR EXISTS(
+          WITH RECURSIVE upstream(id) AS (
+            SELECT rd2.after_run_id FROM run_dependencies rd2 WHERE rd2.run_id=dep.id
+            UNION
+            SELECT rd3.after_run_id FROM run_dependencies rd3 JOIN upstream u ON rd3.run_id=u.id
+          )
+          SELECT 1 FROM upstream u
+          JOIN runs ur ON ur.id=u.id
+          JOIN sessions us ON us.id=ur.session_id
+          WHERE ur.status IN ('failed','interrupted','cancelled','unknown','paused')
+             OR (ur.status='queued' AND COALESCE(json_extract(us.data,'$.queuePaused'),0)=1)
+        )
+      ) THEN 'true'
+      ELSE 'false'
+    END)
   ) AS dep_json
   FROM run_dependencies rd
   JOIN runs dep ON dep.id = rd.after_run_id

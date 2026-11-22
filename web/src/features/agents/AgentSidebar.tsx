@@ -16,8 +16,10 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   CircleHelp,
   CirclePause,
+  Clock,
   Eraser,
   Folders,
   LoaderCircle,
@@ -175,9 +177,11 @@ export function AgentSidebar({
           : conversation.title;
       const unread =
         conversation.unreadSequence > (readCursors[conversation.id] ?? 0);
-      const run = runsBySession
-        .get(conversation.id)
-        ?.find((run) => run.status !== "queued" && run.status !== "paused");
+      const sessionRuns = runsBySession.get(conversation.id);
+      const run =
+        sessionRuns?.find(
+          (run) => run.status !== "queued" && run.status !== "paused",
+        ) ?? sessionRuns?.find((run) => run.waiting);
       const pending = pendingSessions.has(conversation.id);
       const pinIndex =
         conversation.kind === "topic"
@@ -257,9 +261,15 @@ export function AgentSidebar({
             (item) => item.unreadSequence > (readCursors[item.id] ?? 0),
           ),
           waiting: runs.filter(
-            (run) => run.status === "waiting_user" || run.status === "unknown",
+            (run) =>
+              run.status === "waiting_user" ||
+              run.status === "unknown" ||
+              run.waitingBlocked,
           ).length,
-          working: runs.filter((run) => isWorking(run.status)).length,
+          working: runs.filter(
+            (run) =>
+              isWorking(run.status) || (run.waiting && !run.waitingBlocked),
+          ).length,
         };
       });
     return {
@@ -591,7 +601,13 @@ export function AgentSidebar({
                             chatTitle={chat.title}
                             title={title}
                             unread={unread}
-                            runStatus={run?.status}
+                            runStatus={
+                              run?.waiting
+                                ? run.waitingBlocked
+                                  ? "waiting_blocked"
+                                  : "waiting"
+                                : run?.status
+                            }
                             pending={pending}
                             pinned={pinIndex !== undefined}
                             canClear={canClear}
@@ -688,20 +704,30 @@ const AgentActivityRow = memo(function AgentActivityRow({
   ) => void;
 }) {
   const working = !!runStatus && isWorking(runStatus);
+  const waiting = runStatus === "waiting";
+  const waitingBlocked = runStatus === "waiting_blocked";
   const StatusIcon =
     pending || runStatus === "waiting_user"
       ? CirclePause
-      : runStatus === "unknown"
-        ? CircleHelp
-        : working
-          ? LoaderCircle
-          : undefined;
+      : waitingBlocked
+        ? CircleAlert
+        : waiting
+          ? Clock
+          : runStatus === "unknown"
+            ? CircleHelp
+            : working
+              ? LoaderCircle
+              : undefined;
   const label = title || t("chat.topic");
   const status = pending
     ? t("agents.pending")
-    : runStatus
-      ? t(`status.${runStatus}`)
-      : "";
+    : waitingBlocked
+      ? t("after.statusBlocked")
+      : waiting
+        ? t("after.statusWaiting")
+        : runStatus
+          ? t(`status.${runStatus}`)
+          : "";
   const actionLabel = pinned
     ? t("agents.unpinConversation")
     : t("agents.clearActivity", { title: label });
@@ -735,6 +761,7 @@ const AgentActivityRow = memo(function AgentActivityRow({
           <StatusIcon
             className={cn(
               "agent-working",
+              waitingBlocked && "agent-working-blocked",
               StatusIcon === LoaderCircle &&
                 "animate-spin motion-reduce:animate-none",
             )}

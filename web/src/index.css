@@ -914,6 +914,9 @@ button:focus-visible,
   height: 14px;
   color: var(--muted-foreground);
 }
+.agent-working-blocked {
+  color: var(--destructive);
+}
 .agent-working-count {
   display: inline-flex;
   height: 16px;

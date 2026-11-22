@@ -1,8 +1,10 @@
 import type { WorkbenchOverview } from "@/components/workbench/workbenchOverview";
 import { useQuery } from "@tanstack/react-query";
 import {
+  CircleAlert,
   CircleHelp,
   CirclePause,
+  Clock,
   Eraser,
   LoaderCircle,
   Pin,
@@ -119,11 +121,17 @@ export function RecentConversations({
     const pending = new Set(
       overview?.requests.map((request) => request.sessionId),
     );
-    const runs = new Map(
-      overview?.runs
-        .filter((run) => active(run.status))
-        .map((run) => [run.sessionId, run.status]),
-    );
+    const runs = new Map<string, string>();
+    for (const run of overview?.runs ?? []) {
+      if (active(run.status)) {
+        runs.set(run.sessionId, run.status);
+      } else if (run.waiting && !runs.has(run.sessionId)) {
+        runs.set(
+          run.sessionId,
+          run.waitingBlocked ? "waiting_blocked" : "waiting",
+        );
+      }
+    }
     const entries = (overview?.conversations ?? []).flatMap<RecentEntry>(
       (conversation) => {
         const agent = agents.get(conversation.agentId);
@@ -357,14 +365,27 @@ const RecentConversationRow = memo(function RecentConversationRow({
     isPinned ? "agents.unpinConversation" : "agents.pinConversation",
   );
   const pinButtonId = `recent-pin-${encodeURIComponent(id)}`;
+  const waiting = status === "waiting";
+  const waitingBlocked = status === "waiting_blocked";
   const StatusIcon =
     status === "waiting_user"
       ? CirclePause
-      : status === "unknown"
-        ? CircleHelp
-        : status && isWorking(status)
-          ? LoaderCircle
-          : undefined;
+      : waitingBlocked
+        ? CircleAlert
+        : waiting
+          ? Clock
+          : status === "unknown"
+            ? CircleHelp
+            : status && isWorking(status)
+              ? LoaderCircle
+              : undefined;
+  const statusLabel = waitingBlocked
+    ? t("after.statusBlocked")
+    : waiting
+      ? t("after.statusWaiting")
+      : status
+        ? t(`status.${status}`)
+        : "";
   return (
     <li className="recent-row relative">
       <button
@@ -411,11 +432,14 @@ const RecentConversationRow = memo(function RecentConversationRow({
             {StatusIcon && (
               <StatusIcon
                 className={cn(
-                  "size-3.5 shrink-0 text-muted-foreground",
+                  "size-3.5 shrink-0",
+                  waitingBlocked
+                    ? "text-destructive"
+                    : "text-muted-foreground",
                   StatusIcon === LoaderCircle &&
                     "animate-spin motion-reduce:animate-none",
                 )}
-                aria-label={t(`status.${status}`)}
+                aria-label={statusLabel}
                 role="img"
               />
             )}

@@ -112,7 +112,9 @@ export function AgentSidebarMenus({
       disabled:
         !agent.archived &&
         overview.runs.some(
-          (run) => run.agentId === agent.id && active(run.status),
+          (run) =>
+            run.agentId === agent.id &&
+            (active(run.status) || (run.waiting && !run.waitingBlocked)),
         ),
       run: async () => {
         await api(
@@ -194,11 +196,15 @@ export function AgentSidebarMenus({
       ? conversation.title || t("chat.topic")
       : displayChatTitle(chat, t);
     const state = navigation.tabState(conversation);
-    const run = overview.runs.find(
-      (item) =>
-        item.sessionId === conversation.id &&
-        (active(item.status) || item.status === "paused"),
-    );
+    const run =
+      overview.runs.find(
+        (item) =>
+          item.sessionId === conversation.id &&
+          (active(item.status) || item.status === "paused"),
+      ) ??
+      overview.runs.find(
+        (item) => item.sessionId === conversation.id && item.waiting,
+      );
     group(
       {
         id: "open",
@@ -267,6 +273,21 @@ export function AgentSidebarMenus({
             canPauseReply(run) ? "chat.pauseReply" : "agents.stopExecution",
           ),
           run: () => interruptReply(run),
+        },
+      !archived &&
+        run?.waiting && {
+          id: "cancel-waiting",
+          label: t("after.cancelWaiting"),
+          run: async () => {
+            await api(`/runs/${run.id}/queue`, { action: "remove" });
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["overview"] }),
+              queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] }),
+              queryClient.invalidateQueries({
+                queryKey: ["session", run.sessionId],
+              }),
+            ]);
+          },
         },
     );
   }

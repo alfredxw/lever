@@ -294,3 +294,147 @@ func TestRunDependenciesSurviveServerRestartWithLiveHost(t *testing.T) {
 	reopened.wait(taskA.ID, "completed")
 	reopened.wait(follow.ID, "completed")
 }
+
+func TestRunDependenciesChainOnWaitingTaskAndSidebarActivity(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	chat := f.chat(agent)
+
+	taskA := f.send(chat.ID, "topic", "", "Task A [approval]")
+	f.wait(taskA.ID, "waiting_user")
+
+	var waitW model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		Operation:   "topic",
+		Text:        "Run tests after A [approval]",
+		AfterRunIDs: []string{taskA.ID},
+	}, 200, &waitW)
+	if waitW.Status != "queued" {
+		t.Fatalf("expected waitW queued, got %s", waitW.Status)
+	}
+
+	// Waiting on another waiting task is allowed and chains execution.
+	var waitC model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		Operation:   "topic",
+		Text:        "Commit after tests",
+		AfterRunIDs: []string{waitW.ID},
+	}, 200, &waitC)
+	if waitC.Status != "queued" || len(waitC.WaitingOn) != 1 || waitC.WaitingOn[0].Blocked {
+		t.Fatalf("unexpected waitC initial state: %+v", waitC)
+	}
+
+	// Brand-new waiting Topics must immediately appear in Overview.Conversations without marking unread.
+	var overview model.Overview
+	f.request("GET", "/overview", nil, 200, &overview)
+	for _, want := range []struct {
+		sessionID string
+		title     string
+	}{
+		{waitW.SessionID, "Run tests after A [approval]"},
+		{waitC.SessionID, "Commit after tests"},
+	} {
+		idx := slices.IndexFunc(overview.Conversations, func(c model.Conversation) bool { return c.ID == want.sessionID })
+		if idx < 0 {
+			t.Fatalf("expected waiting session %s in overview.conversations, got %+v", want.sessionID, overview.Conversations)
+		}
+		conv := overview.Conversations[idx]
+		if conv.Title != want.title || conv.UnreadSequence != 0 {
+			t.Fatalf("unexpected waiting conversation projection: %+v", conv)
+		}
+	}
+
+	// Complete A -> W starts and awaits approval, while C remains queued.
+	f.answerRunApproval(taskA.ID, true)
+	f.wait(taskA.ID, "completed")
+	f.wait(waitW.ID, "waiting_user")
+	var midC model.Run
+	f.request("GET", "/runs/"+waitC.ID, nil, 200, &midC)
+	if midC.Status != "queued" || len(midC.WaitingOn) != 1 || midC.WaitingOn[0].Status != "waiting_user" || midC.WaitingOn[0].Blocked {
+		t.Fatalf("unexpected midC while waitW is running: %+v", midC)
+	}
+
+	// Complete W -> C automatically launches and completes.
+	f.answerRunApproval(waitW.ID, true)
+	f.wait(waitW.ID, "completed")
+	f.wait(waitC.ID, "completed")
+
+	// Transitive block propagation: A2 -> W2 -> C2, stop A2.
+	taskA2 := f.send(chat.ID, "topic", "", "Task A2 [approval]")
+	f.wait(taskA2.ID, "waiting_user")
+	var waitW2 model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		Operation:   "topic",
+		Text:        "Wait W2",
+		AfterRunIDs: []string{taskA2.ID},
+	}, 200, &waitW2)
+	var waitC2 model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		Operation:   "topic",
+		Text:        "Wait C2",
+		AfterRunIDs: []string{waitW2.ID},
+	}, 200, &waitC2)
+
+	var beforeStop int64
+	f.request("GET", "/overview", nil, 200, &overview)
+	beforeStop = overview.Cursor
+
+	f.request("POST", "/runs/"+taskA2.ID+"/stop", map[string]bool{}, 200, nil)
+	f.wait(taskA2.ID, "interrupted")
+
+	var blockedC2 model.Run
+	f.request("GET", "/runs/"+waitC2.ID, nil, 200, &blockedC2)
+	if blockedC2.Status != "queued" || len(blockedC2.WaitingOn) != 1 || !blockedC2.WaitingOn[0].Blocked {
+		t.Fatalf("expected waitC2 transitively blocked after A2 stopped, got %+v", blockedC2)
+	}
+
+	// Verify SSE replay emitted an update event for transitive dependent waitC2.
+	events, err := f.a.Store.Events(context.Background(), beforeStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(events, func(e model.Event) bool { return e.Run != nil && e.Run.ID == waitC2.ID }) {
+		t.Fatalf("expected transitive dependent event for %s after %s stopped", waitC2.ID, taskA2.ID)
+	}
+
+	// Submitting a new run waiting on blocked W2 is rejected with 409.
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		Operation:   "topic",
+		Text:        "Wait on blocked W2",
+		AfterRunIDs: []string{waitW2.ID},
+	}, 409, nil)
+
+	// Editing an unstarted waiting Topic updates its activity title.
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:   app.ID(),
+		ChatID:      chat.ID,
+		SessionID:   waitW2.SessionID,
+		Operation:   "reply",
+		EditRunID:   waitW2.ID,
+		Text:        "Renamed Wait W2",
+		AfterRunIDs: []string{taskA2.ID},
+	}, 409, nil) // still blocked on taskA2!
+
+	// Cancelling unstarted waiting Topic C2 removes it from Overview.Conversations.
+	f.request("POST", "/runs/"+waitC2.ID+"/queue", map[string]string{"action": "remove"}, 200, nil)
+	f.request("GET", "/overview", nil, 200, &overview)
+	if slices.ContainsFunc(overview.Conversations, func(c model.Conversation) bool { return c.ID == waitC2.SessionID }) {
+		t.Fatalf("expected cancelled unstarted waiting session %s removed from overview.conversations", waitC2.SessionID)
+	}
+	// Clean up W2 as well.
+	f.request("POST", "/runs/"+waitW2.ID+"/queue", map[string]string{"action": "remove"}, 200, nil)
+	f.request("GET", "/overview", nil, 200, &overview)
+	if slices.ContainsFunc(overview.Conversations, func(c model.Conversation) bool { return c.ID == waitW2.SessionID }) {
+		t.Fatalf("expected cancelled unstarted waiting session %s removed from overview.conversations", waitW2.SessionID)
+	}
+}
