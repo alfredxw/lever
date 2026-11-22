@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -113,7 +114,7 @@ func (a *App) writeAttachment(file model.Attachment, reader io.Reader) (model.At
 	if err != nil && !errors.Is(err, io.EOF) {
 		return file, err
 	}
-	file.MediaType = http.DetectContentType(header[:n])
+	file.MediaType = attachmentMediaType(file.Name, header[:n])
 	if isImage(file) && file.Size > maxAttachmentImageBytes {
 		return file, invalid("Images must be at most 5 MiB")
 	}
@@ -122,6 +123,36 @@ func (a *App) writeAttachment(file model.Attachment, reader io.Reader) (model.At
 	}
 	written = true
 	return file, nil
+}
+
+func attachmentMediaType(name string, header []byte) string {
+	mediaType := http.DetectContentType(header)
+	switch mediaType {
+	case "audio/wave", "audio/x-wav":
+		return "audio/wav"
+	case "application/ogg":
+		if bytes.Contains(header, []byte("OpusHead")) || bytes.Contains(header, []byte("\x01vorbis")) {
+			return "audio/ogg"
+		}
+	case "video/mp4", "application/octet-stream":
+		if (mediaType == "video/mp4" && strings.EqualFold(filepath.Ext(name), ".m4a")) || (len(header) >= 12 && string(header[4:12]) == "ftypM4A ") {
+			return "audio/mp4"
+		}
+		if bytes.HasPrefix(header, []byte("fLaC")) {
+			return "audio/flac"
+		}
+		if strings.EqualFold(filepath.Ext(name), ".aac") && len(header) >= 7 && header[0] == 0xff && header[1]&0xf6 == 0xf0 {
+			return "audio/aac"
+		}
+		if strings.EqualFold(filepath.Ext(name), ".mp3") && len(header) >= 4 && header[0] == 0xff && header[1]&0xe6 == 0xe2 && header[1]&0x18 != 0x08 && header[2]>>4 != 0xf && header[2]&0x0c != 0x0c {
+			return "audio/mpeg"
+		}
+	case "video/webm":
+		if strings.EqualFold(filepath.Ext(name), ".weba") {
+			return "audio/webm"
+		}
+	}
+	return mediaType
 }
 
 func isImage(file model.Attachment) bool {

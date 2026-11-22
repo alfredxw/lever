@@ -885,6 +885,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "composer.unsupportedImages": "此运行时不支持图片输入。",
   "composer.modelUnsupportedImages": "请选择支持图片输入的模型后再发送。",
   "composer.unsupportedFiles": "此运行时不支持文件附件。",
+  "composer.fileLinkOnly":
+    "{{name}}：此运行时只接收文件链接，能否读取取决于它的文件权限。",
   "composer.unsupportedRoots": "此运行时仅支持一个工作目录。",
   "composer.unsupportedSkills": "此运行时不支持 Agent 技能目录。",
   "composer.unsupportedDelegation": "此运行时不支持委派所需的 MCP 连接。",

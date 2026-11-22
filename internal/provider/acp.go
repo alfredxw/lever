@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -196,7 +197,7 @@ func (c *acpRuntime) failure(err error) error {
 
 func (c *acpRuntime) capabilities() model.ProviderCapabilities {
 	a := c.initial.AgentCapabilities
-	return model.ProviderCapabilities{Images: a.PromptCapabilities.Image, Files: a.PromptCapabilities.EmbeddedContext, MultiRoot: a.SessionCapabilities.AdditionalDirectories != nil, MCP: true, Resume: a.LoadSession || a.SessionCapabilities.Resume != nil}
+	return model.ProviderCapabilities{Images: a.PromptCapabilities.Image, Audio: a.PromptCapabilities.Audio, Files: true, FileLinksOnly: !a.PromptCapabilities.EmbeddedContext, MultiRoot: a.SessionCapabilities.AdditionalDirectories != nil, MCP: true, Resume: a.LoadSession || a.SessionCapabilities.Resume != nil}
 }
 
 func acpDirectoryContext(caps model.ProviderCapabilities) bool {
@@ -316,9 +317,6 @@ func discoverACP(ctx context.Context, config model.Provider, cwd string) (model.
 			removeAntigravityProbe(ctx, config, string(state.SessionID), cwd)
 		}
 	}()
-	if !c.capabilities().Resume {
-		return model.Catalog{}, errors.New("This ACP runtime cannot restore native sessions")
-	}
 	state, err = c.sessionState(ctx, cwd, "", nil, []acp.McpServer{})
 	if err != nil {
 		return model.Catalog{}, c.failure(err)
@@ -450,9 +448,6 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	}
 	defer c.close()
 	caps := c.capabilities()
-	if !caps.Resume {
-		return errors.New("This ACP runtime cannot restore native sessions")
-	}
 	if len(in.Profile.Skills) > 0 {
 		return errors.New("This ACP runtime does not support Agent skill directories")
 	}
@@ -460,8 +455,6 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	var contextDirectories []string
 	if acpDirectoryContext(caps) {
 		contextDirectories, directories = directories, nil
-	} else if len(directories) > 0 && !caps.MultiRoot {
-		return errors.New("This ACP runtime does not support multiple working directories")
 	}
 	if caps.MultiRoot && in.Skills.AntigravityRoot != "" {
 		directories = append(directories, in.Skills.AntigravityRoot)
@@ -495,6 +488,8 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	native := in.Session.NativeID
 	if native == "" {
 		native = string(state.SessionID)
+	} else if state.SessionID != "" && string(state.SessionID) != native {
+		return errors.New("ACP runtime restored a different native session")
 	}
 	if native == "" {
 		return errors.New("ACP runtime returned an empty native session ID")
@@ -502,8 +497,10 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	c.mu.Lock()
 	c.session = acp.SessionId(native)
 	c.mu.Unlock()
-	if err = sink.Bind(native); err != nil {
-		return err
+	if caps.Resume {
+		if err = sink.Bind(native); err != nil {
+			return err
+		}
 	}
 	selection := in.Selection
 	if c.preset != nil {
@@ -533,7 +530,12 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	}
 	if nativeCommand {
 		prompt[0] = acp.TextBlock(strings.TrimSpace(in.Text))
-	} else if len(contextDirectories) > 0 {
+	}
+	if !nativeCommand && caps.FileLinksOnly {
+		for _, path := range contextDirectories {
+			prompt = append(prompt, acp.ResourceLinkBlock(filepath.Base(path), acpFileURI(path)))
+		}
+	} else if !nativeCommand && len(contextDirectories) > 0 {
 		prompt = append(prompt, acp.ResourceBlock(acp.EmbeddedResourceResource{
 			TextResourceContents: &acp.TextResourceContents{
 				Uri:      "lever://workspace/additional-directories",
@@ -662,17 +664,37 @@ func acpPrompt(in Input, caps model.ProviderCapabilities, advertised []model.Nat
 	}
 	prompt := []acp.ContentBlock{acp.TextBlock(text)}
 	for _, file := range in.Attachments {
-		if file.Image() {
-			if !caps.Images {
+		mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(file.MediaType, ";", 2)[0]))
+		if mediaType == "audio/wave" || mediaType == "audio/x-wav" {
+			mediaType = "audio/wav"
+		}
+		audioFile := strings.HasPrefix(mediaType, "audio/") && mediaType != "audio/*" && mediaType != "audio/"
+		audio := audioFile && caps.Audio
+		if in.Provider.Type == "antigravity" && audio {
+			switch mediaType {
+			case "audio/aac", "audio/flac", "audio/mp3", "audio/mpeg", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/ogg", "audio/wav", "audio/webm":
+			default:
+				audio = false
+			}
+		}
+		if file.Image() || audio {
+			if file.Image() && !caps.Images {
 				return nil, errors.New("This ACP runtime does not accept images")
 			}
 			data, err := os.ReadFile(file.Path)
 			if err != nil {
 				return nil, err
 			}
-			prompt = append(prompt, acp.ImageBlock(base64.StdEncoding.EncodeToString(data), file.MediaType))
+			encoded := base64.StdEncoding.EncodeToString(data)
+			if audio {
+				prompt = append(prompt, acp.AudioBlock(encoded, mediaType))
+			} else {
+				prompt = append(prompt, acp.ImageBlock(encoded, file.MediaType))
+			}
 		} else {
-			block, err := acpResource(file.Path, file.MediaType, caps)
+			fileCaps := caps
+			fileCaps.FileLinksOnly = caps.FileLinksOnly || audioFile
+			block, err := acpResource(file.Path, file.Name, file.MediaType, fileCaps)
 			if err != nil {
 				return nil, err
 			}
@@ -681,7 +703,7 @@ func acpPrompt(in Input, caps model.ProviderCapabilities, advertised []model.Nat
 	}
 	// The handoff already carries an inline history tail and a local path.
 	if in.History != "" && caps.Files {
-		block, err := acpResource(in.History, "application/x-ndjson", caps)
+		block, err := acpResource(in.History, filepath.Base(in.History), "application/x-ndjson", caps)
 		if err != nil {
 			return nil, err
 		}
@@ -690,15 +712,24 @@ func acpPrompt(in Input, caps model.ProviderCapabilities, advertised []model.Nat
 	return prompt, nil
 }
 
-func acpResource(path, mediaType string, caps model.ProviderCapabilities) (acp.ContentBlock, error) {
+func acpFileURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/")}).String()
+}
+
+func acpResource(path, name, mediaType string, caps model.ProviderCapabilities) (acp.ContentBlock, error) {
 	if !caps.Files {
 		return acp.ContentBlock{}, errors.New("This ACP runtime does not accept embedded files")
+	}
+	uri := acpFileURI(path)
+	if caps.FileLinksOnly {
+		block := acp.ResourceLinkBlock(name, uri)
+		block.ResourceLink.MimeType = &mediaType
+		return block, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return acp.ContentBlock{}, err
 	}
-	uri := (&url.URL{Scheme: "file", Path: path}).String()
 	if strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "application/x-ndjson" {
 		return acp.ContentBlock{Resource: &acp.ContentBlockResource{Resource: acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: uri, MimeType: &mediaType, Text: string(data)}}}}, nil
 	}

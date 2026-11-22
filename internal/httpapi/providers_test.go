@@ -171,9 +171,10 @@ func TestACPCapabilitiesRejectUnsupportedWorkBeforePrompt(t *testing.T) {
 	agent.Profile.Roots = append(agent.Profile.Roots, model.Root{ID: "other", Path: t.TempDir()})
 	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
 	chat := f.chat(agent)
-	run := f.wait(f.send(chat.ID, "main", "", "must not execute").ID, "failed")
-	if !strings.Contains(run.Error, "multiple working directories") || len(run.Items) != 0 {
-		t.Fatal(run)
+	first := acpReceipt(t, f.wait(f.send(chat.ID, "main", "", "Use directory links").ID, "completed"))
+	blocks := first["prompt"].([]any)
+	if len(blocks) != 2 || blocks[1].(map[string]any)["type"] != "resource_link" || first["directories"] != nil {
+		t.Fatal(first)
 	}
 	agent.Profile.Roots = agent.Profile.Roots[:1]
 	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
@@ -188,16 +189,17 @@ func TestACPCapabilitiesRejectUnsupportedWorkBeforePrompt(t *testing.T) {
 	}
 	file := f.upload(chat.ID, "notes.txt", []byte("unsupported attachment"))
 	var attached model.Run
-	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "must not execute", AttachmentIDs: []string{file.ID}}, 200, &attached)
-	attached = f.wait(attached.ID, "failed")
-	if !strings.Contains(attached.Error, "embedded files") || len(attached.Items) != 0 {
-		t.Fatal(attached)
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Use file link", AttachmentIDs: []string{file.ID}}, 200, &attached)
+	blocks = acpReceipt(t, f.wait(attached.ID, "completed"))["prompt"].([]any)
+	if link := blocks[1].(map[string]any); link["type"] != "resource_link" || link["name"] != "notes.txt" || !strings.HasPrefix(link["uri"].(string), "file:///") {
+		t.Fatal(link)
 	}
 	noResume := f.acpProvider("no-resume", "--no-resume")
 	chat = f.chat(f.acpAgent(noResume))
-	run = f.wait(f.send(chat.ID, "main", "", "must not execute").ID, "failed")
-	if !strings.Contains(run.Error, "cannot restore native sessions") || len(run.Items) != 0 {
-		t.Fatal(run)
+	first = acpReceipt(t, f.wait(f.send(chat.ID, "main", "", "handoff-marker").ID, "completed"))
+	second := f.wait(f.send(chat.ID, "main", "", "what was the marker?").ID, "completed")
+	if got := acpReceipt(t, second); !second.Handoff || got["native"] == first["native"] || !strings.Contains(got["input"].(string), "handoff-marker") {
+		t.Fatal(second)
 	}
 	legacy := f.acpProvider("legacy", "--legacy")
 	chat = f.chat(f.acpAgent(legacy))
@@ -424,6 +426,34 @@ func TestPiPolicyCannotSilentlyRunUnsupervised(t *testing.T) {
 	run := f.wait(f.send(chat.ID, "main", "", "do not send").ID, "failed")
 	if !strings.Contains(run.Error, "no prompt was sent") || len(run.Items) != 0 {
 		t.Fatal(run)
+	}
+}
+
+func TestNativeAudioAttachmentDelivery(t *testing.T) {
+	f := newFixture(t)
+	for _, tc := range []struct {
+		config model.Provider
+		native bool
+	}{
+		{model.Provider{ID: "antigravity", Name: "Antigravity"}, false},
+		{f.acpProvider("audio-acp", "--audio"), true},
+		{f.acpProvider("no-audio", "--limited"), false},
+	} {
+		t.Run(tc.config.Name, func(t *testing.T) {
+			chat := f.chat(f.acpAgent(tc.config))
+			data := []byte("RIFF\x28\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00")
+			file := f.upload(chat.ID, "voice.wav", data)
+			if file.MediaType != "audio/wav" {
+				t.Fatal(file.MediaType)
+			}
+			var run model.Run
+			f.request("POST", "/messages", model.SendInput{ChatID: chat.ID, CommandID: app.ID(), Operation: "main", Text: "[audio-wire]", AttachmentIDs: []string{file.ID}}, 200, &run)
+			blocks := acpReceipt(t, f.wait(run.ID, "completed"))["prompt"].([]any)
+			block := blocks[1].(map[string]any)
+			if tc.native && (block["type"] != "audio" || block["mimeType"] != "audio/wav" || block["data"] != base64.StdEncoding.EncodeToString(data)) || !tc.native && block["type"] != "resource_link" {
+				t.Fatal(block)
+			}
+		})
 	}
 }
 

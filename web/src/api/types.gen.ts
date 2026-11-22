@@ -685,7 +685,9 @@ export interface PermissionInfo {
 export interface ProviderCapabilities {
   steering: boolean;
   images: boolean;
+  audio?: boolean;
   files: boolean;
+  fileLinksOnly?: boolean;
   multiRoot: boolean;
   directoryContext?: boolean; // Additional paths can be included as context under the runtime's own permissions.
   mcp: boolean;

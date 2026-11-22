@@ -933,6 +933,8 @@ export const enUS = {
   "composer.modelUnsupportedImages":
     "Choose a model that accepts images to send this attachment.",
   "composer.unsupportedFiles": "This runtime does not accept file attachments.",
+  "composer.fileLinkOnly":
+    "{{name}}: this runtime receives a file link. Its filesystem permissions determine whether it can read the file.",
   "composer.unsupportedRoots":
     "This runtime supports only one working directory.",
   "composer.unsupportedSkills":

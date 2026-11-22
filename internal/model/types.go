@@ -225,7 +225,9 @@ type PermissionInfo struct {
 type ProviderCapabilities struct {
 	Steering         bool `json:"steering"`
 	Images           bool `json:"images"`
+	Audio            bool `json:"audio,omitempty"`
 	Files            bool `json:"files"`
+	FileLinksOnly    bool `json:"fileLinksOnly,omitempty"`
 	MultiRoot        bool `json:"multiRoot"`
 	DirectoryContext bool `json:"directoryContext,omitempty"` // Additional paths can be included as context under the runtime's own permissions.
 	MCP              bool `json:"mcp"`

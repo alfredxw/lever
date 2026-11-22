@@ -49,9 +49,11 @@ export function ImageAttachment({
 export function Attachments({
   files,
   onRemove,
+  fileLinksOnly,
 }: {
   files: FileAttachment[];
   onRemove?: (file: FileAttachment) => void;
+  fileLinksOnly?: boolean;
 }) {
   const { t } = useTranslation();
   if (!files.length) return null;
@@ -101,7 +103,11 @@ export function Attachments({
                 href={url}
                 download={file.name}
                 aria-label={file.name}
-                title={file.name}
+                title={
+                  fileLinksOnly
+                    ? t("composer.fileLinkOnly", { name: file.name })
+                    : file.name
+                }
               />
             </AttachmentTrigger>
             {remove}

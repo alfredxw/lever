@@ -151,7 +151,7 @@ func acpFixture() {
 		respond := func(result any) { send(object{"jsonrpc": "2.0", "id": frame["id"], "result": result}) }
 		switch method {
 		case "initialize":
-			caps := object{"loadSession": !slices.Contains(os.Args, "--no-resume"), "promptCapabilities": object{"image": !limited && (!dsh || dshImages), "embeddedContext": !limited && !dsh}, "sessionCapabilities": object{}}
+			caps := object{"loadSession": !slices.Contains(os.Args, "--no-resume"), "promptCapabilities": object{"image": !limited && (!dsh || dshImages), "audio": slices.Contains(os.Args, "--audio"), "embeddedContext": !limited && !dsh}, "sessionCapabilities": object{}}
 			if !limited && (!nativeCLI || processPerSession) {
 				caps["mcpCapabilities"] = object{"http": true}
 			}
@@ -328,7 +328,7 @@ func acpFixture() {
 				notify(object{"sessionUpdate": "usage_update", "used": 32, "size": 4096})
 			}
 			receipt = object{"native": native, "input": input, "mode": mode, "model": model, "effort": effort, "cwd": cwd, "directories": directories, "servers": servers, "images": images, "resources": resources, "args": os.Args[1:]}
-			if singleRoot {
+			if singleRoot || limited || strings.Contains(input, "[audio-wire]") {
 				receipt["prompt"] = blocks
 			}
 			if antigravity {

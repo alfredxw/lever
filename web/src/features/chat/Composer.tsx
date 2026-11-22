@@ -984,6 +984,7 @@ export function Composer({
           >
             <Attachments
               files={draft.files}
+              fileLinksOnly={capabilities?.fileLinksOnly}
               onRemove={sending ? undefined : (file) => void remove(file)}
             />
             {draft.editing && (
