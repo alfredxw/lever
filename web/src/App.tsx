@@ -164,7 +164,9 @@ import {
   DiffNavigation,
   type TurnSelection,
 } from "@/features/diff/TurnChanges";
+import { GitStatusControl } from "@/features/diff/GitStatusControl";
 import { useGitRoots } from "@/features/diff/useGitRoots";
+import type { DiffTarget } from "@/features/diff/useGitSummary";
 
 import {
   closeTerminals,
@@ -493,6 +495,8 @@ export default function App() {
       )?.id;
   }
   const selectedSessionId = sessionIdFor(activeTab);
+  const activeSessionId =
+    activeTab?.sessionId ?? activeTab?.diff?.sessionId ?? selectedSessionId;
   function contextualTool(tab: WorkspaceTab, source?: WorkspaceTab) {
     if (tab.kind === "browser")
       return {
@@ -1601,6 +1605,27 @@ export default function App() {
       "side",
     );
   });
+  const openGitDiff = useEventCallback((target: DiffTarget) => {
+    if (!agent) return;
+    const baseTab = contextualTool(toolTab("diff"), activeTab);
+    const existing = workspace.tabs.find((tab) => tab.id === baseTab.id);
+    openTab(
+      { ...baseTab, diffTarget: target },
+      agent.id,
+      existing ? paneOf(existing) : "side",
+    );
+  });
+  const gitStatus =
+    agent && canOpenDiff ? (
+      <GitStatusControl
+        key={agent.id}
+        agent={agent}
+        sessionId={activeSessionId}
+        enabled={page === "agents" && canOpenDiff}
+        active={!split && mainTab?.kind === "diff"}
+        onOpenDiff={openGitDiff}
+      />
+    ) : undefined;
 
   return (
     <ComposerContext.Provider value={composer}>
@@ -1766,6 +1791,11 @@ export default function App() {
                                 <WorkspaceActions
                                   compact={split}
                                   selected={currentTab}
+                                  gitStatus={
+                                    !split && pane === "main"
+                                      ? gitStatus
+                                      : undefined
+                                  }
                                   onSearch={
                                     pane === (maximized ? "side" : "main")
                                       ? (event) =>
@@ -1798,6 +1828,7 @@ export default function App() {
                         hasTabs={!!sideTab}
                         maximized={maximized}
                         compact={compactTopic}
+                        leading={split ? gitStatus : undefined}
                         onToggle={() =>
                           compactTopic && sideVisible
                             ? focusPane(activePane === "side" ? "main" : "side")
@@ -2440,6 +2471,7 @@ const ScopedTool = memo(function ScopedTool({
             canReview={!tab.reviewChatId || !!sessionId}
             openFile={(root, path) => openFile({ root, path }, fileSource)}
             initialTurn={tab.diff}
+            target={tab.diffTarget}
             onFeedback={onFeedback}
           />
         )}

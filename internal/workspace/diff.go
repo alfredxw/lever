@@ -31,19 +31,23 @@ func RecentCommits(ctx context.Context, root string) ([]model.GitCommit, error) 
 	if _, err := revision(ctx, root, "HEAD"); err != nil {
 		return commits, nil
 	}
-	b, err := git(ctx, root, "log", "-20", "-z", "--format=%H%x00%s", "--", ".")
+	b, err := gitReadOnly(ctx, root, "log", "-20", "-z", "--format=%H%x00%s%x00%cI", "--", ".")
 	if err != nil {
 		return nil, err
 	}
 	parts := strings.Split(string(b), "\x00")
-	for i := 0; i+1 < len(parts); i += 2 {
-		commits = append(commits, model.GitCommit{Hash: parts[i], Subject: parts[i+1]})
+	for i := 0; i+2 < len(parts); i += 3 {
+		commits = append(commits, model.GitCommit{Hash: parts[i], Subject: parts[i+1], CommittedAt: parts[i+2]})
 	}
 	return commits, nil
 }
 
 func git(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return gitEnv(ctx, dir, nil, args...)
+}
+
+func gitReadOnly(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return gitEnv(ctx, dir, []string{"GIT_OPTIONAL_LOCKS=0"}, args...)
 }
 
 func gitEnv(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {

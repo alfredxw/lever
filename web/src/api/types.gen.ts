@@ -897,6 +897,20 @@ export interface DiffFile {
 export interface GitCommit {
   hash: string;
   subject: string;
+  committedAt?: string;
+}
+export interface GitRootSummary {
+  root: Root;
+  branch?: string;
+  head?: string;
+  upstream?: string;
+  ahead?: number /* int */;
+  behind?: number /* int */;
+  files: number /* int */;
+  additions: number /* int */;
+  deletions: number /* int */;
+  truncated?: boolean;
+  error?: string;
 }
 export interface GitBranch {
   name: string;

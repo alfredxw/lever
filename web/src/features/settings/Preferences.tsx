@@ -16,6 +16,23 @@ export const chatFontSizes = [13, 14, 16, 18] as const;
 export const chatWidths = ["comfortable", "wide", "full"] as const;
 export const sendShortcuts = ["enter", "mod-enter"] as const;
 export const followUpBehaviors = ["queue", "steer"] as const;
+export const workspaceTools = [
+  "files",
+  "diff",
+  "terminal",
+  "browser",
+  "notes",
+  "profile",
+] as const;
+export type WorkspaceTool = (typeof workspaceTools)[number];
+export const toolbarTools = [
+  "files",
+  "terminal",
+  "browser",
+  "notes",
+  "profile",
+] as const;
+export type ToolbarTool = (typeof toolbarTools)[number];
 
 type Preferences = {
   chatFontSize: (typeof chatFontSizes)[number];
@@ -28,6 +45,8 @@ type Preferences = {
   secondarySidebarWidth: number | null;
   maxWorkspaceTabs: number | null;
   shortcutOverrides: ShortcutOverrides;
+  // Tools kept in the workspace overflow menu instead of the toolbar.
+  hiddenWorkspaceTools: ToolbarTool[];
 };
 
 const defaults: Preferences = {
@@ -41,6 +60,7 @@ const defaults: Preferences = {
   secondarySidebarWidth: null,
   maxWorkspaceTabs: null,
   shortcutOverrides: {},
+  hiddenWorkspaceTools: ["browser", "profile"],
 };
 const storageKey = "lever:preferences";
 
@@ -90,6 +110,11 @@ function readPreferences(): Preferences {
         ? saved.maxWorkspaceTabs
         : defaults.maxWorkspaceTabs,
       shortcutOverrides,
+      hiddenWorkspaceTools: Array.isArray(saved?.hiddenWorkspaceTools)
+        ? toolbarTools.filter((tool) =>
+            saved.hiddenWorkspaceTools.includes(tool),
+          )
+        : defaults.hiddenWorkspaceTools,
     };
   } catch {
     return defaults;

@@ -458,8 +458,23 @@ type DiffFile struct {
 }
 
 type GitCommit struct {
-	Hash    string `json:"hash"`
-	Subject string `json:"subject"`
+	Hash        string `json:"hash"`
+	Subject     string `json:"subject"`
+	CommittedAt string `json:"committedAt,omitempty"`
+}
+
+type GitRootSummary struct {
+	Root      Root   `json:"root"`
+	Branch    string `json:"branch,omitempty"`
+	Head      string `json:"head,omitempty"`
+	Upstream  string `json:"upstream,omitempty"`
+	Ahead     int    `json:"ahead,omitempty"`
+	Behind    int    `json:"behind,omitempty"`
+	Files     int    `json:"files"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 type GitBranch struct {

@@ -1,4 +1,5 @@
 import {
+  Ellipsis,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -6,34 +7,39 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import type { MouseEventHandler } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  type MouseEventHandler,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  toolbarTools,
+  usePreferences,
+  workspaceTools,
+  type WorkspaceTool,
+} from "@/features/settings/Preferences";
 import { cn } from "@/lib/utils";
 import { tabIcons } from "./WorkspaceTabs";
 import type { WorkspaceTab } from "./useWorkspaces";
 
-const tools = [
-  "files",
-  "diff",
-  "terminal",
-  "browser",
-  "notes",
-  "profile",
-] as const;
 const availableTools = (canOpenDiff: boolean) =>
-  tools.filter((kind) => canOpenDiff || kind !== "diff");
-export function toolTab(
-  kind: (typeof tools)[number],
-  sessionId?: string,
-): WorkspaceTab {
+  workspaceTools.filter((kind) => canOpenDiff || kind !== "diff");
+export function toolTab(kind: WorkspaceTool, sessionId?: string): WorkspaceTab {
   const id = sessionId ? `${kind}:${sessionId}` : kind;
   return {
     id:
@@ -55,15 +61,17 @@ type NewTabActions = {
 export function WorkspaceActions({
   compact,
   selected,
+  gitStatus,
   onSearch,
   ...newTabActions
 }: {
   compact: boolean;
   selected?: WorkspaceTab;
+  gitStatus?: ReactNode;
   onSearch?: MouseEventHandler<HTMLButtonElement>;
 } & NewTabActions) {
   const { t } = useTranslation();
-  const { archived, canOpenDiff, onNewChat, onOpen } = newTabActions;
+  const { archived, onNewChat, onOpen } = newTabActions;
   return (
     <>
       {onSearch && (
@@ -109,26 +117,125 @@ export function WorkspaceActions({
       {!compact && (
         <>
           <span className="tab-action-divider" />
-          {availableTools(canOpenDiff).map((kind) => {
-            const Icon = tabIcons[kind];
-            return (
-              <Button
-                key={kind}
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t(`workspace.${kind}`)}
-                title={t(`workspace.${kind}`)}
-                className={cn(
-                  selected?.kind === kind && "text-foreground bg-accent",
-                )}
-                onClick={() => onOpen(toolTab(kind))}
-              >
-                <Icon />
-              </Button>
-            );
-          })}
+          <ToolbarTools
+            selected={selected}
+            gitStatus={gitStatus}
+            onOpen={onOpen}
+          />
         </>
       )}
+    </>
+  );
+}
+
+function ToolbarTools({
+  selected,
+  gitStatus,
+  onOpen,
+}: {
+  selected?: WorkspaceTab;
+  gitStatus?: ReactNode;
+  onOpen: (tab: WorkspaceTab) => void;
+}) {
+  const { t } = useTranslation();
+  const {
+    preferences: { hiddenWorkspaceTools },
+    updatePreferences,
+  } = usePreferences();
+  const hidden = toolbarTools.filter((kind) =>
+    hiddenWorkspaceTools.includes(kind),
+  );
+  const moreLabel = t("workspace.moreTools");
+  return (
+    <>
+      {toolbarTools
+        .filter((kind) => !hidden.includes(kind))
+        .map((kind) => {
+          const Icon = tabIcons[kind];
+          return (
+            <Button
+              key={kind}
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t(`workspace.${kind}`)}
+              title={t(`workspace.${kind}`)}
+              className={cn(
+                selected?.kind === kind && "text-foreground bg-accent",
+              )}
+              onClick={() => onOpen(toolTab(kind))}
+            >
+              <Icon />
+            </Button>
+          );
+        })}
+      {gitStatus}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={moreLabel}
+            title={moreLabel}
+            className={cn(
+              hidden.some((kind) => kind === selected?.kind) &&
+                "text-foreground bg-accent",
+            )}
+          >
+            <Ellipsis />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-40">
+          {hidden.length > 0 && (
+            <>
+              <DropdownMenuGroup>
+                {hidden.map((kind) => {
+                  const Icon = tabIcons[kind];
+                  return (
+                    <DropdownMenuItem
+                      key={kind}
+                      onSelect={() => onOpen(toolTab(kind))}
+                    >
+                      <Icon />
+                      {t(`workspace.${kind}`)}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              {t("workspace.toolbarTools")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-36">
+              {toolbarTools.map((kind) => {
+                const Icon = tabIcons[kind];
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={kind}
+                    checked={!hiddenWorkspaceTools.includes(kind)}
+                    // Keep the menu open while arranging several tools.
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(shown) =>
+                      updatePreferences({
+                        hiddenWorkspaceTools: toolbarTools.filter((tool) =>
+                          tool === kind
+                            ? !shown
+                            : hiddenWorkspaceTools.includes(tool),
+                        ),
+                      })
+                    }
+                  >
+                    <Icon />
+                    {t(`workspace.${kind}`)}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }
@@ -138,6 +245,7 @@ export function WorkspacePanelControls({
   visible,
   hasTabs,
   maximized,
+  leading,
   onToggle,
   onMaximize,
   ...newTabActions
@@ -146,10 +254,30 @@ export function WorkspacePanelControls({
   visible: boolean;
   hasTabs: boolean;
   maximized: boolean;
+  leading?: ReactNode;
   onToggle: () => void;
   onMaximize: () => void;
 } & NewTabActions) {
   const { t } = useTranslation();
+  const controls = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = controls.current;
+    const layout = element?.parentElement;
+    if (!element || !layout) return;
+    const sync = () => {
+      layout.style.setProperty(
+        "--workspace-controls-width",
+        `${Math.ceil(element.getBoundingClientRect().width)}px`,
+      );
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      layout.style.removeProperty("--workspace-controls-width");
+    };
+  }, []);
   const sideLabel = t(
     visible ? "workspace.hideSidePane" : "workspace.showSidePane",
   );
@@ -170,7 +298,8 @@ export function WorkspacePanelControls({
     </Button>
   );
   return (
-    <div className="workspace-panel-controls">
+    <div className="workspace-panel-controls" ref={controls}>
+      {leading}
       {visible && !compact && (
         <Button
           variant="ghost"

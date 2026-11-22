@@ -141,6 +141,7 @@ async function save(session: SaveSession) {
     if (session.draft.content === contents) sessions.delete(key);
     notify();
     void queryClient.invalidateQueries({ queryKey: ["diff"] });
+    void queryClient.invalidateQueries({ queryKey: ["git-summary"] });
     void queryClient.invalidateQueries({
       queryKey: ["file-search", fileSourceKey(target.source)],
     });

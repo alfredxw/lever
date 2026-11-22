@@ -4,6 +4,7 @@ import type { FileSelection } from "@/features/files/filePaths";
 import type { SkillFileSource } from "@/features/files/fileSource";
 import type { TabKind } from "./WorkspaceTabs";
 import type { TurnSelection } from "@/features/diff/TurnChanges";
+import type { DiffTarget } from "@/features/diff/useGitSummary";
 import type { SharedConversationRef } from "@/features/chat/sharedConversations";
 
 import type { TerminalLayout } from "@/features/terminal/terminalSession";
@@ -14,6 +15,7 @@ export type WorkspaceTab = {
   title: string;
   pane?: Pane;
   diff?: TurnSelection;
+  diffTarget?: DiffTarget;
   reviewChatId?: string;
   sessionId?: string;
   workingCopyId?: string;
@@ -286,10 +288,19 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
               const next = {
                 ...item,
                 diff: tab.diff ?? item.diff,
+                diffTarget: tab.diffTarget ?? item.diffTarget,
                 pane: target,
               };
               if (next.kind === "files" && tab.file) next.file = tab.file;
               if (next.kind === "shared") next.title = tab.title;
+              if (
+                next.kind === "browser" &&
+                tab.kind === "browser" &&
+                tab.htmlPreview
+              ) {
+                next.htmlPreview = tab.htmlPreview;
+                next.title = tab.title;
+              }
               return next;
             });
             return selectPaneTab(

@@ -183,8 +183,13 @@ func TestDiffScopesAndSubdirectoryPaths(t *testing.T) {
 	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
 	var commits []model.GitCommit
 	f.request("GET", "/agents/"+agent.ID+"/commits?root=root", nil, 200, &commits)
-	if len(commits) != 1 || len(commits[0].Hash) != 40 || commits[0].Subject != "initial" {
+	if len(commits) != 1 || len(commits[0].Hash) != 40 || commits[0].Subject != "initial" || commits[0].CommittedAt == "" {
 		t.Fatalf("invalid commit menu: %+v", commits)
+	}
+	var cleanSummary []model.GitRootSummary
+	f.request("GET", "/agents/"+agent.ID+"/git-summary", nil, 200, &cleanSummary)
+	if len(cleanSummary) != 1 || cleanSummary[0].Root.ID != "root" || cleanSummary[0].Branch != "main" || cleanSummary[0].Files != 0 {
+		t.Fatalf("invalid clean git summary: %+v", cleanSummary)
 	}
 	var branches model.GitBranches
 	f.request("GET", "/agents/"+agent.ID+"/branches?root=root", nil, 200, &branches)
@@ -196,6 +201,11 @@ func TestDiffScopesAndSubdirectoryPaths(t *testing.T) {
 	os.WriteFile(filepath.Join(f.root, "nested", "file.txt"), []byte("one\nworking\n"), 0600)
 	os.WriteFile(filepath.Join(f.root, "nested", "new.txt"), []byte("new\n"), 0600)
 	os.WriteFile(filepath.Join(f.root, "outside.txt"), []byte("outside changed\n"), 0600)
+	var dirtySummary []model.GitRootSummary
+	f.request("GET", "/agents/"+agent.ID+"/git-summary", nil, 200, &dirtySummary)
+	if len(dirtySummary) != 1 || dirtySummary[0].Files != 2 || dirtySummary[0].Additions != 2 || dirtySummary[0].Deletions != 1 {
+		t.Fatalf("invalid dirty git summary: %+v", dirtySummary)
+	}
 	for mode, expected := range map[string]string{"working": "+working", "staged": "+changed", "unstaged": "+working", "committed": "+two"} {
 		var diff model.DiffResult
 		f.request("GET", "/agents/"+agent.ID+"/diff?root=root&mode="+mode+"&head=HEAD", nil, 200, &diff)

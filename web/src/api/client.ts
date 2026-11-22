@@ -318,6 +318,12 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
         void queryClient.invalidateQueries({
           queryKey: ["changes", run.agentId],
         });
+        void queryClient.invalidateQueries({
+          queryKey: ["git-summary", run.agentId],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["commits", run.agentId],
+        });
       }
       if (run.status === "starting" || needsRefresh) {
         void queryClient.invalidateQueries({ queryKey: ["overview"] });

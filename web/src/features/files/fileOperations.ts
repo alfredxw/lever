@@ -91,8 +91,8 @@ export async function changeEntry(
       flushSync(() => changeListeners.forEach((listener) => listener(change)));
     }
     await Promise.all(
-      ["files", "file", "file-search", "diff", "skills"].map((key) =>
-        queryClient.invalidateQueries({ queryKey: [key] }),
+      ["files", "file", "file-search", "diff", "git-summary", "skills"].map(
+        (key) => queryClient.invalidateQueries({ queryKey: [key] }),
       ),
     );
     return entry;

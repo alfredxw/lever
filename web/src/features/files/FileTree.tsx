@@ -236,7 +236,7 @@ export function FileTree({
           { rootPath: root.path, directory: event.isFolder },
         );
         await Promise.all(
-          ["files", "file-search", "diff"].map((key) =>
+          ["files", "file-search", "diff", "git-summary"].map((key) =>
             client.invalidateQueries({ queryKey: [key] }),
           ),
         );

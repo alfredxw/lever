@@ -55,7 +55,7 @@ import type {
   Root,
   TurnReview,
 } from "@/api/types.gen";
-import { api } from "@/api/client";
+import { api, queryClient } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -86,6 +86,10 @@ import { selectedCode } from "./selectedCode";
 import { DiffFileTree, prepareDiffFileTree } from "./DiffFileTree";
 import { BranchPicker } from "./BranchPicker";
 import { useGitRoots } from "./useGitRoots";
+import {
+  formatCompactCommitTime,
+  type DiffTarget,
+} from "./useGitSummary";
 
 const defaults = {
   split: false,
@@ -130,6 +134,7 @@ export default function Diff({
   canReview,
   openFile,
   initialTurn,
+  target,
   onFeedback,
 }: {
   agent: Agent;
@@ -137,16 +142,19 @@ export default function Diff({
   canReview: boolean;
   openFile: (root: Root, path: string) => void;
   initialTurn?: TurnSelection;
+  target?: DiffTarget;
   onFeedback: (sessionId: string, content: JSONContent[]) => Promise<void>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const sessionId = useContext(WorkspaceSession);
   const gitRoots = useGitRoots(agent.id, agent.profile.roots, sessionId);
   const [rootID, setRootID] = useState(
-    initialTurn?.rootId ?? agent.profile.primaryRootId,
+    initialTurn?.rootId ?? target?.rootId ?? agent.profile.primaryRootId,
   );
-  const [mode, setMode] = useState(initialTurn ? "turn" : "working");
-  const [commit, setCommit] = useState("HEAD");
+  const [mode, setMode] = useState(
+    initialTurn ? "turn" : (target?.mode ?? "working"),
+  );
+  const [commit, setCommit] = useState(target?.commit ?? "HEAD");
   const [branchSelections, setBranchSelections] = useState<
     Record<string, { base: string; head: string }>
   >({});
@@ -461,6 +469,18 @@ export default function Diff({
     reviewingTurn,
     rootID,
   ]);
+  const appliedTarget = useRef<string | undefined>(target?.key);
+  useEffect(() => {
+    if (!target || appliedTarget.current === target.key) return;
+    appliedTarget.current = target.key;
+    setRootID(target.rootId);
+    setMode(target.mode);
+    if (target.mode === "committed" && target.commit) setCommit(target.commit);
+    setFilter("");
+    setSelected("");
+    setCollapsed(new Set());
+    void queryClient.invalidateQueries({ queryKey: ["diff", agent.id] });
+  }, [target, agent.id]);
   function reveal(path: string) {
     pendingReveal.current = path;
     setSelected(path);
@@ -479,8 +499,12 @@ export default function Diff({
     });
   }
   function refresh() {
-    if (!reviewingTurn) void gitRoots.refetch();
-    else if (canReview)
+    if (!reviewingTurn) {
+      void gitRoots.refetch();
+      void queryClient.invalidateQueries({
+        queryKey: ["git-summary", agent.id],
+      });
+    } else if (canReview)
       void changes.refetch().then(({ data, isSuccess }) => {
         if (!initialTurn && isSuccess) setLatestReview(data);
       });
@@ -615,25 +639,44 @@ export default function Diff({
                             {commits.error.message}
                           </DropdownMenuItem>
                         ) : commits.data?.length ? (
-                          commits.data.map((commit) => (
-                            <DropdownMenuItem
-                              key={commit.hash}
-                              onSelect={() => {
-                                setMode("committed");
-                                setCommit(commit.hash);
-                                setFilter("");
-                              }}
-                            >
-                              <code className="text-xs text-muted-foreground">
-                                {commit.hash.slice(0, 7)}
-                              </code>
-                              <span className="truncate">{commit.subject}</span>
-                              {mode === "committed" &&
-                                diffParams.head === commit.hash && (
-                                  <Check className="ml-auto" />
+                          commits.data.map((commit) => {
+                            const committed = commit.committedAt
+                              ? formatCompactCommitTime(
+                                  commit.committedAt,
+                                  i18n.language,
+                                )
+                              : null;
+                            return (
+                              <DropdownMenuItem
+                                key={commit.hash}
+                                onSelect={() => {
+                                  setMode("committed");
+                                  setCommit(commit.hash);
+                                  setFilter("");
+                                }}
+                              >
+                                <code className="text-xs text-muted-foreground">
+                                  {commit.hash.slice(0, 7)}
+                                </code>
+                                <span className="min-w-0 flex-1 truncate">
+                                  {commit.subject}
+                                </span>
+                                {committed && (
+                                  <time
+                                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                                    dateTime={commit.committedAt}
+                                    title={committed.full}
+                                  >
+                                    {committed.displayed}
+                                  </time>
                                 )}
-                            </DropdownMenuItem>
-                          ))
+                                {mode === "committed" &&
+                                  diffParams.head === commit.hash && (
+                                    <Check className="shrink-0" />
+                                  )}
+                              </DropdownMenuItem>
+                            );
+                          })
                         ) : (
                           <DropdownMenuItem disabled>
                             {t("diff.noCommits")}

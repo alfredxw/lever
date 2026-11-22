@@ -618,6 +618,33 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 		}
 		respond(w, roots, ctx.Err())
 	})
+	mux.HandleFunc("GET /api/agents/{id}/git-summary", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		dirs, release, err := a.UseScope(ctx, r.PathValue("id"), r.URL.Query().Get("sessionId"), "", false)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		defer release()
+		summaries := make([]model.GitRootSummary, 0, len(dirs.Roots))
+		for _, root := range dirs.Roots {
+			summary, err := workspace.GitSummary(ctx, root)
+			if errors.Is(err, workspace.ErrNotRepository) {
+				continue
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					respond(w, nil, ctx.Err())
+					return
+				}
+				summaries = append(summaries, model.GitRootSummary{Root: root, Error: err.Error()})
+				continue
+			}
+			summaries = append(summaries, summary)
+		}
+		respond(w, summaries, ctx.Err())
+	})
 	mux.HandleFunc("GET /api/agents/{id}/diff", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		opts := workspace.DiffOptions{Full: q.Get("full") == "true", IgnoreWhitespace: q.Get("ignoreWhitespace") == "true", Path: q.Get("path")}
