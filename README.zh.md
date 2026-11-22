@@ -1,305 +1,202 @@
-<p align="center">
-  <img src="./cmd/lever-desktop/icon.png" alt="Lever Logo" width="128" height="128">
+<div align="center">
+
+<img src="./cmd/lever-desktop/icon.png" alt="Lever Logo" width="112" height="112" />
+
+<h1>Lever</h1>
+
+<p><strong>为高并发协作而生的本机 AI 工作台</strong></p>
+
+<p>
+  统一编排 <strong>Codex</strong>、<strong>Claude Code</strong>、<strong>Pi</strong>、<strong>DeepSeek Harness</strong>、<strong>Antigravity</strong> 与 <strong>ACP</strong> 原生运行时——<br />
+  在一个轻量本机应用中融合并行 Topic、持久化 Agent、内建工程工具、Works 看板与自动化。
 </p>
 
-<h1 align="center">Lever</h1>
-
-<p align="center">
-  <strong>以 Agent 为中心的本机 AI 工作台</strong>
+<p>
+  <a href="LICENCE"><img src="https://img.shields.io/badge/License-Apache%202.0-18181b?style=flat&labelColor=27272a" alt="Apache 2.0 许可证" /></a>
+  <img src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat&logo=go&logoColor=white&labelColor=27272a" alt="Go 1.27+" />
+  <img src="https://img.shields.io/badge/React-19-0ea5e9?style=flat&logo=react&logoColor=white&labelColor=27272a" alt="React 19" />
+  <img src="https://img.shields.io/badge/App-Desktop%20%26%20Web-6366f1?style=flat&labelColor=27272a" alt="桌面端与 Web 端" />
+  <img src="https://img.shields.io/badge/Protocols-Native%20CLIs%20%C2%B7%20ACP%20%C2%B7%20MCP-10b981?style=flat&labelColor=27272a" alt="原生 CLI、ACP 与 MCP" />
+  <img src="https://img.shields.io/badge/Data-Local--First%20SQLite-f59e0b?style=flat&logo=sqlite&logoColor=white&labelColor=27272a" alt="本机优先 SQLite" />
 </p>
 
-<p align="center">
-  连接 Codex、Claude Code、Pi、DeepSeek Harness、Antigravity 和 ACP 运行时，在同一个工作区管理对话、文件、代码变更与终端。
-</p>
-
-<p align="center">
+<p>
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center">
+<p>
+  <a href="#设计理念">设计理念</a> ·
+  <a href="#lever-的不同之处">不同之处</a> ·
   <a href="#核心能力">核心能力</a> ·
+  <a href="#支持的运行时">运行时</a> ·
   <a href="#快速开始">快速开始</a> ·
-  <a href="#运行时与插件">运行时与插件</a> ·
-  <a href="#开发">开发</a>
+  <a href="#开发指南">开发指南</a>
 </p>
 
-## 为什么选择 Lever
+</div>
 
-Lever 把 Agent 配置、连续对话、独立话题和本地项目操作放进同一个工作区。为每个 Agent 配置工作目录、指令、Skills 和协作对象，再围绕它开展工作、跟进执行并审阅结果。
+---
 
-模型和工具执行由原生运行时负责，Lever 沿用 CLI 的配置与登录凭据。你可以在 Web UI 或桌面应用中使用同一套工作流，同时查看文件、检查变更和操作终端。
+## 设计理念
+
+早期的 AI 工具把我们训练成了「长对话」工作流：先铺垫背景，等一段不完整的回复，再追问纠偏三四轮，所有新任务不断往同一条时间线上堆——或者干脆不停新开临时窗口，最后散落一地、再也找不到上下文。
+
+**但今天人与 Agent 的协作节奏正在发生变化。** 随着 Agent 对人类意图的理解越来越准确，单个任务已经越来越不需要反复多轮对齐；大多数事情本身就是彼此独立的话题——说清目标即可交付执行，只在必要时深入追问或验收结果。
+
+因此，人与 Agent 的交互形态应该从**「连续对话为主」**转向**「独立话题为主、连续对话为辅」**。Lever 正是围绕这一判断构建的：
+
+> **Topic 间弱联系 + Topic 内强连续 = 高并发度**
+
+```text
+同一个 Agent · 同一条 Chat 时间线
+├── 主聊天            ──► 持续对齐背景与日常沟通
+├── Topic A (运行中)  ──► [Worktree A · Codex]       重构鉴权流程     ──► 侧栏深入追问 + Diff 划行反馈
+├── Topic B (运行中)  ──► [Worktree B · Claude Code] 修复移动端布局   ──► 从工作区浏览器直接拾取 DOM 元素
+└── Topic C (待确认)  ──► [默认 Scope · Pi]          整理发布说明     ──► 队列已就绪，完成后自动续跑
+```
+
+- **Topic 间弱联系**：每个 Topic 共享同一个 Agent 的持久化设定与同一条 Chat 时间线视图（以实时摘要呈现），一眼看清全局进展，却不会互相污染上下文窗口，也不会彼此阻塞执行。
+- **Topic 内强连续**：当某个任务确实需要反复打磨时，点开摘要即可在侧栏进入专属会话——它拥有独立的运行时、模型、Worktree 目录组、草稿、消息队列与未读状态，可以持续深挖直到交付。
+- **天生高并发**：同一个 Agent 下可以同时跑着主聊天与多条并行 Topic，你在同一工作区里顺滑切换、审阅文件与代码变更，不再被单线程聊天或零散窗口拖慢节奏。
+
+## Lever 的不同之处
+
+在同样支持聚合多种本机编码 CLI 的前提下，Lever 在**对话形态、顶层抽象与验收闭环**上走了不同的路：
+
+| 维度 | 常见的多 Agent 聚合形态 | Lever 的方式 |
+| :--- | :--- | :--- |
+| **对话组织方式** | 单条越来越长的线性聊天，或彼此孤立的零散分支线程 | **独立 Topic 为主、连续 Chat 为辅** —— Topic 间弱联系共享全局视野，Topic 内强连续支持深入迭代 |
+| **顶层组织单位** | 按单个仓库开窗口、一次性临时线程，或异步团队工单 | **持久化 Agent** —— 一次配好跨仓库 **Scope**、Git **worktree 目录组**、原生指令、**Skills**、**委派**与布局，新 Topic 开箱即用 |
+| **执行控制力** | 干等执行完成，或直接中断丢掉上下文 | **Steer、Queue、暂停与继续** —— 运行中实时纠偏、排队或一键转 Topic；每轮独立进程承载，关窗或重启后端任务不中断 |
+| **多账号与原生互通** | 每个 CLI 单账号运行，或单线程绑定死一个运行时 | **多命名账号并行**（如个人 + 工作账号）、会话内热切运行时并自动交接历史、`/compare` 多 Agent 对比，以及 **Codex App / Claude Code 续聊** |
+| **审阅与验收闭环** | 在聊天工具、IDE、终端与外部浏览器之间来回切换 | **一体化本机工程工作台** —— Monaco **文件**与 25+ 格式预览、可划行反馈的 **Diff**、持久 **PTY 终端**、支持 DOM 元素拾取的**工作区浏览器** |
+| **对话之外的工作流** | 纯被动提问回复，或需要额外部署的服务端看板 | **轻量本机工作中枢** —— 块**笔记**、同步 **GitHub / Lark Todos** 的看板、定时与事件**自动化**、**Lark Bot**，全部收进**单 Go 二进制 + 原生 WebView + SQLite** |
 
 ## 核心能力
 
-- **工作区浏览器** 从桌面工作区的地球图标或分栏的 `+` 菜单打开网址和本地开发服务。点「选择元素」再点网页，确认后引用进入 Chat 或 Topic 草稿。相机把可见区域作为图片附件加入草稿。工具栏支持悬浮浏览、独立预览窗口、设备视口、缩放、强制刷新和开发者工具。每个 Agent 的浏览器标签和独立窗口共享登录态，清除 Cookie 或缓存只作用于这个 Agent 的浏览器。macOS 支持按网页选择浅色或深色外观，macOS 14 起可跨重启保留独立浏览器配置。网页版从同一入口在新标签页打开网址。
-- **Agent 配置与协作**：为 Agent 设置多个 Scope 目录、默认运行时、模型、权限、指令和 Skills；通过 Delegations 配置可委派的 Agent。
-- **原生运行时**：内置 Codex、Claude Code、Pi、DeepSeek Harness、Antigravity 和 ACP 插件，支持运行时与模型选择、推理强度，以及运行时提供的 Fast 档位。
-- **Chat 与 Topic**：在同一个 Chat 中结合连续聊天与独立话题。多个话题可以并行执行，各自保存上下文、草稿、队列和未读状态。
-- **执行控制**：查看流式回复、工具轨迹、计划、审批与问题；在运行中追加输入、排队后续消息，或停止对应会话。
-- **文件与终端**：浏览和搜索 Scope 内的文件，编辑文本并自动保存，预览图片、音视频、PDF、Markdown 和文档，引用文件与上传图片；打开多个本机交互式终端，刷新或短暂断线后接回正在运行的 Shell。
-- **变更审阅**：查看每轮执行的变更快照、未提交改动、提交与分支差异；将选中的代码变更引用回原对话。
-- **可调整的工作区**：拖动标签排序或移动到另一分区，调整分区宽度，折叠导航与侧栏；按 Agent 保留工作区布局。
-- **Web 与桌面**：共用应用服务和数据格式，支持简体中文、英语，以及跟随系统、浅色和深色主题。
+### 并行 Topic 与实时执行控制
+- **主聊天 + 并行 Topic 混合时间线**：需要连续探索时在主聊天对话，任务一拆开就随手发成独立 **Topic** 并行推进。主聊天中展示 Topic 的实时摘要，点击在侧栏展开完整会话，各话题独立保存草稿、队列与未读状态。
+- **Steer、Queue、暂停与继续**：运行中可用 **Steer**（<kbd>Enter</kbd>）实时追加纠偏，或用 **Queue**（<kbd>⌘/Ctrl</kbd>+<kbd>Enter</kbd>）排队后续指令；排队消息可编辑、移除、插入当前轮，或把主聊天的排队消息一键转为独立 Topic。受支持的运行时还可随时**暂停 / 继续回复**，保留已生成内容。
+- **进程隔离不中断**：每轮执行由独立 provider 进程承载。关闭桌面窗口或重启 Go 后端都不会中断运行中的 Agent，重新打开即可接回实时输出与待审批请求。
+- **现代输入框**：Markdown 即时排版、`@` 引用（文件、对话/话题、Agent、笔记/工作项）、`/` 选择命令与 Skills，支持拖入/粘贴图片与文件附件。
 
-## Chat 与 Topic
+### 持久化 Agent、多账号与原生互通
+- **一次配置，每个 Topic 即刻开跑**：为每个 Agent 配置多目录 **Scope**、可复用的 Git **worktree 目录组**（Topic 首发时自动锁定）、默认运行时与模型、权限策略、原生系统指令、**Skills** 与一层 MCP **委派（Delegations）**。
+- **多账号并行与跨运行时热切**：同一个 CLI 可同时维护个人与工作等多个命名账号。会话中途切换运行时时，Lever 会自动在目标运行时创建原生会话并携带当前会话历史平滑交接。
+- **`/compare` 多 Agent 对比与原生续聊**：输入 `/compare` 让多位 Agent 同时回答同一条消息（默认隔离各自 Scope，也可开启共用当前 Scope）；在 **Agents → 最近** 可直接打开并续聊本机 **Codex App** 与 **Claude Code** 会话；导航栏实时展示受支持运行时的订阅额度窗口。
 
-Chat 是可见的对话容器，Session 是运行时执行与上下文的单位。普通消息复用 Chat 的主 Session，每个 Topic 使用独立 Session；停止、审批和模型切换只影响对应会话。
+### 一体化本机工程工作台
+- **工作区浏览器**（桌面端）：在对话旁直接打开本机开发服务或网页。点击**选择元素**即可把网页 DOM 选择器与可见文本直接引用进 Chat 或 Topic 草稿，点击相机一键附带可视区截图；内置设备视口、缩放、悬浮窗/独立预览窗、DevTools、macOS 单页深浅外观切换，以及按 Agent 隔离且跨重启保留的登录态（macOS 14+）。
+- **聊天中的 HTML 文件**：独占一段的本地 HTML 报告、已发送的单个 HTML 附件都会直接在消息内展开。正文里的文件链接或指向报告章节的链接点一下展开，再点收起，不切换标签页。预览的 `⋯` 菜单可在 Lever 网页标签中打开、放大预览、复制绝对路径、在已配对的浏览器中打开，或在桌面端定位原文件。附件仍可下载。工作区报告可用相对路径引用同目录及子目录内的 PNG、JPEG 等截图；作为单个附件分享时，请把图片嵌入 HTML。
+- **文件编辑与 25+ 格式预览**：跨多 Scope 根目录浏览与搜索（遵循 `.gitignore`），内置 **Monaco** 编辑器（500 ms 自动保存与磁盘冲突保护），直接只读预览图片、音视频、PDF、Mermaid、Office 文档、Jupyter Notebook、压缩包与 SQLite 数据表。
+- **轮次与 Git Diff 划行反馈**：查看最近一轮 Codex 补丁或只读 Git 快照、未提交/暂存、单次提交与分支差异（统一或并排视图）。点击或拖选行号再点**反馈这段变更**，将带路径和行号的代码快照直接引用回原 Topic 草稿。
+- **持久 PTY 终端与记忆布局**：在 Agent 主 Scope 目录打开多个本机 Shell，切换标签或刷新页面自动重连；标签支持整项拖拽排序与跨栏移动，每个 Agent 独立记忆分栏布局，提供简体中文 / English 与跟随系统 / 浅色 / 深色主题。
 
-主聊天与多个 Topic 可以同时工作。默认共享 Agent 的 Scope 目录，文件改动相互可见。Topic 在主聊天中显示摘要，点击后在侧栏查看、回复或引用消息，各话题的草稿和未读状态独立保留。
+### Works、自动化、Skills 与插件生态
+- **Works（笔记 + 看板 + 外部来源）**：用块编辑器记录工作笔记并内嵌待办与 `@Agent` 交接，在支持自定义分组与视图的 **Board** 看板统一管理，自动同步 **GitHub Issue/PR** 与 **Lark Todos** 并一键派发给 Agent。
+- **自动化**：让 Agent 主动干活——支持定时触发（单次、每天、工作日、指定星期、每月、固定间隔）与事件触发（**IMAP 邮件**、带 Bearer Token 与 `Idempotency-Key` 的自定义 **Webhook**），执行结果自动进入新 Topic、原 Chat 或看板工作项。
+- **Skills 与插件生态**：统一浏览、筛选并按 Agent 启停 Lever 托管目录、用户目录与 Scope 目录下的 Skills（托管的 `SKILL.md` 可直接在 Files 编辑）。支持通过 Git 仓库（子目录、版本锁定、更新预览与一键回退）或本地目录安装运行时、任务源、事件源与个人消息渠道插件，并内置 **Lark Bot**。
 
-单击 Chat 或 Topic 时，同一分栏会复用斜体标题的预览标签。开始回复、添加附件或回答提问后，标签自动保留。只想持续查看进度时，双击标签或在右键菜单选择 **保留标签页**。
+## 支持的运行时
 
-在 Agent 的 **Profile → Scope → 管理目录组和 worktree** 中，按仓库添加 worktree，再把要一起使用的目录保存为一个组。组中未指定 worktree 的仓库使用默认 Scope。新建 Topic 或派发任务时可以选择目录组。Topic 在首发时保存工作目录，后续消息、Files、Diff 和 Terminal 都使用这份目录配置。
+Lever 直接编排本机已安装的 CLI 与 ACP 服务，沿用原有登录态与订阅额度，不修改你的全局 CLI 配置。
 
-Agent 的指令、Skills 和 Delegations 在下一轮执行时生效。已有会话保留自己的运行时、模型、权限和工作目录；修改 Agent 默认设置只影响新会话。切换运行时会为当前会话建立目标运行时的原生会话，并携带该会话历史。
+| 运行时 | 接入方式 | 核心特性 | 路径环境变量 |
+| :--- | :--- | :--- | :--- |
+| **Codex** | 原生协议（`app-server`） | 多账号、Steer、暂停/继续、Skills、Fast、Codex App 续聊 | `LEVER_CODEX_PATH` |
+| **Claude Code** | 原生协议（`stream-json`） | 多账号、Steer、暂停/继续、Skills、Fast、桌面/CLI 续聊 | `LEVER_CLAUDE_PATH` |
+| **Pi** | 原生 RPC | 多账号、Steer、Skills、每轮授权的 Lever 工具、当前 Chat 查询 CLI | `LEVER_PI_PATH` |
+| **Antigravity** | 本机 `agy` / 托管 ACP | 本机 `agy acp` 1.5.0+ 可 Steer；独立托管连接按握手启用能力 | `LEVER_ANTIGRAVITY_PATH` |
+| **DeepSeek Harness** | 内置 ACP（`dsh`） | 自动检测 CLI 与 macOS 桌面版（`/Applications`） | `LEVER_DSH_PATH` |
+| **自定义 ACP** | 通用 ACP v1 | 任意 ACP 可执行命令与参数，或 `lever-plugin.json` 插件包 | 自定义命令 |
 
-在 Chat 输入 `/compare`，可以让多位 Agent 回答同一条消息。默认使用**各自 Scope**。选择**共用当前 Scope**时，所有参与者使用当前 Chat 的工作目录；没有主会话时，使用发起 Agent 的默认 Scope。共用目录不会创建独立的 worktree，有写权限的 Agent 可以修改同一份文件。
+各连接的追加、暂停、会话恢复、附件和权限差异见[运行时基础能力表](docs/provider-capabilities.md)。
+
+> [!TIP]
+> 除上述 6 个运行时插件外，Lever 还内置 **GitHub**、**Lark Todos**、**IMAP Mail** 与 **Lark Bot** 插件，均可在侧栏 **插件** 页面统一管理。
 
 <details>
-<summary>输入、附件与消息队列</summary>
+<summary><strong>运行时配置提示、原生应用续聊与本机 CLI</strong></summary>
 
-- 点击输入框的 **Chat / Topic** 切换模式，也可使用 `/chat`、`/topic` 和 `/model`。
-- 输入 `@` 引用当前会话工作目录中的文件，输入 `/` 选择命令或当前运行时的 Skills。引用随草稿和消息保留；点击文件引用会在对侧分栏的 Files 标签中打开文件。
-- 输入框支持 Markdown 即时排版、文件选择、拖入、粘贴和图片预览。每条消息最多 8 个附件、合计 20 MiB，单张图片最多 5 MiB。
-- **Enter** 发送消息，**Shift+Enter** 换行。执行中，**Enter** 默认将消息追加到当前轮（Steer），**⌘/Ctrl+Enter** 将这条消息排到下一轮（Queue）。在 **设置 → 通用 → 运行中发送** 可交换两种动作。若发送键设为 **⌘/Ctrl+Enter**，按 **⌘/Ctrl+Shift+Enter** 执行另一种动作。
-- 在同一运行时切换模型后，**Steer** 会将消息交给当前轮，所选模型成为该会话下一轮的默认值。等待审批、回答问题、切换运行时或切换权限时使用 **Queue**。支持 Steer 的运行时可以将排队消息追加到当前轮。也可以编辑、移除排队消息，或将主聊天里的排队消息改为独立 Topic。
-- 停止或失败只暂停当前 Session 的队列。重启后端时，正在执行的 Session 保留原有队列，当前轮完成后会继续处理。其他已暂停的队列可点击 **继续队列** 恢复。
+- **多账号连接**：在 **设置 → 运行时 → 添加连接** 可为 Codex / Claude Code 创建独立配置目录并打开原生登录终端（查找顺序：`~/.local/bin` → Homebrew → `/usr/local/bin` → NVM → `PATH`；遵循 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`PI_CODING_AGENT_DIR`）。
+- **原生应用续聊**：在 **Agents → 最近** 可直接读取并续聊本机 **Codex App** 与 **Claude Code** 会话；在 Lever 新建的对话需等当前轮结束后再在原生应用续聊。
+- **通过命令行查询对话上下文（JSON）**：
+  ```sh
+  lever chat list --limit 20
+  lever context find --chat '<chat-id>' --query '架构决策'
+  lever context read --target '<session-id>' # 或 --target main
+  ```
 
 </details>
 
 ## 快速开始
 
-需要 Go 1.27.3、Node.js 24 和 pnpm 11；仓库固定的 pnpm 版本为 11.15.1。先安装并登录需要使用的运行时 CLI，Lever 沿用其配置和凭据。
+**环境准备：** Go `1.27.3`、Node.js `24`、pnpm `11`（固定版本 `11.15.1`），并至少登录一个本机运行时 CLI。
 
-以下命令在仓库根目录执行。
+<table>
+<tr>
+<td width="50%" valign="top">
 
-### 运行 Web UI
+**运行 Web UI**
 
 ```sh
 make build
 ./bin/lever
 ```
 
-打开终端打印的完整本机链接。首次链接用于配对，配对后 token 会从地址栏清除。默认地址为 `127.0.0.1:4778`，当前仅支持本机访问。
+打开终端打印的完整本机链接（默认 `127.0.0.1:4778`，仅本机访问，一次性 token 配对后自动清除）。
 
-### 运行桌面应用
+</td>
+<td width="50%" valign="top">
+
+**运行桌面应用**
 
 ```sh
 make desktop
 ./bin/desktop/Lever
 ```
 
-### 第一次使用
+使用同一 Go 后端与 SQLite 存储启动原生桌面窗口，并额外提供内置工作区浏览器与系统文件夹选择器。
 
-1. 打开 **设置 → 运行时**。在 **本机发现** 中选择要使用的 CLI，或点击 **添加连接** 配置其他账号或命令。
-2. 首次接入后，可以直接使用初始 Agent **Lever**，也可以创建自己的 Agent。在 Profile 中选择连接、模型和权限，并指定 Scope 目录。Codex 和 Claude Code 默认加载用户目录和所有 Scope 目录中的 Skills。
-3. 打开 Chat 发送消息。需要独立上下文时切换为 Topic。通过 Files、Diff 和 Terminal 查看或操作项目。
+</td>
+</tr>
+</table>
 
-桌面端可以使用系统文件夹选择器添加多个 Scope 目录；浏览器端手动输入路径。Profile 的 Model 可以留空，在聊天输入框中选择模型。
+1. **连接 CLI**：打开 **设置 → 运行时**，启用本机发现的 CLI，或点击 **添加连接** 配置多账号。
+2. **配置 Agent**：直接使用初始 **Lever** 或新建专属 Agent，在 **Profile** 中设置连接、权限与 **Scope** 目录。
+3. **高并发协作**：日常在 **Chat** 沟通，遇到独立任务随时发成 **Topic** 并行推进，旁边随时打开 **Files**、**Diff**、**Terminal** 与**工作区浏览器**验收。
 
-Web 与桌面共用数据格式，同一数据目录由一个后端进程持有。数据默认保存在系统用户配置目录下的 `Lever`，可通过 `--data-dir /path/to/data` 或 `LEVER_DATA_DIR` 指定其他目录。
+> [!NOTE]
+> Web 与桌面共用同一数据目录（默认 `<系统用户配置目录>/Lever`，可用 `--data-dir` 或 `LEVER_DATA_DIR` 指定）。关闭桌面窗口后活跃任务会在后台继续执行，重启 Go 后端也不会中断当前轮次。
 
-关闭窗口或退出桌面时，正在执行的 Agent 会在后台继续。重新打开 Lever 后，可以在原 Chat 或 Topic 查看进度、处理审批和查看结果。需要终止执行时，在原对话中点击 **停止**。桌面关闭后，后台会在任务全部结束时退出。
+## 开发指南
 
-每一轮的 provider 由独立进程持有。重启 Go 后端期间，运行时继续执行，输出和原有审批保留在同一轮。重新打开原数据目录后即可查看输出、答复审批或停止任务。机器重启或执行进程丢失时，未确认的结果显示为 **结果待确认**。
-
-## 运行时与插件
-
-在 **插件** 中按图标浏览、搜索和启停已安装的插件。运行时插件提供接入能力，每种运行时都可以添加多个命名连接。插件详情中的 **管理连接** 会打开 **设置 → 运行时**，并筛选出该插件的连接。
-
-### 配置 Codex 与 Claude Code
-
-默认沿用本机 CLI 的登录状态与配置。CLI 查找优先使用 `~/.local/bin`，随后查找 Homebrew、`/usr/local/bin`、NVM 与继承的 PATH。可通过 `LEVER_CODEX_PATH`、`LEVER_CLAUDE_PATH` 指定可执行文件的绝对路径。
-
-本机连接的配置目录分别遵循 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`，默认使用 `~/.codex`、`~/.claude`。要同时使用个人和工作账号，在 **设置 → 运行时 → 添加连接** 中选择同一类型并命名。**登录另一个账号** 会创建独立目录并打开原生登录终端。已有独立配置时，选择 **使用已有配置目录**。随后可在 Agent Profile 和聊天模型选择器中按连接名切换。
-
-模型选择器显示实际 CLI 版本和路径，可刷新模型目录。模型、推理强度和 Fast 是否可用，以对应运行时返回的能力为准。
-
-### 接入 Antigravity
-
-Lever 自动检测本机 `agy`，沿用其账号、设置与原生会话目录，无需在 Lever 重复登录。尚未登录时，在终端执行 `agy --login`，再刷新模型列表。
-
-需要独立安装和账号时，打开 **设置 → 运行时 → 添加连接**，选择 Antigravity 和托管安装，填写名称后保存。点击 **安装 Antigravity** 和 **使用 Google 登录**。该连接在 Lever 数据目录下独立保存账号。
-
-也可指定已有的 Antigravity ACP 程序，或通过 `LEVER_ANTIGRAVITY_PATH` 覆盖默认程序路径。Antigravity 复用 ACP 适配器，后续输入使用队列，不支持 Fast 和 Steer；图片、多目录与委派按运行时声明的能力启用。
-
-### 接入 Pi 和 DeepSeek Harness
-
-在运行 Lever 的机器上安装 CLI，并在终端完成登录或配置模型的 API 密钥。在 **设置 → 运行时 → 本机发现** 点击对应 CLI 的 **使用**，随后在 Agent Profile 选择该连接。
-
-- Pi 沿用 `PI_CODING_AGENT_DIR` 指定的配置，默认读取 `~/.pi/agent`。可在 **添加连接** 中指定其他可执行文件或配置目录。
-- DeepSeek Harness 通过 `dsh --profile acp` 启动。在 macOS 上，Lever 也会检测 `/Applications` 中的 DeepSeek Harness 桌面版。若使用自定义安装位置，在 **添加连接** 中填写程序的绝对路径。
-
-也可通过 `LEVER_PI_PATH` 或 `LEVER_DSH_PATH` 指定默认运行时的可执行文件。
-
-### 从命令行查找对话
-
-Lever 运行时，同一系统用户下的终端、脚本和其他 Agent 可以通过本机 CLI 查询对话，结果为 JSON：
-
-```bash
-lever chat list --limit 20
-lever context find --chat '<chat-id>' --query '架构决策'
-lever context read --target '<session-id>'
-```
-
-省略 `--query` 列出该 Chat 的近期 Topic。读取主对话可用 `--chat '<chat-id>' --target main`；翻页时保留相同的 `--target`，并把上一页的 `nextCursor` JSON 原样传给 `--cursor`。连接非默认实例时，使用 `--data-dir` 或 `LEVER_DATA_DIR` 指定其数据目录。
-
-从 Lever 启动的 Pi 会收到查询当前 Chat 的 CLI 命令，无需手动配置 `PATH` 或传 `--chat`。这不会启用需要 MCP 的跨 Chat 引用或委派。
-
-### 接入 ACP 与本地插件
-
-要使用已安装的 ACP 命令，在 **设置 → 运行时 → 添加连接** 中选择 ACP，填写程序和逐项参数。通过对应 CLI 登录后，在 Agent Profile 或模型选择器中选择该连接。
-
-点击 **插件 → 安装插件** 可粘贴 Git 仓库地址，也可选择包含 `lever-plugin.json` 的本地目录。Git 插件支持按子目录安装、预览更新和回退到上一版。本地开发时可在详情页重新读取清单。清单格式和会话身份规则见 [插件说明](docs/plugins.md)。
+| 任务 | 命令 | 说明 |
+| :--- | :--- | :--- |
+| **桌面热更新**（macOS） | `./scripts/restart-desktop.sh` | 编译 Go 与前端、热替换窗口与后端、保留运行中 provider 并代理 Vite HMR |
+| **浏览器热更新** | `make dev` + `pnpm --dir web dev` | 先执行 `pnpm --dir web install --frozen-lockfile`，访问 `4778` / `5179` 端口 |
+| **打包桌面应用** | `make package` | 输出到 `desktop/dist/`；加 `TARGETS=darwin/arm64,windows/amd64` 同步构建 Windows |
+| **重新生成类型** | `make generate` | 修改 Go DTO 或桌面绑定后同步 TypeScript 类型 |
+| **完整测试验证** | `make test && go vet ./...` | 运行隐私检查、Go `-race` 测试、前端构建与 Playwright E2E |
 
 <details>
-<summary>在原生应用中接续会话</summary>
+<summary><strong>性能基准、隐私检查与真实运行时测试</strong></summary>
 
-打开 **Agents → 最近**，选择一条 Codex App 或 Claude Code 会话。Lever 读取原生历史，发送的文字由原应用在同一条会话中处理。打开的聊天会自动更新已经写入原生历史的消息。
-
-Codex App 会在需要时打开对应会话。macOS 上的 Claude 桌面端 Code 会话也可以从 Lever 唤起。终端中的 Claude Code 需要先打开原会话，并支持接收其他会话的消息。
-
-Lever 保存 CLI 的原生会话 ID，同一运行时内续聊沿用该 ID；主聊天和每个 Topic 分别保存。原生应用能否发现或接续会话，取决于运行时和本机配置。
-
-对于在 Lever 创建的 Chat 和 Topic，等当前执行结束后再在原生应用中续聊。原生应用新增的消息尚不会导入这些 Chat 和 Topic。跨运行时切换会建立目标运行时的新会话。
+- **Chat 切换基准**：`pnpm --dir web build && pnpm --dir web test:e2e chat-switch.spec.ts`（6 个 Chat × 52 轮；P90 上限：Chromium 首次打开 180 ms / 切回 100 ms；WebKit 200 ms / 140 ms）。
+- **隐私检查**：`make privacy`（暂存区用 `python3 scripts/privacy_check.py --staged`）。自定义敏感词可写入 `.private-words.txt`（已 Git 忽略）或 `${XDG_CONFIG_HOME:-~/.config}/lever/private-words.txt`。
+- **真实运行时测试**（需显式开启，消耗账号额度）：
+  ```sh
+  LEVER_LIVE_TEST=1 LEVER_LIVE_CODEX_MODEL='<model>' go test ./internal/provider -run TestLiveRuntimes/codex -v -count=1
+  LEVER_LIVE_TEST=1 LEVER_LIVE_CLAUDE_MODEL='<model>' go test ./internal/provider -run TestLiveRuntimes/claude -v -count=1
+  LEVER_LIVE_TEST=1 go test ./internal/provider -run TestLiveComposer -v -count=1
+  ```
 
 </details>
 
-## 文件、终端与变更审阅
+## 更多文档与许可证
 
-<details>
-<summary>文件编辑与搜索</summary>
+- [设计文档](docs/design.md) — Agent、Chat、Session、执行生命周期与模块边界
+- [插件说明](docs/plugins.md) — 插件清单（`lever-plugin.json`）、Provider、任务/事件源与消息渠道
+- [多设备与自托管 Hub 设计草案](docs/remote-devices.md) — 远程 Host、Hub 同步与移动端控制端的拟议架构
 
-Files 支持编辑 Scope 内不超过 2 MiB 的 UTF-8 文本文件。停止输入 500 ms 后自动保存，也可点击保存或按 **⌘/Ctrl+S**。切换文件或标签不会中断保存。保存失败会保留本次打开应用期间的草稿。磁盘文件有冲突时，可下载草稿或重新载入磁盘版本，读取成功后才会丢弃草稿。
-
-点击顶部路径或文件名打开目录树。Markdown 默认预览，源码与预览的选择会保留。目录支持路径筛选；**在文件中搜索** 忽略大小写并遵循 Git 忽略规则，跳过二进制和超过 2 MiB 的文件，点击结果定位到对应行。
-
-Files 按类型预览：图片（PNG/JPEG/GIF/WebP/SVG/AVIF/BMP/ICO/HEIC/HEIF/TIFF，支持缩放与拖动）、音视频、PDF、静态 HTML、Markdown/MDX、Mermaid、CSV/TSV、字体（TTF/OTF/WOFF/WOFF2）、DOCX/XLSX/PPTX、ODT/ODS/ODP、RTF、EPUB、Jupyter Notebook、ZIP/JAR/TAR/GZ/TGZ 目录，以及 SQLite 数据表。文档提供内容预览，复杂排版、图表、公式和动画不保证还原；HTML 不运行脚本或加载外部资源，音视频编码支持取决于浏览器。二进制预览为只读，不支持的文件可从文件操作菜单下载。
-
-文档、压缩包和数据库解析在独立 Worker 中按需加载，单文件上限 50 MiB，超时 30 秒；字体上限 10 MiB，Notebook/RTF 上限 8 MiB。压缩内容另有限制；表格、数据库分页显示，超出文档预览上限会提示截断。图片和音视频通过原始资源接口读取，音视频支持 HTTP Range，不受文本编辑的 2 MiB 限制。
-
-</details>
-
-<details>
-<summary>交互式终端</summary>
-
-Terminal 可以打开多个终端，默认在 Agent 的主 Scope 目录启动系统 Shell，支持缩放、中文输入输出、滚动历史和 Ctrl+C。切换标签或 Agent 会保留会话。刷新页面或短暂断线后，可以接回仍在运行的 Shell。关闭终端标签会结束对应 Shell，停止后端会结束它管理的终端。
-
-终端以本机用户权限执行命令。Scope 只决定起始目录，终端不沿用模型的审批或只读策略。
-
-</details>
-
-<details>
-<summary>Diff 与轮次变更</summary>
-
-Diff 支持最近一轮、未提交、未暂存、已暂存、单次提交和分支比较，以及统一或并排显示、词级差异、换行和完整上下文。
-
-轮次有可预览的变更时，回复下方会显示文件摘要。打开后可点击或拖选行号，再点击 **反馈这段变更**，将代码、路径和行号追加到原 Chat 或 Topic 的草稿；后续文件修改不会改写已引用的代码。
-
-Codex 的「本轮变更」显示运行时上报的累计补丁。通过 shell 写入的内容可能不会出现在补丁中。同一文件被多个任务交错编辑时，补丁可能包含其他任务中途写入的内容。从 Chat 或 Topic 打开的「最近一轮」仅查询该会话，刷新可查看随后完成的轮次。
-
-依赖 Git 快照的轮次（例如其他运行时的轮次或仅有快照的历史记录）仍可在同一视图中查看执行前后的差异。差异包含未忽略的新文件，也可能包含并发写入；采集不会修改用户的暂存区、HEAD 或工作文件。非 Git 目录支持 Codex 原生补丁。
-
-</details>
-
-## 开发
-
-### 桌面热更新
-
-在 macOS 上运行：
-
-```sh
-./scripts/restart-desktop.sh
-```
-
-脚本先安装前端依赖并编译 Go，再替换目标数据目录的桌面窗口和后端。正在运行的 provider 会继续执行，新窗口会接回同一轮任务和待审批请求。首次从旧版升级时，脚本会等旧版已启动的任务结束，原窗口在此期间仍可审批。前端由本机 Vite 提供热更新。
-
-脚本支持 `--data-dir`、`--listen` 和 `LEVER_DATA_DIR`。开发模式通过后端转发前端资源和 HMR，保持 API、配对与页面设置同源。
-
-### 浏览器热更新
-
-先安装前端依赖：
-
-```sh
-pnpm --dir web install --frozen-lockfile
-```
-
-在两个终端分别运行：
-
-```sh
-make dev
-```
-
-```sh
-pnpm --dir web dev
-```
-
-打开后端打印的 **Lever:** 链接（端口 4778），或 **Development:** 链接（端口 5179）。两种入口共用本机后端，开发构建不依赖 `web/dist`。
-
-### 构建桌面包
-
-```sh
-make package
-# 同时构建 Windows 可执行文件
-make package TARGETS=darwin/arm64,windows/amd64
-```
-
-产物位于 `desktop/dist/`，默认目标为 macOS Apple Silicon。macOS 使用本地 ad hoc 签名；上述命令跳过 DMG 和 Windows 安装器。正式发布需要配置签名、公证，并完成目标平台实机验证。
-
-### 验证改动
-
-```sh
-make privacy
-pnpm --dir web install --frozen-lockfile
-pnpm --dir web exec playwright install chromium
-make test
-go vet ./...
-```
-
-`make test` 运行隐私检查、Go 竞态检查、前端生产构建和 Playwright 端到端测试。集成测试通过真实 HTTP、SQLite 和 CLI 协议夹具验证会话、审批、取消、委派及文件边界。夹具不调用真实模型。
-
-用以下命令单独运行 Chat 切换基准。
-
-```sh
-pnpm --dir web build
-pnpm --dir web test:e2e chat-switch.spec.ts
-```
-
-基准使用 6 个各有 52 轮历史的 Chat 和固定的历史响应，测量从标签页收到点击事件到最新消息可见的时间。Chromium 的 P90 上限为首次打开 180 ms、切回已加载 Chat 100 ms。安装 Playwright WebKit 后，可给测试命令加上 `--browser=webkit`，对应上限为 200 ms 和 140 ms。终端显示 P90，Playwright 报告附有各次切换的耗时。
-
-隐私检查需要 Python 3，默认扫描已跟踪文件和未被忽略的新文件的路径与文本内容，检查本机用户路径、私网 IPv4、非示例邮箱、内网 URL 和常见密钥格式。检查暂存区的实际内容时，运行 `python3 scripts/privacy_check.py --staged`。输出只包含文件位置和问题类型。
-
-将公司名称、内部域名、内部项目名和其他私人词条写入 `.private-words.txt`，每行一项，`#` 开头的行作为注释。该文件已被 Git 忽略；也可将词条放入 `${XDG_CONFIG_HOME:-~/.config}/lever/private-words.txt`，在多个工作区复用。公司专有词检查依赖这些本机词条。
-
-修改 Go DTO 或桌面绑定后，重新生成类型：
-
-```sh
-make generate
-```
-
-<details>
-<summary>真实运行时验证</summary>
-
-真实运行时测试需要显式启用，会使用已登录账户的模型额度。将 `<available-model>` 替换为账号可用的模型：
-
-```sh
-LEVER_LIVE_TEST=1 LEVER_LIVE_CODEX_MODEL='<available-model>' \
-	go test ./internal/provider -run TestLiveRuntimes/codex -v -count=1
-
-LEVER_LIVE_TEST=1 LEVER_LIVE_CLAUDE_MODEL='<available-model>' \
-	go test ./internal/provider -run TestLiveRuntimes/claude -v -count=1
-
-# 模型目录、图片与 Fast 的联合验证
-LEVER_LIVE_TEST=1 go test ./internal/provider -run TestLiveComposer -v -count=1
-```
-
-</details>
-
-## 更多文档
-
-- [设计文档](docs/design.md)：Agent、Chat、Session、执行生命周期与应用架构。
-- [插件说明](docs/plugins.md)：插件清单、Provider 配置和 ACP 支持范围。
-
-## 许可证
-
-本项目采用 [Apache License 2.0](LICENCE)。
+本项目采用 [Apache License 2.0](LICENCE) 开源。

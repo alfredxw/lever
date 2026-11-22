@@ -6,7 +6,7 @@
 
 Lever 管理已经存在的 Agent runtime。用户先定义 Agent，再与它对话、查看其工作目录和审阅变更。目录是 Agent 的 Scope，不是应用的顶层组织单位。
 
-Go 后端管理本机 Codex、Claude Code 的进程、原生会话引用、审批与输出。模型调用、工具执行、上下文压缩和推理循环仍由 runtime 完成。Lever 不实现另一套 agent loop，也不直接调用模型 API。
+Go 后端管理 Codex、Claude Code、Pi、Antigravity 和 ACP 进程的会话引用、审批与输出，DeepSeek Harness 使用同一 ACP 适配层。模型调用、工具执行、上下文压缩和推理循环仍由 runtime 完成。Lever 不实现另一套 agent loop，也不直接调用模型 API。
 
 第一版只交付 Agents 工作区及必要设置。Tasks、Plugins、Integrations 保留在产品规划中，不展示可点击但不可用的空页面。
 
@@ -39,7 +39,7 @@ Agents                   │ 全部 / 未读      │ 普通消息              
 
 一级导航位于浅灰/深灰画布上，二、三级共用一个 12px 圆角容器，外侧留白 8px。二级列表顶部与三级 36px 标签栏对齐；当前 Tab 使用中性底色和圆角，不另叠一层标题栏。
 
-分栏控制固定在工作区右上角，使用 `PanelRight`；历史入口只保留在主栏。侧栏为空时打开新标签菜单，已有标签时动画展开／收起；收起保留侧栏标签、草稿和终端连接。最大化只占满工作区，还原保留原分栏比例；收起后再次展开回到普通分栏。Files 内的目录显隐使用 `Folders`，与工作区分栏区分。
+二级侧栏和右侧分栏收展时，正文随可用宽度自然换行；开启系统「减少动态效果」时直接切换。分栏控制固定在工作区右上角，使用 `PanelRight`；历史入口只保留在主栏。右栏为空时打开新标签菜单；收起已有分栏时保留标签、草稿和终端连接。最大化只占满工作区，还原保留原分栏比例；收起后再次展开回到普通分栏。Files 内的目录显隐使用 `Folders`，与工作区分栏区分。
 
 一级导航默认展开至 160px。macOS 支持在 52–288px 之间连续拖动，松手时保存实际宽度。全屏态下，导航缩到 80px 以下时，Lever 字标淡出，App 图标淡入。窗口态下，红绿灯下方沿一级导航底色向工作区渐变，导航覆盖红绿灯后恢复完整的圆角边框。默认字号下，一级导航达到 96px 时显示图标和标签，较窄时居中显示图标。
 
@@ -90,7 +90,7 @@ Topic 的根消息与普通消息共用 `UserMessage`，摘要通过气泡内容
 
 Agents 侧栏的「未读」直接列出 main Session 和 Topic，而不是仅列出有未读的 Agent。Topic 条目标明所属 Agent 和原 Chat，点击后复用原 Session 的标签、草稿和队列；「定位原消息」打开父 Chat，必要时加载更早历史再定位根消息。Topic 的消息和上下文仍属于原 Chat 下的独立 Session。
 
-「全部」视图在每个 Agent 下列出进行中、待处理和未读的 Chat 与 Topic，每个 Session 占一行。展开时在会话行显示状态，收起时在 Agent 摘要行显示状态汇总。阅读后，未读点消失，会话在刷新后仍留在列表里。已读且没有进行中任务或待处理请求的条目可以逐条、按 Agent 或通过侧栏顶部的「清除已读会话」移除。当前设备会记住手动清理的条目，会话有新活动时会重新出现。来源和详细状态放在悬停提示中。子列表沿用 shadcn Sidebar 的缩进、28px 行高和选中背景，背景铺满子项整行，不加层级线。Agent 原有点击、头像、文件与 Chat 入口不变；有子项时在摘要行最右侧显示折叠按钮及方向指示，无子项时隐藏并保留占位，避免宽度跳动，点击只切换该 Agent 的子列表。拖动 Agent 时整组移动，子项不触发拖动。「设置 → 外观」控制活动会话默认展开或折叠，偏好保存在当前设备。
+「全部」视图在每个 Agent 下列出进行中、待处理和未读的 Chat 与 Topic，每个 Session 占一行。展开时在会话行显示状态，收起时在 Agent 摘要行显示状态汇总。阅读后，未读点消失，会话在刷新后仍留在列表里。已读且没有进行中任务或待处理请求的条目可以逐条或按 Agent 移除。当前设备会记住手动清理的条目，会话有新活动时会重新出现。来源和详细状态放在悬停提示中。子列表沿用 shadcn Sidebar 的缩进、28px 行高和选中背景，背景铺满子项整行，不加层级线。Agent 原有点击、头像、文件与 Chat 入口不变；有子项时在摘要行最右侧显示折叠按钮及方向指示，无子项时隐藏并保留占位，避免宽度跳动，点击只切换该 Agent 的子列表。拖动 Agent 时整组移动，子项不触发拖动。「设置 → 外观」控制活动会话默认展开或折叠，偏好保存在当前设备。
 
 `sessions.activity` 保存轻量 `Conversation` 投影：会话身份、来源、标题、最近消息和未读事件游标。Overview 返回所有会话摘要，SSE 按 Session 更新，因此已完成、未打开的 Topic 不依赖活动 Run 或浏览器标签才能被发现。执行终态、新问题、审批请求和 unknown 状态推进所属 Session 的未读游标。主聊天与话题的历史响应在同一只读事务中返回内容和事件游标；对应会话已加载、可见且窗口聚焦时，前端自动确认这个边界之前的内容已读。父 Chat 中的话题预览不确认 Topic 已读。请求的待处理状态由现有 requests 记录决定，阅读不修改审批状态。
 
@@ -135,9 +135,15 @@ Scope 是工作目录和文件浏览边界，**不等于 runtime 的完整安全
 
 **Skills** 由 Codex 和 Claude Code 从 Lever 托管目录、`~/.agents/skills`、两个运行时的用户配置目录和会话的每个 Scope 目录加载。运行时的用户 Skills 位于配置目录下的 `skills`。Lever 优先使用当前运行时实例配置的目录，其次使用 `CODEX_HOME` 或 `CLAUDE_CONFIG_DIR`，最后使用 `~/.codex` 或 `~/.claude`。每个 Scope 目录提供 `.agents/skills`、`.codex/skills`、`.claude/skills` 和 `skills`。Profile 的 Scope 展示新会话的目录来源，已有会话使用各自保存的 Scope。
 
+输入框的 `/` 可在正文中引用 Skill，不要求运行时支持自动加载 Agent 的 Skill 目录。Codex 和 Claude Code 使用各自的原生引用；Antigravity、Pi 和其他 ACP 运行时按选中的 `SKILL.md` 路径引用。Antigravity 优先调用当前会话已确认的对应 Skill，未确认时保留文件路径。普通运行时命令仍只在消息开头提供。
+
 **Skills** 一级菜单默认打开卡片总览，按用户目录和 Agent 已保存的 Scope 目录展示自动发现的 Skills。总览支持搜索、按来源和启用状态筛选。选中 Agent 后，卡片开关保存到该 Agent 的 Profile，并在下一轮执行生效。同名条目显示来源路径并共享启停设置。侧栏可展开各个目录。打开 Skill 后，Files 展示 `SKILL.md` 和配套文件。Lever 托管的 Skills 可以在 Files 中编辑，其他来源以只读方式打开。
 
 在 Profile 的 **已禁用的 Skills** 中按名称配置禁用。同名目录 Skill 一起禁用。保存后，下一轮执行和 `/` 建议使用新的配置。正在执行的轮次与其 Steer 使用启动时的配置。**额外 Skills** 可以附加其他包含 `SKILL.md` 的目录。Lever 在每轮开始前更新额外 Skills 的工作副本，保留相对资源路径。副本使用常规文件，合计最多 32 MiB。
+
+Antigravity、TRAE CLI 与 DeepSeek Harness 在普通消息中接收该 Agent 已启用的补充技能目录（名称、说明和 `SKILL.md` 路径），不要求用户手动输入 `/`。TRAE CLI 还按进程叠加原生禁用规则。支持多目录的本地 `agy` 加载会话专用的 `skills.json`，原生发现主动挂载的技能副本，并对项目技能应用禁用。不会改写仓库或用户配置，也不把原技能所在的外部目录授权为工作区；读取其他来源仍遵守运行时审批。
+
+AGY 的 `~/.gemini/antigravity-cli/skills` 和 `~/.gemini/skills` 不受原生清单的排除规则约束；DeepSeek 自行加载的技能也不由 Lever 禁用。TRAE 的启动参数若覆盖整个 `skills` 表，或包含不能安全合并的规则，则保留连接原值，仅过滤 Lever 提供的技能。未识别的 ACP 连接仅支持显式文件引用，不显示配置开关。
 
 **Delegations** 配置允许协作的其他 Agent，以及是否逐次确认。配置在下一轮执行时生效。子 Agent 使用自身 Profile；不继承父会话历史、凭据或权限。父任务必须提供明确的委派输入。
 
@@ -185,7 +191,7 @@ Provider 层只依赖小接口：`Bind` 保存原生身份、`Item` 更新显示
 
 从输入框或队列发起 Steer 时，追加输入沿用当前 Run 的运行时、模型、推理强度、Fast 和权限。接受 Steer 时，把消息选择的模型、推理强度和 Fast 保存为 Session 的默认值，供接下来的新消息使用。已排队的消息各自保留所选设置。
 
-Provider 通过 `NextSteer` / `Steered` 领取并确认追加输入。Steer 使用 Codex 的 `turn/steer`（绑定 expectedTurnId）或 Claude 的 `priority: now` 用户输入。Claude 通过用户消息回显确认投递，并忽略 steer 导致的旧片段中断结果。运行时明确拒绝时保留为后续 Queue；断线或退出导致送达不确定时不自动重发。所有输入仍可通过原 commandId 查询，网络重试不会重复执行。
+Provider 通过 `NextSteer` / `Steered` 领取并确认追加输入。输入框和队列依据当前 Run 的 `steerPending` / `canSteer`。尚在启动的兼容连接允许先把输入绑定到指定 `steerRunId`，但收到就绪信号前不向进程投递；普通 Queue 不自动升级。Codex 绑定 `expectedTurnId`，Claude 在工具安全点追加并以消息 UUID 回显确认，Pi 等待原生消费或处理确认。AGY CLI 在后台命令或子代理仍在运行时保留同一会话与 Steer 入口；其他 ACP 按握手契约注入。没被领取或被明确拒绝的追加保留为后续 Queue；送达不确定时不自动重发。所有输入仍可通过原 commandId 查询。各连接的能力与降级方式见[运行时能力表](provider-capabilities.md)。
 
 用户停止或执行失败／未确认只暂停所属 Session 的队列，其他 Session 继续执行。独立执行进程所属的 Session 在后端重启时保留队列状态，当前 Run 结束后按原顺序出队。其他遗留队列在重启后暂停，点击该 Session 的「继续队列」恢复。尚未确认的旧执行仍须先核对已停止。编辑排队消息时暂存原输入草稿，保存或取消后恢复。
 

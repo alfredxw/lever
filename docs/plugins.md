@@ -1,6 +1,6 @@
 # 插件清单
 
-插件清单声明插件的能力。内置插件、本地目录和 Git 仓库安装共用安装记录和启停机制。外部插件可声明 Provider，或声明一个个人消息渠道。内置插件还可以声明 Works 的任务来源和事件源。
+插件清单声明插件的能力。内置插件、本地目录和 Git 仓库安装共用安装记录和启停机制。外部插件可声明 Provider、`poll-stdio-v1` 事件源，或声明一个个人消息渠道。内置插件还可以声明 Works 的任务来源和内置事件源。
 
 ## 包结构
 
@@ -49,9 +49,10 @@ example-agent/
 | `name` | 显示名称，最多 100 字符 |
 | `version` | 显示版本，最多 100 字符 |
 | `description` | 可选说明，最多 1000 字符 |
-| `contributes.providers` | 1 至 32 个 Provider 贡献，贡献 ID 在同一插件内唯一 |
+| `contributes.providers` | 最多 32 个 Provider 贡献，贡献 ID 在同一插件内唯一 |
 | `contributes.taskSources` | 内置任务来源。每项包含 `id` 和 `name`，由宿主注册读取适配器 |
-| `contributes.channels` | 内置渠道使用 `id`、`name`；本地个人渠道还须指定 `driver: "personal-stdio-v1"` 和包内相对可执行文件 `command`，不能混合声明 Provider |
+| `contributes.channels` | 内置渠道使用 `id`、`name`；本地个人渠道还须指定 `driver: "personal-stdio-v1"` 和包内相对可执行文件 `command`，不能混合声明 Provider 或事件源 |
+| `contributes.eventSources` | 内置事件源使用 `id`、`name`、`fields`；外部事件源（最多 32 个）须从包目录安装，指定 `driver: "poll-stdio-v1"`、包内相对可执行文件 `command` 与最多 32 个字段（`kind` 为 `text` 或 `secret`，`secret` 不能设 `default`） |
 | Provider 的 `driver` | `codex`、`claude`、`pi`、`antigravity` 或 `acp` |
 | Provider 的 `command` | 可执行程序。ACP 必填；其他适配器留空时查找托管安装或本机对应 CLI |
 | Provider 的 `args` | ACP 的启动参数数组；原生适配器自行构造协议参数 |
@@ -83,6 +84,69 @@ example-agent/
 - **预览更新** 展示目标包、启动命令和能力变化。确认时切换到预览过的文件。断网后仍可使用已装版本，详情页可 **回退到上一版**。回退只切换包，插件写入的账号和业务数据沿用当前内容。
 - 更新与回退共用安装 ID。兼容的 Provider 连接可以续用原生会话，已连接的个人渠道按保存的账号和路由恢复监听。存在未完成执行、排队任务、配对或正在发送的回执时，先完成这些操作再重试。已使用的 Provider 贡献变更驱动、入口或参数时，预览会列出受影响的连接，需要通过新安装和新连接交接会话。
 - **本地目录**在详情页使用 **重新读取清单**，目录内的程序由开发者维护。内置插件随 Lever 发版。直接通过 API 登记清单的安装没有可检查的仓库来源。
+
+## 外部事件源（`poll-stdio-v1`）
+
+外部插件可在 `contributes.eventSources` 中声明 `driver: "poll-stdio-v1"` 和包内相对路径 `command`，通过本地目录或 Git 仓库安装后出现在 **自动化 → 事件触发 → 事件类型** 中。
+
+```json
+{
+  "manifestVersion": 1,
+  "id": "example.alerts",
+  "name": "Build Alerts",
+  "version": "1.0.0",
+  "contributes": {
+    "eventSources": [
+      {
+        "id": "build-failed",
+        "name": "Build failed",
+        "driver": "poll-stdio-v1",
+        "command": "bin/poll",
+        "fields": [
+          { "id": "endpoint", "label": "API URL", "kind": "text", "required": true },
+          { "id": "token", "label": "API token", "kind": "secret", "required": true }
+        ]
+      }
+    ]
+  }
+}
+```
+
+宿主按轮询周期（默认每分钟，受待处理队列上限背压）在插件目录启动 `command`，并通过标准输入传入单条 JSON 请求（配置与密钥均走 stdin，不放入命令行参数），同时设置 `LEVER_PLUGIN_DIR` 与插件私有缓存目录 `LEVER_EVENT_SOURCE_CACHE`（卸载时清除）：
+
+```json
+{
+  "protocolVersion": 1,
+  "source": "build-failed",
+  "automationId": "<automation-id>",
+  "config": { "endpoint": "https://api.example.com", "token": "..." },
+  "cursor": "",
+  "limit": 32
+}
+```
+
+程序在 12 秒内向标准输出返回单条 JSON（上限 1 MiB）：
+
+```json
+{
+  "cursor": "2026-11-21T08:00:00Z",
+  "more": false,
+  "events": [
+    { "key": "build-42", "payload": { "status": "failed", "build": 42 } }
+  ]
+}
+```
+
+- 首次轮询传入空 `cursor`；返回非空 `cursor`（最多 1024 字节）后，宿主会在同一数据库事务内保存事件并推进游标。
+- 每条事件的 `key` 最多 200 字节用于去重，`payload` 为不超过 16 KiB 的合法 JSON；事件数量不能超过 `limit`。`more: true` 时宿主会立即拉取下一批。
+- 退出码非零时，标准错误摘要会显示在该自动化的事件源错误提示中；停用、卸载或更新插件时会取消正在执行的轮询，正在被未归档自动化使用的事件源贡献若在更新中被移除或更换 `driver` 会被阻止。
+
+对于本地脚本、Git hook 等外部推入场景，也可以对自定义 Webhook 自动化直接使用本机 CLI 推送事件（走本机 IPC，无需监听端口或 Bearer Token）：
+
+```sh
+lever automations list
+echo '{"type":"push","branch":"main"}' | lever automations emit --id '<automation-id>' --key 'commit-abc'
+```
 
 ## Works 数据来源
 
@@ -130,11 +194,11 @@ Lark Bot 接收绑定用户的私聊文本，沿用 Agent 的运行权限和队�
 
 ## ACP 支持范围
 
-Lever 使用 ACP v1 和 `github.com/coder/acp-go-sdk`。运行时必须支持 `session/load` 或 `session/resume`。续聊期间的历史回放不重复写入新 Run。连接在任务完成前断开时，结果标记为 `unknown`，不自动重发输入。
+Lever 使用 ACP v1 和 `github.com/coder/acp-go-sdk`。支持 `session/resume` 或 `session/load` 时优先恢复原生会话，历史回放不重复写入新 Run。两者皆无时，新一轮显式交接 Lever 历史，不假称恢复原生会话。连接在任务完成前断开时，结果标记为 `unknown`，不自动重发输入。
 
-支持文本与思考输出、工具进度、计划、原生审批选项、模型及模式选择。图片、内嵌文件和多目录按协商能力启用。运行时声明 HTTP MCP 时直接使用 HTTP，否则通过 ACP 的 stdio MCP 接入相同的每轮工具，引用和委派仍受原有权限约束。Profile 指令作为本轮输入传入。当前不提供客户端文件系统及终端执行回调，不安装 Agent 技能目录，不模拟 steer；运行中后续消息进入队列。登录和工具执行由运行时管理，独立进程本身不是沙箱。
+支持文本与思考输出、工具进度、计划、原生审批选项、模型及模式选择。图片、内嵌文件和多目录按协商能力启用；不能内嵌文件时使用标准 `resource_link`。运行时声明 HTTP MCP 时直接使用 HTTP，否则通过 ACP 的 stdio MCP 接入相同的每轮工具。Profile 指令作为本轮输入传入。目前不提供客户端文件与终端执行回调，不安装 Agent 技能目录。运行中能原生追加才提供 Steer，否则仅 Queue，详见[运行时能力表](provider-capabilities.md)。登录和工具执行由运行时管理，独立进程本身不是沙箱。
 
-声明 `additionalDirectories` 的运行时通过会话协议接收附加工作目录。仅支持单个工作目录、但接受内嵌上下文的运行时在主目录启动，Lever 随普通消息附上其余目录的路径。跨目录访问由运行时按当前权限处理。
+声明 `additionalDirectories` 的运行时通过会话协议接收附加工作目录。仅支持单个工作目录时在主目录启动，Lever 通过上下文或文件链接提供其余目录的路径。跨目录访问由运行时按当前权限处理。
 
 `antigravity` 支持接入本机 `agy`，沿用 CLI 已有的登录和设置。另可在 **设置 → 运行时** 创建独立 ACP 安装，使用单独的账号目录和 Google 登录。两种方式共用 ACP 适配器并按模型读取推理档位。普通模型探测不会弹出浏览器。[接入 Antigravity](../README.zh.md#接入-antigravity)
 

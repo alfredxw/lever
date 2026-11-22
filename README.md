@@ -1,307 +1,200 @@
-<p align="center">
-  <img src="./cmd/lever-desktop/icon.png" alt="Lever logo" width="128" height="128">
+<div align="center">
+
+<img src="./cmd/lever-desktop/icon.png" alt="Lever Logo" width="112" height="112" />
+
+<h1>Lever</h1>
+
+<p><strong>The Agent-first local AI workbench built for high-concurrency work.</strong></p>
+
+<p>
+  Orchestrate native <strong>Codex</strong>, <strong>Claude Code</strong>, <strong>Pi</strong>, <strong>DeepSeek Harness</strong>, <strong>Antigravity</strong>, and <strong>ACP</strong> CLIs —<br />
+  with independent parallel Topics, persistent Agents, built-in dev tools, Works, and Automations in one lightweight app.
 </p>
 
-<h1 align="center">Lever</h1>
-
-<p align="center">
-  <strong>A local AI workbench for Agents</strong>
+<p>
+  <a href="LICENCE"><img src="https://img.shields.io/badge/License-Apache%202.0-18181b?style=flat&labelColor=27272a" alt="Apache 2.0 License" /></a>
+  <img src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat&logo=go&logoColor=white&labelColor=27272a" alt="Go 1.27+" />
+  <img src="https://img.shields.io/badge/React-19-0ea5e9?style=flat&logo=react&logoColor=white&labelColor=27272a" alt="React 19" />
+  <img src="https://img.shields.io/badge/App-Desktop%20%26%20Web-6366f1?style=flat&labelColor=27272a" alt="Desktop and Web" />
+  <img src="https://img.shields.io/badge/Protocols-Native%20CLIs%20%C2%B7%20ACP%20%C2%B7%20MCP-10b981?style=flat&labelColor=27272a" alt="Native CLIs, ACP, MCP" />
+  <img src="https://img.shields.io/badge/Data-Local--First%20SQLite-f59e0b?style=flat&logo=sqlite&logoColor=white&labelColor=27272a" alt="Local-First SQLite" />
 </p>
 
-<p align="center">
-  Connect Codex, Claude Code, Pi, DeepSeek Harness, Antigravity, and ACP runtimes. Work with conversations, files, diffs, and terminals in one workspace.
-</p>
-
-<p align="center">
+<p>
   <strong>English</strong> · <a href="README.zh.md">简体中文</a>
 </p>
 
-<p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#runtimes-and-plugins">Runtimes and plugins</a> ·
+<p>
+  <a href="#the-idea">The Idea</a> ·
+  <a href="#how-lever-differs">How Lever Differs</a> ·
+  <a href="#core-capabilities">Capabilities</a> ·
+  <a href="#supported-runtimes">Runtimes</a> ·
+  <a href="#quick-start">Quick Start</a> ·
   <a href="#development">Development</a>
 </p>
 
-## Why Lever
+</div>
 
-Set each Agent's working directories, instructions, Skills, and Delegations. Use the same workspace to chat with that Agent, run Topics in parallel, and review the results.
+---
 
-The native runtime calls models and runs tools using your CLI configuration and credentials. The web UI and desktop app share the same workflow for conversations, files, diffs, and terminals.
+## The Idea
 
-## Features
+Early AI tools taught us to work in long, linear chats: explain the background, wait for a partial answer, nudge it three more times, and keep piling new tasks onto the same scrollback—or scatter work across dozens of disposable windows you quickly lose track of.
 
-- **Workspace browser.** In the desktop app, open websites or local development servers from the globe icon or the pane's `+` menu. Choose **Select an element**, pick an element on the page, and confirm to add a reference to a Chat or Topic draft. Use the camera button to attach a screenshot of the visible area. The toolbar also offers a floating browser, a separate preview window, device viewports, zoom, hard reload, and DevTools. Browser tabs and separate windows share a sign-in state per Agent. Clearing cookies or cache applies to the current Agent's browser profile. On macOS, you can select a light or dark appearance for each page. On macOS 14 or later, each Agent's browser profile persists across app restarts. In the web UI, the same entry opens the address in a new browser tab.
-- **Agent configuration and collaboration.** Set multiple Scope directories, a default runtime and model, permissions, instructions, and Skills for each Agent. Use Delegations to choose which Agents can receive tasks.
-- **Native runtimes.** Built-in plugins connect Codex, Claude Code, Pi, DeepSeek Harness, Antigravity, and ACP. Choose a runtime and model, then set the reasoning effort and Fast mode where the runtime supports them.
-- **Chats and Topics.** Keep an ongoing conversation in a Chat and run separate Topics in parallel. Each Topic keeps its own context, draft, queue, and unread state.
-- **Execution controls.** Follow streamed replies, tool activity, plans, approvals, and questions. Send input during a run, queue messages for the next turn, or stop a Session.
-- **Files and terminals.** Browse and search Scope files, edit text with autosave, and preview images, audio, video, PDFs, Markdown, and documents. Reference files and upload images in conversations. Open multiple local terminals and reconnect to them after a page refresh or brief connection loss.
-- **Change review.** Inspect snapshots from individual turns, uncommitted changes, commits, and branch diffs. Reference selected changes in the original conversation.
-- **Adjustable workspace.** Drag tabs to reorder them or move them between panes. Resize panes and collapse the navigation or sidebar. Lever saves the layout per Agent.
-- **Web and desktop.** Both use the same backend and data format. Choose English or Simplified Chinese and a system, light, or dark theme.
+**That rhythm no longer matches how modern Agents work.** As Agents get dramatically better at understanding human intent, a single task rarely needs ten rounds of conversational alignment. Most pieces of work are naturally independent—you state the goal, let the Agent run, and only step in when you want to refine or verify.
 
-## Chats and Topics
+Lever flips the default interaction model from **continuous chat first** to **independent Topics first, continuous chat as support**:
 
-A Chat is the conversation you see. A Session holds the runtime execution and context. Regular messages share the Chat's main Session, and each Topic has a separate Session. Stop requests, approvals, and model changes apply to the selected Session.
+> **Weakly coupled across Topics + Strongly continuous within each Topic = High concurrency.**
 
-The main Chat and several Topics can run at the same time. They share the Agent's Scope directories by default, so each Session can see file changes made by another. The main Chat shows a summary for each Topic. Select a summary to view, reply, or reference messages in the sidebar. Topics keep separate drafts and unread states.
+```text
+One Agent · One Chat Timeline
+├── Main Chat         ──► Continuous alignment & quick back-and-forth
+├── Topic A (running) ──► [Worktree A · Codex]       Refactor auth flow    ──► Deep follow-ups & Diff review in side pane
+├── Topic B (running) ──► [Worktree B · Claude Code] Fix mobile layout     ──► DOM element picked from Workspace Browser
+└── Topic C (waiting) ──► [Default Scope · Pi]       Draft release notes   ──► Queued follow-up ready on completion
+```
 
-Selecting a Chat or Topic uses the pane's preview tab, which has an italic title. Lever keeps the tab open after you start a reply, attach a file, or answer a question. To keep a tab open while you follow a run, double-click the tab or select **Keep tab open** from its context menu.
+- **Weak coupling across Topics:** Every Topic lives on the same Chat timeline as a live summary and inherits the Agent's persistent identity, directories, and Skills—so you keep the full picture in one place without Topics blocking each other or polluting each other's context window.
+- **Strong continuity within each Topic:** Open any Topic in the side pane whenever a task *does* need deep iteration. Each Topic owns an isolated Session with its own runtime, model, worktree directory group, draft, queue, and unread state.
+- **High concurrency by default:** Run five Topics and a main Chat simultaneously under one Agent—then review their files, diffs, terminals, and live web previews right beside the conversation.
 
-In the Agent's **Profile**, open **Scope** and manage the directory groups and worktrees. Add worktrees by repository, then save the directories you want to use together as a group. For a repository without a selected worktree, the group uses the default Scope directory. Choose a group when you create a Topic or delegate a task. Lever saves the Topic's working directories when you send its first message. Subsequent messages, Files, Diff, and Terminal use those directories.
+## How Lever Differs
 
-Changes to an Agent's instructions, Skills, and Delegations take effect on its next turn. Existing Sessions keep their runtime, model, permissions, and working directories. Changes to Agent defaults apply to new Sessions. When you switch runtimes, Lever creates a native session in the target runtime and passes along the conversation history.
+Many local multi-CLI tools already let you drive coding CLIs without vendor lock-in. Lever stands out in **how work is organized, parallelized, and verified**:
 
-Enter `/compare` in a Chat to have several Agents answer the same message. By default, each Agent uses its own Scope. Turn on **Share scope** to use the current Chat's working directories for every participant. If the Chat has yet to start a main Session, the comparison uses the initiating Agent's default Scope. Agents with write access can edit the same files when they share a Scope.
+| Dimension | Conventional Multi-Agent Patterns | How Lever Works |
+| :--- | :--- | :--- |
+| **Conversation rhythm** | One bloated linear chat, or dozens of disconnected per-branch threads | **Independent Topics first, continuous Chat as backbone** — weakly coupled parallel Topics inside a unified timeline, with deep side-pane continuity |
+| **Top-level unit** | Repo-folder windows, disposable threads, or async team tickets | **Persistent Agents** — define multi-repo **Scopes**, named Git **worktree groups**, native instructions, **Skills**, **Delegations**, and saved layouts once |
+| **Execution control** | Wait for completion or hard-abort | **Steer, Queue, Pause & Resume** — guide active turns, stack or promote queued messages into Topics, and survive window closes or backend restarts |
+| **Runtimes & accounts** | Single login per CLI, or locked to one runtime per thread | **Multi-account native CLIs** *(e.g. personal + work)*, mid-session runtime switching with history handoff, `/compare` across Agents & **Codex App / Claude Code** continuation |
+| **Verification loop** | Jump between chat, IDE, terminal, and external browser | **Built-in local workbench** — Monaco **Files** + 25+ previews, turn & Git **Diffs** with inline feedback, persistent **PTY Terminals**, and a DOM-picking **Workspace Browser** |
+| **Beyond reactive chat** | Prompt-only sessions, or heavy cloud/server boards | **Personal local work hub** — block **Notes**, Kanban **Board** synced with **GitHub** & **Lark Todos**, scheduled/event **Automations**, and **Lark Bot** in a single **Go + native WebView + SQLite** app |
+
+## Core Capabilities
+
+### Parallel Topics & Live Execution Control
+- **Mixed Chat + Topic timeline:** Stay in a continuous main Chat when exploring together, or send any message as an independent **Topic** when you want parallel execution. Topics show compact live summaries inline and expand in the side pane with separate drafts, queues, and unread markers.
+- **Steer, Queue, Pause & Resume:** While a turn is running, steer it in flight (<kbd>Enter</kbd>) or queue follow-up turns (<kbd>⌘/Ctrl</kbd>+<kbd>Enter</kbd>). Edit queued messages, move them into the active turn, or promote a queued main-chat message into its own Topic. Supported runtimes also let you **Pause & Resume** replies while keeping generated output intact.
+- **Process-isolated turns:** Every turn executes in an isolated provider host process. Closing the desktop window or restarting the Go backend never kills running Agents—reopen Lever to reconnect straight to live output and pending approvals.
+- **Rich composer:** Live Markdown formatting, `@` references (files, chats/topics, Agents, notes, work items), `/` commands & Skills, and drag-and-drop / paste attachments.
+
+### Persistent Agents, Multi-Account & Native Interop
+- **Configure once, launch Topics instantly:** Give each Agent its own multi-directory **Scope**, reusable Git **worktree directory groups** (locked per Topic on first send), default runtime/model/permissions, native system instructions, **Skills**, and one-level MCP **Delegations**.
+- **Multiple accounts & live runtime handoff:** Run separate personal and work logins for the same CLI side by side. Switch runtimes mid-session and Lever creates a native session on the target runtime with conversation history handed over automatically.
+- **Multi-Agent `/compare` & native continuity:** Type `/compare` to send the same prompt to multiple Agents simultaneously (using their own Scopes or a shared Scope). Open **Agents → Recent** to inspect and continue local **Codex App** or **Claude Code** sessions directly, and monitor active subscription usage windows in the navigation rail.
+
+### Integrated Local Workbench
+- **Workspace Browser** *(Desktop)*: Open local dev servers or websites right beside your conversation. Click **Select an element** to drop a DOM selector and visible text straight into a Chat or Topic draft, or attach a visible-area screenshot. Includes device viewports, zoom, floating/pop-out windows, DevTools, macOS per-page light/dark mode, and per-Agent isolated login profiles (persisted across restarts on macOS 14+).
+- **HTML files in Chat:** A link to a local HTML report in its own paragraph, or a single sent HTML attachment, opens inline automatically. Click a link in a sentence or a link to a specific section to expand or collapse it without leaving the conversation. Use the preview’s `⋯` menu to open a Lever web tab, enlarge the preview, copy the absolute path, open in a paired browser, or reveal the file on desktop. Attachments remain downloadable. Reports can use relative PNG and JPEG screenshots in the HTML directory or its subdirectories; embed the images when sharing a report as a single attachment.
+- **Files & 25+ Format Previews:** Browse and search across multi-root Scopes (`.gitignore`-aware), edit UTF-8 files in **Monaco** with 500 ms autosave and disk-conflict protection, and preview images, audio/video, PDF, Mermaid, Office documents, Jupyter notebooks, archives, and SQLite tables in place.
+- **Turn & Git Diff with Inline Feedback:** Review latest-turn Codex patches or read-only Git snapshots, uncommitted/staged changes, commits, and branch diffs (unified or side-by-side). Select line numbers and click **Discuss selection** to send an immutable code snippet back to the originating Topic.
+- **Persistent PTY Terminals & Saved Layouts:** Open multiple local shells that survive tab switches and page refreshes. Drag tabs freely across split panes—each Agent remembers its own workspace layout, in English or Simplified Chinese, across Light, Dark, and System themes.
+
+### Works, Automations, Skills & Plugins
+- **Works (Notes + Board + Sync):** Draft rich block **Notes** with inline tasks and `@Agent` handovers, track progress on a customizable Kanban **Board** with saved views, and auto-sync **GitHub Issues/PRs** and **Lark Todos** straight into dispatchable work items.
+- **Automations:** Let Agents start work on their own—on flexible schedules (once, daily, weekdays, weekly, monthly, interval) or incoming events (**IMAP Mail** and custom **Webhooks** with Bearer auth and `Idempotency-Key`), routing results into fresh Topics, existing Chats, or Board items.
+- **Skills & Extensible Plugins:** Discover, filter, and toggle Skills across Lever-managed, user, and Scope directories per Agent (with built-in editing for Lever-managed `SKILL.md`). Install Runtime, Task Source, Event Source, or Personal Channel plugins—including built-in **Lark Bot**—from Git repositories (with version pinning, update previews, and one-click rollback) or local directories.
+
+## Supported Runtimes
+
+Lever orchestrates the CLIs already installed on your machine—reusing your existing logins, subscriptions, and configurations without modifying global CLI files.
+
+| Runtime | Integration | Highlights | Executable Override |
+| :--- | :--- | :--- | :--- |
+| **Codex** | Native (`app-server`) | Multi-account, Steer, Pause/Resume, Skills, Fast, Codex App continuity | `LEVER_CODEX_PATH` |
+| **Claude Code** | Native (`stream-json`) | Multi-account, Steer, Pause/Resume, Skills, Fast, Desktop/CLI continuity | `LEVER_CLAUDE_PATH` |
+| **Pi** | Native RPC | Multi-account, Steer, Skills, per-run Lever tools, scoped history CLI | `LEVER_PI_PATH` |
+| **Antigravity** | Local `agy` / Managed ACP | Local CLI Steer (`agy acp` 1.5.0+); managed connections negotiate independently | `LEVER_ANTIGRAVITY_PATH` |
+| **DeepSeek Harness** | Built-in ACP (`dsh`) | Auto-detects CLI and macOS desktop app (`/Applications`) | `LEVER_DSH_PATH` |
+| **Custom ACP** | Generic ACP v1 | Any ACP executable & args, or packaged plugin (`lever-plugin.json`) | Custom command |
+
+> [!TIP]
+> Alongside the 6 runtime plugins above, Lever ships with built-in **GitHub**, **Lark Todos**, **IMAP Mail**, and **Lark Bot** plugins—all managed under **Plugins** in the sidebar.
 
 <details>
-<summary>Input, attachments, and queues</summary>
+<summary><strong>Runtime setup tips, native app continuity & local CLI</strong></summary>
 
-- Use **Chat** and **Topic** in the composer to switch modes. You can also use `/chat`, `/topic`, and `/model`.
-- Type `@` to reference files in the current Session's working directories. Type `/` to select a command or a Skill for the current runtime. References stay with the draft and the sent message. Click a file reference to open it in a Files tab in the opposite pane.
-- The composer formats Markdown as you type. Select, drag, or paste files into it and preview attached images. Each message can have up to 8 attachments totaling 20 MiB, with a limit of 5 MiB per image.
-- Press **Enter** to send and **Shift+Enter** to insert a line break. While a run is active, **Enter** sends input to the current turn (**Steer**), and **⌘/Ctrl+Enter** queues input for the next turn (**Queue**). Swap these actions in **Settings → General → Send while running**. If you set **⌘/Ctrl+Enter** as the send shortcut, press **⌘/Ctrl+Shift+Enter** for the other action.
-- After you select another model within the same runtime, **Steer** sends input to the current turn. The selected model becomes the Session's default for the next turn. Use **Queue** when the runtime awaits approval or an answer, or while you switch runtimes or permissions. Runtimes that support Steer can move a queued message into the current turn. You can edit or remove queued messages, or turn a queued message in the main Chat into a Topic.
-- Stopping a run or encountering an error pauses that Session's queue. If you restart the backend during a run, the Session keeps its queue and continues processing it after the current turn finishes. To resume another paused queue, select **Resume queue**.
+- **Multi-account setup:** Open **Settings → Runtimes → Add connection** to sign in to another Codex or Claude Code account in an isolated profile directory. Executable lookup checks `~/.local/bin` → Homebrew → `/usr/local/bin` → NVM → `PATH`, and respects `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `PI_CODING_AGENT_DIR`.
+- **Native app continuity:** Open **Agents → Recent** to read and continue local **Codex App** or **Claude Code** sessions. For conversations started in Lever, wait for the active turn to finish before resuming in the native app.
+- **Query conversations from terminals, scripts, or other Agents (JSON):**
+  ```sh
+  lever chat list --limit 20
+  lever context find --chat '<chat-id>' --query 'architecture decision'
+  lever context read --target '<session-id>' # or --target main
+  ```
 
 </details>
 
-## Quick start
+## Quick Start
 
-You need Go 1.27.3, Node.js 24, and pnpm 11. The repository pins pnpm to 11.15.1. Install and sign in to the runtime CLI you plan to use. Lever uses that CLI's configuration and credentials.
+**Prerequisites:** Go `1.27.3`, Node.js `24`, pnpm `11` *(repository pins `11.15.1`)*, and at least one signed-in runtime CLI.
 
-Run the following commands from the repository root.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-### Run the web UI
+**Web UI**
 
 ```sh
 make build
 ./bin/lever
 ```
 
-Open the complete local URL printed in the terminal. Lever uses the URL to pair with the browser, then removes the token from the address bar. The default address is `127.0.0.1:4778`. Open it on the machine that runs Lever.
+Open the local URL printed in the terminal (default `127.0.0.1:4778`, loopback-only with one-time pairing token).
 
-### Run the desktop app
+</td>
+<td width="50%" valign="top">
+
+**Desktop App**
 
 ```sh
 make desktop
 ./bin/desktop/Lever
 ```
 
-### Set up your first Agent
+Launches the native desktop shell over the same Go backend and SQLite store, adding the Workspace Browser and native folder pickers.
 
-1. Open the runtime page in **Settings**. Under **Discovered on this device**, select the CLI you want to use. For another account or command, select **Add connection**.
-2. Use the initial **Lever** Agent or create your own. In **Profile**, select a connection, model, and permissions, then set the Scope directories. By default, Codex and Claude Code load Skills from the user directory and all Scope directories.
-3. Open a Chat and send a message. Switch to a Topic when you need separate context. Use **Files**, **Diff**, and **Terminal** to work with the project.
+</td>
+</tr>
+</table>
 
-In the desktop app, use the system folder picker to add multiple Scope directories. In the web UI, enter the paths. If you leave the model blank in **Profile**, select a model in the composer.
+1. **Connect a CLI:** Open **Settings → Runtimes**, enable a discovered CLI, or click **Add connection** for another account.
+2. **Set up an Agent:** Use the default **Lever** Agent or create your own; choose a connection, permissions, and **Scope** directories in **Profile**.
+3. **Run in parallel:** Chat continuously or branch off independent **Topics** as work splits up, with **Files**, **Diff**, **Terminal**, and **Browser** right alongside.
 
-The web UI and desktop app share a data format. One backend process uses a data directory at a time. By default, Lever stores data in the `Lever` directory under your system's user configuration directory. Set another directory with `--data-dir /path/to/data` or `LEVER_DATA_DIR`.
-
-Active Agents continue running in the background when you close the window or quit the desktop app. Reopen Lever and return to the original Chat or Topic to follow progress, respond to approvals, or view results. To end a run, select **Stop run** in the conversation. After the desktop app closes, the backend exits when all active runs finish.
-
-A separate process hosts the provider for each turn. The runtime continues during a Go backend restart and keeps its output and pending approvals with the same turn. Reopen the same data directory to view output, respond to approvals, or stop the run. If the machine restarts or the execution process is lost, Lever marks unresolved runs as **Outcome unconfirmed**.
-
-## Runtimes and plugins
-
-In **Plugins**, browse, search, enable, or disable installed plugins. Each runtime plugin can have several named connections. Select **Manage connections** in the plugin details to open the runtime settings filtered to that plugin.
-
-### Configure Codex and Claude Code
-
-Lever uses the local CLI's sign-in and configuration by default. It looks for executables in `~/.local/bin` first, then in Homebrew, `/usr/local/bin`, NVM, and the inherited `PATH`. Set an absolute executable path with `LEVER_CODEX_PATH` or `LEVER_CLAUDE_PATH`.
-
-Local connections use `CODEX_HOME` and `CLAUDE_CONFIG_DIR`, which default to `~/.codex` and `~/.claude`, respectively. To use separate accounts, select **Add connection** in the runtime settings. Choose the same runtime and name the connection. **Sign in to another account** creates a separate profile directory and opens the native CLI sign-in terminal. If you already have a separate configuration, select **Use existing profile**. Choose the connection by name in the Agent's **Profile** or in the chat model picker.
-
-The model picker displays the CLI version and path and lets you refresh the model catalog. The runtime reports the available models, reasoning effort levels, and Fast mode.
-
-### Connect Antigravity
-
-Lever detects the local `agy` and uses its sign-in, settings, and native session directory. If you still need to sign in, run `agy --login` in a terminal, then refresh the model list.
-
-To use a separate installation and account, select **Add connection** in the runtime settings. Choose Antigravity and **Use managed ACP runtime**, name the connection, and save it. Select **Install Antigravity**, then **Sign in with Google**. The connection keeps its profile in a separate directory under Lever's data directory.
-
-You can also point the connection to an existing Antigravity ACP executable or set `LEVER_ANTIGRAVITY_PATH` to override the default. Antigravity uses the ACP adapter and queues follow-up input. Fast and Steer are unavailable. Images, multiple directories, and Delegations depend on the capabilities the runtime reports.
-
-### Connect Pi and DeepSeek Harness
-
-Install the CLI on the machine that runs Lever. Sign in or configure a model API key in the terminal. In the runtime settings, find the CLI under **Discovered on this device** and select **Use**. Then select that connection in the Agent's **Profile**.
-
-- Pi uses the configuration in `PI_CODING_AGENT_DIR`, which defaults to `~/.pi/agent`. To set another executable or configuration directory, select **Add connection**.
-- Lever launches DeepSeek Harness with `dsh --profile acp`. On macOS it also detects the desktop app in `/Applications`. For a custom installation, enter the absolute executable path in **Add connection**.
-
-You can override the default executable with `LEVER_PI_PATH` or `LEVER_DSH_PATH`.
-
-### Find conversations from the command line
-
-While Lever runs, terminals, scripts, and other Agents under the same system account can query conversations with the local CLI. The CLI returns JSON.
-
-```bash
-lever chat list --limit 20
-lever context find --chat '<chat-id>' --query 'architecture decision'
-lever context read --target '<session-id>'
-```
-
-Omit `--query` to list the Chat's recent Topics. To read the main conversation, use `--chat '<chat-id>' --target main`. To read another page, keep the same `--target` and pass the previous page's `nextCursor` JSON to `--cursor` as returned. To connect to another Lever instance, use `--data-dir` or `LEVER_DATA_DIR` to select its data directory.
-
-When Lever starts Pi, it supplies a CLI command scoped to the current Chat and sets up executable lookup. Cross-Chat references and Delegations still require MCP.
-
-### Connect ACP runtimes and install local plugins
-
-To connect an installed ACP command, choose ACP in **Add connection**. Enter the executable and add each argument separately. Sign in through the runtime CLI, then select the connection from the Agent's **Profile** or the model picker.
-
-In **Plugins**, select **Install plugin**. Paste a Git repository URL or select a local directory with a `lever-plugin.json` file. Git plugins support installation from a subdirectory, update previews, and rollback to the previous version. During local development, reload the manifest from the plugin details. For manifest formats and session identity rules, see the [plugin documentation in Chinese](docs/plugins.md).
-
-<details>
-<summary>Continue a conversation in its native app</summary>
-
-Open **Agents → Recent** and select a Codex App or Claude Code session. Lever reads the native history and sends new text through the original app in the same session. The open Chat updates when new messages reach the native history.
-
-Codex App opens the corresponding session as needed. On macOS, Lever can also open a Code session in the Claude desktop app. For Claude Code in a terminal, open the original session first and enable it to receive messages from other sessions.
-
-Lever saves the native session ID so a conversation can continue in the same runtime. The main Chat and each Topic keep their own ID. Whether a native app can find or resume a session depends on the runtime and local configuration.
-
-For Chats and Topics created in Lever, wait for the current run to finish before continuing in the native app. New messages you send in the native app stay in its history. Switching runtimes creates a new session in the target runtime.
-
-</details>
-
-## Files, terminals, and change review
-
-<details>
-<summary>Edit and search files</summary>
-
-In Files, you can edit UTF-8 text in Scope up to 2 MiB per file. Lever autosaves 500 ms after you stop typing. You can also select **Save** or press **⌘/Ctrl+S**. Saving continues when you switch files or tabs. If saving fails, the draft stays available while the app is open. If the file changed on disk, download the draft or reload the disk version. Lever discards the draft after it successfully loads the disk version.
-
-Select the path or filename at the top to open the directory tree. Markdown opens in preview by default. Lever remembers whether you last chose source or preview. Filter the directory tree by path. **Search in files** ignores case, follows Git ignore rules, and skips binary files and files larger than 2 MiB. Select a result to jump to its line.
-
-Files previews images with zoom and pan. The supported formats are PNG, JPEG, GIF, WebP, SVG, AVIF, BMP, ICO, HEIC, HEIF, and TIFF. Files also previews audio, video, PDF, static HTML, Markdown, MDX, Mermaid, CSV, TSV, and TTF, OTF, WOFF, and WOFF2 fonts. For documents, it supports DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, EPUB, and Jupyter Notebook. It can list the contents of ZIP, JAR, TAR, GZ, and TGZ archives and show SQLite tables.
-
-Document previews focus on content. Complex layout, charts, formulas, and animations may render differently. HTML previews render static content without scripts or external resources. Audio and video codecs depend on the browser. Binary previews are read-only. You can download unsupported files from the file actions menu.
-
-Files loads document, archive, and database parsers in a separate worker on demand. The limit is 50 MiB per file, with a 30-second timeout. Fonts have a 10 MiB limit, and notebooks and RTF have an 8 MiB limit. Archive contents have additional limits. Tables and databases use paginated views, and a notice appears when Files truncates a document preview. Files streams the original image, audio, or video directly, beyond the 2 MiB text editing limit. Audio and video support HTTP Range requests.
-
-</details>
-
-<details>
-<summary>Use interactive terminals</summary>
-
-Open multiple system shells in Terminal. Each shell starts in the Agent's primary Scope directory by default. Terminal supports zoom, Chinese input and output, scrollback, and **Ctrl+C**. Terminal sessions stay open when you switch tabs or Agents. After a page refresh or brief disconnect, Lever can reconnect to the same running shell. Closing a terminal tab ends its shell. Stopping the backend ends its terminals.
-
-Commands run with your local user's permissions. Scope sets the shell's starting directory. The model's approval and read-only settings apply to runtime tools.
-
-</details>
-
-<details>
-<summary>Review diffs and turn changes</summary>
-
-Diff can show the latest turn, uncommitted changes, unstaged or staged changes, a single commit, or a branch comparison. Choose unified or side-by-side view, word-level diffs, line wrapping, or full context.
-
-When a turn has changes to preview, a file summary appears below the reply. Open the summary, select line numbers by clicking or dragging, and select **Discuss selection**. Lever adds the code, path, and line numbers to the original Chat or Topic draft. Each reference keeps the code you selected at the time.
-
-For Codex, turn changes show the cumulative patch that the runtime reports. The patch may omit writes made by shell commands. If multiple tasks edit the same file at the same time, it may include edits from those other tasks. Open the latest-turn diff from a Chat or Topic to see that Session's changes. Refresh to see newer completed turns.
-
-For turns that use Git snapshots, the same view shows the difference between the snapshots from before and after the turn. This includes turns from other runtimes or older runs with snapshots. The diff includes new files that Git does not ignore and can include edits from concurrent tasks. Snapshot capture is read-only with respect to your Git index, HEAD, and working files. Lever can show native Codex patches in directories outside Git repositories.
-
-</details>
+> [!NOTE]
+> Web and Desktop share one data directory (`<user-config-dir>/Lever`, override via `--data-dir` or `LEVER_DATA_DIR`). Active runs continue in the background after closing the desktop window and survive Go backend restarts.
 
 ## Development
 
-### Reload the desktop app during development
-
-On macOS, run the restart script.
-
-```sh
-./scripts/restart-desktop.sh
-```
-
-The script installs the frontend dependencies, builds the Go binaries, and replaces the desktop window and backend for the selected data directory. Active providers continue running. The new window reconnects to the same turn and any pending approvals. When upgrading from an older version for the first time, the script waits for active runs from that version to finish. You can still respond to approvals in the original window while it waits. A local Vite server provides hot reload.
-
-The script supports `--data-dir`, `--listen`, and `LEVER_DATA_DIR`. In development, the backend proxies frontend assets and hot module replacement. The API, pairing, and page settings share the same origin.
-
-### Reload the web UI during development
-
-Install the frontend dependencies.
-
-```sh
-pnpm --dir web install --frozen-lockfile
-```
-
-Run these commands in separate terminals.
-
-```sh
-make dev
-```
-
-```sh
-pnpm --dir web dev
-```
-
-Open the URL labeled **Lever:** in the backend output on port 4778, or the one labeled **Development:** on port 5179. Both use the local backend. Vite serves the frontend directly in development.
-
-### Build desktop packages
-
-```sh
-make package
-# Also build the Windows executable.
-make package TARGETS=darwin/arm64,windows/amd64
-```
-
-Find the output in `desktop/dist/`. The default target is macOS on Apple Silicon, with local ad hoc signing. Both commands skip the macOS DMG and Windows installer. For a release, configure signing and notarization, and verify the package on the target platforms.
-
-### Verify changes
-
-```sh
-make privacy
-pnpm --dir web install --frozen-lockfile
-pnpm --dir web exec playwright install chromium
-make test
-go vet ./...
-```
-
-`make test` runs the privacy check, Go race tests, a production frontend build, and Playwright end-to-end tests. Integration tests use HTTP, SQLite, and CLI protocol fixtures to cover sessions, approvals, cancellation, Delegations, and file boundaries. The fixtures stand in for the real models.
-
-To run the Chat switching benchmark on its own, build the web UI and run its spec.
-
-```sh
-pnpm --dir web build
-pnpm --dir web test:e2e chat-switch.spec.ts
-```
-
-The benchmark uses six Chats with 52 turns each and fixed history responses. It measures the time between a click on a Chat tab and its latest message becoming visible. Chromium's 90th-percentile limits are 180 ms for the first open and 100 ms when returning to a loaded Chat. With Playwright WebKit installed, add `--browser=webkit` for limits of 200 ms and 140 ms, respectively. The terminal prints the P90, and the Playwright report includes the timing of each switch.
-
-The privacy check requires Python 3. By default it scans the paths and text of tracked files and new files that Git does not ignore. It checks for local user paths, private IPv4 addresses, non-example email addresses, internal URLs, and common secret formats. To scan the staged contents, run `python3 scripts/privacy_check.py --staged`. The check reports only the file location and issue type for each finding.
-
-Add company names, internal domains, internal project names, and other private terms to `.private-words.txt`, one per line. Start a line with `#` to add a comment. Git ignores this file. To share the list across workspaces, put it in `${XDG_CONFIG_HOME:-~/.config}/lever/private-words.txt`. The check uses these local lists to detect organization-specific terms.
-
-After you change Go DTOs or desktop bindings, regenerate the types.
-
-```sh
-make generate
-```
+| Task | Command | Notes |
+| :--- | :--- | :--- |
+| **Desktop hot reload** *(macOS)* | `./scripts/restart-desktop.sh` | Rebuilds Go + UI, keeps active providers running, proxies Vite HMR |
+| **Web hot reload** | `make dev` + `pnpm --dir web dev` | Install deps first (`pnpm --dir web install --frozen-lockfile`); ports `4778` / `5179` |
+| **Package desktop** | `make package` | Outputs to `desktop/dist/`; add `TARGETS=darwin/arm64,windows/amd64` for Windows |
+| **Regenerate types** | `make generate` | Syncs TypeScript DTOs and desktop bindings from Go |
+| **Full verification** | `make test && go vet ./...` | Runs privacy check, Go `-race` tests, web build, and Playwright E2E |
 
 <details>
-<summary>Test against real runtimes</summary>
+<summary><strong>Benchmarks, privacy check & live runtime tests</strong></summary>
 
-Live runtime tests require an opt-in and use the model quota of your signed-in account. Replace `<available-model>` with a model your account can use.
-
-```sh
-LEVER_LIVE_TEST=1 LEVER_LIVE_CODEX_MODEL='<available-model>' \
-	go test ./internal/provider -run TestLiveRuntimes/codex -v -count=1
-
-LEVER_LIVE_TEST=1 LEVER_LIVE_CLAUDE_MODEL='<available-model>' \
-	go test ./internal/provider -run TestLiveRuntimes/claude -v -count=1
-
-# Test the model catalog, images, and Fast mode together.
-LEVER_LIVE_TEST=1 go test ./internal/provider -run TestLiveComposer -v -count=1
-```
+- **Chat switch benchmark:** `pnpm --dir web build && pnpm --dir web test:e2e chat-switch.spec.ts` (6 Chats × 52 turns; P90 budgets: Chromium 180 ms first open / 100 ms return; WebKit 200 ms / 140 ms).
+- **Privacy check:** `make privacy` (or `python3 scripts/privacy_check.py --staged`). Add private terms to `.private-words.txt` (gitignored) or `${XDG_CONFIG_HOME:-~/.config}/lever/private-words.txt`.
+- **Live runtime tests** *(opt-in, uses account quota)*:
+  ```sh
+  LEVER_LIVE_TEST=1 LEVER_LIVE_CODEX_MODEL='<model>' go test ./internal/provider -run TestLiveRuntimes/codex -v -count=1
+  LEVER_LIVE_TEST=1 LEVER_LIVE_CLAUDE_MODEL='<model>' go test ./internal/provider -run TestLiveRuntimes/claude -v -count=1
+  LEVER_LIVE_TEST=1 go test ./internal/provider -run TestLiveComposer -v -count=1
+  ```
 
 </details>
 
-## More documentation
+## Documentation & License
 
-- Agents, Chats, Sessions, the execution lifecycle, and the application architecture. [Design documentation in Chinese](docs/design.md)
-- Plugin manifests, provider configuration, and ACP support. [Plugin documentation in Chinese](docs/plugins.md)
-
-## License
+- [Design & Architecture *(Chinese)*](docs/design.md) — Agents, Chats, Sessions, execution lifecycle, and module boundaries
+- [Plugin Specification *(Chinese)*](docs/plugins.md) — Plugin manifests (`lever-plugin.json`), providers, task/event sources, and channels
+- [Multi-Device & Self-Hosted Hub Draft *(Chinese)*](docs/remote-devices.md) — Proposed architecture for remote Hosts, Hub sync, and mobile clients
 
 Lever is licensed under the [Apache License 2.0](LICENCE).
