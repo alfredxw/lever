@@ -23,6 +23,8 @@ func (a *App) ExternalTasks(ctx context.Context) ([]model.ExternalTask, error) {
 		"SELECT json_object("+externalTaskColumns+")"+externalTaskFrom+`
 WHERE (s.status<>'removed' AND e.in_scope AND (s.sync_kind='both' OR s.sync_kind=json_extract(e.data,'$.kind')))
 OR e.done=1 OR EXISTS(
+  SELECT 1 FROM sessions WHERE kind='topic' AND json_type(data,'$.taskId')='text' AND json_extract(data,'$.taskId')=e.id
+) OR EXISTS(
   SELECT 1 FROM chats WHERE json_type(data,'$.taskId')='text' AND json_extract(data,'$.taskId')=e.id
 )
 OR EXISTS(SELECT 1 FROM task_triage WHERE task_id=e.id AND (closed=1 OR disposition='todo'))

@@ -23,9 +23,12 @@ type queuedTask struct {
 }
 
 type taskDelivery struct {
-	Images    []NoteAsset    `json:"images,omitempty"`
-	Task      *model.RunTask `json:"completionTask,omitempty"`
-	noteTitle string
+	Images      []NoteAsset        `json:"images,omitempty"`
+	Task        *model.RunTask     `json:"completionTask,omitempty"`
+	noteTitle   string
+	sourceID    string
+	sourceTitle string
+	origin      *model.RunLocation
 }
 
 func (a *App) TaskWorkflows(ctx context.Context) ([]model.TaskWorkflow, error) {
@@ -509,15 +512,13 @@ WHERE agent_id=? AND state='queued' AND error='' ORDER BY position,id LIMIT 1`, 
 	if err != nil {
 		return false, err
 	}
-	op := "main"
 	if entry.Record == model.TaskRecordNote {
 		a.notesMu.Lock()
 		defer a.notesMu.Unlock()
-		op = "topic"
 	}
 	_, err = a.sendLocked(ctx, model.SendInput{
 		CommandID: ID(), AgentID: agentID, WorkingCopyID: entry.WorkingCopyID,
-		Operation: op, Text: taskMessage(entry.Text, entry.Note),
+		Operation: "topic", Text: taskMessage(entry.Text, entry.Note),
 	}, sendOrigin{task: &entry.TaskDispatch, taskRecord: entry.Record, taskQueue: &entry})
 	if err == nil {
 		return true, nil

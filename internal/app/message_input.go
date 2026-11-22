@@ -53,17 +53,19 @@ func validateMessage(commandID, text string, attachments []string, references []
 	return nil
 }
 
+func (a *App) supportsMCP(session model.Session, config model.Provider) bool {
+	supported := provider.ConfiguredCapabilities(config).MCP
+	key := catalogKey{config.ID, provider.ConfigurationDirectory(config), workspace.CWD(session.Scope)}
+	if entry := a.catalogs[key]; entry != nil && entry.confirmed {
+		supported = entry.value.Capabilities.MCP
+	}
+	return supported
+}
+
 func (a *App) validateReferences(ctx context.Context, q store.Queryer, references []model.Reference, session model.Session, agent model.Agent, config model.Provider, shareSkills bool) error {
 	var skillPaths map[string]bool
-	if slices.ContainsFunc(references, model.Reference.RequiresMCP) {
-		supported := provider.ConfiguredCapabilities(config).MCP
-		key := catalogKey{config.ID, provider.ConfigurationDirectory(config), workspace.CWD(session.Scope)}
-		if entry := a.catalogs[key]; entry != nil && entry.confirmed {
-			supported = entry.value.Capabilities.MCP
-		}
-		if !supported {
-			return invalid("This runtime cannot use Lever references. Choose a runtime with MCP support.")
-		}
+	if slices.ContainsFunc(references, model.Reference.RequiresMCP) && !a.supportsMCP(session, config) {
+		return invalid("This runtime cannot use Lever references. Choose a runtime with MCP support.")
 	}
 	for _, ref := range references {
 		if ref.Name == "" || len(ref.Name) > 4096 || len(ref.Path) > 4096 {

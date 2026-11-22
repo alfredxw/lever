@@ -125,6 +125,7 @@ type Chat struct {
 	AgentID       string `json:"agentId"`
 	TaskID        string `json:"taskId,omitempty"`
 	NoteID        string `json:"noteId,omitempty"`
+	TaskSourceID  string `json:"taskSourceId,omitempty"`
 	Channel       string `json:"channel,omitempty"`
 	Title         string `json:"title"`
 	TitleIsCustom bool   `json:"titleIsCustom,omitempty"`

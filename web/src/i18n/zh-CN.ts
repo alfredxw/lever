@@ -460,6 +460,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "tasks.filterSource": "来源",
   "tasks.source.written": "手写任务",
   "tasks.source.workItem": "工作项",
+  "tasks.workItemsChat": "工作项",
   "tasks.source.agent": "Agent",
   "tasks.source.github": "GitHub",
   "tasks.source.lark-todos": "飞书待办",

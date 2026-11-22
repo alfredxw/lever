@@ -28,8 +28,14 @@ func TestAgentCompletesOnlyTheAssignedItem(t *testing.T) {
 	if !item.Done || !delivered.TaskCompletionRequested {
 		t.Fatal("the explicit tool call did not complete the assigned work item")
 	}
+	var chatView model.ChatView
+	f.request("GET", "/chats/"+run.ChatID, nil, 200, &chatView)
+	if chatView.Chat.Source != "workItem" || chatView.Chat.TaskID != "" || len(chatView.Sessions) != 1 ||
+		chatView.Sessions[0].Kind != "topic" || chatView.Sessions[0].TaskID != item.ID {
+		t.Fatalf("work item did not run in a dedicated workItem Chat Topic: %+v", chatView)
+	}
 	f.request("PATCH", "/tasks/work-items/"+item.ID, map[string]bool{"done": false}, 200, nil)
-	// A fire targeting a work item's existing Chat must never complete the parent item.
+	// A fire targeting the work items Chat must never complete a work item.
 	input := model.AutomationInput{Name: "Daily", Prompt: deliverTask, WorkItem: new(true),
 		Trigger:     model.AutomationTrigger{Kind: "schedule", Schedule: &model.AutomationSchedule{IntervalMinutes: 60}},
 		Destination: model.AutomationDestination{Mode: "chat", ChatID: run.ChatID}}
@@ -42,25 +48,27 @@ func TestAgentCompletesOnlyTheAssignedItem(t *testing.T) {
 	if !fire.Execution.Done || item.Done {
 		t.Fatal("automation completion did not stay bound to its own board item")
 	}
+	ordinaryMain := f.send(run.ChatID, "main", "", deliverTask)
+	f.wait(ordinaryMain.ID, "completed")
 	ordinary := f.send(run.ChatID, "topic", "", deliverTask)
 	f.wait(ordinary.ID, "completed")
 	f.request("GET", "/tasks/work-items/"+item.ID, nil, 200, &item)
 	if item.Done {
-		t.Fatal("an unrelated Topic completed the parent task")
+		t.Fatal("an unrelated main turn or Topic completed the work item")
 	}
 	readOnly := run.Selection
 	readOnly.Permission = "read_only"
 	var review model.Run
-	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: run.ChatID, Operation: "main", Selection: &readOnly, Text: deliverTask}, 200, &review)
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: run.ChatID, SessionID: run.SessionID, Operation: "reply", Selection: &readOnly, Text: deliverTask}, 200, &review)
 	if f.wait(review.ID, "completed").TaskCompletionRequested {
 		t.Fatal("a read-only execution requested a state change")
 	}
 	// Choose the original writable selection for the next delivery.
-	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: run.ChatID, Operation: "main", Selection: &run.Selection, Text: deliverTask}, 200, &review)
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: run.ChatID, SessionID: run.SessionID, Operation: "reply", Selection: &run.Selection, Text: deliverTask}, 200, &review)
 	f.wait(review.ID, "completed")
 	f.request("GET", "/tasks/work-items/"+item.ID, nil, 200, &item)
 	if !item.Done {
-		t.Fatal("a follow-up in the assigned main session could not finish delivery")
+		t.Fatal("a follow-up in the assigned Topic session could not finish delivery")
 	}
 }
 

@@ -136,6 +136,11 @@ ON CONFLICT(task_id) DO UPDATE SET accepted=1`, id)
 	return err
 }
 
+const (
+	workItemsChatTitle  = "Work items"
+	taskSourceChatTitle = "Task source"
+)
+
 func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecord, input model.TaskDispatch, queued *queuedTask) (taskDelivery, error) {
 	note, err := a.openTaskSource(ctx, tx, record, input.TaskID, input.NoteID)
 	if err != nil {
@@ -159,6 +164,10 @@ func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecor
 		return taskDelivery{}, err
 	}
 	if record == model.TaskRecordWorkItem {
+		item, err := store.Get[model.WorkItem](ctx, tx, "SELECT data FROM work_items WHERE id=?", input.TaskID)
+		if err != nil {
+			return taskDelivery{}, err
+		}
 		if err := markTaskAccepted(ctx, tx, input.TaskID); err != nil {
 			return taskDelivery{}, err
 		}
@@ -168,7 +177,18 @@ func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecor
 		if err := store.Event(tx, model.Event{Type: "work-items"}); err != nil {
 			return taskDelivery{}, err
 		}
-		return taskDelivery{Task: &model.RunTask{ID: input.TaskID, Record: record}}, nil
+		return taskDelivery{
+			Task:   &model.RunTask{ID: input.TaskID, Record: record},
+			origin: item.Origin,
+		}, nil
+	}
+	if record == model.TaskRecordExternal {
+		var sourceID, sourceTitle string
+		if err := tx.QueryRowContext(ctx, `SELECT e.source_id, s.name FROM external_tasks e
+JOIN task_sources s ON s.id=e.source_id WHERE e.id=?`, input.TaskID).Scan(&sourceID, &sourceTitle); err != nil {
+			return taskDelivery{}, err
+		}
+		return taskDelivery{sourceID: sourceID, sourceTitle: strings.TrimSpace(sourceTitle)}, nil
 	}
 	if note.ID == "" {
 		return taskDelivery{}, nil
@@ -183,6 +203,75 @@ func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecor
 	}
 	delivery.noteTitle = note.Title
 	return delivery, nil
+}
+
+func taskChat(ctx context.Context, q store.Queryer, record model.TaskRecord, task model.TaskDispatch, delivery taskDelivery, queued *queuedTask) (model.Chat, error) {
+	switch record {
+	case model.TaskRecordNote:
+		return noteTaskChat(ctx, q, task, queued)
+	case model.TaskRecordExternal:
+		chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
+WHERE agent_id=? AND json_type(data,'$.taskSourceId')='text' AND json_extract(data,'$.taskSourceId')=?`, task.AgentID, delivery.sourceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return chat, err
+	case model.TaskRecordWorkItem:
+		chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
+WHERE agent_id=? AND json_extract(data,'$.source')='workItem'`, task.AgentID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return chat, err
+	default:
+		return model.Chat{}, nil
+	}
+}
+
+func originConversationReference(ctx context.Context, q store.Queryer, origin *model.RunLocation) (*model.Reference, error) {
+	if origin == nil || !notes.IDPattern.MatchString(origin.SessionID) {
+		return nil, nil
+	}
+	var kind, sessionTitle, chatTitle string
+	err := q.QueryRowContext(ctx, `SELECT s.kind,
+COALESCE(NULLIF(json_extract(s.data,'$.title'),''), NULLIF(json_extract(s.activity,'$.title'),''), ''),
+COALESCE(json_extract(c.data,'$.title'),'')
+FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?`, origin.SessionID).Scan(&kind, &sessionTitle, &chatTitle)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	clip := func(s string) string {
+		s = strings.Join(strings.Fields(s), " ")
+		runes := []rune(s)
+		if len(runes) > 120 {
+			return string(runes[:120])
+		}
+		return s
+	}
+	ref := model.Reference{ID: origin.SessionID}
+	switch kind {
+	case "topic":
+		ref.Kind = "topic"
+		ref.Name = clip(sessionTitle)
+		if ref.Name == "" {
+			ref.Name = clip(chatTitle)
+		}
+		if ref.Name == "" {
+			ref.Name = "Origin topic"
+		}
+	case "main":
+		ref.Kind = "chat"
+		ref.Name = clip(chatTitle)
+		if ref.Name == "" {
+			ref.Name = "Origin chat"
+		}
+	default:
+		return nil, nil
+	}
+	return &ref, nil
 }
 
 func (a *App) DispatchTask(ctx context.Context, input model.TaskDispatch) (model.Run, error) {
@@ -208,7 +297,7 @@ func (a *App) dispatchStoredTask(ctx context.Context, record model.TaskRecord, i
 	note := strings.TrimSpace(input.Note)
 	return a.sendLocked(ctx, model.SendInput{
 		CommandID: input.CommandID, AgentID: input.AgentID, WorkingCopyID: input.WorkingCopyID,
-		Operation: "main", Text: taskMessage(text, note),
+		Operation: "topic", Text: taskMessage(text, note),
 	}, sendOrigin{
 		taskRecord: record,
 		task:       &model.TaskDispatch{TaskID: id, Title: string(label[:min(len(label), 80)]), AgentID: input.AgentID, Note: note},

@@ -297,3 +297,133 @@ func TestGitHubTaskSourceScopeReconcilesOpenTasksAndPreservesLocalWork(t *testin
 		t.Fatalf("scope changes lost the linked Chat or local completion: %#v", executions)
 	}
 }
+
+func TestExternalTaskDispatchGroupsBySourceChatAndKeepsOpenTopicOutOfScope(t *testing.T) {
+	t.Setenv("GH_TOKEN", "fixture")
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	const updated = "2026-11-13T06:00:00Z"
+	http.DefaultTransport = githubFixture(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api.github.com" {
+			return original.RoundTrip(req)
+		}
+		h := http.Header{"Date": {time.Date(2026, time.November, 13, 6, 0, 0, 0, time.UTC).Format(http.TimeFormat)}}
+		var body string
+		switch req.URL.Path {
+		case "/repos/example/alpha", "/repositories/101":
+			body = `{"id":101,"full_name":"example/alpha"}`
+		case "/repos/example/beta", "/repositories/202":
+			body = `{"id":202,"full_name":"example/beta"}`
+		case "/repositories/101/issues":
+			if req.URL.Query().Get("state") == "open" {
+				body = `[{"node_id":"a1","number":1,"updated_at":"` + updated + `","state":"open","title":"Alpha one"},` +
+					`{"node_id":"a2","number":2,"updated_at":"` + updated + `","state":"open","title":"Alpha two"},` +
+					`{"node_id":"a3","number":3,"updated_at":"` + updated + `","state":"open","title":"Alpha untouched"}]`
+			} else {
+				body = "[]"
+			}
+		case "/repositories/202/issues":
+			if req.URL.Query().Get("state") == "open" {
+				body = `[{"node_id":"b1","number":10,"updated_at":"` + updated + `","state":"open","title":"Beta ten"}]`
+			} else {
+				body = "[]"
+			}
+		default:
+			return &http.Response{StatusCode: 404, Header: h, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+
+	f := newFixture(t)
+	agentA, agentB := f.agent("codex"), f.agent("claude")
+	var alpha, beta model.TaskSource
+	f.request("POST", "/tasks/sources", map[string]string{"pluginId": "lever.github", "contributionId": "github", "target": "example/alpha"}, 200, &alpha)
+	f.request("POST", "/tasks/sources", map[string]string{"pluginId": "lever.github", "contributionId": "github", "target": "example/beta"}, 200, &beta)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+		var sources []model.TaskSource
+		f.request("GET", "/tasks/sources", nil, 200, &sources)
+		ready := len(sources) == 2
+		for _, src := range sources {
+			if src.SyncPending || src.LastSyncedAt == 0 || src.Error != "" {
+				ready = false
+			}
+		}
+		if ready {
+			break
+		}
+	}
+	var all []model.ExternalTask
+	f.request("GET", "/tasks/external", nil, 200, &all)
+	byTitle := map[string]model.ExternalTask{}
+	for _, task := range all {
+		byTitle[task.Title] = task
+	}
+	if len(byTitle) != 4 {
+		t.Fatalf("expected 4 synced tasks, got %+v", all)
+	}
+
+	var alphaOneRun, betaRun model.Run
+	f.request("POST", "/tasks/external/"+byTitle["Alpha one"].ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: agentA.ID,
+	}, 200, &alphaOneRun)
+	f.wait(alphaOneRun.ID, "completed")
+
+	// Queue the second task from example/alpha on agentA to verify the queue path also routes to the same source Chat Topic.
+	f.request("POST", "/tasks/queue", model.TaskQueueInput{
+		Record: model.TaskRecordExternal,
+		TaskDispatch: model.TaskDispatch{
+			TaskID: byTitle["Alpha two"].ID, AgentID: agentA.ID, CommandID: app.ID(),
+		},
+	}, 200, nil)
+	alphaTwoExec := f.waitForTask(byTitle["Alpha two"].ID, "completed")
+
+	f.request("POST", "/tasks/external/"+byTitle["Beta ten"].ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: agentA.ID,
+	}, 200, &betaRun)
+	f.wait(betaRun.ID, "completed")
+
+	if !alphaTwoExec.Topic || alphaTwoExec.ChatID != alphaOneRun.ChatID || alphaTwoExec.SessionID == alphaOneRun.SessionID {
+		t.Fatalf("tasks from the same external source did not share one Chat with distinct Topics: one=%+v two=%+v", alphaOneRun, alphaTwoExec)
+	}
+	if betaRun.ChatID == alphaOneRun.ChatID {
+		t.Fatal("tasks from different external sources shared the same Chat")
+	}
+
+	var alphaChat, betaChat model.ChatView
+	f.request("GET", "/chats/"+alphaOneRun.ChatID, nil, 200, &alphaChat)
+	f.request("GET", "/chats/"+betaRun.ChatID, nil, 200, &betaChat)
+	if alphaChat.Chat.Source != "taskSource" || alphaChat.Chat.TaskSourceID != alpha.ID || alphaChat.Chat.Title != "example/alpha" || len(alphaChat.Sessions) != 2 {
+		t.Fatalf("unexpected alpha source Chat: %+v", alphaChat)
+	}
+	if betaChat.Chat.Source != "taskSource" || betaChat.Chat.TaskSourceID != beta.ID || betaChat.Chat.Title != "example/beta" || len(betaChat.Sessions) != 1 || betaChat.Sessions[0].Kind != "topic" {
+		t.Fatalf("unexpected beta source Chat: %+v", betaChat)
+	}
+
+	// Dispatching a task from example/alpha to another Agent creates that Agent's own source Chat.
+	var otherAgentRun model.Run
+	f.request("POST", "/tasks/external/"+byTitle["Alpha untouched"].ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: agentB.ID,
+	}, 200, &otherAgentRun)
+	f.wait(otherAgentRun.ID, "completed")
+	if otherAgentRun.ChatID == alphaOneRun.ChatID {
+		t.Fatal("different Agents shared a taskSource Chat")
+	}
+
+	// Removing example/alpha while its dispatched Topic tasks are still open (done=false) must keep them visible.
+	f.request("DELETE", "/tasks/sources/"+alpha.ID, nil, 200, nil)
+	var afterDelete []model.ExternalTask
+	f.request("GET", "/tasks/external", nil, 200, &afterDelete)
+	if len(afterDelete) != 4 {
+		t.Fatalf("open external tasks with Topic executions disappeared after source removal: %+v", afterDelete)
+	}
+	var executions []model.TaskExecution
+	f.request("GET", "/tasks/executions", nil, 200, &executions)
+	if len(executions) != 4 {
+		t.Fatalf("expected 4 Topic executions, got %+v", executions)
+	}
+	for _, exec := range executions {
+		if !exec.Topic {
+			t.Fatalf("expected external task execution to be a Topic: %+v", exec)
+		}
+	}
+}

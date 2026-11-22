@@ -471,6 +471,7 @@ export const enUS = {
   "tasks.filterSource": "Source",
   "tasks.source.written": "Written tasks",
   "tasks.source.workItem": "Work item",
+  "tasks.workItemsChat": "Work items",
   "tasks.source.agent": "Agent",
   "tasks.source.github": "GitHub",
   "tasks.source.lark-todos": "Lark Todos",

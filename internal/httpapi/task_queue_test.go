@@ -161,11 +161,14 @@ func TestTaskQueueStartIntervalSurvivesRestart(t *testing.T) {
 	if _, err := reopened.Store.DB.Exec("UPDATE task_queue SET started_at=? WHERE run_id=?", time.Now().Add(-time.Minute).UnixMilli(), firstRun.RunID); err != nil {
 		t.Fatal(err)
 	}
-	next.waitForTask(second.TaskID, "completed")
+	secondRun := next.waitForTask(second.TaskID, "completed")
+	if !firstRun.Topic || !secondRun.Topic || firstRun.ChatID != secondRun.ChatID || firstRun.SessionID == secondRun.SessionID {
+		t.Fatalf("work items should share one dedicated Chat with separate Topics: %+v vs %+v", firstRun, secondRun)
+	}
 	var overview model.Overview
 	next.request("GET", "/overview", nil, 200, &overview)
-	if len(overview.Chats) != 2 {
-		t.Fatalf("recovery created duplicate Chats: %+v", overview.Chats)
+	if len(overview.Chats) != 1 || overview.Chats[0].Source != "workItem" || len(overview.Conversations) != 2 {
+		t.Fatalf("recovery created duplicate Chats or Topics: chats=%+v conversations=%+v", overview.Chats, overview.Conversations)
 	}
 }
 

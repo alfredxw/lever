@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS plugins(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), data TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS chat_task ON chats(json_extract(data,'$.taskId')) WHERE json_type(data,'$.taskId') = 'text';
 CREATE UNIQUE INDEX IF NOT EXISTS note_chat ON chats(agent_id,json_extract(data,'$.noteId')) WHERE json_type(data,'$.noteId')='text';
+CREATE UNIQUE INDEX IF NOT EXISTS task_source_chat ON chats(agent_id,json_extract(data,'$.taskSourceId')) WHERE json_type(data,'$.taskSourceId')='text';
+CREATE UNIQUE INDEX IF NOT EXISTS work_item_chat ON chats(agent_id) WHERE json_extract(data,'$.source')='workItem';
 CREATE TABLE IF NOT EXISTS note_handovers(
   note_id TEXT PRIMARY KEY, agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE, chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL
 );

@@ -684,6 +684,7 @@ export interface Chat {
   agentId: string;
   taskId?: string;
   noteId?: string;
+  taskSourceId?: string;
   channel?: string;
   title: string;
   titleIsCustom?: boolean;

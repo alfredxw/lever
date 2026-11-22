@@ -579,7 +579,6 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		var delivery taskDelivery
 		var err error
 		task := origin.task
-		noteTask := task != nil && origin.taskRecord == model.TaskRecordNote
 		if task != nil {
 			delivery, err = a.acceptTask(ctx, tx, origin.taskRecord, *task, origin.taskQueue)
 			if err != nil {
@@ -590,8 +589,8 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if origin.personal != nil {
 			chat, err = origin.personal.chat(ctx, tx, input.AgentID)
 			newChat = chat.ID == ""
-		} else if noteTask {
-			chat, err = noteTaskChat(ctx, tx, *task, origin.taskQueue)
+		} else if task != nil {
+			chat, err = taskChat(ctx, tx, origin.taskRecord, *task, delivery, origin.taskQueue)
 			newChat = chat.ID == ""
 		} else if !newChat {
 			chat, err = store.Get[model.Chat](ctx, tx, "SELECT data FROM chats WHERE id=?", input.ChatID)
@@ -604,10 +603,21 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			if turn := origin.personal; turn != nil {
 				chat.Source, chat.Channel, chat.Title = "channel", turn.install, turn.title
 			}
-			if noteTask {
-				chat.Title, chat.Source, chat.NoteID = delivery.noteTitle, "note", task.NoteID
-			} else if task != nil {
-				chat.Title, chat.Source, chat.TaskID = task.Title, "task", task.TaskID
+			if task != nil {
+				switch origin.taskRecord {
+				case model.TaskRecordNote:
+					chat.Title, chat.Source, chat.NoteID = delivery.noteTitle, "note", task.NoteID
+				case model.TaskRecordExternal:
+					title := delivery.sourceTitle
+					if title == "" {
+						title = taskSourceChatTitle
+					}
+					chat.Title, chat.Source, chat.TaskSourceID = title, "taskSource", delivery.sourceID
+				case model.TaskRecordWorkItem:
+					chat.Title, chat.Source = workItemsChatTitle, "workItem"
+				default:
+					chat.Title, chat.Source, chat.TaskID = task.Title, "task", task.TaskID
+				}
 			}
 			if fire := origin.automation; fire != nil {
 				chat.Title, chat.Source = fire.plan.Name, "automation"
@@ -745,7 +755,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if create {
 			kind := input.Operation
 			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
-			if noteTask {
+			if task != nil && kind == "topic" {
 				session.Title, session.TaskID = task.Title, task.TaskID
 			} else if origin.automation != nil && kind == "topic" {
 				session.Title = origin.automation.plan.Name
@@ -802,6 +812,17 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		selection, config, err := resolveSelection(ctx, tx, selection, session.Selection)
 		if err != nil {
 			return err
+		}
+		if delivery.origin != nil && a.supportsMCP(session, config) {
+			originRef, err := originConversationReference(ctx, tx, delivery.origin)
+			if err != nil {
+				return err
+			}
+			if originRef != nil && !slices.ContainsFunc(input.References, func(ref model.Reference) bool {
+				return ref.Kind == originRef.Kind && ref.ID == originRef.ID
+			}) {
+				input.References = append(slices.Clone(input.References), *originRef)
+			}
 		}
 		retryComparison := origin.retry != nil && origin.retry.ComparisonID != ""
 		if err := a.validateReferences(ctx, tx, input.References, session, agent, config, retryComparison); err != nil {

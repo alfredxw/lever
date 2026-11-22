@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,170 @@ func TestAgentWorkItemRetainsOriginRun(t *testing.T) {
 	f.request("GET", "/tasks/work-items", nil, 200, &list)
 	if len(list) != 1 {
 		t.Fatal("a read-only execution created a Work Item")
+	}
+}
+
+func TestWorkItemDispatchUsesDedicatedChatTopicAndOriginReference(t *testing.T) {
+	f := newFixture(t)
+	owner, other := f.agent("codex"), f.agent("claude")
+
+	// 1. Multiple standalone work items on the same Agent share one dedicated "workItem" Chat with separate Topics.
+	var firstItem, secondItem, otherItem model.WorkItem
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "First board item", Body: "Detail one"}, 200, &firstItem)
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "Second board item", Body: "Detail two"}, 200, &secondItem)
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "Other agent item"}, 200, &otherItem)
+
+	var firstRun model.Run
+	f.request("POST", "/tasks/work-items/"+firstItem.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: owner.ID,
+	}, 200, &firstRun)
+	f.wait(firstRun.ID, "completed")
+
+	f.request("POST", "/tasks/queue", model.TaskQueueInput{
+		Record: model.TaskRecordWorkItem,
+		TaskDispatch: model.TaskDispatch{
+			TaskID: secondItem.ID, AgentID: owner.ID, CommandID: app.ID(),
+		},
+	}, 200, nil)
+	secondExec := f.waitForTask(secondItem.ID, "completed")
+
+	var otherRun model.Run
+	f.request("POST", "/tasks/work-items/"+otherItem.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: other.ID,
+	}, 200, &otherRun)
+	f.wait(otherRun.ID, "completed")
+
+	if !secondExec.Topic || secondExec.ChatID != firstRun.ChatID || secondExec.SessionID == firstRun.SessionID {
+		t.Fatalf("work items on the same Agent did not share one Chat with distinct Topics: first=%+v second=%+v", firstRun, secondExec)
+	}
+	if otherRun.ChatID == firstRun.ChatID {
+		t.Fatal("different Agents shared a workItem Chat")
+	}
+	var ownerChat model.ChatView
+	f.request("GET", "/chats/"+firstRun.ChatID, nil, 200, &ownerChat)
+	if ownerChat.Chat.Source != "workItem" || ownerChat.Chat.Title != "Work items" || ownerChat.Chat.TaskID != "" || len(ownerChat.Sessions) != 2 {
+		t.Fatalf("unexpected dedicated workItem Chat: %+v", ownerChat)
+	}
+	titles := map[string]string{}
+	for _, s := range ownerChat.Sessions {
+		if s.Kind != "topic" || s.TaskID == "" {
+			t.Fatalf("expected task Topic session: %+v", s)
+		}
+		titles[s.TaskID] = s.Title
+	}
+	if titles[firstItem.ID] != firstItem.Title || titles[secondItem.ID] != secondItem.Title {
+		t.Fatalf("unexpected Topic titles: %+v", titles)
+	}
+
+	// 2. Origin-linked work items (from main or topic) do not disturb the origin Chat,
+	//    and instead attach a conversation Reference readable via read_chat_context.
+	originChat := f.chat(owner)
+	mainSeed := f.wait(f.send(originChat.ID, "main", "", "main origin secret context").ID, "completed")
+	topicSeed := f.wait(f.send(originChat.ID, "topic", "", "topic origin secret context").ID, "completed")
+
+	var topicOriginItem, mainOriginItem model.WorkItem
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{
+		Title:       "[chat-context]",
+		OriginRunID: topicSeed.ID,
+	}, 200, &topicOriginItem)
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{
+		Title:       "[chat-context]",
+		OriginRunID: mainSeed.ID,
+	}, 200, &mainOriginItem)
+
+	var beforeOrigin model.ChatView
+	f.request("GET", "/chats/"+originChat.ID, nil, 200, &beforeOrigin)
+
+	readPair := func(allowID, denyID string) string {
+		calls, err := json.Marshal([]historyCall{
+			{Name: "read_chat_context", Arguments: map[string]any{"target": allowID}},
+			{Name: "read_chat_context", Arguments: map[string]any{"target": denyID}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(calls)
+	}
+
+	var topicOriginRun model.Run
+	f.request("POST", "/tasks/work-items/"+topicOriginItem.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: owner.ID, Note: readPair(topicSeed.SessionID, mainSeed.SessionID),
+	}, 200, &topicOriginRun)
+	topicOriginRun = f.wait(topicOriginRun.ID, "completed")
+
+	var mainOriginRun model.Run
+	f.request("POST", "/tasks/work-items/"+mainOriginItem.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: owner.ID, Note: readPair(mainSeed.SessionID, topicSeed.SessionID),
+	}, 200, &mainOriginRun)
+	mainOriginRun = f.wait(mainOriginRun.ID, "completed")
+
+	if topicOriginRun.ChatID != firstRun.ChatID || mainOriginRun.ChatID != firstRun.ChatID {
+		t.Fatalf("origin work items should land in the Agent's dedicated workItem Chat, not originChat=%s: topic=%s main=%s",
+			originChat.ID, topicOriginRun.ChatID, mainOriginRun.ChatID)
+	}
+	var afterOrigin model.ChatView
+	f.request("GET", "/chats/"+originChat.ID, nil, 200, &afterOrigin)
+	if afterOrigin.Chat.UpdatedAt != beforeOrigin.Chat.UpdatedAt || len(afterOrigin.Entries) != len(beforeOrigin.Entries) {
+		t.Fatalf("dispatching origin work items disturbed originChat: before=(%s,%d) after=(%s,%d)",
+			beforeOrigin.Chat.UpdatedAt, len(beforeOrigin.Entries), afterOrigin.Chat.UpdatedAt, len(afterOrigin.Entries))
+	}
+
+	checkOriginRef := func(run model.Run, wantKind, wantSessionID, wantText string) {
+		t.Helper()
+		if len(run.References) != 1 || run.References[0].Kind != wantKind || run.References[0].ID != wantSessionID || run.References[0].Name == "" {
+			t.Fatalf("expected %s reference to %s, got %+v", wantKind, wantSessionID, run.References)
+		}
+		var receipt struct {
+			Input   string
+			Results []historyResult
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(run.Items[0].Text, "context:")), &receipt); err != nil {
+			t.Fatalf("runtime did not return a history receipt: %s", run.Items[0].Text)
+		}
+		if !strings.Contains(receipt.Input, "read_chat_context") || len(receipt.Results) != 2 {
+			t.Fatalf("unexpected receipt: %+v", receipt)
+		}
+		if len(receipt.Results[0].Body.Messages) == 0 || !strings.Contains(receipt.Results[0].Body.Messages[0].Text, wantText) {
+			t.Fatalf("origin reference did not grant access to %q: %+v", wantText, receipt.Results[0])
+		}
+		if receipt.Results[1].Error == "" {
+			t.Fatalf("sibling session in origin Chat was unexpectedly readable: %+v", receipt.Results[1])
+		}
+	}
+	checkOriginRef(topicOriginRun, "topic", topicSeed.SessionID, "topic origin secret context")
+	checkOriginRef(mainOriginRun, "chat", mainSeed.SessionID, "main origin secret context")
+
+	// 3. Cross-provider compatibility: dispatching an origin-linked work item to a non-MCP runtime
+	//    still succeeds cleanly and omits the MCP-only conversation reference.
+	limitedConfig := model.Provider{
+		PluginID: "lever.pi", ContributionID: "pi", Type: "pi",
+		Name: "Pi no-tools for work items", Command: "pi", Args: []string{"--no-tools"}, Enabled: true,
+	}
+	f.request("POST", "/providers", limitedConfig, 200, &limitedConfig)
+	var catalog model.Catalog
+	f.request("GET", "/providers/"+limitedConfig.ID+"/models", nil, 200, &catalog)
+	if catalog.Capabilities.MCP {
+		t.Fatal("disabled Pi tools advertised MCP")
+	}
+	limited := f.piAgent()
+	limited.ID = ""
+	limited.Name = "Limited Pi"
+	limited.Profile.Provider = limitedConfig.ID
+	f.request("POST", "/agents", limited, 200, &limited)
+
+	var nonMCPItem model.WorkItem
+	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{
+		Title:       "Non-MCP origin item",
+		Body:        "Should run without MCP reference",
+		OriginRunID: topicSeed.ID,
+	}, 200, &nonMCPItem)
+	var nonMCPRun model.Run
+	f.request("POST", "/tasks/work-items/"+nonMCPItem.ID+"/dispatch", model.ExternalTaskDispatch{
+		CommandID: app.ID(), AgentID: limited.ID,
+	}, 200, &nonMCPRun)
+	nonMCPRun = f.wait(nonMCPRun.ID, "completed")
+	if len(nonMCPRun.References) != 0 {
+		t.Fatalf("expected non-MCP runtime to omit conversation reference, got %+v", nonMCPRun.References)
 	}
 }
 
