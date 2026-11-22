@@ -536,6 +536,7 @@ function ChatContent(props: ChatProps) {
                       onOpenTopic({ session, root: message });
                       composer?.edit(session.id, message);
                     }}
+                    onOpenRun={onOpenRun}
                   />
                 ) : (
                   <RunContent
@@ -619,7 +620,7 @@ function ChatContent(props: ChatProps) {
             session={main}
             profile={agent.profile}
             activeRun={activeRun}
-            hasPausedReply={overview.runs.some(
+            pausedRun={overview.runs.find(
               (run) => run.sessionId === main?.id && run.status === "paused",
             )}
             queuedRuns={queuedRuns}

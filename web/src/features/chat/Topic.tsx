@@ -48,6 +48,7 @@ import { useRevealEntry } from "./useRevealEntry";
 import type { OpenRun } from "./DelegatedTasks";
 import { useFocusComposer } from "./useFocusComposer";
 import { TopicSourceContent } from "./TopicSourceContent";
+import { WaitingDependencies } from "./WaitingDependencies";
 import {
   chatDelegationsQuery,
   prefetchTopicHistory,
@@ -80,7 +81,9 @@ function mergeTopicRuns(
   for (const run of activeRuns) {
     if (
       run.sessionId === sessionId &&
-      (active(run.status) || run.status === "paused")
+      (active(run.status) ||
+        run.status === "paused" ||
+        (run.status === "queued" && run.id === root?.id))
     )
       runs.set(run.sequence, run);
   }
@@ -106,6 +109,7 @@ export function Topic({
   onQuote,
   onForward,
   onEdit,
+  onOpenRun,
   ...props
 }: TopicProps &
   MessageActionHandlers & {
@@ -115,6 +119,7 @@ export function Topic({
     onExpand?: () => void;
     onOpen: () => void;
     onEdit: (run: Run) => void;
+    onOpenRun?: OpenRun;
   }) {
   const { t } = useTranslation();
   const { session, root, agent, activeRuns } = props;
@@ -259,6 +264,15 @@ export function Topic({
             </ItemGroup>
           </button>
         )}
+        {latest.status === "queued" && latest.waitingOn?.length ? (
+          <WaitingDependencies
+            run={latest}
+            compact
+            disabled={agent.archived}
+            onEdit={!agent.archived ? onEdit : undefined}
+            onOpenRun={onOpenRun}
+          />
+        ) : null}
         {query.error && (
           <ErrorNotice error={query.error} retry={() => void query.refetch()} />
         )}
@@ -275,13 +289,16 @@ export function Topic({
             <MessageCircle data-icon="inline-start" />
             {t("chat.replyAction")}
           </Button>
-          {latest.status !== "completed" && (
-            <RunStatus
-              status={latest.status}
-              label={latest.pauseRequested ? t("chat.pausingReply") : undefined}
-              iconOnly={isWorking(latest.status)}
-            />
-          )}
+          {latest.status !== "completed" &&
+            !(latest.status === "queued" && latest.waitingOn?.length) && (
+              <RunStatus
+                status={latest.status}
+                label={
+                  latest.pauseRequested ? t("chat.pausingReply") : undefined
+                }
+                iconOnly={isWorking(latest.status)}
+              />
+            )}
           {!agent.archived &&
             !latest.superseded &&
             canRecoverRun(latest.status) && (
@@ -562,11 +579,14 @@ function TopicConversationContent({
           reply
           compact={props.compactReply}
           activeRun={activeRun}
-          hasPausedReply={overview.runs.some(
+          pausedRun={overview.runs.find(
             (run) => run.sessionId === session.id && run.status === "paused",
           )}
           queuedRuns={overview.runs.filter(
-            (run) => run.sessionId === session.id && run.status === "queued",
+            (run) =>
+              run.sessionId === session.id &&
+              run.status === "queued" &&
+              !(props.root?.status === "queued" && run.id === props.root.id),
           )}
           archived={agent.archived}
           visible={enabled}

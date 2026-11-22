@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import {
   CornerUpRight,
-  GitBranch,
   MessageCircle,
+  MessagesCircle,
   Pencil,
   Play,
   X,
@@ -18,6 +18,8 @@ import { MessageInput } from "./References";
 import { QuotedMessage } from "./QuotedMessage";
 import { steerModelHint } from "./steer";
 import { isLeverReference } from "./prompt";
+import { WaitingDependencies } from "./WaitingDependencies";
+import { dependencyProgress } from "./waitRuns";
 
 export function QueuedMessages({
   runs,
@@ -53,6 +55,7 @@ export function QueuedMessages({
           attachmentIds: run.attachments.map((file) => file.id),
           references: run.references,
           quote: run.quote,
+          afterRunIds: run.afterRunIds,
         });
       return api(`/runs/${run.id}/queue`, {
         action,
@@ -76,20 +79,33 @@ export function QueuedMessages({
     onError: (error) => toast.error(error.message),
   });
   if (!runs.length) return null;
+  const sorted = [...runs].sort((a, b) => a.sequence - b.sequence);
+  const head = sorted[0];
+  const headDeps = head?.waitingOn?.length
+    ? dependencyProgress(head.waitingOn)
+    : undefined;
+  const headWaiting = Boolean(headDeps && headDeps.completed < headDeps.total);
   return (
     <section className="queued-messages" aria-label={t("queue.title")}>
       <div className="queue-heading">
         <span>
-          {t(activeRun ? "queue.count" : "queue.paused", {
-            count: runs.length,
-          })}
+          {activeRun
+            ? t("queue.count", { count: runs.length })
+            : headWaiting
+              ? t(
+                  headDeps!.blocked > 0
+                    ? "after.queueBlocked"
+                    : "after.queueWaiting",
+                  { count: runs.length },
+                )
+              : t("queue.paused", { count: runs.length })}
         </span>
-        {!activeRun && (
+        {!activeRun && !headWaiting && (
           <Button
             variant="ghost"
             size="sm"
             disabled={disabled || action.isPending}
-            onClick={() => action.mutate({ run: runs[0], action: "resume" })}
+            onClick={() => action.mutate({ run: head, action: "resume" })}
           >
             <Play />
             {t("queue.resume")}
@@ -97,11 +113,12 @@ export function QueuedMessages({
         )}
       </div>
       <ol>
-        {[...runs]
-          .sort((a, b) => a.sequence - b.sequence)
-          .map((run) => {
+        {sorted.map((run) => {
             const busy = disabled || action.isPending;
             const editable = onEdit && !run.comparisonId && !run.channel;
+            const hasWaiting = Boolean(
+              run.afterRunIds?.length || run.waitingOn?.length,
+            );
             const currentSelection =
               !activeRun?.channel &&
               activeRun?.sessionId === run.sessionId &&
@@ -114,6 +131,7 @@ export function QueuedMessages({
                 (run.selection.permission &&
                   currentSelection.permission !== run.selection.permission));
             const canSteer =
+              !hasWaiting &&
               (activeRun?.canSteer || activeRun?.steerPending) &&
               !run.references?.some(isLeverReference) &&
               currentSelection &&
@@ -121,6 +139,7 @@ export function QueuedMessages({
               run.steerRunId !== activeRun?.id;
             const steerHint =
               editable &&
+              !hasWaiting &&
               (differentPolicy
                 ? t("queue.steerRequiresSameRuntimeAndPermission")
                 : canSteer
@@ -141,6 +160,13 @@ export function QueuedMessages({
                     sessionId={run.sessionId}
                   />
                   <Attachments files={run.attachments} />
+                  {hasWaiting && (
+                    <WaitingDependencies
+                      run={run}
+                      compact
+                      showActions={false}
+                    />
+                  )}
                   {activeRun && run.steerRunId === activeRun.id && (
                     <p
                       role="status"
@@ -184,7 +210,7 @@ export function QueuedMessages({
                       }
                     >
                       {run.operation === "topic" ? (
-                        <GitBranch />
+                        <MessagesCircle />
                       ) : (
                         <MessageCircle />
                       )}
@@ -195,8 +221,19 @@ export function QueuedMessages({
                       )}
                     </Button>
                   )}
-                  {editable && (
-                    <>
+                  {hasWaiting ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t("after.runNow")}
+                      title={t("after.runNow")}
+                      disabled={busy || !!editing}
+                      onClick={() => action.mutate({ run, action: "run_now" })}
+                    >
+                      <Play />
+                    </Button>
+                  ) : (
+                    editable && (
                       <Button
                         variant="ghost"
                         size="icon-xs"
@@ -216,17 +253,19 @@ export function QueuedMessages({
                       >
                         <CornerUpRight />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={t("queue.edit")}
-                        title={t("queue.edit")}
-                        disabled={busy || !!editing}
-                        onClick={() => onEdit(run)}
-                      >
-                        <Pencil />
-                      </Button>
-                    </>
+                    )
+                  )}
+                  {editable && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t("queue.edit")}
+                      title={t("queue.edit")}
+                      disabled={busy || !!editing}
+                      onClick={() => onEdit(run)}
+                    >
+                      <Pencil />
+                    </Button>
                   )}
                   <Button
                     variant="ghost"

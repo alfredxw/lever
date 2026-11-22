@@ -155,6 +155,12 @@ CREATE INDEX IF NOT EXISTS task_queue_order ON task_queue(agent_id,position) WHE
 CREATE INDEX IF NOT EXISTS task_queue_starts ON task_queue(agent_id,started_at) WHERE state='started';
 CREATE INDEX IF NOT EXISTS task_queue_run ON task_queue(run_id) WHERE run_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS comparisons(id TEXT PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats(id), position INTEGER NOT NULL, command_id TEXT NOT NULL UNIQUE, input_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(chat_id,position));
+CREATE TABLE IF NOT EXISTS run_dependencies(
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  after_run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  PRIMARY KEY(run_id, after_run_id)
+);
+CREATE INDEX IF NOT EXISTS run_dependencies_after ON run_dependencies(after_run_id);
 CREATE INDEX IF NOT EXISTS active_runs ON runs(sequence)
   WHERE status IN ('starting','running','waiting_user','cancelling','unknown','queued');
 CREATE UNIQUE INDEX IF NOT EXISTS paused_runs ON runs(session_id) WHERE status='paused';
@@ -401,6 +407,7 @@ func SaveRun(tx *sql.Tx, run model.Run) error {
 	if err != nil {
 		return err
 	}
+	run.Channel, run.WaitingOn, run.ScopePaths = nil, nil, nil
 	if _, err := tx.Exec("UPDATE runs SET status=?,data=? WHERE id=?", run.Status, JSON(run), run.ID); err != nil {
 		return err
 	}
@@ -411,8 +418,43 @@ func SaveRun(tx *sql.Tx, run model.Run) error {
 		if err := notifyDelegation(tx, run.ID); err != nil {
 			return err
 		}
+		if err := notifyDependentRuns(tx, run.ID); err != nil {
+			return err
+		}
 	}
 	return updateActivity(tx, previous, run)
+}
+
+func notifyDependentRuns(tx *sql.Tx, afterRunID string) error {
+	rows, err := tx.Query(`SELECT r.id, r.chat_id FROM run_dependencies d
+JOIN runs r ON r.id=d.run_id
+WHERE d.after_run_id=? AND r.status='queued'`, afterRunID)
+	if err != nil {
+		return err
+	}
+	type dep struct{ id, chatID string }
+	var deps []dep
+	for rows.Next() {
+		var item dep
+		if err := rows.Scan(&item.id, &item.chatID); err != nil {
+			rows.Close()
+			return err
+		}
+		deps = append(deps, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range deps {
+		if err := Event(tx, model.Event{Type: "run", ChatID: item.chatID, RunID: item.id}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func InsertRun(tx *sql.Tx, run *model.Run, commandID, hash string) error {
@@ -509,7 +551,7 @@ func (s *Store) Events(ctx context.Context, after int64) ([]model.Event, error) 
 		var sessionID string
 		if e.RunID != "" {
 			if runs[e.RunID] == nil {
-				v, err := Get[model.Run](ctx, s.DB, `SELECT `+RunWithChannelReceipt+` FROM runs r
+				v, err := Get[model.Run](ctx, s.DB, `SELECT `+RunWithOverviewFields+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?`, e.RunID)
 				if err != nil {
 					return nil, err
@@ -583,8 +625,21 @@ func (s *Store) Recover(ctx context.Context) ([]RestartRun, error) {
 		if _, err := tx.Exec("UPDATE personal_channel_turns SET reaction_status='unknown' WHERE reaction_status='pending'"); err != nil {
 			return err
 		}
-		// A live worker retains its session queue. Other unfinished queues need an explicit resume.
-		if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('true')) WHERE id IN (SELECT session_id FROM runs WHERE status IN ('queued','steering','starting','running','waiting_user','cancelling')) AND id NOT IN (SELECT r.session_id FROM runs r JOIN runtime_hosts h ON r.id=h.run_id)"); err != nil {
+		// A live worker retains its session queue. Other unfinished queues need an
+		// explicit resume, except a queued run waiting only on live upstream hosts.
+		if _, err := tx.Exec(`UPDATE sessions SET data=json_set(data,'$.queuePaused',json('true'))
+WHERE id IN (SELECT session_id FROM runs WHERE status IN ('queued','steering','starting','running','waiting_user','cancelling'))
+AND id NOT IN (SELECT r.session_id FROM runs r JOIN runtime_hosts h ON r.id=h.run_id)
+AND NOT (
+  NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id=sessions.id AND r.status IN ('steering','starting','running','waiting_user','cancelling'))
+  AND EXISTS (
+    SELECT 1 FROM runs q
+    WHERE q.id=(SELECT id FROM runs WHERE session_id=sessions.id AND status='queued' ORDER BY sequence LIMIT 1)
+    AND EXISTS (SELECT 1 FROM run_dependencies rd WHERE rd.run_id=q.id)
+    AND EXISTS (SELECT 1 FROM run_dependencies rd JOIN runs dep ON dep.id=rd.after_run_id WHERE rd.run_id=q.id AND (dep.id IN (SELECT run_id FROM runtime_hosts) OR dep.status='queued'))
+    AND NOT EXISTS (SELECT 1 FROM run_dependencies rd JOIN runs dep ON dep.id=rd.after_run_id WHERE rd.run_id=q.id AND dep.status NOT IN ('completed','queued') AND dep.id NOT IN (SELECT run_id FROM runtime_hosts))
+  )
+)`); err != nil {
 			return err
 		}
 		steers, err := List[model.Run](ctx, tx, `SELECT data FROM runs WHERE (status='steering' OR (status='queued' AND json_extract(data,'$.steerRunId') IS NOT NULL))
@@ -654,7 +709,9 @@ func (s *Store) SessionView(ctx context.Context, id string) (model.SessionView, 
 	}
 	// Match the topic root in View, including a queued first message. A topic
 	// with all its queued messages removed still has a usable reply composer.
-	root, err := Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('steering','steered','cancelled') ORDER BY position LIMIT 1", id)
+	root, err := Get[model.Run](ctx, tx, `SELECT `+RunWithWaitingOn+` FROM runs r
+LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
+WHERE r.session_id=? AND r.position IS NOT NULL AND r.status NOT IN ('steering','steered','cancelled') ORDER BY r.position LIMIT 1`, id)
 	if err == nil {
 		v.Root = &root
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -680,7 +737,9 @@ func (s *Store) SessionRunPage(ctx context.Context, id string, before int64, lim
 	if before == 0 {
 		before = 1 << 62
 	}
-	v.Runs, err = List[model.Run](ctx, tx, "SELECT data FROM runs WHERE session_id=? AND position<? AND status NOT IN ('queued','steering','steered','cancelled') ORDER BY position DESC LIMIT ?", id, before, limit)
+	v.Runs, err = List[model.Run](ctx, tx, `SELECT `+RunWithWaitingOn+` FROM runs r
+LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
+WHERE r.session_id=? AND r.position<? AND r.status NOT IN ('queued','steering','steered','cancelled') ORDER BY r.position DESC LIMIT ?`, id, before, limit)
 	if err != nil {
 		return v, err
 	}
@@ -752,6 +811,35 @@ func (s *Store) View(ctx context.Context, chatID string, before int64) (model.Ch
 
 const RunWithChannelReceipt = `CASE WHEN d.run_id IS NULL THEN r.data ELSE json_set(r.data,'$.channel',json_object('status',d.status)) END`
 
+const runWaitingOnExpr = `(SELECT json_group_array(json(dep_json)) FROM (
+  SELECT json_object(
+    'runId', dep.id,
+    'sessionId', dep.session_id,
+    'chatId', dep.chat_id,
+    'agentId', dep.agent_id,
+    'topic', json(CASE WHEN ds.kind='topic' THEN 'true' ELSE 'false' END),
+    'title', substr(COALESCE(
+      CASE WHEN ds.kind='topic' THEN NULLIF(json_extract(ds.data,'$.title'),'') ELSE NULLIF(json_extract(dc.data,'$.title'),'') END,
+      NULLIF(trim(json_extract(dep.data,'$.input')),''),
+      NULLIF(trim(json_extract(dep.data,'$.quote.text')),''),
+      json_extract(dep.data,'$.attachments[0].name'),
+      json_extract(dep.data,'$.references[0].name'),
+      ''
+    ), 1, 120),
+    'status', dep.status
+  ) AS dep_json
+  FROM run_dependencies rd
+  JOIN runs dep ON dep.id = rd.after_run_id
+  JOIN sessions ds ON ds.id = dep.session_id
+  JOIN chats dc ON dc.id = dep.chat_id
+  WHERE rd.run_id = r.id
+  ORDER BY rd.rowid
+))`
+
+const RunWithWaitingOn = `CASE WHEN EXISTS(SELECT 1 FROM run_dependencies rd WHERE rd.run_id=r.id) THEN json_set(` + RunWithChannelReceipt + `,'$.waitingOn',json(` + runWaitingOnExpr + `)) ELSE ` + RunWithChannelReceipt + ` END`
+
+const RunWithOverviewFields = `CASE WHEN r.status IN ('starting','running','waiting_user','cancelling','unknown','queued','paused') THEN json_set(` + RunWithWaitingOn + `,'$.scopePaths',json(COALESCE((SELECT json_group_array(root.value->>'path') FROM sessions rs, json_each(rs.data,'$.roots') root WHERE rs.id=r.session_id),'[]'))) ELSE ` + RunWithWaitingOn + ` END`
+
 func (s *Store) ChatPage(ctx context.Context, chatID string, before int64, limit int) (model.ChatView, error) {
 	if limit < 1 || limit > 40 {
 		limit = 40
@@ -772,7 +860,7 @@ func (s *Store) ChatPage(ctx context.Context, chatID string, before int64, limit
 	// A comparison takes one position in its source Chat. Its local Topic is
 	// represented by that entry. Other Agents retain their normal Topic entries.
 	// A Topic created from a turn is represented by the action on that turn.
-	rows, err := tx.QueryContext(ctx, `SELECT r.position, s.kind, `+RunWithChannelReceipt+`, COALESCE(topic.id,'') FROM runs r JOIN sessions s ON r.session_id=s.id
+	rows, err := tx.QueryContext(ctx, `SELECT r.position, s.kind, `+RunWithWaitingOn+`, COALESCE(topic.id,'') FROM runs r JOIN sessions s ON r.session_id=s.id
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
 LEFT JOIN sessions topic ON s.kind='main' AND topic.chat_id=r.chat_id AND topic.kind='topic' AND json_extract(topic.data,'$.sourceRunId')=r.id
 WHERE r.chat_id=? AND r.position<? AND r.status NOT IN ('steering','steered','cancelled')

@@ -388,19 +388,33 @@ type Run struct {
 	FinishedAt              string         `json:"finishedAt,omitempty"`
 	// A nil native turn ID permits lookup by the original client message ID.
 	// An empty ID records a continuation whose delivery has yet to be confirmed.
-	NativeTurnID        *string      `json:"nativeTurnId,omitempty"`
-	CanPause            bool         `json:"canPause,omitempty"`
-	PauseRequested      bool         `json:"pauseRequested,omitempty"`
-	CanSteer            bool         `json:"canSteer,omitempty"`
-	SteerPending        bool         `json:"steerPending,omitempty"`
-	Continued           bool         `json:"continued,omitempty"`
-	ResumeAfterShutdown bool         `json:"resumeAfterShutdown,omitempty"`
-	Operation           string       `json:"operation,omitempty"`
-	Delivery            string       `json:"delivery,omitempty"`
-	SteerRunID          string       `json:"steerRunId,omitempty"`
-	TurnDiff            *TurnPatch   `json:"turnDiff,omitempty"`
-	Changes             []RunChanges `json:"changes,omitempty"`
-	Channel             *ChannelTurn `json:"channel,omitempty"`
+	NativeTurnID        *string         `json:"nativeTurnId,omitempty"`
+	CanPause            bool            `json:"canPause,omitempty"`
+	CanSteer            bool            `json:"canSteer,omitempty"`
+	SteerPending        bool            `json:"steerPending,omitempty"`
+	PauseRequested      bool            `json:"pauseRequested,omitempty"`
+	Continued           bool            `json:"continued,omitempty"`
+	ResumeAfterShutdown bool            `json:"resumeAfterShutdown,omitempty"`
+	Operation           string          `json:"operation,omitempty"`
+	Delivery            string          `json:"delivery,omitempty"`
+	SteerRunID          string          `json:"steerRunId,omitempty"`
+	AfterRunIDs         []string        `json:"afterRunIds,omitempty"`
+	WaitingOn           []RunDependency `json:"waitingOn,omitempty"`
+	ScopePaths          []string        `json:"scopePaths,omitempty"`
+	TurnDiff            *TurnPatch      `json:"turnDiff,omitempty"`
+	Changes             []RunChanges    `json:"changes,omitempty"`
+	Channel             *ChannelTurn    `json:"channel,omitempty"`
+}
+
+// RunDependency is the live status projection of an upstream run this turn waits on.
+type RunDependency struct {
+	RunID     string `json:"runId"`
+	SessionID string `json:"sessionId"`
+	ChatID    string `json:"chatId"`
+	AgentID   string `json:"agentId"`
+	Topic     bool   `json:"topic,omitempty"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
 }
 
 func (run Run) UserMessage() *Message {
@@ -515,6 +529,7 @@ type SendInput struct {
 	Quote         *MessageQuote `json:"quote,omitempty"`
 	Delivery      string        `json:"delivery,omitempty"`
 	SteerRunID    string        `json:"steerRunId,omitempty"`
+	AfterRunIDs   []string      `json:"afterRunIds,omitempty"`
 	EditRunID     string        `json:"editRunId,omitempty"`
 	ReplaceRunID  string        `json:"replaceRunId,omitempty"`
 }

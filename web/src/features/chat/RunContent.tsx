@@ -1,7 +1,12 @@
 import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowUpRight, CircleAlert, CircleUser, GitBranch } from "lucide-react";
+import {
+  ArrowUpRight,
+  CircleAlert,
+  CircleUser,
+  MessagesCircle,
+} from "lucide-react";
 import { active, api, queryClient } from "@/api/client";
 import type {
   Agent,
@@ -39,6 +44,7 @@ import { isWorking, RunStatus } from "./RunStatus";
 import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { subagentTitle } from "./RunWork";
 import { DelegatedTasks, type OpenRun } from "./DelegatedTasks";
+import { WaitingDependencies } from "./WaitingDependencies";
 import { TurnChanges } from "@/features/diff/TurnChanges";
 import { UserMessage } from "./UserMessage";
 import type { OpenChatFile } from "./ChatResponse";
@@ -154,7 +160,7 @@ function RunMessages({
       disabled={openingSourceTopic}
       onClick={() => onOpenSourceTopic({ runId: run.id, sourceTopicId })}
     >
-      <GitBranch data-icon={sourceTopicId ? "inline-start" : undefined} />
+      <MessagesCircle data-icon={sourceTopicId ? "inline-start" : undefined} />
       {sourceTopicId && topicLabel}
     </Button>
   );
@@ -317,9 +323,18 @@ function RunMessages({
               </AlertDescription>
             </Alert>
           )}
+          {run.status === "queued" && run.waitingOn?.length ? (
+            <WaitingDependencies
+              run={run}
+              disabled={agent.archived}
+              onEdit={!agent.archived ? onEdit : undefined}
+              onOpenRun={onOpenRun}
+            />
+          ) : null}
           {!run.error &&
             run.status !== "unknown" &&
             run.status !== "completed" &&
+            !(run.status === "queued" && run.waitingOn?.length) &&
             !isWorking(run.status) && (
               <div className="flex flex-wrap items-center gap-2">
                 <RunStatus status={run.status} />

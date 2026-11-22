@@ -203,7 +203,7 @@ func (a *App) Overview(ctx context.Context) (model.Overview, error) {
 	if err != nil {
 		return o, err
 	}
-	o.Runs, err = store.List[model.Run](ctx, tx, `SELECT `+store.RunWithChannelReceipt+` FROM runs r
+	o.Runs, err = store.List[model.Run](ctx, tx, `SELECT `+store.RunWithOverviewFields+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
 WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','queued') OR r.status='paused' ORDER BY r.sequence`)
 	if err != nil {
@@ -504,13 +504,21 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 	if input.Delivery != "" && input.Delivery != "queue" && input.Delivery != "steer" {
 		return run, invalid("delivery must be queue or steer")
 	}
+	afterRunIDs, err := normalizeAfterRunIDs(input.AfterRunIDs)
+	if err != nil {
+		return run, err
+	}
+	input.AfterRunIDs = afterRunIDs
+	if len(afterRunIDs) > 0 && (input.Delivery == "steer" || input.SteerRunID != "") {
+		return run, invalid("A message waiting on other tasks cannot steer the current turn")
+	}
 	if err := validateMessage(input.CommandID, input.Text, input.AttachmentIDs, input.References, input.Quote); err != nil {
 		return run, err
 	}
 	if input.AgentID != "" && (input.ChatID != "" || input.SessionID != "" || input.EditRunID != "" || (input.Operation != "main" && input.Operation != "topic")) {
 		return run, invalid("A new Chat must start with a main message or topic")
 	}
-	if input.ReplaceRunID != "" && (input.AgentID != "" || input.EditRunID != "" || input.WorkingCopyID != "" || input.Delivery != "") {
+	if input.ReplaceRunID != "" && (input.AgentID != "" || input.EditRunID != "" || input.WorkingCopyID != "" || input.Delivery != "" || len(afterRunIDs) > 0) {
 		return run, invalid("An edited sent message must run in its original conversation")
 	}
 	if input.Selection != nil {
@@ -539,8 +547,9 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 	}
 	var taskFiles []model.Attachment
 	noteErr := a.validateNoteReferences(ctx, input.References)
-	err := a.Store.Write(ctx, func(tx *sql.Tx) error {
-		existing, lookupErr := store.Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE command_id=?", input.CommandID)
+	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
+		existing, lookupErr := store.Get[model.Run](ctx, tx, `SELECT `+store.RunWithOverviewFields+` FROM runs r
+LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.command_id=?`, input.CommandID)
 		if lookupErr == nil {
 			var h string
 			if err := tx.QueryRowContext(ctx, "SELECT input_hash FROM runs WHERE command_id=?", input.CommandID).Scan(&h); err != nil {
@@ -838,7 +847,7 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			}
 			// An explicit submission starts its own turn. Keep existing queued
 			// work on hold until the user resumes the queue.
-			startAfterPause = paused && input.Delivery == "" && origin == (sendOrigin{})
+			startAfterPause = paused && input.Delivery == "" && origin == (sendOrigin{}) && len(afterRunIDs) == 0
 			if !queued && (!paused || startAfterPause) {
 				if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false')) WHERE id=?", session.ID); err != nil {
 					return err
@@ -846,12 +855,17 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 				session.QueuePaused = false
 			}
 		}
+		if len(afterRunIDs) > 0 {
+			if err := validateAfterRuns(ctx, tx, afterRunIDs, editing, session.ID); err != nil {
+				return err
+			}
+		}
 		if create {
 			if _, err = tx.Exec("INSERT INTO sessions(id,chat_id,kind,data) VALUES(?,?,?,?)", session.ID, chat.ID, session.Kind, store.JSON(session)); err != nil {
 				return err
 			}
 		}
-		run = model.Run{ID: ID(), SessionID: session.ID, ChatID: chat.ID, AgentID: agent.ID, Input: input.Text, Selection: selection, Attachments: files, References: input.References, Quote: quote, Status: "queued", Items: []model.Item{}, CreatedAt: now(), Delivery: input.Delivery, Operation: input.Operation}
+		run = model.Run{ID: ID(), SessionID: session.ID, ChatID: chat.ID, AgentID: agent.ID, Input: input.Text, Selection: selection, Attachments: files, References: input.References, Quote: quote, Status: "queued", Items: []model.Item{}, CreatedAt: now(), Delivery: input.Delivery, Operation: input.Operation, AfterRunIDs: afterRunIDs}
 		run.Quiet = origin.idleCompaction
 		if turn := origin.personal; turn != nil {
 			run.ChannelPrompt = turn.prompt
@@ -882,6 +896,9 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 		}
 		if input.EditRunID != "" {
 			run.ID, run.Sequence, run.CreatedAt = editing.ID, editing.Sequence, editing.CreatedAt
+			if editing.Operation == "topic" && input.Operation == "reply" && editing.SessionID == session.ID {
+				run.Operation = "topic"
+			}
 			if _, err := tx.Exec("UPDATE runs SET session_id=? WHERE id=?", session.ID, run.ID); err != nil {
 				return err
 			}
@@ -892,6 +909,9 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			}
 			run.Delivery = "queue"
 			if _, err = tx.Exec("DELETE FROM run_attachments WHERE run_id=?", run.ID); err != nil {
+				return err
+			}
+			if err = saveRunDependencies(ctx, tx, run.ID, afterRunIDs); err != nil {
 				return err
 			}
 			if err = store.SaveRun(tx, run); err != nil {
@@ -923,6 +943,11 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			}
 			if err = store.InsertRun(tx, &run, input.CommandID, digest); err != nil {
 				return err
+			}
+			if len(afterRunIDs) > 0 {
+				if err = saveRunDependencies(ctx, tx, run.ID, afterRunIDs); err != nil {
+					return err
+				}
 			}
 			if queued := origin.taskQueue; queued != nil {
 				result, err := tx.ExecContext(ctx, `UPDATE task_queue SET state='started',data='{}',run_id=?,started_at=?
@@ -1032,7 +1057,8 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 	if err := a.advanceQueueLocked(run.SessionID); err != nil {
 		return run, err
 	}
-	saved, err := store.Get[model.Run](ctx, a.Store.DB, "SELECT data FROM runs WHERE id=?", run.ID)
+	saved, err := store.Get[model.Run](ctx, a.Store.DB, `SELECT `+store.RunWithOverviewFields+` FROM runs r
+LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?`, run.ID)
 	if err != nil {
 		return run, err
 	}
@@ -1076,6 +1102,7 @@ func (a *App) trackLocked(e *execution, run func() error) {
 		if err := a.advanceQueueLocked(sessionID); err != nil {
 			slog.Error("advance message queue", "session", sessionID, "error", err)
 		}
+		a.advanceDependentRunsLocked(id)
 	}()
 }
 

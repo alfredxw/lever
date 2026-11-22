@@ -22,6 +22,7 @@ type Draft = {
   comparisonSelection?: Selection;
   comparisonModels?: Record<string, Selection>;
   comparisonSharedScope?: boolean;
+  afterRunIds?: string[];
   sessionSelection?: DraftSelection;
   topicSelection?: DraftSelection;
   files: Attachment[];
@@ -85,6 +86,7 @@ function restoreDraft(
     comparisonSharedScope: saved?.content
       ? saved.comparisonSharedScope
       : comparison?.sharedScope,
+    afterRunIds: saved?.content ? saved.afterRunIds : send?.afterRunIds,
     content:
       saved?.content ??
       textPrompt(

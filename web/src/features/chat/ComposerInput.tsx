@@ -80,6 +80,8 @@ export function ComposerInput({
   suggestions = true,
   useAgentProfiles,
   canStartComparison,
+  canStartAfter,
+  waitingForRuns,
   collaboratorIds,
   value,
   empty,
@@ -110,6 +112,8 @@ export function ComposerInput({
   suggestions?: boolean;
   useAgentProfiles?: boolean;
   canStartComparison: boolean;
+  canStartAfter?: boolean;
+  waitingForRuns?: boolean;
   collaboratorIds?: string[];
   value: JSONContent;
   empty: boolean;
@@ -203,6 +207,7 @@ export function ComposerInput({
           ...(reply || fixedDestination ? [] : ["chat", "topic"]),
           ...(useAgentProfiles ? [] : ["model"]),
           ...(canStartComparison || useAgentProfiles ? ["compare"] : []),
+          ...(canStartAfter || waitingForRuns ? ["after"] : []),
         ] as ComposerCommand[]
       ).map((command) => ({
         id: `command:${command}`,
@@ -210,7 +215,9 @@ export function ComposerInput({
         description:
           command === "compare" && useAgentProfiles
             ? t("comparison.cancel")
-            : t(`composer.command.${command}`),
+            : command === "after" && waitingForRuns
+              ? t("after.cancel")
+              : t(`composer.command.${command}`),
         command,
       }))
     : [];
@@ -331,7 +338,10 @@ export function ComposerInput({
           },
           {
             label: t("composer.skillsGroup"),
-            options: searchComposerOptions(references, query),
+            options: searchComposerOptions(
+              references,
+              runtimeType === "pi" ? query.replace(/^\/?skill:/i, "") : query,
+            ),
           },
         ];
       case "mention":

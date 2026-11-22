@@ -65,6 +65,10 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM personal_channel_turns WHERE run_id=? AND context_ready=0)", run.ID).Scan(&preparing); err != nil || preparing {
 			return err
 		}
+		ready, err := dependenciesReady(ctx, tx, run.ID)
+		if err != nil || !ready {
+			return err
+		}
 		agent, err := store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", session.AgentID)
 		if err != nil {
 			return err
@@ -215,7 +219,27 @@ func (a *App) QueueAction(ctx context.Context, runID, action, target string) err
 		switch action {
 		case "remove":
 			run.Status, run.FinishedAt = "cancelled", now()
+			if err := saveRunDependencies(ctx, tx, run.ID, nil); err != nil {
+				return err
+			}
+		case "run_now":
+			run.AfterRunIDs = nil
+			if err := saveRunDependencies(ctx, tx, run.ID, nil); err != nil {
+				return err
+			}
+			var headID string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE session_id=? AND status='queued' ORDER BY sequence LIMIT 1", run.SessionID).Scan(&headID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if headID == run.ID && !a.hasActiveSessionLocked(run.SessionID) {
+				if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false')) WHERE id=?", run.SessionID); err != nil {
+					return err
+				}
+			}
 		case "send":
+			if len(run.AfterRunIDs) > 0 {
+				return conflict("Run this message now or remove its waiting tasks before steering")
+			}
 			if err := requireLocalTurn(ctx, tx, run.ID, "Channel messages run in queue order"); err != nil {
 				return err
 			}
@@ -253,7 +277,7 @@ func (a *App) QueueAction(ctx context.Context, runID, action, target string) err
 				return conflict("Resume the queue to start the next message")
 			}
 		default:
-			return invalid("action must be send or remove")
+			return invalid("action must be send, remove or run_now")
 		}
 		return store.SaveRun(tx, run)
 	})
@@ -261,6 +285,9 @@ func (a *App) QueueAction(ctx context.Context, runID, action, target string) err
 		if e := a.active[run.SteerRunID]; e != nil {
 			e.wakeSteer()
 		}
+	}
+	if err == nil && (action == "run_now" || action == "remove") {
+		return a.advanceQueueLocked(run.SessionID)
 	}
 	return err
 }

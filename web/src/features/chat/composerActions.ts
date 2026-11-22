@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import type { NativeCommand, Reference } from "@/api/types.gen";
 import { searchComposerOptions } from "./composerSearch";
 
-export type ComposerCommand = "chat" | "topic" | "model" | "compare";
+export type ComposerCommand = "chat" | "topic" | "model" | "compare" | "after";
 export type ComposerPage = "actions" | "command" | "mention" | "goal";
 export type ComposerBrowser = { page: ComposerPage; query: string };
 export type ComposerOption = {
@@ -20,6 +20,7 @@ const reserved = new Set([
   "topic",
   "model",
   "compare",
+  "after",
   "clear",
   "effort",
   "fast",
@@ -56,9 +57,14 @@ export function actionOptions(
   runApprovals?: boolean,
 ): ComposerOption[] {
   const candidates = [...commands, ...native];
-  const featured = ["/compare", "/chat", "/topic", "/goal", "/model"].flatMap(
-    (name) => candidates.find((option) => option.name === name) ?? [],
-  );
+  const featured = [
+    "/compare",
+    "/after",
+    "/chat",
+    "/topic",
+    "/goal",
+    "/model",
+  ].flatMap((name) => candidates.find((option) => option.name === name) ?? []);
   const remaining = native.filter((option) => option.name !== "/goal");
   const options: ComposerOption[] = [
     {

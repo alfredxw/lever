@@ -829,17 +829,32 @@ export interface Run {
    */
   nativeTurnId?: string;
   canPause?: boolean;
-  pauseRequested?: boolean;
   canSteer?: boolean;
   steerPending?: boolean;
+  pauseRequested?: boolean;
   continued?: boolean;
   resumeAfterShutdown?: boolean;
   operation?: string;
   delivery?: string;
   steerRunId?: string;
+  afterRunIds?: string[];
+  waitingOn?: RunDependency[];
+  scopePaths?: string[];
   turnDiff?: TurnPatch;
   changes?: RunChanges[];
   channel?: ChannelTurn;
+}
+/**
+ * RunDependency is the live status projection of an upstream run this turn waits on.
+ */
+export interface RunDependency {
+  runId: string;
+  sessionId: string;
+  chatId: string;
+  agentId: string;
+  topic?: boolean;
+  title: string;
+  status: string;
 }
 /**
  * TurnPatch summarizes the native Codex diff. The raw patch is stored separately
@@ -943,6 +958,7 @@ export interface SendInput {
   quote?: MessageQuote;
   delivery?: string;
   steerRunId?: string;
+  afterRunIds?: string[];
   editRunId?: string;
   replaceRunId?: string;
 }

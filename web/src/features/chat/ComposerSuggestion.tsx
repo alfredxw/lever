@@ -1,10 +1,11 @@
 import {
   AtSign,
   ChevronRight,
+  Clock,
   Columns2,
   CornerDownLeft,
-  GitBranch,
   MessageCircle,
+  MessagesCircle,
   Paperclip,
   ShieldCheck,
   Slash,
@@ -24,8 +25,9 @@ const icons = {
   command: Slash,
   goal: Target,
   compare: Columns2,
+  after: Clock,
   chat: MessageCircle,
-  topic: GitBranch,
+  topic: MessagesCircle,
   model: SlidersHorizontal,
 };
 

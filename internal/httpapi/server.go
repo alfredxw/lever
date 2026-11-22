@@ -503,7 +503,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		run, err := store.Get[model.Run](r.Context(), a.Store.DB, "SELECT data FROM runs WHERE id=?", r.PathValue("id"))
+		run, err := store.Get[model.Run](r.Context(), a.Store.DB, `SELECT `+store.RunWithWaitingOn+` FROM runs r
+LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?`, r.PathValue("id"))
 		respond(w, run, err)
 	})
 	mux.HandleFunc("POST /api/runs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {

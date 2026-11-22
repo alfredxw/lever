@@ -9,9 +9,15 @@ import {
   useState,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useIsMutating, useMutation } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useQueries,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   ArrowUp,
+  Clock,
   Columns2,
   CornerUpRight,
   Folder,
@@ -19,10 +25,11 @@ import {
   ListPlus,
   Check,
   X,
-  GitBranch,
   LoaderCircle,
   MessageCircle,
+  MessagesCircle,
   Pause,
+  Play,
   Plus,
   Square,
   Upload,
@@ -36,8 +43,10 @@ import type {
   Attachment,
   Comparison,
   ComparisonInput,
+  Overview,
   Profile,
   Run,
+  RunDependency,
   Selection,
   SendInput,
   Session,
@@ -76,6 +85,13 @@ import { QuotedMessage } from "./QuotedMessage";
 import { QueuedMessages } from "./QueuedMessages";
 import { hasDifferentModelSettings, steerModelHint } from "./steer";
 import { ComparisonPicker } from "./ComparisonPicker";
+import { WaitRunPicker } from "./WaitRunPicker";
+import {
+  defaultWaitRunIds,
+  isDependencyBlocked,
+  listWaitableRuns,
+  runDisplayTitle,
+} from "./waitRuns";
 import { useComposerShortcuts } from "@/features/settings/Preferences";
 import { PermissionMenu } from "@/features/runtime/Permissions";
 import {
@@ -91,7 +107,7 @@ import {
 import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPicker";
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
-import { canPauseReply, interruptReply } from "./runControls";
+import { canPauseReply, interruptReply, resumeReply } from "./runControls";
 
 const MotionInputGroupButton = motion.create(InputGroupButton);
 
@@ -120,7 +136,7 @@ export function Composer({
   topicLauncher,
   compact,
   activeRun,
-  hasPausedReply,
+  pausedRun,
   queuedRuns = [],
   archived,
   autoFocus,
@@ -137,7 +153,7 @@ export function Composer({
   topicLauncher?: { topicId: string; backButton: ReactElement };
   compact?: boolean;
   activeRun?: Run;
-  hasPausedReply?: boolean;
+  pausedRun?: Run;
   queuedRuns?: Run[];
   archived?: boolean;
   autoFocus?: boolean;
@@ -319,6 +335,9 @@ export function Composer({
       ? pending
       : undefined;
   const comparisonOwnerSelection = draft.comparisonSelection ?? selection;
+  const inputProvider = (
+    comparisonAgents ? comparisonOwnerSelection : selection
+  ).provider;
   const participants = useComparisonModels(
     agents,
     comparisonAgents,
@@ -346,6 +365,80 @@ export function Composer({
     !archived &&
     !comparisonAgents &&
     agents.filter((agent) => !agent.archived).length >= 2;
+  const overview = useQuery({
+    queryKey: ["overview"],
+    queryFn: () => api<Overview>("/overview"),
+    enabled: visible !== false && !archived,
+    subscribed: visible !== false && !archived,
+  });
+  const afterRunIds =
+    !comparisonAgents && !editingSent ? draft.afterRunIds : undefined;
+  const [afterPickerKey, setAfterPickerKey] = useState(0);
+  const waitCandidates = useMemo(
+    () =>
+      listWaitableRuns(overview.data, currentScope, {
+        excludeSessionId: reply ? session?.id : undefined,
+        excludeRunId: draft.editing?.runId,
+      }),
+    [overview.data, currentScope, reply, session?.id, draft.editing?.runId],
+  );
+  const missingAfterIds = useMemo(() => {
+    if (!afterRunIds?.length) return [];
+    const live = new Set(overview.data?.runs.map((run) => run.id) ?? []);
+    return afterRunIds.filter((id) => !live.has(id));
+  }, [afterRunIds, overview.data?.runs]);
+  const resolvedMissing = useQueries({
+    queries: missingAfterIds.map((id) => ({
+      queryKey: ["run", id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api<Run>(`/runs/${id}`, undefined, "GET", signal),
+      staleTime: 10_000,
+      retry: false,
+    })),
+  });
+  const resolvedAfterRuns = useMemo(() => {
+    const map = new Map<
+      string,
+      Pick<RunDependency, "runId" | "title" | "status">
+    >();
+    for (const run of overview.data?.runs ?? []) {
+      map.set(run.id, {
+        runId: run.id,
+        title: runDisplayTitle(run, overview.data),
+        status: run.status,
+      });
+    }
+    for (const item of waitCandidates) {
+      map.set(item.run.id, {
+        runId: item.run.id,
+        title: item.title,
+        status: item.run.status,
+      });
+    }
+    for (let i = 0; i < missingAfterIds.length; i++) {
+      const run = resolvedMissing[i]?.data;
+      if (run) {
+        map.set(run.id, {
+          runId: run.id,
+          title: runDisplayTitle(run, overview.data),
+          status: run.status,
+        });
+      }
+    }
+    return map;
+  }, [waitCandidates, missingAfterIds, resolvedMissing, overview.data]);
+  const canStartAfter =
+    !archived &&
+    !editingSent &&
+    !comparisonAgents &&
+    afterRunIds === undefined &&
+    waitCandidates.length > 0;
+  const blockedAfterRun = Boolean(
+    afterRunIds?.some((id) =>
+      isDependencyBlocked(resolvedAfterRuns.get(id)?.status ?? ""),
+    ),
+  );
+  const afterError = blockedAfterRun ? t("after.blockedDraft") : "";
   const capabilities = catalog.data?.capabilities ?? runtime?.capabilities;
   const hasLeverReferences = prompt.references.some(isLeverReference);
   const collaboratorIds = useMemo(() => {
@@ -445,6 +538,7 @@ export function Composer({
             comparisonSelection: undefined,
             comparisonModels: undefined,
             comparisonSharedScope: undefined,
+            afterRunIds: undefined,
             sessionSelection: isSessionMessage
               ? queuedSelection
               : draft.sessionSelection,
@@ -478,8 +572,21 @@ export function Composer({
       onSent(result, launchedFromTopicId);
     },
   });
+  const hasPausedReply = Boolean(pausedRun);
   const interrupt = useMutation({
     mutationFn: interruptReply,
+    onError: (error) => toast.error(error.message),
+  });
+  const resume = useMutation({
+    mutationFn: resumeReply,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["chat", chatId] }),
+        session &&
+          queryClient.invalidateQueries({ queryKey: ["session", session.id] }),
+      ]);
+    },
     onError: (error) => toast.error(error.message),
   });
   const canPause = !!activeRun && canPauseReply(activeRun);
@@ -500,6 +607,7 @@ export function Composer({
       files: run.attachments,
       sessionSelection: run.selection,
       topic: !sent && run.operation === "topic",
+      afterRunIds: !sent && run.afterRunIds?.length ? run.afterRunIds : undefined,
       quote: run.quote ?? null,
       editing: { runId: run.id, previous: current, sent },
     }));
@@ -515,6 +623,10 @@ export function Composer({
   }
   const beginSentEdit = useEffectEvent((run: Run) => {
     if (archived) return;
+    if (run.status === "queued") {
+      beginEdit(run, false);
+      return;
+    }
     if (activeRun) {
       toast.error(t("chat.editWaitForRun"));
       return;
@@ -627,6 +739,7 @@ export function Composer({
   });
   const canSteer =
     !draft.editing &&
+    !afterRunIds &&
     !hasLeverReferences &&
     (activeRun?.canSteer || activeRun?.steerPending) &&
     running &&
@@ -669,17 +782,30 @@ export function Composer({
   const editLabel = editingSent ? "chat.resendEdit" : "queue.save";
   const sendLabel = comparisonAgents
     ? t("comparison.send", { count: comparisonAgents.length })
-    : draft.editing
-      ? t(editLabel)
-      : defaultAction
+    : !draft.editing && afterRunIds?.length
+      ? t("after.send", { count: afterRunIds.length })
+      : !draft.editing && defaultAction
         ? actionLabel(defaultAction)
-        : t("chat.send");
+        : t(draft.editing ? editLabel : "chat.send");
   const sendButtonText =
     draft.editing || comparisonAgents
       ? sendLabel
-      : defaultAction && t(defaultAction.shortLabel);
+      : afterRunIds?.length
+        ? t("after.sendShort")
+        : defaultAction && t(defaultAction.shortLabel);
   const promptEmpty = !prompt.text.trim() && !prompt.references.length;
   const hasContent = !promptEmpty || draft.files.length > 0 || !!draft.quote;
+  const canResumePaused = Boolean(
+    pausedRun &&
+      !running &&
+      !topicMode &&
+      !hasContent &&
+      !draft.editing &&
+      !comparisonAgents &&
+      afterRunIds === undefined &&
+      !archived &&
+      !pausedRun.channel,
+  );
   const hasInput = hasContent || !!draft.editing || uploading || sending;
   useEffect(() => {
     if (hasInput) keepOpen?.();
@@ -772,6 +898,8 @@ export function Composer({
     !incompatibleSkills &&
     !unsupported &&
     !directoryError &&
+    !afterError &&
+    (afterRunIds === undefined || afterRunIds.length > 0) &&
     (!copyId || copyAvailable) &&
     (comparisonAgents
       ? comparisonAgents.length >= 2 &&
@@ -824,6 +952,7 @@ export function Composer({
         : delivery === "steer"
           ? activeRun?.id
           : undefined,
+      ...(afterRunIds?.length ? { afterRunIds } : {}),
       ...(replaceRunId
         ? { replaceRunId }
         : { editRunId: draft.editing?.runId }),
@@ -923,6 +1052,7 @@ export function Composer({
         setDraft((d) => ({
           ...d,
           topic: true,
+          afterRunIds: undefined,
           comparisonSelection: {
             ...selection,
             permission: permission || undefined,
@@ -930,6 +1060,20 @@ export function Composer({
           comparisonAgents: runtimeUnavailable ? [] : [agentId],
           comparisonModels: undefined,
           comparisonSharedScope: undefined,
+        }));
+      }
+    } else if (command === "after") {
+      if (afterRunIds !== undefined) {
+        setDraft((d) => ({ ...d, afterRunIds: undefined }));
+      } else if (canStartAfter) {
+        const preselected = defaultWaitRunIds(waitCandidates);
+        setAfterPickerKey((n) => n + 1);
+        setDraft((d) => ({
+          ...d,
+          topic: reply || d.editing || topicLauncher ? d.topic : true,
+          comparisonAgents: undefined,
+          comparisonModels: undefined,
+          afterRunIds: preselected,
         }));
       }
     } else if (!editingSent && !topicLauncher) {
@@ -1027,6 +1171,7 @@ export function Composer({
           unsupported ||
           needsRuntimeSetup ||
           directoryError ||
+          afterError ||
           draft.quote) && (
           <InputGroupAddon
             align="block-start"
@@ -1085,6 +1230,11 @@ export function Composer({
             {directoryError && (
               <p className="reference-error" role="alert">
                 {directoryError}
+              </p>
+            )}
+            {afterError && (
+              <p className="reference-error" role="alert">
+                {afterError}
               </p>
             )}
             {(incompatibleSkills || unsupported) && (
@@ -1150,6 +1300,20 @@ export function Composer({
             />
           </InputGroupAddon>
         )}
+        {afterRunIds !== undefined && (
+          <InputGroupAddon align="block-start">
+            <WaitRunPicker
+              key={afterPickerKey}
+              candidates={waitCandidates}
+              selected={afterRunIds}
+              resolved={resolvedAfterRuns}
+              disabled={sending}
+              initialOpen={afterRunIds.length === 0}
+              onChange={(next) => setDraft((d) => ({ ...d, afterRunIds: next }))}
+              onReturnToComposer={() => textbox.current?.focus()}
+            />
+          </InputGroupAddon>
+        )}
         {sessionRuntime?.goal && (
           <InputGroupAddon
             align="block-start"
@@ -1180,11 +1344,7 @@ export function Composer({
           draftAgentId={draftAgentId}
           sessionId={scopeSession?.id}
           workingCopyId={copyId}
-          provider={
-            comparisonAgents
-              ? comparisonOwnerSelection.provider
-              : selection.provider
-          }
+          provider={inputProvider}
           nativeCommands={{
             session: sessionRuntime?.commands,
             catalog: catalog.data?.commands,
@@ -1195,7 +1355,9 @@ export function Composer({
               : undefined
           }
           goal={sessionRuntime?.goal}
-          runtimeType={runtime?.type}
+          runtimeType={
+            providers?.find((item) => item.id === inputProvider)?.type
+          }
           actions={{
             id: actionsId,
             browser: actionMenu,
@@ -1217,11 +1379,14 @@ export function Composer({
             currentScope.roots,
             currentScope.primaryRootId,
             profile.skills,
+            profile.disabledSkills,
           ])}
           reply={reply}
           fixedDestination={editingSent || !!topicLauncher}
           useAgentProfiles={!!comparisonAgents}
           canStartComparison={canStartComparison}
+          canStartAfter={canStartAfter}
+          waitingForRuns={afterRunIds !== undefined}
           collaboratorIds={collaboratorIds}
           onCommand={chooseCommand}
           label={t(
@@ -1314,7 +1479,7 @@ export function Composer({
                     layout
                     layoutDependency={draft.topic}
                     transition={{ duration: reduceMotion ? 0 : 0.16 }}
-                    aria-label="Topic"
+                    aria-label={t("chat.topic")}
                     aria-pressed={draft.topic}
                     title={
                       draft.topic
@@ -1339,7 +1504,7 @@ export function Composer({
                         transition={{ duration: reduceMotion ? 0 : 0.14 }}
                       >
                         {draft.topic ? (
-                          <GitBranch data-icon="inline-start" />
+                          <MessagesCircle data-icon="inline-start" />
                         ) : (
                           <MessageCircle data-icon="inline-start" />
                         )}
@@ -1391,6 +1556,23 @@ export function Composer({
                       </span>
                     </Toggle>
                   </>
+                )}
+                {afterRunIds !== undefined && (
+                  <InputGroupButton
+                    variant="ghost"
+                    size="icon-sm"
+                    className="bg-control-selected text-foreground"
+                    aria-label={t("after.title")}
+                    aria-pressed={true}
+                    title={t("after.cancel")}
+                    disabled={sending}
+                    onClick={() => {
+                      chooseCommand("after");
+                      textbox.current?.focus();
+                    }}
+                  >
+                    <Clock />
+                  </InputGroupButton>
                 )}
                 {choosingDirectory && !archived && (
                   <WorkingDirectoryPicker
@@ -1498,7 +1680,24 @@ export function Composer({
                     <alternateAction.Icon />
                   </InputGroupButton>
                 )}
-                {(!running || hasContent || draft.editing) && (
+                {canResumePaused && pausedRun && (
+                  <InputGroupButton
+                    className="send-button rounded-full"
+                    variant="default"
+                    size="icon-sm"
+                    aria-label={t("chat.resumeReply")}
+                    title={t("chat.resumeReply")}
+                    disabled={resume.isPending || sending}
+                    onClick={() => resume.mutate(pausedRun)}
+                  >
+                    {resume.isPending ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Play fill="currentColor" className="translate-x-[0.5px]" />
+                    )}
+                  </InputGroupButton>
+                )}
+                {((!running && !canResumePaused) || hasContent || draft.editing) && (
                   <InputGroupButton
                     className="send-button rounded-full"
                     variant="default"
