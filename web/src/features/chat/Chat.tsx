@@ -45,6 +45,7 @@ import { useProviders } from "@/features/runtime/queries";
 import { useFeishuChannel } from "@/features/plugins/channelQuery";
 import { usePreferences } from "@/features/settings/Preferences";
 import { Composer } from "./Composer";
+import { hasDraggedFiles } from "./composerFiles";
 import type { OpenChatFile } from "./ChatResponse";
 import { ComparisonMessage } from "./ComparisonMessage";
 import { ComposerContext } from "./ComposerContext";
@@ -602,6 +603,10 @@ function ChatContent(props: ChatProps) {
           className="chat-composer-wrap"
           onFocusCapture={(event) => {
             if (inlineTopic && !event.target.closest(".topic-collapse"))
+              setWritingChat(true);
+          }}
+          onDropCapture={(event) => {
+            if (inlineTopic && hasDraggedFiles(event.dataTransfer))
               setWritingChat(true);
           }}
         >

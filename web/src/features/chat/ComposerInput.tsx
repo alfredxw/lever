@@ -29,6 +29,7 @@ import {
   type ComposerTrigger,
 } from "./composerSearch";
 import { composerCompositionEvents } from "./composerComposition";
+import { hasDraggedFiles } from "./composerFiles";
 import {
   actionOptions,
   goalOptions,
@@ -577,6 +578,12 @@ export function ComposerInput({
       handleDOMEvents: compositionEvents,
       clipboardTextSerializer: (slice) =>
         serializePrompt({ type: "doc", content: slice.content.toJSON() }).text,
+      handleDrop: (_view, event, _slice, moved) => {
+        if (moved || !onFiles || !hasDraggedFiles(event.dataTransfer))
+          return false;
+        event.preventDefault();
+        return true;
+      },
       handlePaste: (view, event) => {
         const data = event.clipboardData;
         if (!data) return false;

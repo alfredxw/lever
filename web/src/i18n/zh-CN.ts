@@ -1003,6 +1003,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "attachments.add": "添加附件",
   "attachments.choose": "选择附件",
   "attachments.drop": "松开以添加附件",
+  "attachments.directoryUnsupported": "不支持直接添加文件夹，请拖入文件",
   "attachments.remove": "移除 {{name}}",
   "attachments.countLimit": "每条消息最多添加 8 个附件",
   "attachments.sizeLimit": "每条消息的附件总大小不能超过 20 MB",

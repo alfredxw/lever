@@ -23,9 +23,11 @@ import (
 var browserPicker string
 
 type Browser struct {
-	shell *mygo.WebView
-	tabs  map[string]*browserTab
-	frame *DesktopFrame
+	shell                 *mygo.WebView
+	tabs                  map[string]*browserTab
+	frame                 *DesktopFrame
+	clearingDragTypes     bool
+	dragClearedAfterPaint bool
 }
 
 type DesktopFrame struct {
@@ -72,6 +74,7 @@ func (b *Browser) paint(ctx *ui.Context) {
 	if b.shell == nil {
 		return
 	}
+	b.ensureDragPassThrough()
 	titleBar := ctx.TitleBar()
 	frame := DesktopFrame{Height: titleBar.Height, Left: titleBar.Left, Right: titleBar.Right}
 	if b.frame == nil || *b.frame != frame {
@@ -93,6 +96,29 @@ func (b *Browser) paint(ctx *ui.Context) {
 			}
 		}
 	})
+}
+
+// MyGo's native UI surface sits above embedded WebViews and registers file-URL
+// dragged types on macOS. Clearing those types after a frame lets AppKit route
+// Finder file drags directly to the underlying WebView.
+func (b *Browser) ensureDragPassThrough() {
+	shell := b.shell
+	if shell == nil || shell.IsDestroyed() || b.clearingDragTypes {
+		return
+	}
+	if b.dragClearedAfterPaint && !surfaceHasDraggedTypes(shell.Window()) {
+		return
+	}
+	b.clearingDragTypes = true
+	go func() {
+		mygo.RunOnMain(func() {
+			b.clearingDragTypes = false
+			b.dragClearedAfterPaint = true
+			if !shell.IsDestroyed() {
+				unregisterSurfaceDraggedTypes(shell.Window())
+			}
+		})
+	}()
 }
 
 func (b *Browser) reset() {

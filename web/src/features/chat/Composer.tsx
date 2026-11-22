@@ -55,6 +55,7 @@ import { useImagePreview } from "./ImagePreview";
 import { ModelPicker } from "./ModelPicker";
 import { ComposerInput, type ComposerInputHandle } from "./ComposerInput";
 import type { ComposerBrowser, ComposerCommand } from "./composerActions";
+import { extractDroppedFiles, hasDraggedFiles } from "./composerFiles";
 import { ComposerContext, KeepConversationOpen } from "./ComposerContext";
 import {
   recoverTopicLauncherDraft,
@@ -180,6 +181,26 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const intakeBusy = useRef(false);
+  const canDropFiles = !archived && !sending && !uploading && visible !== false;
+  useEffect(() => {
+    if (!dragging) return;
+    const clear = () => {
+      dragDepth.current = 0;
+      setDragging(false);
+    };
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+    };
+  }, [dragging]);
+  useEffect(() => {
+    if (!canDropFiles && dragging) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  }, [canDropFiles, dragging]);
   const fileInput = useRef<HTMLInputElement>(null);
   const textbox = useRef<ComposerInputHandle>(null);
   const composerRoot = useRef<HTMLDivElement>(null);
@@ -926,25 +947,48 @@ export function Composer({
       data-composer-compact={compact || undefined}
       onCompositionStart={keepOpen}
       onDragEnter={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
-          event.preventDefault();
-          dragDepth.current++;
-          setDragging(true);
+        if (!hasDraggedFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        if (!canDropFiles) {
+          event.dataTransfer.dropEffect = "none";
+          return;
         }
+        event.dataTransfer.dropEffect = "copy";
+        dragDepth.current++;
+        setDragging(true);
       }}
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+        if (!hasDraggedFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = canDropFiles ? "copy" : "none";
+        if (canDropFiles && !dragging) setDragging(true);
       }}
-      onDragLeave={() => {
-        dragDepth.current--;
-        if (dragDepth.current <= 0) setDragging(false);
+      onDragLeave={(event) => {
+        if (dragDepth.current <= 0 && !dragging) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        const next = event.relatedTarget;
+        if (
+          dragDepth.current <= 0 ||
+          (next instanceof globalThis.Node &&
+            !event.currentTarget.contains(next))
+        ) {
+          dragDepth.current = 0;
+          setDragging(false);
+        }
       }}
       onDrop={(event) => {
-        if (!event.dataTransfer.types.includes("Files")) return;
+        if (!hasDraggedFiles(event.dataTransfer)) return;
         event.preventDefault();
         dragDepth.current = 0;
         setDragging(false);
-        void intake(Array.from(event.dataTransfer.files));
+        if (!canDropFiles) return;
+        const { files, skippedDirectories } = extractDroppedFiles(
+          event.dataTransfer,
+        );
+        if (skippedDirectories > 0) {
+          toast.error(t("attachments.directoryUnsupported"));
+        }
+        if (files.length) void intake(files);
       }}
     >
       {!topicMode && (
@@ -1495,7 +1539,7 @@ export function Composer({
         </div>
         {dragging && (
           <div className="attachment-drop">
-            <Upload size={24} />
+            <Upload size={compact ? 16 : 24} />
             <span>{t("attachments.drop")}</span>
           </div>
         )}

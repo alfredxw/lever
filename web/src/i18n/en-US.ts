@@ -1061,6 +1061,8 @@ export const enUS = {
   "attachments.add": "Attach files",
   "attachments.choose": "Choose attachments",
   "attachments.drop": "Drop files to attach",
+  "attachments.directoryUnsupported":
+    "Folders cannot be attached. Drop files instead.",
   "attachments.remove": "Remove {{name}}",
   "attachments.countLimit": "Attach up to 8 files per message",
   "attachments.sizeLimit": "Attachments must total at most 20 MB",

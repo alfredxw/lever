@@ -155,6 +155,7 @@ func (browser *Browser) attach(window *mygo.Window, origin, start string) error 
 		return err
 	}
 	browser.shell = shell
+	unregisterSurfaceDraggedTypes(window)
 	window.Invalidate()
 	page := shell.Page()
 	page.OnDOMReady(func() {
