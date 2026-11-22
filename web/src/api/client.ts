@@ -236,9 +236,19 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
           ?.find(({ execution }) => execution?.runId === run.id);
         if (
           queryClient.getQueryState(historyKey) &&
-          occurrence?.status !== run.status
+          (occurrence?.status !== run.status || !!occurrence?.canPause !== !!run.canPause || !active(run.status))
         ) {
           void queryClient.invalidateQueries({ queryKey: historyKey });
+        }
+        const feedKey = ["automation-runs"];
+        const feedItem = queryClient
+          .getQueryData<AutomationRun[]>(feedKey)
+          ?.find(({ execution }) => execution?.runId === run.id);
+        if (
+          queryClient.getQueryState(feedKey) &&
+          (!feedItem || feedItem.status !== run.status || !!feedItem.canPause !== !!run.canPause || !active(run.status))
+        ) {
+          void queryClient.invalidateQueries({ queryKey: feedKey });
         }
         const summary = queryClient
           .getQueryData<Automation[]>(["automations"])

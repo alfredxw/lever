@@ -102,7 +102,7 @@ func (e *execution) BindTurn(id string) error {
 		run.TurnDiff = nil
 	}
 	run.NativeTurnID = &id
-	run.CanPause = id != "" && !run.Quiet && e.providerInput(run).CanPauseTurn()
+	run.CanPause = id != "" && (!run.Quiet || run.AutomationID != "") && e.providerInput(run).CanPauseTurn()
 	if id != "" && run.Status == "starting" {
 		run.Status = "running"
 	}

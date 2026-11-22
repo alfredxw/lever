@@ -28,11 +28,22 @@ export interface AutomationDestination {
   agentId?: string;
   workingCopyId?: string;
 }
+export interface AutomationTarget {
+  id: string;
+  agentId: string;
+  chatId?: string;
+  workingCopyId?: string;
+  prompt?: string; // Optional per-target supplemental instructions.
+  enabled?: boolean; // Defaults to true.
+}
 export interface AutomationInput {
   name: string;
   prompt: string;
   trigger: AutomationTrigger;
   destination: AutomationDestination;
+  targets?: AutomationTarget[]; // Optional multi-Agent / multi-Scope execution targets.
+  notifyPolicy?: '' | 'always' | 'actionable' | 'silent';
+  deliveryMode?: '' | 'deliver' | 'audit' | 'propose' | 'curate';
   workItem?: boolean; // Defaults to true for existing automations.
   quiet?: boolean; // Surface only activity that needs attention.
 }
@@ -45,6 +56,7 @@ export interface Automation extends AutomationInput {
   eventToken?: string;
   error?: string;
   boundChatId?: string;
+  boundChats?: { [key: string]: string};
   sourceReady?: boolean;
   sourceDisabled?: boolean;
   sourceError?: string;
@@ -53,18 +65,44 @@ export interface Automation extends AutomationInput {
 }
 export interface AutomationRunSummary {
   runId?: string;
+  targetId?: string;
+  agentId?: string;
   status: string;
   createdAt: string;
 }
+export interface AutomationPullRequest {
+  repository: string;
+  number: string;
+  label?: string;
+}
+export interface AutomationChangeSummary {
+  files: number /* int */;
+  additions: number /* int */;
+  deletions: number /* int */;
+}
 export interface AutomationRun {
+  canPause?: boolean;
   id: string;
+  automationId: string;
+  targetId?: string;
+  agentId?: string;
   name: string;
   trigger: 'schedule' | 'event' | 'manual';
   createdAt: string;
+  finishedAt?: string;
   plannedAt?: number /* int64 */;
   eventCount?: number /* int */;
+  eventPayload?: string;
   status: string;
   error?: string;
+  summary?: string;
+  pullRequests?: AutomationPullRequest[];
+  reportItems?: string[];
+  changeSummary?: AutomationChangeSummary;
+  scopePath?: string;
+  nextFireSequence?: number /* int64 */;
+  replyCount?: number /* int */;
+  workItemIds?: string[];
   execution?: TaskExecution;
 }
 

@@ -862,6 +862,10 @@ button:focus-visible,
   --avatar-size: 22px;
   --avatar-text-size: 9px;
 }
+.agent-avatar:where([data-size="xs"]) {
+  --avatar-size: 16px;
+  --avatar-text-size: 8px;
+}
 [data-avatar-color="white"],
 [data-avatar-color="black"] {
   border: 1px solid color-mix(in srgb, var(--foreground) 20%, transparent);
@@ -883,6 +887,10 @@ button:focus-visible,
 .agent-avatar[data-size="sm"] svg {
   width: 14px;
   height: 14px;
+}
+.agent-avatar[data-size="xs"] svg {
+  width: 10px;
+  height: 10px;
 }
 .contact-name {
   display: flex;

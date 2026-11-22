@@ -1,4 +1,10 @@
-import { createContext, useContext, useId, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, FileDiff } from "lucide-react";
 import type { DiffFile, Run, RunChanges } from "@/api/types.gen";
@@ -12,9 +18,9 @@ export type TurnSelection = {
   sessionId: string;
   path?: string;
 };
-export const DiffNavigation = createContext<(selection: TurnSelection) => void>(
-  () => {},
-);
+export const DiffNavigation = createContext<
+  (selection: TurnSelection, owner: string) => void
+>(() => {});
 
 export function DiffStats({ files }: { files: DiffFile[] }) {
   return (
@@ -32,9 +38,11 @@ export function DiffStats({ files }: { files: DiffFile[] }) {
 function TurnChangeCard({
   run,
   change,
+  preview,
 }: {
   run: Run;
   change: Pick<RunChanges, "root" | "files">;
+  preview?: ReactNode;
 }) {
   const { t } = useTranslation();
   const open = useContext(DiffNavigation);
@@ -61,7 +69,11 @@ function TurnChangeCard({
           <span>{title}</span>
           <DiffStats files={change.files} />
         </div>
-        <Button variant="outline" size="sm" onClick={() => open(selection)}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => open(selection, run.agentId)}
+        >
           {t("diff.viewChanges")}
         </Button>
       </div>
@@ -74,7 +86,9 @@ function TurnChangeCard({
               variant="ghost"
               className="turn-changes-file"
               title={file.path}
-              onClick={() => open({ ...selection, path: file.path })}
+              onClick={() =>
+                open({ ...selection, path: file.path }, run.agentId)
+              }
             >
               <span className="turn-changes-path truncate">
                 <span className="text-muted-foreground">
@@ -87,6 +101,7 @@ function TurnChangeCard({
           );
         })}
       </div>
+      {preview}
       {remaining > 0 && (
         <Button
           variant="ghost"
@@ -105,12 +120,22 @@ function TurnChangeCard({
   );
 }
 
-export function TurnChanges({ run }: { run: Run }) {
+export function TurnChanges({
+  run,
+  preview,
+}: {
+  run: Run;
+  preview?: (rootId: string, file: DiffFile) => ReactNode;
+}) {
   const { t } = useTranslation();
   if (!run.finishedAt && run.status !== "paused") return null;
   const native = run.turnDiff;
   if (native && !native.reported && !native.error) return null;
   const changes = native ? [native] : run.changes;
+  const first = changes?.find(
+    (change) => !change.error && change.files.some((file) => !file.binary),
+  );
+  const file = first?.files.find((item) => !item.binary);
   return (
     <>
       {changes?.map((change) =>
@@ -123,7 +148,16 @@ export function TurnChanges({ run }: { run: Run }) {
             {t("diff.captureFailed")}: {change.error}
           </p>
         ) : change.files.length > 0 ? (
-          <TurnChangeCard key={change.root.id} run={run} change={change} />
+          <TurnChangeCard
+            key={change.root.id}
+            run={run}
+            change={change}
+            preview={
+              change === first && file
+                ? preview?.(change.root.id, file)
+                : undefined
+            }
+          />
         ) : null,
       )}
     </>

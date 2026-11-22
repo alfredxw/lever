@@ -67,16 +67,21 @@ func (s *Server) automationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tasks/automations/{id}/run", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			CommandID string `json:"commandId"`
+			TargetID  string `json:"targetId"`
 		}
 		if err := read(w, r, &input); err != nil {
 			respond(w, nil, err)
 			return
 		}
-		respond(w, nil, a.RunAutomationNow(r.Context(), r.PathValue("id"), input.CommandID))
+		respond(w, nil, a.RunAutomationNow(r.Context(), r.PathValue("id"), input.CommandID, input.TargetID))
 	})
 	mux.HandleFunc("GET /api/tasks/automations/{id}/history", func(w http.ResponseWriter, r *http.Request) {
 		history, err := a.AutomationRuns(r.Context(), r.PathValue("id"))
 		respond(w, history, err)
+	})
+	mux.HandleFunc("GET /api/tasks/automation-runs", func(w http.ResponseWriter, r *http.Request) {
+		runs, err := a.AllAutomationRuns(r.Context(), 120)
+		respond(w, runs, err)
 	})
 	mux.HandleFunc("PATCH /api/tasks/automation-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {

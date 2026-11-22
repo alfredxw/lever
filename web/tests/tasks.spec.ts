@@ -53,8 +53,17 @@ test("quiet automations keep their history and surface requests under Agents", a
     .getByLabel("名称", { exact: true })
     .fill("Quiet history fixture");
   await dialog.getByLabel("执行指令", { exact: true }).fill("Routine check");
-  await dialog.getByRole("button", { name: "归属 Agent", exact: true }).click();
-  await page.getByRole("option", { name: agent.name, exact: true }).click();
+  const ownerChip = dialog.getByRole("button", { name: agent.name, exact: true });
+  if (await ownerChip.count()) {
+    for (const selected of await dialog.locator('.automation-owner-chip[aria-pressed="true"]').all()) {
+      if ((await selected.getAttribute("aria-label")) !== agent.name) await selected.click();
+    }
+    if ((await ownerChip.getAttribute("aria-pressed")) !== "true") await ownerChip.click();
+  } else {
+    await dialog.getByRole("button", { name: "归属 Agent", exact: true }).click();
+    await page.getByRole("option", { name: agent.name, exact: true }).click();
+  }
+  await dialog.locator(".automation-advanced-details > summary").click();
   await expect(dialog.getByRole("radio", { name: "正常显示" })).toBeChecked();
   await expect(
     dialog.getByRole("switch", { name: "每次运行加入看板" }),
@@ -79,7 +88,7 @@ test("quiet automations keep their history and surface requests under Agents", a
   ).toBeVisible();
   await enable.click();
   await expect(
-    planSidebar.getByRole("list", { name: "已启用" }).getByTitle(quiet.name),
+    planSidebar.getByRole("list", { name: "静默守护" }).getByTitle(quiet.name),
   ).toBeVisible();
 
   const path = "/api/tasks/automations/";
@@ -96,12 +105,12 @@ test("quiet automations keep their history and surface requests under Agents", a
   }
   await detail.getByRole("button", { name: "立即运行" }).click();
   const history = page.getByRole("region", { name: "运行历史" });
-  await expect(history.getByText("已完成", { exact: true })).toBeVisible();
+  await expect(history.getByText("静默完成", { exact: true })).toBeVisible();
   const runs: AutomationRun[] = await (
     await page.request.get(path + quiet.id + "/history")
   ).json();
   const background = runs[0].execution!;
-  await history.getByRole("button", { name: "打开 Topic" }).click();
+  await history.getByRole("button", { name: "打开话题" }).click();
   await expect(
     page.locator(`[data-run-id="${background.runId}"]:visible`).first(),
   ).toBeVisible();
@@ -114,7 +123,7 @@ test("quiet automations keep their history and surface requests under Agents", a
   await automations.click();
   await expect(detail.getByRole("heading", { name: quiet.name })).toBeVisible();
   await expect(
-    history.getByRole("button", { name: "打开 Topic" }),
+    history.getByRole("button", { name: "打开话题" }),
   ).toBeVisible();
 
   const input = { destination: quiet.destination, trigger: quiet.trigger };
@@ -240,7 +249,7 @@ test("an automation work item opens its plan and handles an archived plan", asyn
   await detail.getByText("事件接入", { exact: true }).click();
   await expect(detail.getByRole("button", { name: "复制 cURL" })).toBeVisible();
 
-  const works = primary.getByRole("button", { name: "Works" });
+  const works = primary.getByRole("button", { name: "工作" });
   await works.click();
   const tasks = page.locator("#task-sidebar");
   await expect(tasks.getByRole("button", { name: "自动化" })).toHaveCount(0);
@@ -275,6 +284,273 @@ test("an automation work item opens its plan and handles an archived plan", asyn
   await expect(
     detail.getByRole("heading", { name: "Triage webhook" }),
   ).toBeVisible();
+});
+
+test("automations support inline editing, multi-target flat runs, silent monitor, and inline follow-up", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  const createAgent = async (name: string) => {
+    const res = await page.request.post("/api/agents", {
+      data: {
+        name,
+        profile: {
+          provider: "codex",
+          permission: "ask",
+          roots: [{ id: "root", path: scope }],
+          primaryRootId: "root",
+        },
+      },
+    });
+    expect(res.ok()).toBeTruthy();
+    return (await res.json()) as Agent;
+  };
+
+  const backendAgent = await createAgent("Auto Backend Owner");
+  const frontendAgent = await createAgent("Auto Frontend Owner");
+
+  const createPlan = async (body: Record<string, unknown>) => {
+    const res = await page.request.post("/api/tasks/automations", {
+      data: body,
+    });
+    expect(res.ok()).toBeTruthy();
+    return (await res.json()) as Automation;
+  };
+
+  const prPlan = await createPlan({
+    name: "Direct Issue PR fixture",
+    prompt: "Fix confirmed issues and open a PR",
+    notifyPolicy: "always",
+    deliveryMode: "deliver",
+    workItem: false,
+    trigger: { kind: "schedule", schedule: { intervalMinutes: 1440 } },
+    destination: { agentId: backendAgent.id, mode: "topic" },
+  });
+  const silentPlan = await createPlan({
+    name: "Silent Log Guard fixture",
+    prompt: "Check error logs silently",
+    notifyPolicy: "silent",
+    deliveryMode: "deliver",
+    workItem: false,
+    quiet: true,
+    trigger: { kind: "schedule", schedule: { intervalMinutes: 60 } },
+    destination: { agentId: backendAgent.id, mode: "topic" },
+  });
+
+  for (const plan of [prPlan, silentPlan]) {
+    const res = await page.request.post(`/api/tasks/automations/${plan.id}/run`, {
+      data: { commandId: crypto.randomUUID() },
+    });
+    expect(res.ok()).toBeTruthy();
+  }
+  await expect
+    .poll(async () => {
+      const feed: AutomationRun[] = await (
+        await page.request.get("/api/tasks/automation-runs")
+      ).json();
+      const mine = feed.filter(
+        (run) =>
+          run.automationId === prPlan.id || run.automationId === silentPlan.id,
+      );
+      return mine.length === 2 && mine.every((r) => r.status === "completed");
+    })
+    .toBe(true);
+
+  const primary = page.getByRole("navigation", { name: "主导航" });
+  await primary.getByRole("button", { name: "自动化", exact: true }).click();
+
+  // Default Inbox shows non-silent output flat, hides silent completion until toggled
+  const sidebar = page.locator("#automation-sidebar");
+  await sidebar.getByRole("button", { name: /产物收件箱/ }).click();
+  await expect(
+    page.locator(".automation-run-card", { hasText: prPlan.name }).first(),
+  ).toBeVisible();
+  await expect(
+    page.locator(".automation-run-card", { hasText: silentPlan.name }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: /静默完成/ }).click();
+  await expect(
+    page.locator(".automation-run-card", { hasText: silentPlan.name }).first(),
+  ).toBeVisible();
+
+  // Operations Monitor surfaces silent daemons alongside active plans
+  await sidebar.getByRole("button", { name: /运行监控/ }).click();
+  await expect(
+    page.locator(".automation-monitor-table", { hasText: silentPlan.name }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: /仅静默守护/ }).click();
+  await expect(
+    page.locator(".automation-monitor-table tbody tr", {
+      hasText: silentPlan.name,
+    }),
+  ).toHaveCount(1);
+
+  // Open plan -> inline multi-target addition without modal -> flat multi-target runs + scope filter
+  await sidebar.getByTitle(prPlan.name).click();
+  const detail = page.getByRole("article");
+  await expect(
+    detail.getByRole("heading", { name: prPlan.name }),
+  ).toBeVisible();
+  await detail.getByRole("button", { name: "多 Agent / 范围" }).click();
+  await expect(detail.getByText(/2 个范围共用本条规则/)).toBeVisible();
+
+  // Pick frontendAgent on the 2nd target row if needed and dispatch both targets
+  const secondTargetRow = detail.locator(".automation-target-row").nth(1);
+  await secondTargetRow.getByRole("button").first().click();
+  await page
+    .getByRole("option", { name: frontendAgent.name, exact: true })
+    .click();
+
+  await detail.getByRole("button", { name: "收起配置" }).click();
+  await detail.getByRole("button", { name: "立即运行" }).click();
+
+  const history = detail.getByRole("region", { name: "运行历史" });
+  await expect
+    .poll(async () => {
+      const runs: AutomationRun[] = await (
+        await page.request.get(`/api/tasks/automations/${prPlan.id}/history`)
+      ).json();
+      return runs.length >= 3 && runs.every((r) => r.status === "completed");
+    })
+    .toBe(true);
+  await expect(history.locator(".automation-run-card")).toHaveCount(3);
+
+  // Progressive scope filter bar filters flat runs directly
+  const scopeBar = detail.locator(".automation-scope-bar");
+  await scopeBar
+    .getByRole("button", { name: new RegExp(frontendAgent.name) })
+    .click();
+  await expect(history.locator(".automation-run-card")).toHaveCount(1);
+  await scopeBar.getByRole("button", { name: /全部/ }).click();
+  await expect(history.locator(".automation-run-card")).toHaveCount(3);
+
+  // Inline follow-up reply inside docked Reader + promote rule to plan instructions + convert to WorkItem
+  const reader = detail.locator(".automation-reader");
+  await expect(reader).toBeVisible();
+  const correction = "Always attach rollback SQL before opening schema PRs";
+  await reader.locator("textarea").fill(correction);
+  await reader.getByRole("button", { name: "发送" }).click();
+  await expect(reader.getByText(correction)).toBeVisible();
+
+  const promoteSave = page.waitForResponse(
+    (res) =>
+      res.url().includes(`/api/tasks/automations/${prPlan.id}`) &&
+      res.request().method() === "PUT",
+  );
+  await reader.getByRole("button", { name: /沉淀到全部 2 个范围/ }).click();
+  const updatedPlan: Automation = await (await promoteSave).json();
+  expect(updatedPlan.prompt).toContain(correction);
+
+  const convertRes = page.waitForResponse(
+    (res) =>
+      res.url().endsWith("/api/tasks/work-items") &&
+      res.request().method() === "POST",
+  );
+  await reader.getByRole("button", { name: "转为工作项" }).click();
+  expect((await convertRes).ok()).toBeTruthy();
+});
+
+test("automation artifacts stay searchable and open one at a time on narrow screens", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+  const agent: Agent = await (
+    await page.request.post("/api/agents", {
+      data: {
+        name: "Output reader fixture",
+        profile: {
+          provider: "codex",
+          permission: "ask",
+          roots: [{ id: "root", path: scope }],
+          primaryRootId: "root",
+        },
+      },
+    })
+  ).json();
+  const plan: Automation = await (
+    await page.request.post("/api/tasks/automations", {
+      data: {
+        name: "Output reader audit",
+        prompt: "Review changes",
+        deliveryMode: "audit",
+        notifyPolicy: "always",
+        workItem: false,
+        trigger: { kind: "schedule", schedule: { intervalMinutes: 1440 } },
+        destination: { mode: "topic", agentId: agent.id },
+      },
+    })
+  ).json();
+  await page.request.post(`/api/tasks/automations/${plan.id}/run`, {
+    data: { commandId: crypto.randomUUID() },
+  });
+  const history = async (): Promise<AutomationRun[]> =>
+    (
+      await page.request.get(`/api/tasks/automations/${plan.id}/history`)
+    ).json();
+  await expect.poll(async () => (await history())[0]?.status).toBe("completed");
+  const entry: AutomationRun = {
+    ...(await history())[0],
+    summary: "Three findings",
+    reportItems: ["Guard the cursor", "Add coverage", "Check retries"],
+    pullRequests: [
+      {
+        repository: "sample/lever",
+        number: "418",
+        label: "Handle empty cursor",
+      },
+    ],
+  };
+  await page.route("**/api/tasks/automation-runs", (route) =>
+    route.fulfill({ json: [entry] }),
+  );
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("button", { name: "自动化", exact: true })
+    .click();
+  const sidebar = page.locator("#automation-sidebar"),
+    card = page.locator(".automation-run-card"),
+    reader = page.locator(".automation-reader");
+  const search = sidebar.getByRole("searchbox");
+  await search.fill("sample/lever#418");
+  await expect(sidebar.getByTitle(plan.name)).toBeVisible();
+  await expect(
+    card.getByRole("link", { name: "审阅 PR 差异" }),
+  ).toHaveAttribute("href", "https://github.com/sample/lever/pull/418/files");
+  await expect(card.locator(".automation-report-list li")).toHaveCount(3);
+  await expect(reader).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  await expect(reader).toHaveCount(0);
+  await card.getByRole("button", { name: "详情与续聊" }).click();
+  await expect(reader).toBeVisible();
+  await expect(page.locator(".automation-feed-pane[inert]")).toHaveCount(1);
+  await reader.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(reader).toHaveCount(0);
+  await expect(card).toBeVisible();
+  const finding = card.locator(".automation-report-list li").filter({ hasText: "Guard the cursor" });
+  const fix = finding.getByRole("button", { name: "直接修" });
+  const panel = page.getByRole("dialog", { name: "交给 Agent" });
+  const findingItems = async () => {
+    const items = await (await page.request.get("/api/tasks/work-items")).json();
+    return items.filter((item: { origin?: { runId?: string }; body: string }) =>
+      item.origin?.runId === entry.execution?.runId && item.body === "Guard the cursor");
+  };
+  await fix.click();
+  await panel.getByRole("button", { name: "取消" }).click();
+  expect(await findingItems()).toHaveLength(0);
+  await fix.click();
+  await panel.locator('button[type="submit"]').click();
+  await expect(panel).toHaveCount(0);
+  const [created] = await findingItems();
+  await expect.poll(async () => {
+    const runs: TaskExecution[] = await (await page.request.get("/api/tasks/executions")).json();
+    return runs.find((run) => run.taskId === created.id)?.agentId;
+  }).toBe(agent.id);
 });
 
 test("GitHub Sources and saved Board views expose Issue and PR choices", async ({
@@ -360,7 +636,7 @@ test("GitHub Sources and saved Board views expose Issue and PR choices", async (
     route.fulfill({ json: note }),
   );
 
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   const sidebar = page.locator("#task-sidebar");
   const sourcesLink = sidebar.getByRole("button", {
     name: "来源",
@@ -457,7 +733,7 @@ test("GitHub Sources and saved Board views expose Issue and PR choices", async (
     exact: true,
   });
   const boardToggle = sidebar.getByRole("button", {
-    name: "Board",
+    name: "看板",
     exact: true,
   });
   await expect(savedView).toHaveAttribute("aria-current", "page");
@@ -505,7 +781,7 @@ test("GitHub Sources and saved Board views expose Issue and PR choices", async (
   ).toBeChecked();
   await expect(savedView).toBeVisible();
   const boardRows = sidebar
-    .getByRole("list", { name: "Board", exact: true })
+    .getByRole("list", { name: "看板", exact: true })
     .locator(".task-nav-child");
   await expect(boardRows.first()).toHaveText("全部");
   const views: TaskView[] = await (
@@ -520,7 +796,7 @@ test("GitHub Sources and saved Board views expose Issue and PR choices", async (
   expect(fresh).toMatchObject({ group: "status", filters: {} });
   await freshView.press("Shift+Space", { delay: 40 });
   const dragStatus = sidebar
-    .getByRole("list", { name: "Board", exact: true })
+    .getByRole("list", { name: "看板", exact: true })
     .getByRole("status");
   await expect(dragStatus).toContainText("over droppable area " + fresh.id);
   await page.keyboard.press("ArrowUp");
@@ -536,7 +812,7 @@ test("GitHub Sources and saved Board views expose Issue and PR choices", async (
   await expect(board).toContainText("Written fixture task");
 
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await expect(boardRows.first()).toHaveText("全部");
   await expect(boardRows.nth(1)).toHaveText("Fresh board");
   await sourceLink.click();
@@ -625,7 +901,7 @@ test("Agent shortcuts share selections across toolbar and searchable picker", as
     route.fulfill({ json: note }),
   );
   const openBoard = async () => {
-    await page.getByRole("button", { name: "Works", exact: true }).click();
+    await page.getByRole("button", { name: "工作", exact: true }).click();
     await page
       .locator("#task-sidebar")
       .getByRole("button", { name: "全部", exact: true })
@@ -720,11 +996,11 @@ test("notes inherit and override Agent mentions, link execution, and filter task
   expect(configuredChat.ok()).toBeTruthy();
   const destination: Chat = await configuredChat.json();
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   const sidebar = page.locator("#task-sidebar");
   await expect(
-    sidebar.getByRole("button", { name: /^(Board|笔记|来源)$/ }),
-  ).toHaveText(["Board", "笔记", "来源"]);
+    sidebar.getByRole("button", { name: /^(看板|笔记|来源)$/ }),
+  ).toHaveText(["看板", "笔记", "来源"]);
   await sidebar.getByRole("button", { name: "工作笔记", exact: true }).click();
   const note = page.getByRole("textbox", { name: "工作笔记", exact: true });
   await note.click();
@@ -828,7 +1104,7 @@ test("notes inherit and override Agent mentions, link execution, and filter task
   expect(chat.runs[0].input).toBe(
     "Review search refresh\n\nInclude a search regression check",
   );
-  await page.getByRole("button", { name: "打开 Topic", exact: true }).click();
+  await page.getByRole("button", { name: "打开话题", exact: true }).click();
   await expect(page.locator(".topic-conversation:visible")).toContainText(
     "Review search refresh",
   );
@@ -865,25 +1141,36 @@ test("notes inherit and override Agent mentions, link execution, and filter task
   ).toHaveValue("Release checklist");
   const settings = page.getByRole("dialog", { name: "交接设置" });
   await page.getByRole("button", { name: "交接设置", exact: true }).click();
+  await expect(
+    settings.getByRole("button", { name: "保存", exact: true }),
+  ).toHaveCount(0);
+  const saveDefaultAgent = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/handover") &&
+      response.request().method() === "PUT",
+  );
   await settings.getByRole("button", { name: "默认 Agent" }).click();
   await page.getByRole("option", { name: "Web Fixture", exact: true }).click();
-  await settings.getByText("已有 Chat", { exact: true }).click();
+  expect(await (await saveDefaultAgent).json()).toEqual({
+    agentId: fixtureAgents[0].id,
+  });
+  await settings.getByText("已有对话", { exact: true }).click();
   await settings
-    .getByRole("button", { name: "选择 Chat", exact: true })
-    .click();
-  await page
-    .getByRole("option", { name: "Release handovers", exact: true })
+    .getByRole("button", { name: "选择对话", exact: true })
     .click();
   const saveSettings = page.waitForResponse(
     (response) =>
       response.url().endsWith("/handover") &&
       response.request().method() === "PUT",
   );
-  await settings.getByRole("button", { name: "保存", exact: true }).click();
+  await page
+    .getByRole("option", { name: "Release handovers", exact: true })
+    .click();
   expect(await (await saveSettings).json()).toEqual({
     agentId: fixtureAgents[0].id,
     chatId: destination.id,
   });
+  await page.keyboard.press("Escape");
   await expect(settings).toBeHidden();
   await page.getByRole("button", { name: "文档操作" }).click();
   await page.getByRole("menuitem", { name: "笔记所属项目" }).click();
@@ -1111,7 +1398,7 @@ test("notes inherit and override Agent mentions, link execution, and filter task
   await expect(board).toContainText("Draft the release");
 
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await expect(
     sidebar.getByRole("button", { name: "Release checklist", exact: true }),
   ).toBeVisible();
@@ -1235,7 +1522,7 @@ test("the Board follows a dispatched Agent without closing task detail", async (
   expect(saved.ok()).toBeTruthy();
 
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await page
     .locator("#task-sidebar")
     .getByRole("button", { name: "全部", exact: true })
@@ -1248,6 +1535,7 @@ test("the Board follows a dispatched Agent without closing task detail", async (
   );
   await detail.getByRole("button", { name: "关闭任务详情" }).click();
 
+  await card.hover();
   await card.getByRole("button", { name: "交给 Agent", exact: true }).click();
   const dispatch = page.getByRole("dialog", { name: "交给 Agent" });
   await dispatch.getByRole("button", { name: "选择 Agent" }).click();
@@ -1261,10 +1549,10 @@ test("the Board follows a dispatched Agent without closing task detail", async (
     .getByRole("textbox", { name: "备注（可选）" })
     .fill("[approval]");
   await dispatch.getByRole("button", { name: "派发", exact: true }).click();
-  const owner = card.locator(".task-board-card-footer");
-  await expect(owner).toContainText(name);
-  await expect(owner.locator(".agent-avatar")).toHaveText("📋");
-  await expect(owner.locator("time")).toHaveAttribute("datetime", /T/);
+  const footer = card.locator(".task-board-card-footer");
+  await expect(footer).toContainText(name);
+  await expect(footer.locator(".agent-avatar")).toHaveText("📋");
+  await expect(footer.locator("time")).toHaveAttribute("datetime", /T/);
   await expect(card.getByText("待你处理", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: new RegExp(title) }).click();
   const activity = detail.getByRole("region", { name: "动态" });
@@ -1299,6 +1587,7 @@ test("the Board follows a dispatched Agent without closing task detail", async (
   expect(followUp.ok()).toBeTruthy();
   await expect(activity).toContainText("Confirm the export passes");
   await expect(activity.locator("time")).toHaveCount(3);
+  await expect(detail.getByRole("button", { name: "标记完成" })).toBeVisible();
 
   const delegate = await page.request.post("/api/messages", {
     data: {
@@ -1389,7 +1678,7 @@ test("Notes limit handover to lists and to-dos and can skip confirmation", async
     },
   });
   expect(created.ok()).toBeTruthy();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await page.getByRole("button", { name: title, exact: true }).click();
   const editor = page.getByRole("textbox", { name: "工作笔记", exact: true });
   for (const value of ["Ordinary text", "For reference", "Include feedback"]) {
@@ -1409,22 +1698,39 @@ test("Notes limit handover to lists and to-dos and can skip confirmation", async
   const openSettings = page.getByRole("button", { name: "交接设置" });
   const settings = page.getByRole("dialog", { name: "交接设置" });
   const oneClick = settings.getByRole("switch", { name: "一键交接" });
-  const save = settings.getByRole("button", { name: "保存", exact: true });
   await openSettings.click();
+  await expect(
+    settings.getByRole("button", { name: "保存", exact: true }),
+  ).toHaveCount(0);
   await expect(oneClick).not.toBeChecked();
+  const saveOneClick = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/handover") &&
+      response.request().method() === "PUT",
+  );
   await oneClick.click();
-  await save.click();
+  expect(await (await saveOneClick).json()).toEqual({ oneClick: true });
+  await page.keyboard.press("Escape");
   await expect(settings).toBeHidden();
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await todo.click();
   await expect(sheet.getByRole("button", { name: "选择 Agent" })).toBeVisible();
   await page.keyboard.press("Escape");
   await openSettings.click();
   await expect(oneClick).toBeChecked();
+  const saveFallback = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/handover") &&
+      response.request().method() === "PUT",
+  );
   await settings.getByRole("button", { name: "默认 Agent" }).click();
   await page.getByRole("option", { name: fallback.name, exact: true }).click();
-  await save.click();
+  expect(await (await saveFallback).json()).toEqual({
+    agentId: fallback.id,
+    oneClick: true,
+  });
+  await page.keyboard.press("Escape");
   await expect(settings).toBeHidden();
 
   const queueResponse = () =>
@@ -1486,7 +1792,7 @@ test("Chinese composition saves the confirmed text when switching notes", async 
   });
   expect(created.ok()).toBeTruthy();
   const initial: TaskNote = await created.json();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   const openNote = page.getByRole("button", { name: title, exact: true });
   await openNote.click();
   const note = page.getByRole("textbox", { name: "工作笔记", exact: true });
@@ -1551,7 +1857,7 @@ test("a save acknowledgement during composition advances the next write", async 
   expect(
     (await page.request.post("/api/tasks/notes", { data: { id, title } })).ok(),
   ).toBeTruthy();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await page.getByRole("button", { name: title, exact: true }).click();
   const note = page.getByRole("textbox", { name: "工作笔记", exact: true });
   await note.click();
@@ -1633,12 +1939,12 @@ test("concurrent note edits merge when independent and recover when they overlap
       })
     ).ok(),
   ).toBeTruthy();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await page.getByRole("button", { name: title, exact: true }).click();
   const note = page.getByRole("textbox", { name: "工作笔记", exact: true });
   const other = await page.context().newPage();
   await other.goto(url);
-  await other.getByRole("button", { name: "Works", exact: true }).click();
+  await other.getByRole("button", { name: "工作", exact: true }).click();
   await other.getByRole("button", { name: title, exact: true }).click();
   const peer = other.getByRole("textbox", { name: "工作笔记", exact: true });
   await expect(peer.locator("p").first()).toContainText("First task");
@@ -1781,7 +2087,7 @@ test("note block conversion preserves formatting and existing task markers", asy
   });
   expect(response.ok()).toBeTruthy();
 
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   const openNote = page.getByRole("button", { name: title, exact: true });
   await openNote.click();
   const editor = page.getByRole("textbox", { name: "工作笔记", exact: true });
@@ -1856,7 +2162,7 @@ test("note block conversion preserves formatting and existing task markers", asy
     })
     .not.toBe(((await response.json()) as TaskNote).version);
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await expect(body).toBeVisible();
   await expect(body.locator("xpath=ancestor::p")).toHaveCSS(
     "text-align",
@@ -1904,7 +2210,7 @@ test("table rail actions keep the clicked column when a merged cell spans it", a
     ).ok(),
   ).toBeTruthy();
   await page.reload();
-  await page.getByRole("button", { name: "Works", exact: true }).click();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
   await page.getByRole("button", { name: title, exact: true }).click();
   const note = page.getByRole("textbox", { name: "工作笔记", exact: true });
   const table = note.locator("table");
@@ -1945,4 +2251,378 @@ test("table rail actions keep the clicked column when a merged cell spans it", a
     : "Control";
   await page.keyboard.press(`${mod}+z`);
   await expect(bottomCells).toHaveText(["A2", "B2", "C2"]);
+});
+
+
+test("Quick-create Work Items, Agent Control Dock pause/concurrency, Drop-to-Dispatch, and List batch enqueue", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  const agentName = "Dock Worker";
+  const agentResp = await page.request.post("/api/agents", {
+    data: {
+      name: agentName,
+      avatar: { kind: "emoji", value: "⚙️", color: "gradient-coast" },
+      profile: {
+        provider: "codex",
+        model: "gpt-test",
+        permission: "ask",
+        skills: [],
+        delegations: [],
+        roots: [{ id: "root", path: scope }],
+        primaryRootId: "root",
+      },
+    },
+  });
+  expect(agentResp.ok()).toBeTruthy();
+
+  await page.reload();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
+  await page
+    .locator("#task-sidebar")
+    .getByRole("button", { name: "全部", exact: true })
+    .click();
+
+  const board = page.locator(".tasks-board");
+  // Kanban Board is the default display mode with text labels.
+  await expect(
+    board
+      .getByRole("radiogroup", { name: "视图模式" })
+      .getByRole("radio", { name: "看板", exact: true }),
+  ).toBeChecked();
+
+  const dock = board.getByRole("region", { name: "Agent 消费控制" });
+  const capsule = dock
+    .locator(".task-agent-capsule")
+    .filter({ hasText: agentName });
+  await expect(capsule).toBeVisible();
+
+  // Pause agent auto-consumption directly from the Agent Control Dock.
+  await capsule.getByRole("button", { name: `暂停 ${agentName} 自动消费` }).click();
+  await expect(capsule).toContainText("已暂停");
+
+  // Quick-create a human Work Item with Priority + Project -> lands directly in "待办" column (not "待确认").
+  const quickInput = board.getByRole("textbox", { name: "工作项标题" });
+  await quickInput.fill("Implement dock drop dispatch");
+  await board.getByRole("button", { name: "优先级", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "优先级", exact: true })
+    .getByRole("button", { name: "高", exact: true })
+    .click();
+  await board.getByRole("button", { name: "项目", exact: true }).click();
+  const projectDialog = page.getByRole("dialog", { name: "项目", exact: true });
+  await projectDialog.getByRole("textbox", { name: "项目名称" }).fill("Core");
+  await projectDialog.getByRole("textbox", { name: "项目名称" }).press("Enter");
+  await quickInput.press("Enter");
+
+  const todoColumn = board.locator('.task-board-column[data-column="todo"]');
+  const queuedColumn = board.locator('.task-board-column[data-column="queued"]');
+  const firstCard = todoColumn
+    .locator(".task-board-card")
+    .filter({ hasText: "Implement dock drop dispatch" });
+  await expect(firstCard).toBeVisible();
+  await expect(firstCard).toContainText("Core");
+  await expect(firstCard).not.toContainText("待确认");
+  await expect(
+    board.locator('.task-board-column[data-column="done"]'),
+  ).toHaveCount(0);
+
+  // Drop-to-Dispatch: drag the Kanban card directly onto the paused Agent capsule in the dock.
+  const cardBox = (await firstCard.locator(".task-board-card-open").boundingBox())!;
+  const capsuleBox = (await capsule.boundingBox())!;
+  await page.mouse.move(
+    cardBox.x + cardBox.width / 2,
+    cardBox.y + cardBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    cardBox.x + cardBox.width / 2,
+    cardBox.y + cardBox.height / 2 - 20,
+    { steps: 4 },
+  );
+  await page.mouse.move(
+    capsuleBox.x + capsuleBox.width / 2,
+    capsuleBox.y + capsuleBox.height / 2,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+
+  const queuedCard = queuedColumn
+    .locator(".task-board-card")
+    .filter({ hasText: "Implement dock drop dispatch" });
+  await expect(queuedCard).toBeVisible();
+  await expect(queuedCard).toContainText("已暂停消费");
+  await expect(capsule).toContainText("+1");
+
+  // Open Agent queue settings popover: update concurrency to 2 and resume auto-consume.
+  await capsule
+    .getByRole("button", { name: `${agentName} 队列设置` })
+    .click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${agentName} 队列设置`,
+  });
+  await settingsDialog
+    .getByRole("radiogroup", { name: "最大并发槽位" })
+    .getByRole("radio", { name: "2", exact: true })
+    .click();
+  await expect(capsule).toContainText("/2");
+  await settingsDialog.getByRole("switch", { name: "自动消费队列" }).click();
+  await page.keyboard.press("Escape");
+
+  const reviewColumn = board.locator('.task-board-column[data-column="review"]');
+  const reviewCard = reviewColumn
+    .locator(".task-board-card")
+    .filter({ hasText: "Implement dock drop dispatch" });
+  await expect(reviewCard).toBeVisible();
+  await reviewCard
+    .getByRole("button", { name: "标记完成", exact: true })
+    .click();
+  await board.getByRole("button", { name: "显示已完成", exact: true }).click();
+  await expect(
+    board
+      .locator('.task-board-column[data-column="done"]')
+      .locator(".task-board-card")
+      .filter({ hasText: "Implement dock drop dispatch" }),
+  ).toBeVisible();
+
+  // Switch to List View and verify multi-select batch enqueue.
+  await board
+    .getByRole("radiogroup", { name: "视图模式" })
+    .getByRole("radio", { name: "列表", exact: true })
+    .click();
+  await quickInput.fill("Batch item one");
+  await quickInput.press("Enter");
+  await quickInput.fill("Batch item two");
+  await quickInput.press("Enter");
+
+  await board
+    .getByRole("checkbox", { name: "选择 Batch item one", exact: true })
+    .click();
+  await board
+    .getByRole("checkbox", { name: "选择 Batch item two", exact: true })
+    .click();
+  const batchBar = board.getByRole("region", { name: "已选 2 项" });
+  await expect(batchBar).toBeVisible();
+  await batchBar.getByRole("button", { name: "批量入队" }).click();
+  await page
+    .getByRole("dialog", { name: "批量入队" })
+    .getByRole("button", { name: agentName, exact: true })
+    .click();
+  await expect(batchBar).toBeHidden();
+});
+
+test("Needs-You Inbox approves requests in place and sends inline follow-ups", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  const agentName = "Inbox Approver";
+  const agentResp = await page.request.post("/api/agents", {
+    data: {
+      name: agentName,
+      avatar: { kind: "emoji", value: "🛡️", color: "gradient-coast" },
+      profile: {
+        provider: "codex",
+        model: "gpt-test",
+        permission: "ask",
+        skills: [],
+        delegations: [],
+        roots: [{ id: "root", path: scope }],
+        primaryRootId: "root",
+      },
+    },
+  });
+  expect(agentResp.ok()).toBeTruthy();
+  const agent: Agent = await agentResp.json();
+
+  const createdResp = await page.request.post("/api/tasks/work-items", {
+    data: {
+      title: "Approve release deploy",
+      body: "[approval]",
+      priority: "urgent",
+      project: "Release",
+      assigneeAgentId: agent.id,
+    },
+  });
+  expect(createdResp.ok()).toBeTruthy();
+  const item = await createdResp.json();
+
+  const queued = await page.request.post("/api/tasks/queue", {
+    data: {
+      commandId: crypto.randomUUID(),
+      record: "workItem",
+      taskId: item.id,
+      agentId: agent.id,
+    },
+  });
+  expect(queued.ok()).toBeTruthy();
+
+  await page.reload();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
+  const sidebar = page.locator("#task-sidebar");
+  const inboxNav = sidebar.getByRole("button", { name: /^需我处理/ });
+  await expect(inboxNav).toContainText(/[1-9]/);
+  await inboxNav.click();
+
+  const inbox = page.locator(".task-inbox");
+  const inboxRow = inbox
+    .locator(".task-inbox-item")
+    .filter({ hasText: "Approve release deploy" });
+  await expect(inboxRow).toBeVisible();
+  await expect(inboxRow).toContainText("需审批");
+  await inboxRow.click();
+
+  const detailPane = inbox.locator(".task-inbox-detail");
+  // Approve the pending RequestCard right inside Works Inbox!
+  const allowButton = detailPane.getByRole("button", {
+    name: "仅允许此操作",
+    exact: true,
+  });
+  await expect(allowButton).toBeVisible();
+  await allowButton.click();
+
+  await expect(detailPane).toContainText("Approval received:");
+  await expect(
+    detailPane.getByRole("button", { name: "标记完成", exact: true }),
+  ).toBeVisible();
+
+  // Send an inline follow-up right inside the detail pane without leaving Works.
+  const followupInput = detailPane.getByRole("textbox", { name: "发送追问" });
+  await followupInput.fill("Verify smoke check output");
+  await followupInput.press("Enter");
+  await expect(detailPane).toContainText("Verify smoke check output");
+  await expect(
+    detailPane.getByRole("button", { name: "标记完成", exact: true }),
+  ).toBeVisible();
+
+  // Mark complete -> item clears from Inbox.
+  await detailPane.getByRole("button", { name: "标记完成", exact: true }).click();
+  await expect(inboxRow).toHaveCount(0);
+});
+
+test("Task deadlines prioritize earlier DDL on Board & List, configure custom reminders, and surface overdue items in Inbox", async ({
+  page,
+}) => {
+  const { url } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  // Create three work items: urgent with no DDL, medium with far DDL, low with overdue DDL.
+  const now = Date.now();
+  const urgentNoDDL = await page.request.post("/api/tasks/work-items", {
+    data: { title: "Urgent without DDL", priority: "urgent" },
+  });
+  expect(urgentNoDDL.ok()).toBeTruthy();
+
+  const laterDDL = await page.request.post("/api/tasks/work-items", {
+    data: {
+      title: "Later DDL task",
+      priority: "medium",
+      deadline: { dueAt: now + 72 * 60 * 60 * 1000, remindOffsets: [60] },
+    },
+  });
+  expect(laterDDL.ok()).toBeTruthy();
+
+  const overdueDDL = await page.request.post("/api/tasks/work-items", {
+    data: {
+      title: "Overdue DDL task",
+      priority: "low",
+      deadline: { dueAt: now - 2 * 60 * 60 * 1000, remindOffsets: [30] },
+    },
+  });
+  expect(overdueDDL.ok()).toBeTruthy();
+
+  await page.getByRole("button", { name: "工作", exact: true }).click();
+  const sidebar = page.locator("#task-sidebar");
+  await sidebar.getByRole("button", { name: "全部", exact: true }).click();
+
+  // Default sort ("截止优先"): Overdue -> Later -> Urgent without DDL.
+  const todoCards = page.locator(
+    '.task-board-column[data-column="todo"] .task-board-card-title',
+  );
+  await expect(todoCards).toHaveText([
+    "Overdue DDL task",
+    "Later DDL task",
+    "Urgent without DDL",
+  ]);
+
+  // Switch sort to Priority ("优先级"): Urgent without DDL -> Later -> Overdue.
+  await page.getByRole("radio", { name: "优先级", exact: true }).click();
+  await expect(todoCards).toHaveText([
+    "Urgent without DDL",
+    "Later DDL task",
+    "Overdue DDL task",
+  ]);
+
+  // Switch back to Deadline sort and create a task with quick deadline + custom reminder.
+  await page.getByRole("radio", { name: "截止优先", exact: true }).click();
+  const quickForm = page.locator(".task-quick-create");
+  await quickForm.getByRole("button", { name: "截止时间" }).click();
+  const popover = page.locator(".task-deadline-popover");
+  await expect(popover).toBeVisible();
+  await popover.getByRole("button", { name: /^明天/ }).click();
+  await popover.getByRole("button", { name: "自定义" }).click();
+  await popover.getByLabel("提前数值").fill("2");
+  await popover.getByRole("button", { name: "添加", exact: true }).click();
+  await popover.getByRole("button", { name: "保存", exact: true }).click();
+
+  await quickForm.getByLabel("工作项标题").fill("Tomorrow deadline task");
+  await quickForm.getByLabel("工作项标题").press("Enter");
+
+  await expect(todoCards).toHaveText([
+    "Overdue DDL task",
+    "Tomorrow deadline task",
+    "Later DDL task",
+    "Urgent without DDL",
+  ]);
+
+  // Open detail dialog for Tomorrow deadline task and verify reminder + deadline display.
+  await page
+    .locator(".task-board-card")
+    .filter({ hasText: "Tomorrow deadline task" })
+    .locator(".task-board-card-open")
+    .click();
+  const detail = page.locator(".task-board-detail");
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("提前 2 天");
+  await detail.getByRole("button", { name: "关闭任务详情" }).click();
+
+  // Overdue task surfaces inside Needs-You Inbox with snooze & postpone banner.
+  const inboxNav = sidebar.getByRole("button", { name: /^需我处理/ });
+  await expect(inboxNav).toContainText(/[1-9]/);
+  await inboxNav.click();
+  const inbox = page.locator(".task-inbox");
+  const overdueRow = inbox
+    .locator(".task-inbox-item")
+    .filter({ hasText: "Overdue DDL task" });
+  await expect(overdueRow).toBeVisible();
+  await expect(overdueRow).toContainText("已逾期");
+  await overdueRow.click();
+  await expect(inbox.locator(".task-detail-deadline-banner")).toBeVisible();
+  await inbox
+    .locator(".task-detail-deadline-banner")
+    .getByRole("button", { name: "顺延至明天", exact: true })
+    .click();
+  await expect(overdueRow).toHaveCount(0);
+
+  // Settings page exposes global default reminder lead time & all-day wall time.
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "通知与提醒" }),
+  ).toBeVisible();
+  await page
+    .getByRole("radiogroup", { name: "待办默认提前提醒" })
+    .getByRole("radio", { name: "1 小时" })
+    .click();
+  await expect
+    .poll(async () => {
+      const resp = await page.request.get("/api/settings/task-reminders");
+      return (await resp.json()).defaultRemindOffsets;
+    })
+    .toEqual([60]);
 });

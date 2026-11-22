@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS automations(
   id TEXT PRIMARY KEY, data TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('active','paused','archived')),
   next_at INTEGER, event_token TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-  bound_chat_id TEXT REFERENCES chats(id)
+  bound_chat_id TEXT REFERENCES chats(id),
+  bound_chats TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS automation_due ON automations(next_at) WHERE state='active';
 CREATE TABLE IF NOT EXISTS automation_runs(
@@ -187,11 +188,12 @@ CREATE TABLE IF NOT EXISTS automation_runs(
   planned_at INTEGER, created_at TEXT NOT NULL, event_count INTEGER NOT NULL DEFAULT 0,
   run_id TEXT UNIQUE REFERENCES runs(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0,
-  work_item INTEGER NOT NULL DEFAULT 1
+  work_item INTEGER NOT NULL DEFAULT 1,
+  target_id TEXT NOT NULL DEFAULT '',
+  agent_id TEXT NOT NULL DEFAULT '',
+  event_payload TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS automation_history ON automation_runs(automation_id);
-CREATE UNIQUE INDEX IF NOT EXISTS automation_slot ON automation_runs(automation_id, planned_at)
-  WHERE trigger='schedule';
 CREATE TABLE IF NOT EXISTS automation_events(
   id INTEGER PRIMARY KEY, automation_id TEXT NOT NULL REFERENCES automations(id),
   event_key TEXT, payload TEXT, UNIQUE(automation_id, event_key)
@@ -280,7 +282,10 @@ UPDATE agents SET data = json_remove(data, '$.revision') WHERE json_type(data, '
 		}
 	}
 	if err == nil {
-		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS session_run_positions ON runs(session_id, position);
+		_, err = db.Exec(`DROP INDEX IF EXISTS automation_slot;
+CREATE UNIQUE INDEX IF NOT EXISTS automation_slot_target ON automation_runs(automation_id, target_id, planned_at)
+  WHERE trigger='schedule';
+CREATE INDEX IF NOT EXISTS session_run_positions ON runs(session_id, position);
 CREATE UNIQUE INDEX IF NOT EXISTS chat_run_positions ON runs(chat_id, position);
 CREATE INDEX IF NOT EXISTS chat_title_runs ON chats(title_run_id) WHERE title_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS comparison_runs ON runs(session_id, sequence) WHERE json_type(data,'$.comparisonId') = 'text';`)
@@ -299,7 +304,12 @@ func addStoreColumns(db *sql.DB) error {
 	for _, column := range []struct{ table, name, definition string }{
 		{"note_handovers", "one_click", "INTEGER NOT NULL DEFAULT 0"},
 		{"automations", "bound_chat_id", "TEXT REFERENCES chats(id)"},
+		{"automations", "bound_chats", "TEXT NOT NULL DEFAULT '{}'"},
 		{"automation_runs", "work_item", "INTEGER NOT NULL DEFAULT 1"},
+		{"automation_runs", "target_id", "TEXT NOT NULL DEFAULT ''"},
+		{"automation_runs", "agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"automation_runs", "event_payload", "TEXT NOT NULL DEFAULT ''"},
+		{"task_triage", "disposition", "TEXT NOT NULL DEFAULT '' CHECK (disposition IN ('','todo','deleted'))"},
 		{"chats", "title_run_id", "TEXT"},
 		{"sessions", "title_run_id", "TEXT"},
 		{"task_sources", "lark_section_ids", "TEXT NOT NULL DEFAULT '[]'"},

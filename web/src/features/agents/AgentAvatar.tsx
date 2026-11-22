@@ -12,7 +12,7 @@ export function AgentAvatar({
   size = "default",
 }: {
   agent: Pick<Agent, "id" | "name" | "avatar">;
-  size?: "default" | "sm";
+  size?: "default" | "sm" | "xs";
 }) {
   const { avatar } = agent;
   const color = avatar?.color;

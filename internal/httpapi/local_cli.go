@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -48,6 +49,40 @@ FROM agents WHERE json_extract(data,'$.archived') IS NOT 1 ORDER BY json_extract
 		}
 		item, err := a.CreateWorkItem(r.Context(), r.PathValue("id"), nil, input)
 		respond(w, item, err)
+	})
+	mux.HandleFunc("GET /automations", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			respond(w, nil, &app.Error{Status: http.StatusForbidden, Message: "Automation commands are not available inside an active Lever execution"})
+			return
+		}
+		type automation struct {
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			Trigger       string `json:"trigger"`
+			Enabled       bool   `json:"enabled"`
+			AcceptsEvents bool   `json:"acceptsEvents"`
+		}
+		items, err := store.List[automation](r.Context(), a.Store.DB, `SELECT json_object(
+'id',id,
+'name',COALESCE(json_extract(data,'$.name'),''),
+'trigger',COALESCE(json_extract(data,'$.trigger.kind'),''),
+'enabled',json(CASE state WHEN 'active' THEN 'true' ELSE 'false' END),
+'acceptsEvents',json(CASE WHEN event_token<>'' THEN 'true' ELSE 'false' END)
+) FROM automations WHERE state<>'archived' ORDER BY rowid DESC`)
+		respond(w, items, err)
+	})
+	mux.HandleFunc("POST /automations/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			respond(w, nil, &app.Error{Status: http.StatusForbidden, Message: "Automation commands are not available inside an active Lever execution"})
+			return
+		}
+		var payload json.RawMessage
+		if err := readLimit(w, r, &payload, app.MaxAutomationEventBytes); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		err := a.AppendLocalAutomationEvent(r.Context(), r.PathValue("id"), r.Header.Get("Idempotency-Key"), payload)
+		respond(w, map[string]bool{"accepted": true}, err)
 	})
 	mux.HandleFunc("GET /chats", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {

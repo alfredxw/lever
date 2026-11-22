@@ -1697,7 +1697,11 @@ export default function App() {
       composerInsertions,
     ],
   );
-  const openTurnChanges = useEventCallback((selection: TurnSelection) => {
+  const openTurnChanges = useEventCallback((selection: TurnSelection, owner: string) => {
+    if (page === "automations") {
+      if (selected !== owner) choose(owner);
+      setPage("agents");
+    }
     openTab(
       {
         id: `diff:${selection.runId}:${selection.rootId}`,
@@ -1706,7 +1710,7 @@ export default function App() {
         diff: selection,
         sessionId: selection.sessionId,
       },
-      selected,
+      page === "automations" ? owner : selected,
       "side",
     );
   });
@@ -2473,10 +2477,16 @@ export default function App() {
           {page === "automations" && (
             <AutomationsPage
               agents={overview.data?.agents ?? noAgents}
+              defaultAgentId={selected}
               chats={overview.data?.chats ?? noChats}
+              requests={overview.data?.requests ?? noRequests}
               selectedId={selectedAutomation}
               onSelect={setSelectedAutomation}
               onOpenChat={openTaskChat}
+              onOpenFile={(file, source) => {
+                setPage("agents");
+                openChatFile(file, source);
+              }}
             />
           )}
           {tasksOpened && (
