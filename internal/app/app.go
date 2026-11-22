@@ -1098,6 +1098,9 @@ func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 		if run.Status == "unknown" {
 			return conflict("Execution status is unknown; confirm the external runtime has stopped first")
 		}
+		if !pause && run.Status == "paused" {
+			return a.Store.Write(ctx, func(tx *sql.Tx) error { return finishPausedRun(tx, run) })
+		}
 		if pause && run.Status != "paused" {
 			return conflict("This reply is no longer running")
 		}

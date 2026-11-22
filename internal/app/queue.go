@@ -112,13 +112,7 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 func reserveRun(tx *sql.Tx, run *model.Run, session *model.Session) error {
 	paused, err := store.Get[model.Run](context.Background(), tx, "SELECT data FROM runs WHERE session_id=? AND status='paused'", session.ID)
 	if err == nil {
-		paused.Status, paused.FinishedAt = "interrupted", now()
-		for i := range paused.Items {
-			if paused.Items[i].Status == "paused" {
-				paused.Items[i].Status = "interrupted"
-			}
-		}
-		if err := store.SaveRun(tx, paused); err != nil {
+		if err := finishPausedRun(tx, paused); err != nil {
 			return err
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {

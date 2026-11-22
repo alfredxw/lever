@@ -9,6 +9,16 @@ import (
 	"lever/internal/store"
 )
 
+func finishPausedRun(tx *sql.Tx, run model.Run) error {
+	run.Status, run.FinishedAt, run.ResumeAfterShutdown = "interrupted", now(), false
+	for i := range run.Items {
+		if run.Items[i].Status == "paused" {
+			run.Items[i].Status = "interrupted"
+		}
+	}
+	return store.SaveRun(tx, run)
+}
+
 func (a *App) Resume(ctx context.Context, runID, nativeTurnID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
