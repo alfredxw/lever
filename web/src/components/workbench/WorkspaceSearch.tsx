@@ -8,8 +8,8 @@ import {
   ChevronDown,
   FileCode,
   Folder,
-  GitBranch,
   MessageCircle,
+  MessagesCircle,
   Search,
   TextSearch,
   UsersRound,
@@ -265,7 +265,7 @@ function MessageSearchPreview({ parts }: { parts: MessageMatchPart[] }) {
 const icons = {
   agent: UsersRound,
   chat: MessageCircle,
-  topic: GitBranch,
+  topic: MessagesCircle,
   message: TextSearch,
   file: FileCode,
 };

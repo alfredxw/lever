@@ -1,5 +1,5 @@
 import { useState, type RefObject } from "react";
-import { ChevronDown, MessagesSquare, RotateCcw } from "lucide-react";
+import { ChevronDown, MessagesCircle, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Agent, Chat, Conversation } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
@@ -124,7 +124,7 @@ export function ClearedConversations({
                     <span className="conversation-content">
                       <span className="contact-name">
                         {topic && (
-                          <MessagesSquare
+                          <MessagesCircle
                             size={12}
                             className="shrink-0 text-muted-foreground"
                             aria-hidden="true"

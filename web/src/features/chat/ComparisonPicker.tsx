@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useContext, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Plus, X } from "lucide-react";
 import {
@@ -22,6 +22,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
+import { AgentOrderContext } from "@/features/agents/useAgentOrder";
 import { ModelPicker } from "./ModelPicker";
 import type { useComparisonModels } from "./useComparisonModels";
 
@@ -43,6 +44,9 @@ export function ComparisonPicker({
   onChange: (agents: string[]) => void;
 }) {
   const { t } = useTranslation();
+  const order = useContext(AgentOrderContext);
+  const positions = new Map(order.map((agent, index) => [agent.id, index]));
+  const position = (id: string) => positions.get(id) ?? order.length;
   const [panel, setPanel] = useState<string | null>("agents");
   function togglePanel(id: string, open: boolean) {
     setPanel((current) => (open ? id : current === id ? null : current));
@@ -149,6 +153,10 @@ export function ComparisonPicker({
                 .filter(
                   ({ agent }) => !agent.archived || selected.includes(agent.id),
                 )
+                .sort(
+                  (left, right) =>
+                    position(left.agent.id) - position(right.agent.id),
+                )
                 .map(({ agent, available, label }) => {
                   const checked = selected.includes(agent.id);
                   const unavailable =
@@ -160,7 +168,7 @@ export function ComparisonPicker({
                       key={agent.id}
                       orientation="horizontal"
                       data-disabled={unavailable || undefined}
-                      className="min-h-9 gap-3"
+                      className="min-h-9 shrink-0 gap-3"
                     >
                       <Checkbox
                         id={fieldId}
@@ -180,7 +188,9 @@ export function ComparisonPicker({
                       >
                         <AgentAvatar agent={agent} size="sm" />
                         <span className="min-w-0">
-                          <span className="block truncate">{agent.name}</span>
+                          <span className="block truncate" title={agent.name}>
+                            {agent.name}
+                          </span>
                           <span className="block text-xs font-normal text-muted-foreground [overflow-wrap:anywhere]">
                             {label}
                           </span>

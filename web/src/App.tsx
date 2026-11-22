@@ -118,6 +118,10 @@ import {
 import { useConversationReadState } from "@/features/agents/useConversationReadState";
 import { useRecentState } from "@/features/agents/useRecentState";
 import { AgentSidebar } from "@/features/agents/AgentSidebar";
+import {
+  AgentOrderContext,
+  useAgentOrder,
+} from "@/features/agents/useAgentOrder";
 import type { OpenConversationMode } from "@/features/agents/AgentSidebarMenus";
 import { displayChatTitle } from "@/features/chat/conversationTitle";
 import { useUnsavedFileWarning } from "@/features/files/fileDrafts";
@@ -257,6 +261,7 @@ export default function App() {
       selectAgentActivity(overview.data, recentState.pinnedIds),
     [overview.data, recentState.pinnedIds],
   );
+  const agentOrder = useAgentOrder(agentActivity);
   useEffect(() => {
     if (pendingRequests) pruneQuestionDrafts(pendingRequests);
   }, [pendingRequests]);
@@ -698,13 +703,11 @@ export default function App() {
     recent,
     overview.data?.agents,
   ]);
+  const mainTopicId = maximized ? undefined : mainTab?.topic?.sessionId;
+  const sideTopicId = split ? sideTab?.topic?.sessionId : undefined;
   const visibleTopicIds = useMemo(
-    () =>
-      [
-        !maximized ? mainTab?.topic?.sessionId : undefined,
-        split ? sideTab?.topic?.sessionId : undefined,
-      ].filter((id): id is string => !!id),
-    [mainTab?.topic?.sessionId, sideTab?.topic?.sessionId, maximized, split],
+    () => [mainTopicId, sideTopicId].filter((id): id is string => !!id),
+    [mainTopicId, sideTopicId],
   );
   function prefetchAgent(id: string) {
     if (id === selected) return;
@@ -966,7 +969,7 @@ export default function App() {
     }: {
       pane?: Pane;
       mode?: "browse" | "keep";
-      revealInChat?: WorkspaceTab;
+      revealInChat?: { tab: WorkspaceTab; comparisonId?: string };
     } = {},
   ) {
     const id = `topic:${sessionId}`;
@@ -982,13 +985,15 @@ export default function App() {
           ? "side"
           : "main");
     if (revealInChat) {
-      openTab(
-        revealInChat,
-        agentId,
-        sourcePane ?? (pane === "side" ? "main" : "side"),
-        { activatePane: false },
-      );
-      setRevealEntry({ tabId: chatId, topicId: sessionId, focusEntry: false });
+      const { tab, comparisonId } = revealInChat;
+      openTab(tab, agentId, sourcePane ?? (pane === "side" ? "main" : "side"), {
+        activatePane: false,
+      });
+      setRevealEntry({
+        tabId: chatId,
+        focusEntry: false,
+        ...(comparisonId ? { comparisonId } : { topicId: sessionId }),
+      });
     }
     openTab(
       {
@@ -1098,6 +1103,7 @@ export default function App() {
       setRevealEntry(undefined);
     } else if (topicId) {
       const topic = data?.conversations.find((item) => item.id === topicId);
+      const comparison = topic?.comparison;
       openTopicTab(
         chatId,
         topicId,
@@ -1107,8 +1113,11 @@ export default function App() {
           pane,
           mode: tabMode,
           revealInChat:
-            fromSidebar && !mode && topic && !topic.comparison
-              ? chatTab
+            fromSidebar &&
+            !mode &&
+            topic &&
+            (!comparison || comparison.chatId === chatId)
+              ? { tab: chatTab, comparisonId: comparison?.id }
               : undefined,
         },
       );
@@ -1658,7 +1667,7 @@ export default function App() {
       />
     ) : undefined;
 
-  return (
+  const workbenchContent = (
     <ComposerContext.Provider value={composer}>
       <DiffNavigation.Provider value={openTurnChanges}>
         <WorkbenchShell
@@ -1699,6 +1708,7 @@ export default function App() {
                 <AgentSidebar
                   overview={overview}
                   activity={agentActivity}
+                  ordering={agentOrder}
                   recent={recentState}
                   selected={selected}
                   readCursors={readCursors}
@@ -2428,6 +2438,11 @@ export default function App() {
         </WorkbenchShell>
       </DiffNavigation.Provider>
     </ComposerContext.Provider>
+  );
+  return (
+    <AgentOrderContext value={agentOrder.agents}>
+      {workbenchContent}
+    </AgentOrderContext>
   );
 }
 

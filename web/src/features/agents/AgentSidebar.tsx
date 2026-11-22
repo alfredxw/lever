@@ -2,7 +2,6 @@ import type { WorkbenchOverview } from "@/components/workbench/workbenchOverview
 import {
   memo,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -26,7 +25,6 @@ import {
   Pin,
   Plus,
   Search,
-  X,
 } from "lucide-react";
 import {
   closestCenter,
@@ -38,7 +36,6 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import {
-  arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -73,6 +70,7 @@ import {
   type SidebarNavigation,
 } from "./AgentSidebarMenus";
 import { pinId, type useRecentState } from "./useRecentState";
+import type { AgentSort, useAgentOrder } from "./useAgentOrder";
 import { isWorking } from "@/features/chat/RunStatus";
 import { useEventCallback } from "@/hooks/useEventCallback";
 import { cn } from "@/lib/utils";
@@ -88,7 +86,6 @@ import {
 } from "@/features/settings/shortcuts";
 
 type AgentView = "all" | "recent" | "archived";
-type AgentSort = "recent" | "name" | "manual";
 
 function groupBy<T>(items: T[], key: (item: T) => string) {
   const groups = new Map<string, T[]>();
@@ -101,17 +98,10 @@ function groupBy<T>(items: T[], key: (item: T) => string) {
   return groups;
 }
 
-function readOrder(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem("lever:agent-order") ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
 export function AgentSidebar({
   overview,
   activity,
+  ordering: { agents, sort, setSort, moveAgent },
   recent,
   selected,
   readCursors,
@@ -126,6 +116,7 @@ export function AgentSidebar({
 }: SidebarNavigation & {
   overview: UseQueryResult<WorkbenchOverview>;
   activity?: WorkbenchOverview;
+  ordering: ReturnType<typeof useAgentOrder>;
   recent: ReturnType<typeof useRecentState>;
   selected: string;
   readCursors: Record<string, number>;
@@ -137,7 +128,7 @@ export function AgentSidebar({
   onChoose: (id: string) => void;
   onPreview: (id: string) => void;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { onShared, onOpen, onChat } = navigation;
   const onConversation = useEventCallback(navigation.onConversation);
   const [menu, setMenu] = useState<{
@@ -158,20 +149,8 @@ export function AgentSidebar({
   const archiveTab = useRef<HTMLButtonElement>(null);
   const expandedArchiveTrigger = useRef<HTMLButtonElement>(null);
   const showingCleared = filter === "archived" && !showArchivedAgents;
-  const [sort, setSort] = useState<AgentSort>(() => {
-    const saved = localStorage.getItem("lever:agent-sort");
-    return saved === "name" || saved === "manual" ? saved : "recent";
-  });
-  const [manualOrder, setManualOrder] = useState(readOrder);
-  useEffect(() => localStorage.setItem("lever:agent-sort", sort), [sort]);
-  useEffect(
-    () =>
-      localStorage.setItem("lever:agent-order", JSON.stringify(manualOrder)),
-    [manualOrder],
-  );
 
   const sidebarItems = useMemo(() => {
-    const agents = activity?.agents ?? [];
     const conversations = activity?.conversations ?? [];
     const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
     const chatsById = new Map(activity?.chats.map((chat) => [chat.id, chat]));
@@ -253,18 +232,10 @@ export function AgentSidebar({
           }))
           .sort((a, b) => b.lastActivity - a.lastActivity)
       : [];
-    // Keep archived IDs in the canonical order; newly created Agents append.
-    const order = [
-      ...manualOrder.filter((id) => agentsById.has(id)),
-      ...agents
-        .filter((agent) => !manualOrder.includes(agent.id))
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        )
-        .map((agent) => agent.id),
-    ];
     const sorted = agents
+      .filter((agent) =>
+        filter === "archived" ? agent.archived : !agent.archived,
+      )
       .map((agent) => {
         const chats = chatsByAgent.get(agent.id) ?? [];
         const runs = runsByAgent.get(agent.id) ?? [];
@@ -285,54 +256,27 @@ export function AgentSidebar({
           unread: activity.some(
             (item) => item.unreadSequence > (readCursors[item.id] ?? 0),
           ),
-          recent: activity.reduce(
-            (recent, item) => Math.max(recent, Date.parse(item.messageAt) || 0),
-            chats.reduce(
-              (recent, chat) =>
-                Math.max(recent, Date.parse(chat.updatedAt) || 0),
-              Date.parse(agent.createdAt) || 0,
-            ),
-          ),
           waiting: runs.filter(
             (run) => run.status === "waiting_user" || run.status === "unknown",
           ).length,
           working: runs.filter((run) => isWorking(run.status)).length,
         };
-      })
-      .filter(({ agent }) =>
-        filter === "archived" ? agent.archived : !agent.archived,
-      )
-      .sort(
-        (a, b) =>
-          (sort === "manual"
-            ? order.indexOf(a.agent.id) - order.indexOf(b.agent.id)
-            : sort === "recent"
-              ? b.recent - a.recent
-              : 0) ||
-          a.agent.name.localeCompare(b.agent.name, i18n.language, {
-            numeric: true,
-            sensitivity: "base",
-          }),
-      );
+      });
     return {
       sorted,
-      order,
-      clearable: sorted.flatMap((item) => item.clearable),
       clearedGroups: groupBy(cleared, ({ agent }) => agent.id),
     };
   }, [
+    agents,
     activity,
     readCursors,
     recent.cleared,
     recent.pins,
     showingCleared,
     filter,
-    sort,
-    manualOrder,
-    i18n.language,
     t,
   ]);
-  const { sorted, order, clearable, clearedGroups } = sidebarItems;
+  const { sorted, clearedGroups } = sidebarItems;
 
   function selectView(view: AgentView) {
     setFilter(view);
@@ -361,7 +305,7 @@ export function AgentSidebar({
     recent.setPinned(id, false);
   }
 
-  const removeActivity = useEventCallback(
+  const handleActivityAction = useEventCallback(
     (
       conversation: Conversation,
       pinned: boolean,
@@ -392,29 +336,14 @@ export function AgentSidebar({
     >
       <div className="sidebar-heading">
         <h1>{t("nav.agents")}</h1>
-        <div className="flex items-center gap-1">
-          {filter === "all" && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="text-muted-foreground"
-              aria-label={t("agents.clearReadChats")}
-              title={t("agents.clearReadChats")}
-              disabled={!clearable.length}
-              onClick={() => recent.clearConversations(clearable)}
-            >
-              <Eraser />
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("agents.create")}
-            onClick={onCreate}
-          >
-            <Plus size={18} />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("agents.create")}
+          onClick={onCreate}
+        >
+          <Plus size={18} />
+        </Button>
       </div>
       <Button
         variant="outline"
@@ -537,24 +466,8 @@ export function AgentSidebar({
               },
             }}
             onDragEnd={({ active, over }) => {
-              if (canReorder && over && active.id !== over.id) {
-                const visible = sorted.map(({ agent }) => agent.id);
-                const base =
-                  sort === "manual"
-                    ? order
-                    : [
-                        ...visible,
-                        ...order.filter((id) => !visible.includes(id)),
-                      ];
-                setManualOrder(
-                  arrayMove(
-                    base,
-                    base.indexOf(String(active.id)),
-                    base.indexOf(String(over.id)),
-                  ),
-                );
-                setSort("manual");
-              }
+              if (canReorder && over)
+                moveAgent(String(active.id), String(over.id));
             }}
           >
             <SortableContext
@@ -685,7 +598,7 @@ export function AgentSidebar({
                             selected={selectedSessionId === conversation.id}
                             onConversation={onConversation}
                             openMenu={openMenu}
-                            onRemove={removeActivity}
+                            onAction={handleActivityAction}
                           />
                         ),
                       )}
@@ -754,7 +667,7 @@ const AgentActivityRow = memo(function AgentActivityRow({
   selected,
   onConversation,
   openMenu,
-  onRemove,
+  onAction,
 }: {
   t: TFunction;
   conversation: Conversation;
@@ -768,7 +681,7 @@ const AgentActivityRow = memo(function AgentActivityRow({
   selected: boolean;
   onConversation: SidebarNavigation["onConversation"];
   openMenu: (anchor: MenuAnchor, target: MenuTarget) => void;
-  onRemove: (
+  onAction: (
     conversation: Conversation,
     pinned: boolean,
     trigger: HTMLButtonElement,
@@ -791,7 +704,7 @@ const AgentActivityRow = memo(function AgentActivityRow({
       : "";
   const actionLabel = pinned
     ? t("agents.unpinConversation")
-    : t("agents.removeActivity", { title: label });
+    : t("agents.clearActivity", { title: label });
   return (
     <li className="agent-activity-row">
       <button
@@ -849,10 +762,10 @@ const AgentActivityRow = memo(function AgentActivityRow({
           aria-label={actionLabel}
           title={actionLabel}
           onClick={(event) =>
-            onRemove(conversation, pinned, event.currentTarget)
+            onAction(conversation, pinned, event.currentTarget)
           }
         >
-          {pinned ? <Pin className="fill-current" /> : <X />}
+          {pinned ? <Pin className="fill-current" /> : <Eraser />}
         </Button>
       )}
     </li>

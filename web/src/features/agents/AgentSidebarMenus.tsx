@@ -243,8 +243,8 @@ export function AgentSidebarMenus({
         run: () => markRead([conversation]),
       },
       target.clearable && {
-        id: "remove",
-        label: t("agents.removeFromActivity"),
+        id: "clear",
+        label: t("agents.clearFromActivity"),
         run: () => clear([conversation]),
       },
       target.restorable && {
