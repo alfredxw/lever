@@ -30,7 +30,8 @@ const UsageText = `Usage: lever [server flags]
        lever automations list|get|create|update|enable|disable|archive|run|history|emit|import-codex [flags]
        lever work-items list|get|create|update|dispatch [flags]
        lever notes list|get|create [flags]
-       lever events tail [flags]`
+       lever events tail [flags]
+       lever remote pair|status|devices|agents|inbox|accept|decline|unpair [flags]`
 
 func Run(args []string, dataDir string, out, errOut io.Writer) (bool, error) {
 	return RunWithInput(args, dataDir, os.Stdin, out, errOut)
@@ -41,6 +42,8 @@ func RunWithInput(args []string, dataDir string, in io.Reader, out, errOut io.Wr
 		return false, nil
 	}
 	switch args[0] {
+	case "remote":
+		return true, runRemote(args[1:], dataDir, in, out, errOut)
 	case "agent":
 		return true, runAgent(args[1:], dataDir, in, out, errOut)
 	case "providers":

@@ -131,6 +131,7 @@ export function Composer({
   agents = [],
   chatId,
   draftAgentId,
+  sharedScope,
   session,
   profile,
   reply,
@@ -149,6 +150,7 @@ export function Composer({
   agents?: Agent[];
   chatId: string;
   draftAgentId?: string;
+  sharedScope?: SendInput["sharedScope"];
   session?: Session;
   profile: Profile;
   reply?: boolean;
@@ -953,6 +955,7 @@ export function Composer({
         ? { ...selection, permission }
         : selection);
     const input: SendInput = {
+      sharedScope,
       commandId: previousSend?.commandId ?? crypto.randomUUID(),
       chatId: draftAgentId ? "" : chatId,
       ...(draftAgentId ? { agentId: draftAgentId } : {}),

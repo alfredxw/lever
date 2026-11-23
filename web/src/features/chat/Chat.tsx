@@ -348,6 +348,7 @@ function ChatContent(props: ChatProps) {
       className={inlineTopic ? "chat-panel chat-topic-view" : "chat-panel"}
       ref={panel}
     >
+      {latestPage.chat.sharedScope && <span className="self-start px-3 text-xs text-muted-foreground">Hub 共享</span>}
       <motion.div
         key={inlineTopic ? "topic" : "list"}
         className="chat-view-content"

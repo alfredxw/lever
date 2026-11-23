@@ -1,0 +1,224 @@
+.hub-shell,
+.hub-login {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 14px;
+}
+.hub-shell {
+  display: grid;
+  grid-template-columns: 110px minmax(190px, 260px) minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.hub-shell[data-section="settings"] {
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+.hub-shell[data-collapsed="true"]:not([data-section="settings"]) {
+  grid-template-columns: 110px 52px minmax(0, 1fr);
+}
+.hub-shell > nav,
+.hub-shell > aside {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  background: var(--canvas-background);
+  border-right: 1px solid var(--border);
+  padding: 12px;
+  overflow: auto;
+}
+.hub-shell > nav button,
+.hub-shell aside button {
+  justify-content: flex-start;
+}
+.hub-shell aside section button {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  border-radius: 6px;
+}
+.hub-shell aside section button:hover,
+.hub-shell aside section button:focus-visible {
+  background: var(--control-hover);
+  outline: 0;
+}
+.hub-shell aside header,
+.hub-actions,
+.hub-check,
+.hub-ticket,
+.hub-device form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hub-shell aside header {
+  justify-content: space-between;
+}
+.hub-shell[data-collapsed="true"] aside header h2 {
+  display: none;
+}
+.hub-shell article {
+  min-width: 0;
+  overflow: auto;
+  padding: 20px clamp(16px, 4vw, 54px) 40px;
+}
+.hub-shell article > * {
+  max-width: 820px;
+}
+.hub-shell :is(h1, h2, h3),
+.hub-login h1 {
+  font-weight: 600;
+}
+.hub-shell h1,
+.hub-login h1 {
+  font-size: 22px;
+  margin: 6px 0 16px;
+}
+.hub-shell h2 {
+  font-size: 16px;
+}
+.hub-shell h3 {
+  font-size: 14px;
+}
+.hub-shell small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin-inline-start: 4px;
+}
+.hub-shell p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 12px;
+}
+.hub-shell form,
+.hub-login form,
+.hub-shell .hub-group {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+.hub-shell :is(form, label) > button,
+.hub-group > button {
+  width: fit-content;
+}
+.hub-shell :is(form, .hub-group) > label,
+.hub-login label {
+  display: grid;
+  gap: 5px;
+  font-weight: 500;
+}
+.hub-login {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 20px;
+}
+.hub-login form {
+  width: min(100%, 360px);
+}
+.hub-shell select {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: inherit;
+}
+.hub-group,
+.hub-card,
+.hub-turn,
+.hub-compose {
+  margin-block: 18px;
+  padding-block: 14px;
+  border-top: 1px solid var(--border);
+}
+.hub-device {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0;
+}
+.hub-shell .hub-device form {
+  display: flex;
+}
+.hub-device input {
+  width: auto;
+  max-width: 100%;
+}
+.hub-board {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  margin-top: 18px;
+}
+.hub-board section,
+.hub-turn {
+  display: grid;
+  gap: 8px;
+}
+.hub-user {
+  font-weight: 500;
+}
+.hub-error {
+  color: var(--destructive);
+}
+.hub-shell .hub-back {
+  display: none;
+}
+.hub-ticket strong {
+  font: 600 16px monospace;
+}
+.hub-shell aside .hub-chat-link {
+  padding-inline-start: 18px;
+}
+.hub-shell .hub-check {
+  display: flex;
+}
+@media (max-width: 700px) {
+  .hub-shell,
+  .hub-shell[data-section="settings"],
+  .hub-shell[data-collapsed="true"]:not([data-section="settings"]) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .hub-shell > nav {
+    grid-row: 2;
+    flex-direction: row;
+    border: 0;
+    border-top: 1px solid var(--border);
+    justify-content: space-around;
+    padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+  }
+  .hub-shell aside {
+    grid-row: 1;
+    border: 0;
+  }
+  .hub-shell article {
+    grid-row: 1;
+    padding: 12px 16px;
+  }
+  .hub-shell[data-detail="false"] article,
+  .hub-shell[data-detail="true"] aside {
+    display: none;
+  }
+  .hub-shell .hub-back {
+    display: inline-flex;
+  }
+  .hub-shell button,
+  .hub-login button,
+  .hub-shell select,
+  .hub-shell aside section button {
+    min-height: 44px;
+  }
+  .hub-shell aside header button {
+    display: none;
+  }
+  .hub-shell article header {
+    margin-bottom: 10px;
+  }
+}
+
+[data-slot="dialog-content"] > .hub-shell { height: 100%; }

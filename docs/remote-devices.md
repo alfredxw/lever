@@ -4,19 +4,19 @@
 
 在电脑 B 把任务派给 A，在手机上回答 A 的审批，回到 A 查看文件和变更，最后在原任务验收。整段工作只有一条执行会话。**Host 管执行与会话，Hub 管空间、设备目录、共享任务与只读归档。** 切换设备或网络时，用户仍从 Agents 打开原 Chat 或 Topic，从 Tasks 找到交付结果。 [Lever 产品与会话设计](design.md)
 
-方案面向自托管 Hub 与多台独立 Host：首期面向单用户默认个人空间，用无窗口 `lever` 和响应式 Hub Web 跑通多设备闭环；底层数据模型、协议与隔离边界从首期起即按**多空间（个人空间 + 多团队空间）**与**节点对等感知**设计，便于未来多个团队安全共用同一个 Hub 服务。本机任务和 Chat 默认留在创建它们的设备。
+方案面向自托管 Hub 与多台独立 Host：首期面向单用户默认个人空间，用无窗口 `lever`、Hub Web 及原生手机控制端接续同一条会话；底层数据模型、协议与隔离边界从首期起即按**多空间（个人空间 + 多团队空间）**与**节点对等感知**设计，便于未来多个团队安全共用同一个 Hub 服务。本机任务和 Chat 默认留在创建它们的设备。
 
 ## 交付产物与阶段划分
 
-**一期发布三类产物。** 管理员用 Hub 镜像和部署包启动服务，在每台节点运行对应平台的 `lever`。只查看任务、发消息或处理审批的人，直接用电脑或手机浏览器打开 Hub 地址；具备控制角色的节点也可经 Hub 感知同空间全部设备并跨设备下发指令。
+**一期同时交付 Hub、部署包、Host 和手机控制端。** 管理员用 Hub 镜像和部署包启动服务，在每台节点运行对应平台的 `lever`。只查看任务、发消息或处理审批的人，直接用电脑或手机浏览器打开 Hub 地址；具备控制角色的节点也可经 Hub 感知同空间全部设备并跨设备下发指令。
 
 | 阶段 | 用户拿到什么 | 装在哪里，怎样使用 |
 | --- | --- | --- |
 | 一期 | **Hub 镜像** `lever-hub:<version>` | 自托管服务器或内网主机。镜像内的 `lever-hub` 同时提供 Hub Web、HTTP/SSE API 和 Host WSS 入口，内置 `setup`、`reset-password`、`backup` 和停服后的 `restore`。 |
 | 一期 | **部署包** `lever-hub-deploy-<version>.tar.gz` | 解压得到 `compose.yaml`、`.env.example` 和 `README.md`。支持内置 HTTPS（公网域名）或纯 HTTP 置于反向代理 / Tailscale / WireGuard 之后运行。 |
 | 一期 | **支持远程配对的 Host**，沿用 `lever`（Windows 为 `lever.exe`） | 每台执行电脑或云主机。在本机 Web 或 CLI 完成配对、选择向空间开放的 Agent，并可查看同空间其他节点。工作目录和 Provider 登录态取自本机。 |
-| 二期 | **Lever 桌面包**，`Lever.app` / `Lever.exe` | 执行设备和控制设备按需安装。桌面壳层融合多设备 Agents/Tasks 视图，启用远程执行后支持登录自启与空闲待命；同期加入 LAN 直连与本机任务笔记共享。 |
-| 三期 | **Lever 手机 App**，iOS（`.ipa`）与 Android APK | 用 MyGo Mobile 分别打包并真机验收。扫码配对，同网可直连 Host，离开局域网后经 Hub 续接共享 Chat。 |
+| 二期 | **Lever 桌面包**，`Lever.app` / `Lever.exe` | 执行设备和控制设备按需安装。桌面壳层融合多设备 Agents/Tasks 视图，启用远程执行后支持登录自启与空闲待命；同期加入本机任务笔记共享。 |
+| 一期 | **Lever 手机 App**，iOS（`.ipa`）与 Android APK | 用 MyGo Mobile 分别打包并真机验收。扫码配对，同网直连 Host，出门后经 Hub 补齐共享 Chat，在系统锁屏通知中打开原审批。 |
 
 **构建入口。** 现有 `make build` 输出 `bin/lever`，`make package` 将桌面包输出到 `desktop/dist/<平台>-<架构>/`。一期新增 `make hub`，复用 `make web`，再从 `cmd/lever-hub` 构建 `bin/lever-hub`。镜像在仓库根目录构建并嵌入前端产物，部署包从 `deploy/hub/` 收集发布文件。 [现有构建目标](../Makefile) · [桌面打包配置](../desktop/mygo.json) · [Web 资源嵌入](../web/assets.go)
 
@@ -33,7 +33,10 @@ flowchart LR
     NodeB["节点 B（执行 + 控制）"] <-->|"出站 WSS：设备目录 / 同步 / 跨设备指令"| Hub
     NodeA["节点 A（执行 + 控制）"] <-->|"出站 WSS：设备目录 / 同步 / 远程命令"| Hub
     Cloud["云主机 C（仅执行）"] <-->|"出站 WSS：同步 / 远程命令"| Hub
-    NodeB -.->|"二期：同网已授权 LAN 直连"| NodeA
+    NodeB -.->|"已授权 LAN 直连"| NodeA
+    Phone["iOS / Android"] <-->|"同网直连"| NodeA
+    Phone <-->|"蜂窝网络 · 共享会话同步"| Hub
+    Hub -->|"通用提醒与加密定位"| Push["APNs / FCM"] --> Phone
 ```
 
 | 对象 | 谁决定它的状态 | 隔离域与其他端持有什么 |
@@ -56,7 +59,7 @@ flowchart LR
 ### 1. 一次配对，全空间感知（消除 N×N 配对）
 
 - **星型信任锚**：每台新设备只需向 Hub 配对一次，无需设备之间两两配对。配对进入某 Space 后，Hub 立即通过 WSS 将该 Space 的最新**设备目录（Device Directory）**增量推送给同空间内所有在线控制节点，实现新设备上线即刻全端可见。
-- **跨设备下发路径**：任何具备控制角色的在线节点（如电脑 B 上的 `lever`）都能感知同空间内其他所有已配对设备、在线状态及开放 Agent，并可直接经 Hub 向任意目标设备（如电脑 A）下发任务、新建/续聊共享 Chat、回答审批或停止执行。一期在协议、`internal/remote` 和 CLI 层完整打通，Hub Web 提供统一控制台；二期将该能力直接融入桌面工作台侧栏与看板，并在同局域网时利用 Hub 已登记的公钥自动升级为 LAN 直连，依然不需要设备间手动二次配对。
+- **跨设备下发路径**：任何具备控制角色的在线节点（如电脑 B 上的 `lever`）都能感知同空间内其他所有已配对设备、在线状态及开放 Agent，并可直接经 Hub 向任意目标设备（如电脑 A）下发任务、新建/续聊共享 Chat、回答审批或停止执行。一期在协议、`internal/remote` 和 CLI 层完整打通，Hub Web 提供统一控制台；原生手机与控制节点同网时，使用已登记的 Host 公钥验证 LAN 直连；二期再融入桌面工作台侧栏与看板。
 
 ### 2. 节点角色分离与最小权限
 
@@ -80,7 +83,7 @@ flowchart LR
    - 运行 `lever remote pair --hub https://hub.example.com --role executor`（通过交互提示或 `--code-stdin` 传入一次性票据，避免配对码落入 shell 历史），或直接传入配对链接。
    - 支持两种模式：`lever` 已运行时经 `localipc` 实时生效；尚未启动时直接写入数据目录，启动即连 Hub。`localipc` 的远程管理路由显式拒绝携带 `LEVER_EXECUTION_TOKEN` 的请求，防止受控 Agent 误调用。
    - 配对成功后，**默认不开放任何 Agent**；由用户在 Host 本机显式执行 `lever remote agents expose <agentId>`（或在本机设置页勾选）才对外可见。
-3. **扫码配对（三期手机 App）**：扫描同一配对二维码，换取 `controller` 凭据并存入系统安全存储。
+3. **扫码配对（手机 App）**：扫描同一配对二维码，换取 `controller` 凭据并存入系统安全存储。
 
 **配对握手**：新设备提交 `pairingCode + deviceId + publicKey + hostname + platform + requestedRoles`。Hub 校验票据有效、未过期、未复用且角色未越界，在事务中消耗票据、登记设备与公钥并签发独立可撤销的设备凭据，返回 `hubId`、`spaceId` 与 Hub 身份指纹。配对发起端即时看到新设备加入通知，可直接改名或核对指纹；设备后续改 IP、切网络或改主机名均无需重配。
 
@@ -93,7 +96,7 @@ Hub Web 与控制节点均提供统一的设备治理能力（CLI 对应 `lever 
 - **Agent 取消开放（Host 本地主权）**：哪些 Agent 开放给哪个 Space 永远由 Host 本地决定，Hub 不能远程强开。Host 取消某个 Agent 对某 Space 的开放后：立刻禁止向该 Agent 新建共享 Chat、新派发任务和委派；已同步的共享 Chat 在 Hub 保持归档可读，正在运行的 Run 可继续完成或停止，但不再接受新的远程用户输入。
 - **主动解绑与远程一键撤销**：
   - Host 主动执行 `lever remote unpair`（或在设置页断开）会通知 Hub 下线并清除本地远程凭据，保留本地数据。
-  - 设备丢失、云主机销毁或不再信任时，在 Hub 设备页一键**撤销**：Hub 立刻断开其 WSS、吊销凭据、广播给同空间其他控制节点（二期同步失效 LAN 授权）、从派发目标隐藏。已归档的共享历史在 Hub 保持只读可查；该设备上未决的共享任务自动提示「原设备已撤销」，允许用户通过离线逃生路径验收或改派。
+  - 设备丢失、云主机销毁或不再信任时，在 Hub 设备页一键**撤销**：Hub 立刻断开其 WSS、吊销凭据、广播给同空间其他控制节点（Host 收到策略更新后使旧 LAN 凭据失效）、从派发目标隐藏。已归档的共享历史在 Hub 保持只读可查；该设备上未决的共享任务自动提示「原设备已撤销」，允许用户通过离线逃生路径验收或改派。
 
 ## 共享范围、访问路径与隐私白名单
 
@@ -101,7 +104,7 @@ Hub Web 与控制节点均提供统一的设备治理能力（CLI 对应 `lever 
 
 | 用户要操作什么 | 可以从哪里操作 | 连接中断后 |
 | --- | --- | --- |
-| 仅设备 Chat | 本机，或二期经该 Host 明确授权的原生客户端 LAN 直连。标题、正文、活动和命令均不进入 Hub。 | 离开 LAN 时保留已加载内容和草稿，等同一 Host 重新可达。 |
+| 仅设备 Chat | 本机，或经该 Host 明确授权的原生客户端 LAN 直连。标题、正文、活动和命令均不进入 Hub。 | 离开 LAN 后保留本机草稿，重新连接并经 Host 授权后读取对话。 |
 | 空间共享 Chat | 本机、已授权的 LAN，或经对应 Space 的 Hub。回复、审批和停止都送给同一 Host。 | LAN 断开时可经 Hub 续接；Hub 暂不可达时，有效 LAN 授权仍可用；双路断开显示最近同步历史与时间。 |
 | 空间共享任务 | 同空间内各控制端均向 Hub 创建、编辑、派发、验收与改派；打开关联 Chat 后按上一行访问。 | Hub 离线时保留上次任务视图；本机或 LAN 中已完成的会话操作在重连后补入任务进度。 |
 
@@ -140,7 +143,7 @@ Hub Web 与控制节点均提供统一的设备治理能力（CLI 对应 `lever 
 
 ### 1. 一期 `remoteproto` 命令集与边界
 
-普通共享 Chat 的操作经 Hub（以及二期 LAN）都进入同一套 Host 授权与业务处理，每条命令携带 `spaceId`、`actorUserId` 与幂等键。
+普通共享 Chat 的操作经 Hub 或 LAN都进入同一套 Host 授权与业务处理，每条命令携带 `spaceId`、`actorUserId` 与幂等键。
 
 **一期明确支持的远程命令**：
 
@@ -175,7 +178,7 @@ Hub Web 与控制节点均提供统一的设备治理能力（CLI 对应 `lever 
    - **Hub 从旧备份恢复**（`hubAcked < hostMinRetained`）；
    - **Host 从旧备份恢复或重建库**（`hubAcked > hostCurrentVersion` 或 `syncEpoch` 变化）。
    Hub 仅按该 Host 的完整清单校正该 Host 名下的共享归档，清掉源端已删除或取消开放的条目，不影响其他 Host 的归档及 Hub 自身的任务与验收记录。
-5. **已读游标与客户端换路。** Host 的 `Conversation.UnreadSequence` 来自 `events` 表的 `AUTOINCREMENT` 序号（每台 Host 严格单调）。Hub 归档时**原样保留 Host 的 `unreadSequence`**，不替换为 Hub 自身的事件序号；客户端按 `(deviceId, sessionId)` 记录已读位置。二三期在 LAN 与 Hub 之间切换时，已读状态无缝对齐；若客户端已从 LAN 看到更高的 `sharedVersion`，切到滞后的 Hub 时保留本地新内容并提示同步中，待 Hub 追平后继续更新。
+5. **已读游标与客户端换路。** Host 的 `Conversation.UnreadSequence` 来自 `events` 表的 `AUTOINCREMENT` 序号（每台 Host 严格单调）。Hub 归档时**原样保留 Host 的 `unreadSequence`**，不替换为 Hub 自身的事件序号；客户端按 `(deviceId, sessionId)` 记录已读位置。手机在 LAN 与 Hub 之间切换时，已读状态无缝对齐；若客户端已从 LAN 看到更高的 `sharedVersion`，切到滞后的 Hub 时保留本地新内容并提示同步中，待 Hub 追平后继续更新。
 
 ## 源码目录与前端架构
 
@@ -196,7 +199,7 @@ lever/
 │   ├── store/                   Host SQLite、remote_commands、shared_sync_log 与同步触发
 │   ├── provider/                在 Host 上启动和控制运行时
 │   ├── remoteproto/             + 一期，Host/Hub 协议帧、Space/设备目录、命令、白名单投影与兼容测试
-│   ├── remote/                  + 一期，Host 侧配对、WSS、授权校验、同步器与目录缓存，二期加 LAN
+│   ├── remote/                  + 一期，Host 侧配对、WSS、授权校验、同步器与 LAN 入口
 │   └── hub/                     + 一期，Hub HTTP/SSE、认证、Space、设备管理、共享任务、归档与 SQLite
 ├── web/
 │   ├── index.html               本机工作台入口
@@ -214,7 +217,7 @@ lever/
 │   ├── compose.yaml             固定镜像版本、服务入口及持久卷
 │   ├── .env.example             部署者需要填写的配置（支持内置 HTTPS 与反代双模式）
 │   └── README.md                初始化、反代/内网配置、升级与恢复说明
-└── mobile/                      + 三期，MyGo Mobile 入口和两端共用的 Go 客户端
+└── mobile/                      + 一期，MyGo Mobile 入口和两端共用的 Go 客户端
     ├── ios/                     按需接入 iOS 系统能力的 Swift 代码
     └── android/                 按需接入 Android 系统能力的 Kotlin 代码
 ```
@@ -225,9 +228,9 @@ lever/
   - **Hub 入口（`hub.html`）新建轻量 `web/src/hub/`**：直接复用 shadcn 组件、[SecondarySidebar](../web/src/components/workbench/SecondarySidebar.tsx)、`AgentAvatar`、`RunStatus`、`TaskStatusIcon`、`MessageResponse`，并将 [RequestCard](../web/src/features/chat/RequestCard.tsx) 与 `RunContent` 的提交回调抽离为 props 供两端共用。二期在多设备接口稳定后，再按实际复用面将多设备 Agents/Tasks 融入桌面壳层。
 - **类型生成与测试。** Hub HTTP 请求/响应 DTO 纳入现有 `make generate` 输出到 `web/src/api/hub.gen.ts`；协议编解码与兼容测试放在 `internal/remoteproto/`，多设备并发派发/同步/备份恢复/空间隔离集成测试放在 `internal/hub/`，浏览器与移动端视口流程沿用 `web/tests/`。 [现有类型生成配置](../internal/model/tygo.yaml) · [Vite 配置](../web/vite.config.ts)
 
-### 手机 App 选型（三期）
+### 首发手机控制端
 
-三期 iOS 和 Android 控制端采用 **MyGo Mobile**。一期按移动优先构建的 `web/src/hub/` 随 App 打包，在 iOS WKWebView 和 Android 系统 WebView 中运行；通过 MyGo 绑定调用两端共用的 Go 客户端，将控制端凭据存入系统安全存储，LAN 直连时验证 Hub 登记的 Host 公钥。Swift 和 Kotlin 按需接入扫码与局域网发现。届时将 MyGo 从当前 `v0.7.4` 升级至 `v0.10.0+`。 [MyGo 发布说明](https://github.com/egoist/mygo/releases/tag/v0.10.0) · [Lever 依赖](../go.mod)
+iOS 和 Android 使用 MyGo Mobile 打包同一个 React 工作台。Go 客户端在系统安全存储中保存配对凭据，发现并校验 LAN Host，在共享会话切网时保留操作 ID、草稿和读取进度。前台通过 SSE 和增量读取更新，锁屏时通过 APNs 或 FCM 接收提醒；通知点击后在当前授权范围内同步原卡片。个人手机在 Host 上可单独获准直连，以及对各 Agent 执行指定操作。 [手机配置](../mobile/README.md) · [推送部署与中继](../deploy/hub/README.md#手机系统推送)
 
 ### 桌面复用同一个 Host（二期）
 
@@ -252,7 +255,7 @@ Tasks         全部 / 未读                  [打开关联任务]
 - **任务状态** 沿用现有 `taskStatus` 语义：手动任务从「待办」→「进行中」→「待验收」→「已完成」；等待回答、失败或 `unknown` 显示「需处理」；手动关闭显示「已关闭」。网络回执未确认另标「待设备确认」，原设备离线或已撤销则提示「进行中 · 电脑 A 离线 / 已撤销」并保留已知进度与逃生入口。 [状态推导](../web/src/features/tasks/taskDocument.ts) · [中文状态名称](../web/src/i18n/zh-CN.ts)
 - **设置 → 设备** 集中管理当前 Space 的配对（生成一次性配对链接/短码/二维码）、设备改名、角色查看、同步进度、暂停接单开关、一键撤销以及账号登录会话管理。无设备时引导添加第一台设备；已连接却无可用 Agent 时提示前往该 Host 勾选开放。
 
-窄屏（手机浏览器 / 三期 App）采用底部 `Agents / Tasks / 设置` 入口，打开详情占满页面并返回恢复筛选与滚动位置；沿用灰阶主题与清晰状态图标，触控区至少 44 px。查询缓存、输入草稿（含待确认 `commandId`）与已读记录按 `(spaceId, deviceId, ...)` 区分，避免多台设备同名 Agent 冲突。 [Lever 界面规范](../AGENTS.md) · [现有已读游标](../web/src/features/agents/useConversationReadState.ts)
+窄屏（手机浏览器 / App）采用底部 `Agents / Tasks / 设置` 入口，打开详情占满页面并返回恢复筛选与滚动位置；沿用灰阶主题与清晰状态图标，触控区至少 44 px。查询缓存、输入草稿（含待确认 `commandId`）与已读记录按 `(spaceId, deviceId, ...)` 区分，避免多台设备同名 Agent 冲突。 [Lever 界面规范](../AGENTS.md) · [现有已读游标](../web/src/features/agents/useConversationReadState.ts)
 
 ```text
 Agents                           ＋
@@ -278,7 +281,7 @@ Hub 暴露了向本机 Agent 下发指令的控制面，认证与部署安全从
 
 - **管理员初始化与登录**：首次运行 `lever-hub setup` 生成一次性初始化链接（或交互创建管理员账号与默认个人空间）。首期采用 **Argon2id 密码哈希** + 同源 `HttpOnly / Secure / SameSite=Lax` 随机高熵会话 Cookie，登录接口带 IP/账号速率限制；在「设置 → 安全/会话」可查看并撤销活跃浏览器会话；忘记密码通过服务器命令行 `lever-hub reset-password` 重置并吊销旧会话。
 - **Host 与控制端凭据**：配对签发独立可撤销的设备令牌并绑定 Ed25519 公钥（Hub 仅存令牌哈希与公钥）。每次 API / WSS 请求均校验 `user / device` 身份、`spaceId` 归属及 `executor / controller` 角色边界。
-- **LAN 直连（二期）**：Host 在独立端口开放远程接口并通过 mDNS 公告；客户端验证配对登记的 Host 公钥，Host 校验控制端持钥证明与 Hub 签发的短期 `spaceId` 授权，逐次核对目标与共享范围。完整的 Files、Diff、Terminal 和运行时设置始终保留在本机 loopback 接口。 [本机 HTTP 边界](../internal/httpapi/server.go)
+- **LAN 直连。** Host 通过 mDNS 公告独立端口，手机校验已登记的 Host 公钥，每次请求均签名并校验一次性随机数。普通控制端使用 Hub 签发的五分钟授权。个人空间里，Host 显式信任的个人控制端可凭之前保存的身份证明继续直连。Host 每次核对当前本地信任、策略版本和会话授权。Hub 上的撤权在 Host 收到后生效，断网期间可以在 Host 本地立即收回信任。 [Host 直连入口](../internal/remote/lan.go)
 
 ### 2. 数据目录与双一等部署模式
 
@@ -302,7 +305,7 @@ Hub 与 Host 可部署在同一台机器，各自持有独立数据目录与文�
 
 ## 交付顺序、一期里程碑与验收
 
-### 1. 一期：Hub Web 与无窗口 Host
+### 1. 一期交付 Hub、Host 与原生手机控制端
 
 为降低联调风险，一期按三个内部里程碑顺序收口：
 
@@ -322,15 +325,17 @@ Hub 与 Host 可部署在同一台机器，各自持有独立数据目录与文�
 - 分别模拟 **Hub 还原到较早备份**与 **Host 还原到较早备份**：分片全量快照能正确校正该 Host 归档（含更新与删除），其他 Host 归档不受影响，任务按 Hub 备份点恢复。
 - 单元测试构造两个不同 `spaceId`，核对共享任务、设备目录、归档查询、SSE 推送与远程命令均无法跨空间读取或执行。
 
-### 2. 二期：桌面一体化、后台常驻与 LAN 直连
+### 2. 二期桌面一体化与后台常驻
 
 - 安装桌面包并启用远程执行：A 重新登录后无窗口常驻，B 在桌面端直接看到同空间其他设备并向 A 派发任务；随后打开 A 的桌面窗口自动接回同一 Host 与 Chat。
 - 从本机任务笔记预览并共享创建任务；B 经 LAN 直连发出首条消息后断网，切到 Hub 找回同一 Chat 和 Run；同 ID 携带不同输入返回冲突。
-- 离开 LAN 时核对仅设备 Chat 未进入 Hub；Hub 不可达时在有效授权期内经 LAN 回答共享审批，授权到期或撤权广播后 Host 拒绝新请求，重连后补齐进度。
 
-### 3. 三期：MyGo Mobile 手机 App
+### 首发手机验收
 
-- 在 iPhone 和 Android 真机扫码配对；Wi-Fi 直连回答共享 Topic 审批并在收到回执前切至蜂窝网，经 Hub 重开确认仍是同一 `requestId` 且 Host 只采纳一次；拒绝局域网权限时共享 Chat 经 Hub 正常工作，仅设备 Chat 保留已加载内容与草稿。
+- 分别在 iOS 和 Android 真机上，手机经 Wi-Fi 启动共享会话并锁屏，切蜂窝网点开系统审批通知并回答，返回 Wi-Fi 后确认同一 Run 只有一个有效答案。电脑先回答、漏收推送、重复通知、回执丢失分别覆盖。
+- 已信任的个人手机在 Hub 断网超过五分钟后冷启动，同网可继续读取并执行已授权操作。电脑本地撤销后重试应被拒绝。共享游标过旧时按会话重取快照，私有对话、草稿和原生令牌始终不随换路进入 Hub。
+
+- 在 iPhone 和 Android 真机扫码配对；Wi-Fi 直连回答共享 Topic 审批并在收到回执前切至蜂窝网，经 Hub 重开确认仍是同一 `requestId` 且 Host 只采纳一次；拒绝局域网权限时共享 Chat 经 Hub 正常工作，仅设备 Chat 在同网并通过 Host 授权后恢复访问。
 - 长对话滚动与中文输入法编辑草稿切后台，电脑端回答审批后手机回前台恢复原 Topic、草稿及已采纳答案。
 - 原 Host 异常退出后手机可阅读历史并定位待核实设备；确认旧执行停止后方可在线改派，已暂停会话队列由用户显式恢复。
 

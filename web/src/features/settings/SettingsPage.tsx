@@ -76,6 +76,7 @@ import {
   useSaveTaskDispatchSettings,
   useTaskDispatchSettings,
 } from "@/features/tasks/taskDispatchSettings";
+import { RemoteDevices } from "./RemoteDevices";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
 
@@ -133,6 +134,7 @@ const sectionGroups = [
         ],
       },
       { id: "providers", icon: Plug, fields: [] },
+ { id: "remoteDevices", icon: Monitor, fields: [] },
       {
         id: "shortcuts",
         icon: Keyboard,
@@ -252,7 +254,7 @@ export function SettingsPage({
   visible: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  overview: UseQueryResult<Pick<Overview, "dataDir">, Error>;
+  overview: UseQueryResult<Pick<Overview, "dataDir" | "agents" | "chats">, Error>;
   providerTarget?: { id?: string; pluginId?: string };
   onOpenPlugin: (id?: string) => void;
 }) {
@@ -662,7 +664,8 @@ export function SettingsPage({
             </SettingsGroup>
           </>
         );
-      case "storage":
+      case "remoteDevices": return <RemoteDevices agents={overview.data?.agents??[]} chats={overview.data?.chats??[]}/>;
+ case "storage":
         return (
           <>
             {overview.isPending && <Loading />}

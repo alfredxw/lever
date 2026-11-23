@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.15.1",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build --mode hub",
     "typecheck": "tsc -b",
     "test:unit": "node --test unit/*.test.ts",
     "test:e2e": "playwright test"
@@ -42,6 +42,7 @@
     "heic-to": "1.5.2",
     "i18next": "26.3.1",
     "image-size": "2.1.0",
+    "jsqr": "1.4.0",
     "jszip": "3.10.1",
     "lucide-react": "1.45.0",
     "mammoth": "1.13.0",

@@ -406,6 +406,8 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
       if (event.type === "chats" || event.type === "queue")
         void queryClient.invalidateQueries({ queryKey: ["task-executions"] });
+      if (event.type === "chats" && event.chatId)
+        void queryClient.invalidateQueries({ queryKey: ["chat", event.chatId] });
       if (event.type === "queue")
         void queryClient.invalidateQueries({ queryKey: ["chat"] });
     }

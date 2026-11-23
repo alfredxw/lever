@@ -3,3 +3,7 @@ packages:
     output_path: "web/src/api/types.gen.ts"
     exclude_files: ["*_test.go"]
     enum_style: "union"
+  - path: "lever/internal/remoteproto"
+    output_path: "web/src/api/hub.gen.ts"
+    include_files: ["types.go"]
+    enum_style: "union"

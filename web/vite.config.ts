@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
-    viteStaticCopy({
+    mode !== "hub" && viteStaticCopy({
       targets: ["cmaps", "standard_fonts", "wasm"].map((directory) => ({
         src: normalizePath(
           fileURLToPath(
@@ -28,7 +28,13 @@ export default defineConfig(({ mode }) => ({
         ? undefined
         : { "/api": { target: "http://127.0.0.1:4778", ws: true } },
   },
-  build: { target: "es2022" },
+  build: {
+    target: "es2022",
+    ...(mode === "hub" ? {
+      outDir: "hubassets/dist",
+      rollupOptions: { input: fileURLToPath(new URL("./hub.html", import.meta.url)) },
+    } : {}),
+  },
   worker: { format: "es" },
   // Imports reached through lazy panes or workers can trigger a desktop reload
   // when Vite first discovers them in dev mode.

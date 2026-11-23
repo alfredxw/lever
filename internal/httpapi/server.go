@@ -24,11 +24,14 @@ import (
 	"lever/internal/model"
 	"lever/internal/plugin"
 	"lever/internal/provider"
+	"lever/internal/remote"
 	"lever/internal/store"
 	"lever/internal/workspace"
 )
 
 type Server struct {
+	OnStop     context.CancelFunc
+	Remote     *remote.Host
 	App        *app.App
 	HTTP       *http.Server
 	URL, Token string
@@ -83,6 +86,7 @@ func New(a *app.App, address, devOrigin string, assets fs.FS) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.Remote = remote.Start(a)
 	s.URL, s.listener = "http://"+l.Addr().String(), l
 	a.URL = s.URL
 	a.StartChannels()
@@ -103,6 +107,7 @@ func New(a *app.App, address, devOrigin string, assets fs.FS) (*Server, error) {
 		respond(w, map[string]bool{"paired": true}, nil)
 	})
 	api := http.NewServeMux()
+	api.Handle("POST /api/remote", s.Remote.Handler())
 	s.routes(api)
 	s.channelRoutes(api)
 	mux.Handle("/api/", s.auth(api))
@@ -148,6 +153,9 @@ func (s *Server) Serve() error {
 	return s.HTTP.Serve(s.listener)
 }
 func (s *Server) Close(ctx context.Context) error {
+	if s.Remote != nil {
+		s.Remote.Close()
+	}
 	err := s.HTTP.Shutdown(ctx)
 	// The listener may already be bound before Serve registers it with HTTP.
 	if closeErr := s.listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {

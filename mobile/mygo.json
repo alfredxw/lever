@@ -1,0 +1,12 @@
+{
+  "name":"Lever Mobile",
+  "slug":"lever-mobile",
+  "identifier":"app.lever.mobile",
+  "version":"0.1.0",
+  "icon":"../cmd/lever-desktop/icon.png",
+  "main":".",
+  "out":"dist",
+  "urlSchemes":["leverdevice"],
+  "ios":{"distribution":"development","infoPlist":{"NSCameraUsageDescription":"扫描 Lever Hub 配对二维码","NSLocalNetworkUsageDescription":"连接已授权的 Lever 执行设备","NSBonjourServices":["_lever._tcp"]}},
+  "android":{"permissions":["INTERNET","CAMERA","POST_NOTIFICATIONS","ACCESS_NETWORK_STATE","ACCESS_WIFI_STATE","CHANGE_WIFI_MULTICAST_STATE"]}
+}

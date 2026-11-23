@@ -1,0 +1,17 @@
+services:
+  hub:
+    image: ${LEVER_HUB_IMAGE:-lever-hub:0.1.0}
+    restart: unless-stopped
+    command: ["--listen", ":8090"]
+    environment:
+      LEVER_HUB_DOMAIN: ${LEVER_HUB_DOMAIN:-}
+      LEVER_HUB_PUSH_CONFIG: ${LEVER_HUB_PUSH_CONFIG:-}
+    ports:
+      - "${LEVER_HUB_BIND:-127.0.0.1}:${LEVER_HUB_PORT:-8090}:8090"
+    volumes:
+      - hub-data:/var/lib/lever-hub
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  hub-data: {}

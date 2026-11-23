@@ -711,7 +711,17 @@ export interface Agent {
   createdAt: string;
   updatedAt: string;
 }
+export interface SharedScope {
+  hubId: string;
+  spaceId: string;
+}
+export interface SharedTaskRef extends SharedScope {
+  taskId: string;
+  dispatchId: string;
+}
 export interface Chat {
+  sharedScope?: SharedScope;
+  sharedTaskRef?: SharedTaskRef;
   id: string;
   agentId: string;
   taskId?: string;
@@ -1115,6 +1125,7 @@ export interface Question {
   multiple: boolean;
 }
 export interface Request {
+  answeredByUserId?: string;
   id: string;
   runId: string;
   chatId: string;
@@ -1141,6 +1152,7 @@ export interface Answer {
   optionId?: string;
 }
 export interface SendInput {
+  sharedScope?: SharedScope;
   workingCopyId?: string;
   commandId: string;
   chatId: string;

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ func main() {
 	if provider.MCPStdioHelper() {
 		return
 	}
+	background := flag.Bool(host.DesktopServerFlag, false, "Run the paired Host without a window")
 	dir := flag.String("data-dir", host.DefaultDir(), "Local data directory")
 	address := flag.String("listen", "127.0.0.1:4778", "Loopback listen address")
 	devOrigin := flag.String("dev-origin", "", "Allowed Vite development origin")
@@ -31,6 +33,15 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if *background {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := host.ServeDesktop(ctx, *dir, *address, *devOrigin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := cli.Run(flag.Args(), *dir, os.Stdout, os.Stderr); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

@@ -9,6 +9,9 @@ node_modules/
 /lever-desktop.exe
 /output/
 /web/dist/
+/web/hubassets/dist/
+/mobile/dist/
+/mobile/.mygo/
 /desktop/dist/
 *.tsbuildinfo
 

@@ -43,7 +43,10 @@ func (a *App) addDelegationTools(ctx context.Context, server *mcp.Server, owner 
 	targets := []model.Agent{}
 	for _, rule := range owner.profile.Delegations {
 		if target, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", rule.AgentID); err == nil && !target.Archived {
-			targets = append(targets, model.Agent{ID: target.ID, Name: target.Name})
+			var visible bool
+			if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM hub_exposed_agents WHERE hub=json_extract(c.data,'$.sharedScope.hubId') AND space=json_extract(c.data,'$.sharedScope.spaceId') AND agent_id=?) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err == nil && visible {
+				targets = append(targets, model.Agent{ID: target.ID, Name: target.Name})
+			}
 		}
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "delegate_start", Description: "Start a task on another configured Agent. One hop only. Available targets: " + store.JSON(targets)}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateInput) (*mcp.CallToolResult, *model.Delegation, error) {
@@ -144,6 +147,16 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 				title = title[:48]
 			}
 			chat := model.Chat{ID: d.ChatID, AgentID: target.ID, Title: string(title), Source: "delegation", CreatedAt: now(), UpdatedAt: now()}
+			parentChat, err := store.Get[model.Chat](ctx, tx, "SELECT data FROM chats WHERE id=?", parent.session.ChatID)
+			if err != nil {
+				return err
+			}
+			if parentChat.SharedScope != nil {
+				if err = checkExposed(tx, *parentChat.SharedScope, target.ID); err != nil {
+					return err
+				}
+				chat.SharedScope = parentChat.SharedScope
+			}
 			if _, err = tx.Exec("INSERT INTO chats(id,agent_id,data) VALUES(?,?,?)", chat.ID, chat.AgentID, store.JSON(chat)); err != nil {
 				return err
 			}

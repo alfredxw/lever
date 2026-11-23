@@ -1694,6 +1694,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "settings.clearSearch": "清除搜索",
   "settings.noMatches": "没有匹配的设置",
   "settings.general": "常规",
+  "settings.remoteDevices": "远程与设备",
   "settings.storage": "存储",
   "settings.providers": "运行时",
   "settings.detect": "重新检测",

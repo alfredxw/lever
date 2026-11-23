@@ -1769,6 +1769,7 @@ export const enUS = {
   "settings.clearSearch": "Clear search",
   "settings.noMatches": "No matching settings",
   "settings.general": "General",
+  "settings.remoteDevices": "Remote devices",
   "settings.storage": "Storage",
   "settings.providers": "Providers",
   "settings.detect": "Detect again",

@@ -65,10 +65,11 @@ func ServeDesktop(ctx context.Context, dir, address, devOrigin string, ready io.
 }
 
 type desktopControl struct {
-	ctx     context.Context
-	stop    context.CancelFunc
-	address string
-	server  *httpapi.Server
+	resident bool
+	ctx      context.Context
+	stop     context.CancelFunc
+	address  string
+	server   *httpapi.Server
 
 	mu       sync.Mutex
 	clients  int
@@ -84,7 +85,7 @@ func (c *desktopControl) attach(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/desktop/restart" {
 		defer c.mu.Unlock()
-		if c.clients != 0 || !c.server.App.BeginDesktopRestart() {
+		if c.resident || c.clients != 0 || !c.server.App.BeginDesktopRestart() {
 			http.Error(w, "Desktop is still attached or a run is preparing", http.StatusConflict)
 			return
 		}
@@ -93,7 +94,7 @@ func (c *desktopControl) attach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	if address := query.Get("address"); address != c.address && "http://"+address != c.server.URL {
+	if address := query.Get("address"); !c.resident && address != c.address && "http://"+address != c.server.URL {
 		c.mu.Unlock()
 		http.Error(w, "Lever is already listening at "+c.server.URL+" for this data directory", http.StatusConflict)
 		return
@@ -135,7 +136,7 @@ func (c *desktopControl) stopIfIdle() {
 }
 
 func (c *desktopControl) stopIfIdleLocked() {
-	if c.clients == 0 && !time.Now().Before(c.attachBy) && c.server.App.BeginIdleShutdown() {
+	if !c.resident && c.clients == 0 && !time.Now().Before(c.attachBy) && (c.server.Remote == nil || !c.server.Remote.Paired()) && c.server.App.BeginIdleShutdown() {
 		c.stop()
 	}
 }

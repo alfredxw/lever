@@ -26,7 +26,15 @@ func DefaultDir() string {
 	return filepath.Join(dir, "Lever")
 }
 func Start(dir, address, devOrigin string) (*httpapi.Server, error) {
-	return start(dir, address, devOrigin, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	control := &desktopControl{ctx: ctx, stop: cancel, address: address, resident: true}
+	s, err := start(dir, address, devOrigin, control)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.OnStop = cancel
+	return s, nil
 }
 
 func start(dir, address, devOrigin string, control *desktopControl) (*httpapi.Server, error) {
@@ -65,6 +73,9 @@ func start(dir, address, devOrigin string, control *desktopControl) (*httpapi.Se
 }
 func Stop(s *httpapi.Server) error {
 	// Detach running providers and drain local handlers before releasing the store.
+	if s.OnStop != nil {
+		s.OnStop()
+	}
 	s.App.Shutdown()
 	cliCtx, stopCLI := context.WithTimeout(context.Background(), 2*time.Second)
 	cliErr := s.CloseLocalCLI(cliCtx)

@@ -146,6 +146,10 @@ func open(dir string, independent bool) (*App, error) {
 	go a.runSubscriptionUpdates()
 	return a, nil
 }
+
+// Context is cancelled before the Host releases its database.
+func (a *App) Context() context.Context { return a.ctx }
+
 func (a *App) Close() error {
 	a.Shutdown()
 	return a.Store.Close()
@@ -223,7 +227,7 @@ func (a *App) BeginDesktopRestart() bool {
 }
 
 func (a *App) Overview(ctx context.Context) (model.Overview, error) {
-	o := model.Overview{DataDir: a.Store.Dir, DeviceID: "local", Platform: runtime.GOOS}
+	o := model.Overview{DataDir: a.Store.Dir, DeviceID: a.Store.DeviceID, Platform: runtime.GOOS}
 	o.HomeDir, _ = os.UserHomeDir()
 	o.DeviceName, _ = os.Hostname()
 	tx, err := a.Store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -517,6 +521,7 @@ func (a *App) Send(ctx context.Context, input model.SendInput) (model.Run, error
 }
 
 type sendOrigin struct {
+	remote         *remoteOrigin
 	idleCompaction bool
 	parentRunID    string
 	task           *model.TaskDispatch
@@ -570,7 +575,9 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 		return run, err
 	}
 	digest := hash(input)
-	if origin.channel != nil {
+	if origin.remote != nil {
+		digest = origin.remote.digest
+	} else if origin.channel != nil {
 		// Redelivery keeps its identity even when the channel's Agent changes.
 		digest = hash(*origin.channel)
 	} else if origin.retry != nil {
@@ -657,6 +664,23 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				if fire.plan.Destination.Mode == "newChat" && fire.plan.CreatesWorkItem() {
 					chat.Source, chat.TaskID = "task", fire.id
 				}
+			}
+		}
+		if input.SharedScope != nil {
+			if !newChat {
+				return invalid("Sharing can only be selected when creating a Chat")
+			}
+			if err := checkExposed(tx, *input.SharedScope, chat.AgentID); err != nil {
+				return err
+			}
+			chat.SharedScope = input.SharedScope
+		}
+		if origin.remote != nil {
+			if err := origin.remote.authorize(tx, chat); err != nil {
+				return err
+			}
+			if newChat && origin.remote.intent.TaskID != "" {
+				chat.SharedTaskRef = &model.SharedTaskRef{SharedScope: origin.remote.scope, TaskID: origin.remote.intent.TaskID, DispatchID: origin.remote.intent.ID}
 			}
 		}
 		if origin.channel == nil {
@@ -1014,6 +1038,11 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			if err = store.InsertRun(tx, &run, input.CommandID, digest); err != nil {
 				return err
 			}
+			if origin.remote != nil {
+				if err := origin.remote.record(tx, run); err != nil {
+					return err
+				}
+			}
 			if len(afterRunIDs) > 0 {
 				if err = saveRunDependencies(ctx, tx, run.ID, afterRunIDs); err != nil {
 					return err
@@ -1242,6 +1271,9 @@ func (a *App) Resolve(ctx context.Context, runID string) error {
 }
 
 func (a *App) Answer(ctx context.Context, id string, answer model.Answer) error {
+	return a.answer(ctx, id, answer, nil)
+}
+func (a *App) answer(ctx context.Context, id string, answer model.Answer, origin *remoteOrigin) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	request, err := store.Get[model.Request](ctx, a.Store.DB, "SELECT data FROM requests WHERE id=?", id)
@@ -1249,6 +1281,12 @@ func (a *App) Answer(ctx context.Context, id string, answer model.Answer) error 
 		return err
 	}
 	if request.Status == "answered" {
+		if origin != nil {
+			if _, err := a.RemoteReceipt(ctx, origin.scope, origin.intent); !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			return conflict("Request has already been answered")
+		}
 		if hash(request.Answer) == hash(answer) {
 			return nil
 		}
@@ -1284,7 +1322,18 @@ func (a *App) Answer(ctx context.Context, id string, answer model.Answer) error 
 	}
 	request.Status = "answered"
 	request.Answer = &answer
-	if err = a.Store.Write(ctx, func(tx *sql.Tx) error { return store.SaveRequest(tx, request) }); err != nil {
+	if origin != nil {
+		request.AnsweredByUserID = origin.intent.ActorUserID
+	}
+	if err = a.Store.Write(ctx, func(tx *sql.Tx) error {
+		if err := store.SaveRequest(tx, request); err != nil {
+			return err
+		}
+		if origin != nil {
+			return origin.record(tx, model.Run{ID: request.RunID, ChatID: request.ChatID, SessionID: request.SessionID})
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if ch != nil {

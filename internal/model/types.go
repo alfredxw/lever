@@ -126,18 +126,29 @@ type Agent struct {
 	UpdatedAt string  `json:"updatedAt"`
 }
 
+type SharedScope struct {
+	HubID   string `json:"hubId"`
+	SpaceID string `json:"spaceId"`
+}
+type SharedTaskRef struct {
+	SharedScope `tstype:",extends"`
+	TaskID      string `json:"taskId"`
+	DispatchID  string `json:"dispatchId"`
+}
 type Chat struct {
-	ID            string `json:"id"`
-	AgentID       string `json:"agentId"`
-	TaskID        string `json:"taskId,omitempty"`
-	NoteID        string `json:"noteId,omitempty"`
-	TaskSourceID  string `json:"taskSourceId,omitempty"`
-	Channel       string `json:"channel,omitempty"`
-	Title         string `json:"title"`
-	TitleIsCustom bool   `json:"titleIsCustom,omitempty"`
-	Source        string `json:"source"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	SharedScope   *SharedScope   `json:"sharedScope,omitempty"`
+	SharedTaskRef *SharedTaskRef `json:"sharedTaskRef,omitempty"`
+	ID            string         `json:"id"`
+	AgentID       string         `json:"agentId"`
+	TaskID        string         `json:"taskId,omitempty"`
+	NoteID        string         `json:"noteId,omitempty"`
+	TaskSourceID  string         `json:"taskSourceId,omitempty"`
+	Channel       string         `json:"channel,omitempty"`
+	Title         string         `json:"title"`
+	TitleIsCustom bool           `json:"titleIsCustom,omitempty"`
+	Source        string         `json:"source"`
+	CreatedAt     string         `json:"createdAt"`
+	UpdatedAt     string         `json:"updatedAt"`
 }
 
 // Conversation is the sidebar projection of a main or Topic session. Its
@@ -557,6 +568,7 @@ type Question struct {
 }
 
 type Request struct {
+	AnsweredByUserID  string          `json:"answeredByUserId,omitempty"`
 	ID                string          `json:"id"`
 	RunID             string          `json:"runId"`
 	ChatID            string          `json:"chatId"`
@@ -586,6 +598,7 @@ type Answer struct {
 }
 
 type SendInput struct {
+	SharedScope   *SharedScope  `json:"sharedScope,omitempty"`
 	WorkingCopyID string        `json:"workingCopyId,omitempty"`
 	CommandID     string        `json:"commandId"`
 	ChatID        string        `json:"chatId"`

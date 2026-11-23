@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
+import { ShareNote } from "./ShareNote";
 import { useTranslation } from "react-i18next";
 import type { Editor } from "@tiptap/react";
 import type { Range } from "@tiptap/core";
@@ -638,6 +639,7 @@ export function TaskNoteView({
             </form>
           </PopoverContent>
         </Popover>
+        <ShareNote note={note}/>
         {toolbarAction ?? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

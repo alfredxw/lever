@@ -19,6 +19,7 @@ import (
 )
 
 type Store struct {
+	DeviceID string
 	DB       *sql.DB
 	Dir      string
 	lock     *flock.Flock
@@ -306,6 +307,9 @@ CREATE INDEX IF NOT EXISTS comparison_runs ON runs(session_id, sequence) WHERE j
 	}
 	if err == nil {
 		err = s.backfillActivity()
+	}
+	if err == nil {
+		err = s.initRemote()
 	}
 	if err != nil {
 		_ = s.Close()

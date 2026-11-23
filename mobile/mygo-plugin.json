@@ -1,0 +1,12 @@
+{
+  "mobile": {
+    "id": "leverMobile",
+    "android": {
+      "class": "LeverMobile",
+      "sources": ["android/LeverMobile.kt"],
+      "application": [
+        "<provider android:name=\"dev.mygo.LeverFirebaseInit\" android:authorities=\"${applicationId}.lever-firebase\" android:exported=\"false\" android:initOrder=\"101\" />"
+      ]
+    }
+  }
+}

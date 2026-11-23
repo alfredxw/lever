@@ -65,6 +65,16 @@ func (s *Server) StartLocalCLI(desktop http.Handler) error {
 	}
 	a := s.App
 	mux := http.NewServeMux()
+	if s.Remote != nil {
+		handler := s.Remote.Handler()
+		mux.HandleFunc("POST /remote", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				http.Error(w, "device management requires a local operator", 403)
+				return
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
 	mux.HandleFunc("/mcp", a.MCP)
 	if desktop != nil {
 		mux.Handle("POST /desktop/attach", desktop)
