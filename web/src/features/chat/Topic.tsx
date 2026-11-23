@@ -49,6 +49,7 @@ import type { OpenRun } from "./DelegatedTasks";
 import { useFocusComposer } from "./useFocusComposer";
 import { TopicSourceContent } from "./TopicSourceContent";
 import { WaitingDependencies } from "./WaitingDependencies";
+import { formatChannelOrigin } from "./conversationTitle";
 import {
   chatDelegationsQuery,
   prefetchTopicHistory,
@@ -184,12 +185,23 @@ export function Topic({
     })
     .slice(-3);
   const title = topicTitle(session, root) || t("chat.topic");
+  const channelSource = formatChannelOrigin(session.channel, t);
+  const channelDelivery =
+    latest.channel &&
+    (latest.channel.status !== "pending" || !active(latest.status))
+      ? latest.channel
+      : undefined;
   return (
     <MessageScrollerItem
       className={cn("topic-thread", selected && "is-selected")}
       data-session-id={session.id}
       data-status={latest.status}
     >
+      {(channelSource || root.channel) && (
+        <p className="text-right text-xs text-muted-foreground">
+          {channelSource || t("channels.fromChannel")}
+        </p>
+      )}
       <UserMessage
         chatId={session.chatId}
         sessionId={session.id}
@@ -299,7 +311,23 @@ export function Topic({
                 iconOnly={isWorking(latest.status)}
               />
             )}
+          {channelDelivery && (
+            <span
+              role="status"
+              className={cn(
+                "text-xs",
+                channelDelivery.status === "failed"
+                  ? "text-destructive"
+                  : channelDelivery.status === "unknown"
+                    ? "text-(--status-attention)"
+                    : "text-muted-foreground",
+              )}
+            >
+              {t(`channels.reply.${channelDelivery.status}`)}
+            </span>
+          )}
           {!agent.archived &&
+            !latest.channel &&
             !latest.superseded &&
             canRecoverRun(latest.status) && (
               <RunRecoveryButton key={latest.id} run={latest} />
@@ -336,6 +364,7 @@ export type TopicConversationProps = {
   onOpenRun: OpenRun;
   onOpenAgent: (id: string) => void;
   onLocate?: (session: Session) => void;
+  onLocateChannel?: (channel: string) => void;
   focus: boolean;
   onFocused: () => void;
   revealKey?: number;
@@ -382,6 +411,7 @@ function TopicConversationContent({
   onOpenRun,
   onOpenAgent,
   onLocate,
+  onLocateChannel,
   focus,
   onFocused,
   revealKey,
@@ -459,6 +489,15 @@ function TopicConversationContent({
     revealKey,
   );
   useFocusComposer(panel, focus, onFocused);
+  const channelOrigin =
+    session.channel && session.channel.channel !== "feishu"
+      ? session.channel
+      : undefined;
+  const channelNotice = channelOrigin
+    ? [formatChannelOrigin(channelOrigin, t), t("personal.conversation")]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   if (!overview) return <Loading />;
   return (
     <section
@@ -466,6 +505,25 @@ function TopicConversationContent({
       className="topic-conversation"
       aria-label={t("chat.topic")}
     >
+      {channelOrigin && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1">
+          <span
+            className="min-w-0 truncate text-xs text-muted-foreground"
+            title={channelNotice}
+          >
+            {channelNotice}
+          </span>
+          {onLocateChannel && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onLocateChannel(channelOrigin.channel)}
+            >
+              {t("channels.settings")}
+            </Button>
+          )}
+        </div>
+      )}
       {(onLocate || session.workingCopyId || session.comparison) && (
         <div className="topic-toolbar">
           {onLocate && (

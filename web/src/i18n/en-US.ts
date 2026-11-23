@@ -893,6 +893,14 @@ export const enUS = {
     "Separate commands and aliases with spaces, for example /review /ai.",
   "personal.remove": "Remove {{name}}’s route",
   "personal.noAgents": "No more available Agents",
+  "personal.chatMode": "Lever conversations",
+  "personal.chatModeHint":
+    "Choose how new commands are grouped in Lever. Existing conversations stay where they are.",
+  "personal.chatMode.single": "Single Chat",
+  "personal.chatMode.byChat": "By source chat",
+  "personal.chatMode.newChat": "New Chat each",
+  "personal.sourceDm": "DM",
+  "personal.sourceGroup": "Group",
   "personal.scope": "Invocation scope",
   "personal.chats": "Conversations",
   "personal.all": "All conversations",
@@ -960,6 +968,8 @@ export const enUS = {
   "personal.limit": "Maximum preceding messages",
   "personal.last": "Latest accepted command",
   "personal.conversation": "Personal channel · Lever messages don’t post back",
+  "personal.topicConversation":
+    "Personal channel · Open a topic to continue; Lever messages don’t post back",
   "personal.first": "Waiting for the first command",
   "channels.settings": "Channel settings",
   "channels.actions": "More channel actions",

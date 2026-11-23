@@ -43,6 +43,7 @@ import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
 import { isWorking, RunStatus } from "./RunStatus";
 import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { subagentTitle } from "./RunWork";
+import { formatChannelOrigin } from "./conversationTitle";
 import { DelegatedTasks, type OpenRun } from "./DelegatedTasks";
 import { WaitingDependencies } from "./WaitingDependencies";
 import { TurnChanges } from "@/features/diff/TurnChanges";
@@ -184,7 +185,8 @@ function RunMessages({
     <>
       {run.channel && (
         <p className="text-right text-xs text-muted-foreground">
-          {t("channels.fromChannel")}
+          {formatChannelOrigin(session.channel, t) ||
+            t("channels.fromChannel")}
         </p>
       )}
       <UserMessage

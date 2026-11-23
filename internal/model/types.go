@@ -345,6 +345,7 @@ type Session struct {
 	AgentID         string            `json:"agentId"`
 	Kind            string            `json:"kind"`
 	TaskID          string            `json:"taskId,omitempty"`
+	Channel         *ChannelOrigin    `json:"channel,omitempty"`
 	NativeID        string            `json:"nativeId"`
 	Selection       Selection         `json:"selection"`
 	ParentRunID     string            `json:"parentRunId,omitempty"`
@@ -422,7 +423,8 @@ type Run struct {
 	TaskCompletionRequested bool           `json:"taskCompletionRequested,omitempty"` // Explicit delivery requested by this execution.
 	Sequence                int64          `json:"sequence"`                          // Position in the conversation timeline.
 	Input                   string         `json:"input"`
-	ChannelPrompt           string         `json:"channelPrompt,omitempty"` // Additional instructions captured when a personal channel accepts this turn.
+	ChannelPrompt           string         `json:"channelPrompt,omitempty"`  // Additional instructions captured when a personal channel accepts this turn.
+	ChannelContext          string         `json:"channelContext,omitempty"` // External conversation context attached by a personal channel; passed to the runtime without polluting visible titles.
 	Selection               Selection      `json:"selection"`
 	PermissionMutable       bool           `json:"permissionMutable,omitempty"`
 	AllowApprovals          bool           `json:"allowApprovals,omitempty"`

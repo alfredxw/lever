@@ -34,11 +34,15 @@ reaction_status=CASE run_id WHEN 'accepted' THEN 'pending' ELSE 'ok' END WHERE r
 		t.Fatal(err)
 	}
 	for run, want := range map[string]string{"legacy": "", "accepted": "unknown", "confirmed": "ok"} {
-		var status string
+		var status, chatName string
 		var ready bool
-		err := s.DB.QueryRow("SELECT reaction_status,context_ready FROM personal_channel_turns WHERE run_id=?", run).Scan(&status, &ready)
-		if err != nil || status != want || !ready {
-			t.Fatalf("%s: status=%q context ready=%v err=%v", run, status, ready, err)
+		err := s.DB.QueryRow("SELECT reaction_status,context_ready,chat_name FROM personal_channel_turns WHERE run_id=?", run).Scan(&status, &ready, &chatName)
+		if err != nil || status != want || !ready || chatName != "" {
+			t.Fatalf("%s: status=%q context ready=%v chatName=%q err=%v", run, status, ready, chatName, err)
 		}
+	}
+	var chatsTable string
+	if err := s.DB.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='personal_channel_chats'").Scan(&chatsTable); err != nil || chatsTable != "personal_channel_chats" {
+		t.Fatalf("missing personal_channel_chats table: %q %v", chatsTable, err)
 	}
 }

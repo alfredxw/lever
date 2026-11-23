@@ -150,6 +150,17 @@ export interface ChannelAgentDraft {
 export interface ChannelTurn {
   status: string;
 }
+export interface ChannelOrigin {
+  channel: string;
+  chatId?: string;
+  chatName?: string;
+  kind?: string;
+  command?: string;
+}
+export type PersonalChannelChatMode = string;
+export const PersonalChannelChatSingle: PersonalChannelChatMode = "single";
+export const PersonalChannelChatByChat: PersonalChannelChatMode = "byChat";
+export const PersonalChannelChatNewChat: PersonalChannelChatMode = "newChat";
 export interface PersonalChannelRoute {
   agentId: string;
   commands: string[];
@@ -159,6 +170,7 @@ export interface PersonalChannelRoute {
 export interface PersonalChannelSettings {
   routes: PersonalChannelRoute[];
   chatIds: string[];
+  chatMode: PersonalChannelChatMode;
   threadReply: boolean;
   reaction: string;
   prompt: string;
@@ -176,6 +188,10 @@ export interface PersonalChannelView {
 export interface PersonalChannelReceipt {
   command: string;
   chatId: string;
+  sessionId?: string;
+  runId?: string;
+  topic?: boolean;
+  chatName?: string;
   agentId: string;
   status: string;
   runStatus: string;
@@ -895,6 +911,7 @@ export interface Session extends Scope {
   agentId: string;
   kind: string;
   taskId?: string;
+  channel?: ChannelOrigin;
   nativeId: string;
   selection: Selection;
   parentRunId?: string;
@@ -969,6 +986,7 @@ export interface Run {
   sequence: number /* int64 */; // Position in the conversation timeline.
   input: string;
   channelPrompt?: string; // Additional instructions captured when a personal channel accepts this turn.
+  channelContext?: string; // External conversation context attached by a personal channel; passed to the runtime without polluting visible titles.
   selection: Selection;
   permissionMutable?: boolean;
   allowApprovals?: boolean;

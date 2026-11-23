@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import type {
   Agent,
+  PersonalChannelReceipt,
   Plugin,
   PluginUpdate,
   UpdateSettings,
@@ -97,6 +98,7 @@ export default function PluginsPage({
   initialPlugin,
   onManageConnections,
   onOpenChat,
+  onOpenPersonalReceipt,
   onOpenWorks,
   onOpenAutomations,
 }: {
@@ -104,6 +106,10 @@ export default function PluginsPage({
   initialPlugin?: string;
   onManageConnections: (pluginId: string) => void;
   onOpenChat: (chatId: string, agentId: string, title: string) => void;
+  onOpenPersonalReceipt?: (
+    receipt: PersonalChannelReceipt,
+    title: string,
+  ) => void;
   onOpenWorks?: () => void;
   onOpenAutomations?: (automationId?: string) => void;
 }) {
@@ -837,6 +843,7 @@ export default function PluginsPage({
                     plugin={plugin}
                     agents={agents}
                     onOpenChat={onOpenChat}
+                    onOpenReceipt={onOpenPersonalReceipt}
                   />
                 )}
                 {hasProviders && (

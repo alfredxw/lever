@@ -2361,6 +2361,7 @@ export default function App() {
                                       else
                                         locateTopic(session.chatId, session.id);
                                     }}
+                                    onLocateChannel={showChannel}
                                     focus={focusComposer === t.id && active}
                                     onFocused={onComposerFocused}
                                     revealKey={reveal?.key}
@@ -2613,6 +2614,20 @@ export default function App() {
                 showProviderSettings(undefined, pluginId)
               }
               onOpenChat={openChat}
+              onOpenPersonalReceipt={(receipt, title) => {
+                if (receipt.topic && receipt.sessionId)
+                  openRun(
+                    {
+                      chatId: receipt.chatId,
+                      sessionId: receipt.sessionId,
+                      agentId: receipt.agentId,
+                      topic: true,
+                      runId: receipt.runId ?? "",
+                    },
+                    title,
+                  );
+                else openChat(receipt.chatId, receipt.agentId, title);
+              }}
               onOpenWorks={() => showTasks()}
               onOpenAutomations={showAutomations}
             />

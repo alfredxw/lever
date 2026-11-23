@@ -867,6 +867,14 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "personal.commandsHint": "主指令和别名用空格分隔，例如 /审查 /ai。",
   "personal.remove": "移除 {{name}} 的指令",
   "personal.noAgents": "没有可添加的 Agent",
+  "personal.chatMode": "Lever 对话组织",
+  "personal.chatModeHint":
+    "选择新指令在 Lever 中的归档方式。已有对话和话题保持不变。",
+  "personal.chatMode.single": "统一对话",
+  "personal.chatMode.byChat": "按飞书会话",
+  "personal.chatMode.newChat": "每段新对话",
+  "personal.sourceDm": "私聊",
+  "personal.sourceGroup": "群聊",
   "personal.scope": "生效范围",
   "personal.chats": "生效会话",
   "personal.all": "所有会话",
@@ -928,6 +936,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "personal.limit": "最多带入的前文条数",
   "personal.last": "最近受理",
   "personal.conversation": "个人号渠道 · 在 Lever 续聊不会自动回发",
+  "personal.topicConversation":
+    "个人号渠道 · 点开话题续聊；在 Lever 发送不会自动回发",
   "personal.first": "等待第一条指令",
   "channels.settings": "渠道设置",
   "channels.actions": "更多渠道操作",

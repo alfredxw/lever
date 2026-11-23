@@ -404,7 +404,12 @@ function ChatContent(props: ChatProps) {
               <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1">
                 <span className="text-xs text-muted-foreground">
                   {t(
-                    botChat ? "channels.privateChat" : "personal.conversation",
+                    botChat
+                      ? "channels.privateChat"
+                      : entries.some((entry) => entry.kind === "topic") &&
+                          !entries.some((entry) => entry.kind === "main")
+                        ? "personal.topicConversation"
+                        : "personal.conversation",
                   )}
                 </span>
                 <Button

@@ -44,6 +44,26 @@ type ChannelTurn struct {
 	Status string `json:"status"`
 }
 
+type ChannelOrigin struct {
+	Channel  string `json:"channel"`
+	ChatID   string `json:"chatId,omitempty"`
+	ChatName string `json:"chatName,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Command  string `json:"command,omitempty"`
+}
+
+type PersonalChannelChatMode string
+
+const (
+	PersonalChannelChatSingle  PersonalChannelChatMode = "single"
+	PersonalChannelChatByChat  PersonalChannelChatMode = "byChat"
+	PersonalChannelChatNewChat PersonalChannelChatMode = "newChat"
+)
+
+func (mode PersonalChannelChatMode) Valid() bool {
+	return mode == PersonalChannelChatSingle || mode == PersonalChannelChatByChat || mode == PersonalChannelChatNewChat
+}
+
 type PersonalChannelRoute struct {
 	AgentID   string     `json:"agentId"`
 	Commands  []string   `json:"commands"`
@@ -52,13 +72,14 @@ type PersonalChannelRoute struct {
 }
 
 type PersonalChannelSettings struct {
-	Routes       []PersonalChannelRoute `json:"routes"`
-	ChatIDs      []string               `json:"chatIds"`
-	ThreadReply  bool                   `json:"threadReply"`
-	Reaction     string                 `json:"reaction"`
-	Prompt       string                 `json:"prompt"`
-	Signature    string                 `json:"signature"`
-	ContextLimit int                    `json:"contextLimit"`
+	Routes       []PersonalChannelRoute  `json:"routes"`
+	ChatIDs      []string                `json:"chatIds"`
+	ChatMode     PersonalChannelChatMode `json:"chatMode"`
+	ThreadReply  bool                    `json:"threadReply"`
+	Reaction     string                  `json:"reaction"`
+	Prompt       string                  `json:"prompt"`
+	Signature    string                  `json:"signature"`
+	ContextLimit int                     `json:"contextLimit"`
 }
 
 type PersonalChannelView struct {
@@ -73,6 +94,10 @@ type PersonalChannelView struct {
 type PersonalChannelReceipt struct {
 	Command        string    `json:"command"`
 	ChatID         string    `json:"chatId"`
+	SessionID      string    `json:"sessionId,omitempty"`
+	RunID          string    `json:"runId,omitempty"`
+	Topic          bool      `json:"topic,omitempty"`
+	ChatName       string    `json:"chatName,omitempty"`
 	AgentID        string    `json:"agentId"`
 	Status         string    `json:"status"`
 	RunStatus      string    `json:"runStatus"`

@@ -52,7 +52,7 @@ test("personal channel saves owner-only routes and reply preferences", async ({
       .getByRole("button", { name: "插件", exact: true })
       .click();
     const card = page.getByRole("group", { name, exact: true });
-    const cardIcon = card.locator(".plugin-card-open > img");
+    const cardIcon = card.locator(".plugin-card-mark > img");
     await expect(cardIcon).toBeVisible();
     expect(
       await cardIcon.evaluate(
@@ -92,6 +92,8 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     await expect(option).toBeVisible();
     await option.click();
     await page.getByPlaceholder("/agent /ai").fill("/审查 /agent /abc");
+    await expect(page.getByRole("radio", { name: "统一对话" })).toBeChecked();
+    await page.getByRole("radio", { name: "按飞书会话" }).click();
     await expect(page.getByRole("radio", { name: "跟随 Agent" })).toBeChecked();
     await page.getByRole("radio", { name: "指定模型" }).click();
     await page.getByRole("button", { name: "选择模型和运行时" }).click();
@@ -130,6 +132,7 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     expect(view.state).toBe("signedOut");
     expect(view.settings).toMatchObject({
       chatIds: ["111", "222"],
+      chatMode: "byChat",
       reaction: "OnIt",
       threadReply: false,
       contextLimit: 0,
@@ -168,6 +171,10 @@ test("personal channel saves owner-only routes and reply preferences", async ({
       .fill("YouAreTheBest");
     await savedCustomEmoji;
     await reopenSettings();
+    await expect(page.getByRole("radio", { name: "按飞书会话" })).toBeChecked();
+    const savedNewChat = waitChannelSave((body) => body.chatMode === "newChat");
+    await page.getByRole("radio", { name: "每段新对话" }).click();
+    await savedNewChat;
     await expect(
       page.getByRole("button", { name: "选择模型和运行时" }),
     ).toContainText("GPT Review");
@@ -197,7 +204,10 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     let state = "preparing";
     await page.route(`**/api/plugins/${id}/channel`, async (route) => {
       const settings = { ...cleared.settings };
-      if (legacy) delete settings.prompt;
+      if (legacy) {
+        delete settings.prompt;
+        delete settings.chatMode;
+      }
       await route.fulfill({
         json: {
           ...cleared,
@@ -207,6 +217,10 @@ test("personal channel saves owner-only routes and reply preferences", async ({
             command: "/agent",
             agentId: settings.routes[0].agentId,
             chatId: "fixture",
+            sessionId: "fixture-topic",
+            runId: "fixture-run",
+            topic: true,
+            chatName: "研发群",
             status: "sent",
             runStatus: "failed",
             contextReady: true,
@@ -225,6 +239,7 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     await expect(page.getByText(/运行环境准备失败/)).toBeVisible();
     await expect(page.getByRole("button", { name: "扫码连接" })).toBeEnabled();
     const last = page.getByRole("region", { name: "最近受理" });
+    await expect(last).toContainText("研发群");
     await expect(last).toContainText("执行失败");
     await expect(last).toContainText("claude-review");
     await expect(last).toContainText("完成 · 飞书已确认");
@@ -243,6 +258,7 @@ test("personal channel saves owner-only routes and reply preferences", async ({
     legacy = true;
     await expect(page.getByText(/当前后端使用旧版本/)).toBeVisible();
     await expect(page.getByRole("radio", { name: "指定模型" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "统一对话" })).toHaveCount(0);
   } finally {
     if (id) await page.request.delete(`/api/plugins/${id}`).catch(() => {});
     rmSync(directory, { force: true, recursive: true });

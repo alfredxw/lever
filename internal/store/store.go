@@ -227,10 +227,18 @@ CREATE TABLE IF NOT EXISTS personal_channel_turns(
   run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, binding TEXT NOT NULL, chat TEXT NOT NULL,
   conversation TEXT NOT NULL, thread TEXT NOT NULL, command TEXT NOT NULL, signature TEXT NOT NULL,
   answer_id TEXT NOT NULL DEFAULT '', context_ready INTEGER NOT NULL,
-  reaction TEXT NOT NULL DEFAULT '', reaction_status TEXT NOT NULL DEFAULT ''
+  reaction TEXT NOT NULL DEFAULT '', reaction_status TEXT NOT NULL DEFAULT '',
+  chat_name TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS personal_channel_conversation ON personal_channel_turns(binding,chat,conversation);
 CREATE INDEX IF NOT EXISTS personal_channel_answer ON personal_channel_turns(binding,chat,answer_id) WHERE answer_id<>'';
+CREATE TABLE IF NOT EXISTS personal_channel_chats(
+  binding TEXT NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  scope TEXT NOT NULL,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  PRIMARY KEY(binding, agent_id, scope)
+);
 CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS draft_attachments(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS run_attachments(run_id TEXT NOT NULL REFERENCES runs(id), attachment_id TEXT NOT NULL REFERENCES attachments(id), PRIMARY KEY(run_id, attachment_id));
@@ -324,6 +332,7 @@ func addStoreColumns(db *sql.DB) error {
 		{"external_tasks", "in_scope", "INTEGER NOT NULL DEFAULT 1"},
 		{"personal_channel_turns", "reaction", "TEXT NOT NULL DEFAULT ''"},
 		{"personal_channel_turns", "reaction_status", "TEXT NOT NULL DEFAULT ''"},
+		{"personal_channel_turns", "chat_name", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		var exists bool
 		if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name=?)", column.table, column.name).Scan(&exists); err != nil {

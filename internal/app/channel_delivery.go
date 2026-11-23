@@ -169,7 +169,7 @@ func setChannelDelivery(ctx context.Context, tx *sql.Tx, run model.Run, part, st
 	if part != "answer" {
 		return nil
 	}
-	return store.Event(tx, model.Event{Type: "channel-delivery", ChatID: run.ChatID})
+	return store.Event(tx, model.Event{Type: "channel-delivery", ChatID: run.ChatID, SessionID: run.SessionID})
 }
 
 func (a *App) RetryChannelReply(ctx context.Context, runID string) error {
@@ -206,6 +206,6 @@ func (a *App) RetryChannelReply(ctx context.Context, runID string) error {
 		} else if rows == 0 {
 			return conflict("This channel reply is no longer retryable")
 		}
-		return store.Event(tx, model.Event{Type: "channel-delivery", ChatID: run.ChatID})
+		return store.Event(tx, model.Event{Type: "channel-delivery", ChatID: run.ChatID, SessionID: run.SessionID})
 	})
 }

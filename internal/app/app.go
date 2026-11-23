@@ -620,9 +620,13 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 		}
 		var destination taskDestination
+		var personalDest personalDestination
 		newChat := input.AgentID != ""
 		if origin.personal != nil {
-			chat, err = origin.personal.chat(ctx, tx, input.AgentID)
+			personalDest, err = origin.personal.resolve(ctx, tx, input.AgentID)
+			chat = personalDest.chat
+			input.Operation = personalDest.operation
+			input.SessionID = personalDest.sessionID
 			newChat = chat.ID == ""
 		} else if task != nil {
 			settings, settingsErr := taskDispatchSettings(ctx, tx)
@@ -642,7 +646,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if newChat {
 			chat = model.Chat{ID: ID(), AgentID: input.AgentID, Title: "New chat", Source: "user", CreatedAt: now(), UpdatedAt: now()}
 			if turn := origin.personal; turn != nil {
-				chat.Source, chat.Channel, chat.Title = "channel", turn.install, turn.title
+				chat.Source, chat.Channel, chat.Title = "channel", turn.install, personalDest.title
 			}
 			if task != nil {
 				chat.Title, chat.Source = destination.title, destination.source
@@ -670,6 +674,12 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if newChat {
 			if _, err = tx.Exec("INSERT INTO chats(id,agent_id,data) VALUES(?,?,?)", chat.ID, agent.ID, store.JSON(chat)); err != nil {
 				return err
+			}
+			if origin.personal != nil && personalDest.registerScope != "" {
+				if _, err = tx.ExecContext(ctx, "INSERT INTO personal_channel_chats(binding,agent_id,scope,chat_id) VALUES(?,?,?,?)",
+					origin.personal.binding, agent.ID, personalDest.registerScope, chat.ID); err != nil {
+					return err
+				}
 			}
 		}
 		var editing model.Run
@@ -784,7 +794,12 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if create {
 			kind := input.Operation
 			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
-			if task != nil && kind == "topic" {
+			if origin.personal != nil {
+				session.Channel = origin.personal.channelOrigin()
+				if kind == "topic" && personalDest.sessionTitle != "" {
+					session.Title = personalDest.sessionTitle
+				}
+			} else if task != nil && kind == "topic" {
 				session.Title, session.TaskID = task.Title, task.TaskID
 			} else if origin.automation != nil && kind == "topic" {
 				session.Title = origin.automation.plan.Name

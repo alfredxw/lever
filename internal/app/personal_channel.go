@@ -41,8 +41,11 @@ func (a *App) personalConfig(ctx context.Context, id string) (model.Plugin, pers
 	config, err = store.Get[personalConfig](ctx, a.Store.DB, "SELECT data FROM channel_connections WHERE kind=?", id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, personalConfig{Region: "feishu", PersonalChannelSettings: model.PersonalChannelSettings{
-			ThreadReply: true, ContextLimit: 20, Signature: "AI · {agent}", Routes: []model.PersonalChannelRoute{}, ChatIDs: []string{},
+			ChatMode: model.PersonalChannelChatSingle, ThreadReply: true, ContextLimit: 20, Signature: "AI · {agent}", Routes: []model.PersonalChannelRoute{}, ChatIDs: []string{},
 		}}, nil
+	}
+	if err == nil && !config.ChatMode.Valid() {
+		config.ChatMode = model.PersonalChannelChatSingle
 	}
 	return p, config, err
 }
@@ -75,10 +78,10 @@ func (a *App) PersonalChannel(ctx context.Context, id string) (model.PersonalCha
 	if config.Account != "" {
 		var last model.PersonalChannelReceipt
 		var selection []byte
-		err = a.Store.DB.QueryRowContext(ctx, `SELECT t.command,r.chat_id,c.agent_id,d.status,r.status,t.context_ready,t.reaction,t.reaction_status,
+		err = a.Store.DB.QueryRowContext(ctx, `SELECT t.command,r.chat_id,r.session_id,r.id,s.kind='topic',t.chat_name,c.agent_id,d.status,r.status,t.context_ready,t.reaction,t.reaction_status,
 json_extract(r.data,'$.selection') FROM personal_channel_turns t
-JOIN runs r ON r.id=t.run_id JOIN chats c ON c.id=r.chat_id JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
-WHERE t.binding=? ORDER BY t.rowid DESC LIMIT 1`, personalBinding(id, config)).Scan(&last.Command, &last.ChatID, &last.AgentID,
+JOIN runs r ON r.id=t.run_id JOIN sessions s ON s.id=r.session_id JOIN chats c ON c.id=r.chat_id JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
+WHERE t.binding=? ORDER BY t.rowid DESC LIMIT 1`, personalBinding(id, config)).Scan(&last.Command, &last.ChatID, &last.SessionID, &last.RunID, &last.Topic, &last.ChatName, &last.AgentID,
 			&last.Status, &last.RunStatus, &last.ContextReady, &last.Reaction, &last.ReactionStatus, &selection)
 		if err == nil {
 			if err := json.Unmarshal(selection, &last.Selection); err != nil {
@@ -98,6 +101,12 @@ func (a *App) ConfigurePersonal(ctx context.Context, id string, settings model.P
 	_, config, err := a.personalConfig(ctx, id)
 	if err != nil {
 		return err
+	}
+	if settings.ChatMode == "" {
+		settings.ChatMode = config.ChatMode
+	}
+	if !settings.ChatMode.Valid() {
+		return invalid("Choose a valid conversation mode")
 	}
 	settings.Prompt = strings.TrimSpace(settings.Prompt)
 	if utf8.RuneCountInString(settings.Prompt) > 4000 || strings.ContainsRune(settings.Prompt, '\x00') {
@@ -318,8 +327,27 @@ func (a *App) stopPersonalLocked(id string) {
 }
 
 type personalMessage struct {
-	ID, Chat, Sender, Text, Kind, Thread, Parent string
-	Created                                      int64
+	ID, Chat, ChatName, Sender, Text, Kind, Thread, Parent string
+	Created                                                int64
+}
+
+func sanitizePersonalChatName(name string) string {
+	name = strings.ReplaceAll(name, "\x00", "")
+	name = strings.Join(strings.Fields(name), " ")
+	runes := []rune(name)
+	if len(runes) > 80 {
+		return string(runes[:80])
+	}
+	return name
+}
+
+func clipPersonalRunes(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) > limit {
+		return string(runes[:limit]) + "…"
+	}
+	return text
 }
 
 func (config personalConfig) match(message personalMessage) (model.PersonalChannelRoute, string, string, bool) {
@@ -343,20 +371,131 @@ func (config personalConfig) match(message personalMessage) (model.PersonalChann
 }
 
 type personalTurn struct {
-	install, binding, title, remoteChat, conversation, thread, parent, command, signature string
-	prompt, reaction                                                                      string
-	needsContext                                                                          bool
+	install, binding, channelName, remoteChat, chatName, kind string
+	conversation, thread, parent, command, signature          string
+	prompt, reaction, rawBody                                 string
+	chatMode                                                  model.PersonalChannelChatMode
+	needsContext                                              bool
 }
 
-func (turn *personalTurn) chat(ctx context.Context, tx *sql.Tx, agent string) (model.Chat, error) {
-	chat, err := store.Get[model.Chat](ctx, tx, `SELECT c.data FROM personal_channel_turns t
-JOIN runs r ON r.id=t.run_id JOIN chats c ON c.id=r.chat_id
-WHERE t.binding=? AND t.chat=? AND c.agent_id=? AND (t.conversation=? OR (?<>'' AND t.answer_id=?))
-ORDER BY (t.conversation=?) DESC, t.rowid DESC LIMIT 1`, turn.binding, turn.remoteChat, agent, turn.conversation, turn.parent, turn.parent, turn.conversation)
+type personalDestination struct {
+	chat          model.Chat
+	sessionID     string
+	operation     string
+	title         string
+	sessionTitle  string
+	registerScope string
+}
+
+func (turn *personalTurn) sourceLabel() string {
+	if turn.chatName != "" {
+		return turn.chatName
+	}
+	return turn.remoteChat
+}
+
+func (turn *personalTurn) topicTitle(includeSource bool) string {
+	if turn.conversation == "dm" {
+		return turn.sourceLabel()
+	}
+	body := clipPersonalRunes(turn.rawBody, 48)
+	if includeSource && turn.chatName != "" {
+		if body != "" {
+			return turn.chatName + " · " + body
+		}
+		return turn.chatName + " · " + turn.command
+	}
+	if body == "" {
+		return turn.command
+	}
+	return ""
+}
+
+func (turn *personalTurn) channelOrigin() *model.ChannelOrigin {
+	return &model.ChannelOrigin{
+		Channel:  turn.install,
+		ChatID:   turn.remoteChat,
+		ChatName: turn.chatName,
+		Kind:     turn.kind,
+		Command:  turn.command,
+	}
+}
+
+func (turn *personalTurn) scopedChat(ctx context.Context, tx *sql.Tx, agent, scope string) (model.Chat, error) {
+	chat, err := store.Get[model.Chat](ctx, tx, `SELECT c.data FROM personal_channel_chats p
+JOIN chats c ON c.id=p.chat_id
+WHERE p.binding=? AND p.agent_id=? AND p.scope=?`, turn.binding, agent, scope)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
 	return chat, err
+}
+
+func (turn *personalTurn) resolve(ctx context.Context, tx *sql.Tx, agent string) (personalDestination, error) {
+	var sessionID, sessionKind, chatData string
+	err := tx.QueryRowContext(ctx, `SELECT s.id, s.kind, c.data FROM personal_channel_turns t
+JOIN runs r ON r.id=t.run_id JOIN sessions s ON s.id=r.session_id JOIN chats c ON c.id=r.chat_id
+WHERE t.binding=? AND t.chat=? AND c.agent_id=? AND (t.conversation=? OR (?<>'' AND t.answer_id=?))
+ORDER BY (t.conversation=?) DESC, t.rowid DESC LIMIT 1`,
+		turn.binding, turn.remoteChat, agent, turn.conversation, turn.parent, turn.parent, turn.conversation).Scan(&sessionID, &sessionKind, &chatData)
+	if err == nil {
+		var chat model.Chat
+		if err := json.Unmarshal([]byte(chatData), &chat); err != nil {
+			return personalDestination{}, err
+		}
+		if sessionKind == "topic" {
+			return personalDestination{chat: chat, sessionID: sessionID, operation: "reply"}, nil
+		}
+		return personalDestination{chat: chat, operation: "main"}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return personalDestination{}, err
+	}
+	switch turn.chatMode {
+	case model.PersonalChannelChatNewChat:
+		return personalDestination{
+			operation: "main",
+			title:     turn.channelName + " · " + turn.sourceLabel(),
+		}, nil
+	case model.PersonalChannelChatByChat:
+		scope := "chat:" + turn.remoteChat
+		chat, err := turn.scopedChat(ctx, tx, agent, scope)
+		if err != nil {
+			return personalDestination{}, err
+		}
+		operation, sessionTitle := "topic", turn.topicTitle(false)
+		if turn.kind == "dm" && turn.thread == "" {
+			operation, sessionTitle = "main", ""
+		}
+		registerScope := ""
+		if chat.ID == "" {
+			registerScope = scope
+		}
+		return personalDestination{
+			chat:          chat,
+			operation:     operation,
+			title:         turn.channelName + " · " + turn.sourceLabel(),
+			sessionTitle:  sessionTitle,
+			registerScope: registerScope,
+		}, nil
+	default:
+		scope := "agent"
+		chat, err := turn.scopedChat(ctx, tx, agent, scope)
+		if err != nil {
+			return personalDestination{}, err
+		}
+		registerScope := ""
+		if chat.ID == "" {
+			registerScope = scope
+		}
+		return personalDestination{
+			chat:          chat,
+			operation:     "topic",
+			title:         turn.channelName,
+			sessionTitle:  turn.topicTitle(true),
+			registerScope: registerScope,
+		}, nil
+	}
 }
 
 func (turn *personalTurn) record(ctx context.Context, tx *sql.Tx, runID string) error {
@@ -364,7 +503,7 @@ func (turn *personalTurn) record(ctx context.Context, tx *sql.Tx, runID string) 
 	if turn.reaction != "" {
 		reactionStatus = "pending"
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO personal_channel_turns(run_id,binding,chat,conversation,thread,command,signature,context_ready,reaction,reaction_status)
-VALUES(?,?,?,?,?,?,?,?,?,?)`, runID, turn.binding, turn.remoteChat, turn.conversation, turn.thread, turn.command, turn.signature, !turn.needsContext, turn.reaction, reactionStatus)
+	_, err := tx.ExecContext(ctx, `INSERT INTO personal_channel_turns(run_id,binding,chat,conversation,thread,command,signature,context_ready,reaction,reaction_status,chat_name)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)`, runID, turn.binding, turn.remoteChat, turn.conversation, turn.thread, turn.command, turn.signature, !turn.needsContext, turn.reaction, reactionStatus, turn.chatName)
 	return err
 }

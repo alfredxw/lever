@@ -14,6 +14,8 @@ import { useTranslation } from "react-i18next";
 import { api, queryClient } from "@/api/client";
 import type {
   Agent,
+  PersonalChannelChatMode,
+  PersonalChannelReceipt,
   PersonalChannelRoute,
   PersonalChannelSettings,
   PersonalChannelView,
@@ -41,6 +43,11 @@ import type { AutoSaveMode } from "@/lib/autoSave";
 const commandPattern = /^\/[\p{L}\p{N}_-]{1,48}$/u;
 const reactionPattern = /^[A-Za-z0-9_+-]{1,64}$/;
 const chatIdPattern = /^[1-9][0-9]{0,30}$/;
+const personalChatModes: readonly PersonalChannelChatMode[] = [
+  "single",
+  "byChat",
+  "newChat",
+];
 
 function words(value: string) {
   return value.split(/[\s,，]+/u).filter(Boolean);
@@ -77,8 +84,12 @@ function reactionOption(key: string, t: TFunction) {
 
 type RouteDraft = PersonalChannelRoute & { input: string };
 
-type PersonalChannelPayload = Omit<PersonalChannelSettings, "prompt"> & {
+type PersonalChannelPayload = Omit<
+  PersonalChannelSettings,
+  "prompt" | "chatMode"
+> & {
   prompt?: string;
+  chatMode?: PersonalChannelChatMode;
 };
 
 type PersonalDraft = {
@@ -107,8 +118,9 @@ function draftFromSettings(initial: PersonalChannelSettings): PersonalDraft {
 function normalizePayload(
   settings: PersonalChannelPayload,
   supportsChannelModel: boolean,
+  supportsChatMode: boolean,
 ): PersonalChannelPayload {
-  const { prompt, ...rest } = settings;
+  const { prompt, chatMode, ...rest } = settings;
   return {
     threadReply: !!rest.threadReply,
     signature: rest.signature ?? "",
@@ -124,14 +136,18 @@ function normalizePayload(
       }),
     ),
     ...(supportsChannelModel ? { prompt: (prompt ?? "").trim() } : {}),
+    ...(supportsChatMode ? { chatMode: chatMode || "single" } : {}),
   };
 }
 
 function settingsSignature(
   settings: PersonalChannelPayload,
   supportsChannelModel: boolean,
+  supportsChatMode: boolean,
 ) {
-  return JSON.stringify(normalizePayload(settings, supportsChannelModel));
+  return JSON.stringify(
+    normalizePayload(settings, supportsChannelModel, supportsChatMode),
+  );
 }
 
 function validateDraft(draft: PersonalDraft) {
@@ -189,12 +205,14 @@ function validateDraft(draft: PersonalDraft) {
 function buildPayload(
   draft: PersonalDraft,
   supportsChannelModel: boolean,
+  supportsChatMode: boolean,
 ): PersonalChannelPayload {
-  const { prompt, ...replySettings } = draft.settings;
+  const { prompt, chatMode, ...replySettings } = draft.settings;
   return normalizePayload(
     {
       ...replySettings,
       ...(supportsChannelModel ? { prompt } : {}),
+      ...(supportsChatMode ? { chatMode } : {}),
       chatIds: draft.restricted ? words(draft.chats) : [],
       contextLimit: draft.settings.contextLimit
         ? Number(draft.contextLimit.trim())
@@ -208,6 +226,7 @@ function buildPayload(
       })),
     },
     supportsChannelModel,
+    supportsChatMode,
   );
 }
 
@@ -309,10 +328,12 @@ export function PersonalChannel({
   plugin,
   agents,
   onOpenChat,
+  onOpenReceipt,
 }: {
   plugin: Plugin;
   agents: Agent[];
   onOpenChat: (chat: string, agent: string, title: string) => void;
+  onOpenReceipt?: (receipt: PersonalChannelReceipt, title: string) => void;
 }) {
   const { t } = useTranslation();
   const path = `/plugins/${plugin.id}/channel`;
@@ -422,6 +443,7 @@ export function PersonalChannel({
               </>
             }
             description={[
+              last.chatName,
               last.contextReady === false && last.runStatus === "queued"
                 ? t("personal.preparing")
                 : last.runStatus && t(`status.${last.runStatus}`),
@@ -436,9 +458,13 @@ export function PersonalChannel({
           >
             <Button
               variant="outline"
-              onClick={() =>
-                onOpenChat(last.chatId, last.agentId, plugin.manifest.name)
-              }
+              onClick={() => {
+                const title = last.chatName
+                  ? `${plugin.manifest.name} · ${last.chatName}`
+                  : plugin.manifest.name;
+                if (onOpenReceipt) onOpenReceipt(last, title);
+                else onOpenChat(last.chatId, last.agentId, title);
+              }}
             >
               {t("channels.openChat")}
             </Button>
@@ -493,12 +519,18 @@ function PersonalSettings({
   const key = useId();
   // A new desktop window can reattach to an older backend that owns active runs.
   const supportsChannelModel = typeof initial.prompt === "string";
+  const supportsChatMode =
+    typeof initial.chatMode === "string" && initial.chatMode !== "";
   const [draft, setDraft] = useState<PersonalDraft>(() =>
     draftFromSettings(initial),
   );
   const [touchedEmoji, setTouchedEmoji] = useState(false);
   const [touchedChats, setTouchedChats] = useState(false);
-  const initialSig = settingsSignature(initial, supportsChannelModel);
+  const initialSig = settingsSignature(
+    initial,
+    supportsChannelModel,
+    supportsChatMode,
+  );
   const prevInitialSig = useRef(initialSig);
   const pendingOwnEchoes = useRef<string[]>([]);
 
@@ -554,7 +586,7 @@ function PersonalSettings({
       autoSave.cancelPending();
       return;
     }
-    const payload = buildPayload(next, supportsChannelModel);
+    const payload = buildPayload(next, supportsChannelModel, supportsChatMode);
     autoSave.schedule(payload, JSON.stringify(payload), mode);
   }
 
@@ -713,6 +745,18 @@ function PersonalSettings({
             }}
           />
         </SettingsRow>
+        {supportsChatMode && (
+          <SettingsChoiceRow
+            title={t("personal.chatMode")}
+            description={t("personal.chatModeHint")}
+            value={settings.chatMode || "single"}
+            options={personalChatModes.map((value) => ({
+              value,
+              label: t(`personal.chatMode.${value}`),
+            }))}
+            onChange={(value) => set({ chatMode: value }, "immediate")}
+          />
+        )}
       </SettingsGroup>
       <SettingsGroup title={t("personal.receipts")}>
         <SettingsRow
