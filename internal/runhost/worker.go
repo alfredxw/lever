@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -50,14 +51,27 @@ func (o Outcome) Err() error {
 	if o.Message == "" {
 		return nil
 	}
-	err := errors.New(o.Message)
 	if o.Unconfirmed {
-		return fmt.Errorf("%w: %s", provider.ErrUnconfirmed, o.Message)
+		return wrapOutcomeError(provider.ErrUnconfirmed, o.Message)
 	}
 	if o.Rejected {
-		return fmt.Errorf("%w: %s", provider.ErrSteerRejected, o.Message)
+		return wrapOutcomeError(provider.ErrSteerRejected, o.Message)
 	}
-	return err
+	return errors.New(o.Message)
+}
+
+func wrapOutcomeError(sentinel error, message string) error {
+	prefix := sentinel.Error()
+	switch {
+	case message == "" || message == prefix:
+		return sentinel
+	case strings.HasPrefix(message, prefix+"\n"):
+		return errors.Join(sentinel, errors.New(strings.TrimPrefix(message, prefix+"\n")))
+	case strings.HasPrefix(message, prefix+": "):
+		return fmt.Errorf("%w: %s", sentinel, strings.TrimPrefix(message, prefix+": "))
+	default:
+		return fmt.Errorf("%w: %s", sentinel, message)
+	}
 }
 
 func LockPath(dir, id string) string { return filepath.Join(dir, "runtime-hosts", id+".lock") }

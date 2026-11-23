@@ -232,7 +232,7 @@ func TestAntigravityErrorStepPreservesOnlyStatus(t *testing.T) {
 			probe := f.store.watchSubagents("test-session")
 			f.declare(1, "launch", "child", "SUBAGENT_STATE_ALIVE")
 			f.step(2, 17, nil, []byte(tt.payload))
-			_, backgroundErr := probe(t.Context(), map[string]int{"launch": 1}, "")
+			_, backgroundErr := probe(t.Context(), map[string]int{"launch": 1})
 			for _, err := range []error{watch(acp.StopReasonEndTurn), backgroundErr} {
 				if err == nil || err.Error() != tt.want {
 					t.Errorf("got %v, want %s", err, tt.want)

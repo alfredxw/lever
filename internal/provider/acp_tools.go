@@ -166,6 +166,7 @@ func (c *acpRuntime) emitAntigravitySubagent(state *acpToolState) error {
 		}
 		if c.background != nil {
 			delete(c.background.childCalls, state.ID)
+			delete(c.background.childStates, state.ID)
 		}
 		agent.finish(acpToolStatus(state.Status), output)
 	default:

@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	antigravityReplyTimeout  = 5 * time.Minute
-	antigravitySettleTimeout = time.Second
+	antigravityReplyTimeout      = 5 * time.Minute
+	antigravityChildReplyTimeout = 2 * time.Minute
+	antigravitySettleTimeout     = time.Second
+	antigravityChildIdleGrace    = 3 * time.Second
 )
 
 type antigravityProbeState int
@@ -35,10 +37,16 @@ type antigravityBackground struct {
 	probe            func(context.Context) antigravityProbeState
 	childProbe       antigravityChildProbe
 	childCalls       map[string]int
+	childStates      map[string]string
 }
 
 func newAntigravityBackground() *antigravityBackground {
-	return &antigravityBackground{changed: make(chan struct{}, 1), runningPastUsage: map[string]bool{}, childCalls: map[string]int{}}
+	return &antigravityBackground{
+		changed:          make(chan struct{}, 1),
+		runningPastUsage: map[string]bool{},
+		childCalls:       map[string]int{},
+		childStates:      map[string]string{},
+	}
 }
 
 func (background *antigravityBackground) signal() {
@@ -176,7 +184,7 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 	settleTimer.Stop()
 	defer settleTimer.Stop()
 
-	var generatingSince, childUnconfirmedSince time.Time
+	var generatingSince, childIdleSince, childReplySince time.Time
 	for c.err == nil && (len(background.runningPastUsage) > 0 || background.requests > 0 || background.replyPending || background.settling || len(background.childCalls) > 0) {
 		background.waiting = true
 		if queued && c.ctx.Err() == nil {
@@ -189,20 +197,25 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 				settleTimeout = settleTimer.C
 			} else {
 				generatingSince = time.Time{}
+				childIdleSince = time.Time{}
+				childReplySince = time.Time{}
 				replyTimer.Reset(antigravityReplyTimeout)
 				replyTimeout = replyTimer.C
 			}
 		} else {
 			generatingSince = time.Time{}
-			childUnconfirmedSince = time.Time{}
+			childIdleSince = time.Time{}
+			childReplySince = time.Time{}
 		}
 		c.mu.Unlock()
 		var err error
 		settled := false
+		changed := false
 		select {
 		case <-wake:
 			queued = true
 		case <-background.changed:
+			changed = true
 		case <-c.ctx.Done():
 			err = c.ctx.Err()
 		case <-c.conn.Done():
@@ -215,6 +228,11 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 		c.mu.Lock()
 		replyTimer.Stop()
 		settleTimer.Stop()
+		if changed {
+			generatingSince = time.Time{}
+			childIdleSince = time.Time{}
+			childReplySince = time.Time{}
+		}
 		if err != nil {
 			return false, err
 		}
@@ -225,31 +243,70 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 			continue
 		}
 		if len(background.childCalls) > 0 {
-			if err := c.checkAntigravityChildrenLocked(&childUnconfirmedSince); err != nil {
+			active, err := c.checkAntigravityChildrenLocked()
+			if err != nil {
 				return false, err
 			}
-			if len(background.childCalls) > 0 {
+			if active {
+				generatingSince = time.Time{}
+				childIdleSince = time.Time{}
+				childReplySince = time.Time{}
 				continue
 			}
 		}
-		if !background.settling {
+		if !background.settling && background.replyPending && len(background.childCalls) > 0 {
+			if background.probe != nil {
+				state, ok, err := c.probeAntigravityBackgroundLocked()
+				if err != nil {
+					return false, err
+				}
+				if !ok {
+					continue
+				}
+				switch state {
+				case antigravityProbePending, antigravityProbeGenerating:
+					childIdleSince = time.Time{}
+					if childReplySince.IsZero() {
+						childReplySince = time.Now()
+					} else if time.Since(childReplySince) >= antigravityReplyTimeout {
+						if err := c.finishRemainingAntigravityChildrenLocked(); err != nil {
+							return false, err
+						}
+						return false, errors.New("Antigravity stopped responding after its subagent reported")
+					}
+				default:
+					childReplySince = time.Time{}
+					if childIdleSince.IsZero() {
+						childIdleSince = time.Now()
+					} else if time.Since(childIdleSince) >= antigravityChildIdleGrace {
+						if err := c.finishRemainingAntigravityChildrenLocked(); err != nil {
+							return false, err
+						}
+						background.replyPending = false
+						background.replyText = false
+					}
+				}
+			} else {
+				if childReplySince.IsZero() {
+					childReplySince = time.Now()
+				} else if time.Since(childReplySince) >= antigravityChildReplyTimeout {
+					if err := c.finishRemainingAntigravityChildrenLocked(); err != nil {
+						return false, err
+					}
+					background.replyPending = false
+					background.replyText = false
+				}
+			}
 			continue
 		}
-		gen := background.generation
-		probe := background.probe
-		state := antigravityProbeIdle
-		if probe != nil {
-			c.mu.Unlock()
-			state = probe(c.ctx)
-			c.mu.Lock()
+		if !background.settling && len(background.childCalls) == 0 {
+			continue
 		}
-		if c.err != nil {
-			return false, nil
+		state, ok, err := c.probeAntigravityBackgroundLocked()
+		if err != nil {
+			return false, err
 		}
-		if c.ctx.Err() != nil {
-			return false, c.ctx.Err()
-		}
-		if background.generation != gen {
+		if !ok {
 			continue
 		}
 		switch state {
@@ -262,9 +319,18 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 			if generatingSince.IsZero() {
 				generatingSince = time.Now()
 			} else if time.Since(generatingSince) >= antigravityReplyTimeout {
+				if len(background.childCalls) > 0 {
+					if err := c.finishRemainingAntigravityChildrenLocked(); err != nil {
+						return false, err
+					}
+					return false, errors.New("Antigravity stopped responding after its subagent reported")
+				}
 				return false, errors.Join(ErrUnconfirmed, errors.New("Antigravity did not report back after its background command exited"))
 			}
 		default:
+			if err := c.finishRemainingAntigravityChildrenLocked(); err != nil {
+				return false, err
+			}
 			background.settling = false
 			background.replyPending = false
 			background.replyText = false
@@ -273,61 +339,122 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 	return false, nil
 }
 
+func (c *acpRuntime) probeAntigravityBackgroundLocked() (antigravityProbeState, bool, error) {
+	bg := c.background
+	gen := bg.generation
+	probe := bg.probe
+	state := antigravityProbeIdle
+	if probe != nil {
+		c.mu.Unlock()
+		state = probe(c.ctx)
+		c.mu.Lock()
+	}
+	if c.err != nil {
+		return antigravityProbeIdle, false, nil
+	}
+	if err := c.ctx.Err(); err != nil {
+		return antigravityProbeIdle, false, err
+	}
+	if bg.generation != gen {
+		return antigravityProbeIdle, false, nil
+	}
+	return state, true, nil
+}
+
 // Called at a quiet prompt/response boundary. Leave the ACP reader free to
 // receive the next tool, permission request or reply while reading the store.
-func (c *acpRuntime) checkAntigravityChildrenLocked(unconfirmedSince *time.Time) error {
+func (c *acpRuntime) checkAntigravityChildrenLocked() (bool, error) {
 	bg := c.background
 	gen := bg.generation
 	calls := maps.Clone(bg.childCalls)
-	reply := c.items[c.textID]
-	if reply.Kind != "text" {
-		reply.Text = ""
-	}
 	c.mu.Unlock()
-	outcomes, err := bg.childProbe(c.ctx, calls, reply.Text)
+	outcomes, err := bg.childProbe(c.ctx, calls)
 	c.mu.Lock()
 	if err := c.ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if bg.generation != gen || c.err != nil {
-		return nil
+		return true, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
-	unconfirmed := false
 	active := false
 	for id := range calls {
-		outcome, ok := outcomes[id]
 		agent := c.subagents[id]
+		if agent == nil {
+			delete(bg.childCalls, id)
+			delete(bg.childStates, id)
+			continue
+		}
+		prev := bg.childStates[id]
+		outcome, ok := outcomes[id]
 		switch {
 		case !ok:
-			unconfirmed = true
+			// Fail open: nothing proves this child is still running.
+			if agent.item.Status == "running" {
+				agent.finish("completed", "")
+				if err := agent.publish(c.sink); err != nil {
+					return false, err
+				}
+			}
+			delete(bg.childCalls, id)
+			delete(bg.childStates, id)
 		case outcome.status == "running":
 			active = true
-		case outcome.status == "reported":
-			unconfirmed = true // Wait for the parent's delivered reply.
-			if progress := clip(outcome.report); agent.detail.Progress != progress {
+			bg.childStates[id] = "running"
+			if agent.item.Status != "running" {
+				agent.restart()
+				if err := agent.publish(c.sink); err != nil {
+					return false, err
+				}
+			}
+			if progress := clip(outcome.report); progress != "" && agent.detail.Progress != progress {
 				agent.detail.Progress = progress
 				if err := agent.publish(c.sink); err != nil {
-					return err
+					return false, err
+				}
+			}
+		case outcome.status == "interrupted":
+			bg.childStates[id] = "interrupted"
+			if agent.item.Status != "interrupted" {
+				agent.finish("interrupted", outcome.report)
+				if err := agent.publish(c.sink); err != nil {
+					return false, err
 				}
 			}
 		default:
-			agent.finish(outcome.status, outcome.report)
+			bg.childStates[id] = "reported"
+			if prev == "running" && !bg.settling {
+				bg.replyPending = true
+			}
+			report := clip(outcome.report)
+			if agent.item.Status != "completed" || (report != "" && agent.item.Text != report) {
+				agent.finish("completed", outcome.report)
+				if err := agent.publish(c.sink); err != nil {
+					return false, err
+				}
+			}
+		}
+	}
+	if active && bg.settling {
+		bg.settling = false
+		bg.replyPending = false
+	}
+	return active, nil
+}
+
+func (c *acpRuntime) finishRemainingAntigravityChildrenLocked() error {
+	bg := c.background
+	for id := range bg.childCalls {
+		if agent := c.subagents[id]; agent != nil && agent.item.Status == "running" {
+			agent.finish("completed", "")
 			if err := agent.publish(c.sink); err != nil {
 				return err
 			}
-			delete(bg.childCalls, id)
 		}
-	}
-	switch {
-	case active || !unconfirmed:
-		*unconfirmedSince = time.Time{}
-	case unconfirmedSince.IsZero():
-		*unconfirmedSince = time.Now()
-	case time.Since(*unconfirmedSince) >= antigravityReplyTimeout:
-		return errors.Join(ErrUnconfirmed, errors.New("Antigravity did not confirm the subagent result and parent reply"))
+		delete(bg.childCalls, id)
+		delete(bg.childStates, id)
 	}
 	return nil
 }

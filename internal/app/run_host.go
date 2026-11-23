@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"lever/internal/model"
@@ -134,7 +135,7 @@ func (e *execution) followHost() error {
 			case "paused":
 				return provider.ErrPaused
 			case "unknown":
-				return errors.Join(provider.ErrUnconfirmed, errors.New(detail))
+				return unconfirmedHostError(detail)
 			case "failed":
 				return errors.New(detail)
 			default:
@@ -165,6 +166,23 @@ func (e *execution) followHost() error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func unconfirmedHostError(detail string) error {
+	prefix := provider.ErrUnconfirmed.Error()
+	detail = strings.TrimSpace(detail)
+	switch {
+	case detail == "" || detail == prefix:
+		return provider.ErrUnconfirmed
+	case strings.HasPrefix(detail, prefix+"\n"):
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, prefix+"\n"))
+	case strings.HasPrefix(detail, prefix+": "):
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, prefix+": "))
+	}
+	if detail == "" {
+		return provider.ErrUnconfirmed
+	}
+	return errors.Join(provider.ErrUnconfirmed, errors.New(detail))
 }
 
 // A queued steer that the worker never claimed is still safe to send later.

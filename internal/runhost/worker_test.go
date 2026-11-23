@@ -3,7 +3,9 @@ package runhost
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"lever/internal/model"
@@ -38,5 +40,20 @@ func TestSteerStateUsesCompatibleRuntimeSnapshot(t *testing.T) {
 		if err := json.Unmarshal([]byte(data), &update); err != nil || update.SteerState != state {
 			t.Fatalf("missing steering state %q in %s: %v", state, data, err)
 		}
+	}
+}
+
+func TestOutcomeErrDoesNotDuplicateSentinel(t *testing.T) {
+	original := errors.Join(provider.ErrUnconfirmed, errors.New("Antigravity disconnected while waiting for background work"))
+	got := Result(original).Err()
+	if !errors.Is(got, provider.ErrUnconfirmed) {
+		t.Fatalf("expected ErrUnconfirmed, got %v", got)
+	}
+	if count := strings.Count(got.Error(), provider.ErrUnconfirmed.Error()); count != 1 {
+		t.Fatalf("sentinel repeated %d times in %q", count, got.Error())
+	}
+	bare := Result(provider.ErrUnconfirmed).Err()
+	if bare != provider.ErrUnconfirmed {
+		t.Fatalf("expected bare ErrUnconfirmed, got %v", bare)
 	}
 }
