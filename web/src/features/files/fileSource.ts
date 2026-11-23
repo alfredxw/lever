@@ -21,7 +21,17 @@ export type SkillFileSource = {
   readOnly: boolean;
   scope?: ReferenceScope & { agentId: string };
 };
-export type FileSource = AgentFileSource | SkillFileSource;
+export type HostFileSource = {
+  kind: "host";
+  id: "host";
+  readOnly: true;
+};
+export const hostFileSource: HostFileSource = {
+  kind: "host",
+  id: "host",
+  readOnly: true,
+};
+export type FileSource = AgentFileSource | SkillFileSource | HostFileSource;
 
 export const FileSourceContext = createContext<FileSource | null>(null);
 
@@ -32,13 +42,15 @@ export function useFileSource() {
 }
 
 export const fileReadOnly = (source: FileSource) =>
-  source.kind === "skill" && source.readOnly;
+  source.kind === "host" || (source.kind === "skill" && source.readOnly);
 
 export const isSkillEntry = (source: FileSource, path: string) =>
   source.kind === "skill" && path.toLowerCase() === SkillEntry.toLowerCase();
 
 export const fileSourceKey = (source: FileSource) =>
-  `/${source.kind === "agent" ? "agents" : "skills"}/${encodeURIComponent(source.id)}`;
+  source.kind === "host"
+    ? "/host-file"
+    : `/${source.kind === "agent" ? "agents" : "skills"}/${encodeURIComponent(source.id)}`;
 
 export function fileScopeKey(source: FileSource) {
   if (source.kind !== "agent") return;

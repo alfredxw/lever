@@ -2,13 +2,20 @@ import { useMemo } from "react";
 import { defaultRehypePlugins, type Components } from "streamdown";
 import type { Root, Session } from "@/api/types.gen";
 import { MessageResponse } from "@/components/ai-elements/message-response";
-import type { FileSelection } from "@/features/files/filePaths";
-import type { AgentFileSource } from "@/features/files/fileSource";
+import {
+  absoluteFilePath,
+  type FileSelection,
+} from "@/features/files/filePaths";
+import {
+  hostFileSource,
+  type AgentFileSource,
+  type HostFileSource,
+} from "@/features/files/fileSource";
 import {
   chatFileTarget,
   chatHtmlPreview,
   chatPreviewURL,
-  resolveChatFileLink,
+  resolveChatFile,
 } from "./chatFileLinks";
 import {
   ChatHtmlLink,
@@ -22,14 +29,16 @@ import { VisualizationBlock } from "./VisualizationBlock";
 import { ChatPreviewEndpoint } from "./HtmlPreview";
 import { InlineHtmlPreview } from "./InlineHtmlPreview";
 
+export type ChatFileSelection = FileSelection & { source?: HostFileSource };
+
 export type OpenChatFile = (
-  file: FileSelection,
+  file: ChatFileSelection,
   source: AgentFileSource,
 ) => void;
 
-type ChatFiles = {
-  resolve: (href?: string) => FileSelection | null;
-  open: (file: FileSelection) => void;
+export type ChatFiles = {
+  resolve: (href?: string) => ChatFileSelection | null;
+  open: (file: ChatFileSelection) => void;
 };
 
 export function ChatResponse({
@@ -59,8 +68,18 @@ export function ChatResponse({
     };
     const roots = sessionId ? session.roots : (agentRoots ?? session.roots);
     return {
-      resolve: (href) =>
-        resolveChatFileLink(href, session, roots, window.location.origin),
+      resolve: (href) => {
+        const resolved = resolveChatFile(
+          href,
+          session,
+          roots,
+          window.location.origin,
+        );
+        if (!resolved) return null;
+        return resolved.host
+          ? { ...resolved.file, source: hostFileSource }
+          : resolved.file;
+      },
       open: (file) => onOpenFile(file, source),
     };
   }, [session, agentRoots, onOpenFile]);
@@ -189,6 +208,7 @@ export function ChatMarkdown({
             return (
               <a
                 href={href}
+                title={absoluteFilePath(file)}
                 onClick={(event) => {
                   event.preventDefault();
                   files.open(file);
@@ -206,7 +226,7 @@ export function ChatMarkdown({
             <InsideChatLink.Provider value>{children}</InsideChatLink.Provider>
           </a>
         ) : (
-          <span>{children}</span>
+          <span title={target?.path}>{children}</span>
         );
       },
     };

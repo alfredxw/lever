@@ -8,20 +8,32 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { FileTree } from "./FileTree";
-import { rootName, type FileSelection } from "./filePaths";
+import { absoluteFilePath, rootName, type FileSelection } from "./filePaths";
+import { useFileSource } from "./fileSource";
 export function FileToolbar({
   root,
   path,
+  displayPath,
   onFile,
   children,
 }: {
   root?: Root;
   path?: string;
+  displayPath?: string;
   onFile: (file: FileSelection) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  const source = useFileSource();
+  const host = source.kind === "host";
+  const fullPath =
+    displayPath ||
+    (root ? (path ? absoluteFilePath({ root, path }) : root.path) : undefined);
   const segments = path?.split("/") ?? [];
+  const hostSegments =
+    host && fullPath
+      ? fullPath.replaceAll("\\", "/").split("/").filter(Boolean)
+      : [];
   const breadcrumb = useRef<HTMLElement>(null);
   useEffect(() => {
     const element = breadcrumb.current!;
@@ -32,50 +44,68 @@ export function FileToolbar({
     const observer = new ResizeObserver(reveal);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [path]);
+  }, [path, fullPath]);
   return (
     <header className="file-bar">
       <nav
         className="file-breadcrumb"
         ref={breadcrumb}
         aria-label={t("files.path")}
-        title={root ? `${root.path}${path ? `/${path}` : ""}` : undefined}
+        title={fullPath}
       >
         <ol>
-          {root ? (
-            <li>
-              <PathSegment
-                key={`${root.id}:${path}`}
-                root={root}
-                label={rootName(root)}
-                directory="."
-                selectedPath={path}
-                current={!path}
-                onFile={onFile}
-              />
-            </li>
+          {host ? (
+            hostSegments.map((segment, index) => (
+              <li key={index}>
+                {index > 0 && <ChevronRight size={14} aria-hidden="true" />}
+                <span
+                  className="file-breadcrumb-segment"
+                  aria-current={
+                    index === hostSegments.length - 1 ? "page" : undefined
+                  }
+                >
+                  {segment}
+                </span>
+              </li>
+            ))
           ) : (
-            <li>
-              <FileCode size={16} />
-              <span>{t("workspace.files")}</span>
-            </li>
-          )}
-          {segments.map((segment, index) => (
-            <li key={index}>
-              <ChevronRight size={14} aria-hidden="true" />
-              {root && (
-                <PathSegment
-                  key={`${root.id}:${path}:${index}`}
-                  root={root}
-                  label={segment}
-                  directory={segments.slice(0, index).join("/") || "."}
-                  selectedPath={path}
-                  current={index === segments.length - 1}
-                  onFile={onFile}
-                />
+            <>
+              {root ? (
+                <li>
+                  <PathSegment
+                    key={`${root.id}:${path}`}
+                    root={root}
+                    label={rootName(root)}
+                    directory="."
+                    selectedPath={path}
+                    current={!path}
+                    onFile={onFile}
+                  />
+                </li>
+              ) : (
+                <li>
+                  <FileCode size={16} />
+                  <span>{t("workspace.files")}</span>
+                </li>
               )}
-            </li>
-          ))}
+              {segments.map((segment, index) => (
+                <li key={index}>
+                  <ChevronRight size={14} aria-hidden="true" />
+                  {root && (
+                    <PathSegment
+                      key={`${root.id}:${path}:${index}`}
+                      root={root}
+                      label={segment}
+                      directory={segments.slice(0, index).join("/") || "."}
+                      selectedPath={path}
+                      current={index === segments.length - 1}
+                      onFile={onFile}
+                    />
+                  )}
+                </li>
+              ))}
+            </>
+          )}
         </ol>
       </nav>
       <div className="file-actions">{children}</div>

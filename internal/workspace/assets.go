@@ -14,6 +14,10 @@ func OpenAsset(root, path string) (*os.File, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	return assetFromFile(f, path)
+}
+
+func assetFromFile(f *os.File, path string) (*os.File, string, error) {
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		f.Close()

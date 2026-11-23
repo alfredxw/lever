@@ -21,6 +21,9 @@ import {
   ImagePreviewProvider,
   useImagePreview,
 } from "./ImagePreview";
+import { hostFileSource } from "@/features/files/fileSource";
+import { resolveChatFile } from "./chatFileLinks";
+import type { ChatFileSelection, ChatFiles } from "./ChatResponse";
 import { sharedExchanges, SharedTurn } from "./SharedTranscript";
 import { useComposerDraft } from "./composerDraft";
 import { isLeverReference, serializePrompt, textPrompt } from "./prompt";
@@ -33,13 +36,18 @@ import {
 
 export function SharedChat({
   conversation,
+  onOpenFile,
 }: {
   conversation: SharedConversationRef;
+  onOpenFile?: (file: ChatFileSelection) => void;
 }) {
   return (
     <MessageScrollerProvider key={sharedConversationKey(conversation)}>
       <ImagePreviewProvider>
-        <SharedChatContent conversation={conversation} />
+        <SharedChatContent
+          conversation={conversation}
+          onOpenFile={onOpenFile}
+        />
       </ImagePreviewProvider>
     </MessageScrollerProvider>
   );
@@ -51,8 +59,10 @@ const turnKey = (turn: { id: string }) => turn.id;
 
 function SharedChatContent({
   conversation,
+  onOpenFile,
 }: {
   conversation: SharedConversationRef;
+  onOpenFile?: (file: ChatFileSelection) => void;
 }) {
   const { t } = useTranslation();
   const preview = useImagePreview();
@@ -87,6 +97,28 @@ function SharedChatContent({
     hasLeverReferences ||
     !data?.canSend ||
     (conversation.runtime === "codex" && !!activity);
+  const cwd = data?.conversation.cwd;
+  const files = useMemo<ChatFiles | undefined>(
+    () =>
+      onOpenFile
+        ? {
+            resolve: (href) => {
+              const resolved = resolveChatFile(
+                href,
+                undefined,
+                [],
+                window.location.origin,
+                cwd,
+              );
+              return resolved
+                ? { ...resolved.file, source: hostFileSource }
+                : null;
+            },
+            open: onOpenFile,
+          }
+        : undefined,
+    [cwd, onOpenFile],
+  );
   const turns = useMemo(
     () => sharedExchanges(data?.messages ?? [], pageAnchors.current, activity),
     [data?.messages, activity],
@@ -164,6 +196,7 @@ function SharedChatContent({
             path={path}
             runtime={runtime}
             activity={index === turns.length - 1 ? activity : undefined}
+            files={files}
           />
         )}
       </MessageTimeline>

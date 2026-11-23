@@ -64,11 +64,6 @@ func codexPreviewRoots(home string, image bool) []string {
 	return roots
 }
 
-func temporaryImagePath(path string) (string, string, error) {
-	// Tools can use /tmp even if the desktop has a private TMPDIR on macOS.
-	return previewPath(path, "", []string{os.TempDir(), "/tmp"})
-}
-
 // Render raw HTML for link extraction only. The renderer's output is never served.
 var previewMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM), goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()))
 
@@ -153,31 +148,44 @@ func (a *App) RunPreviewPath(ctx context.Context, runID, path string, image bool
 	if root, relative, err := previewPath(path, workspace.CWD(scope), roots); err == nil {
 		return root, relative, nil
 	}
-	if !filepath.IsAbs(path) {
+	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
 		return "", "", os.ErrNotExist
 	}
 	config, err := store.Get[model.Provider](ctx, a.Store.DB, `SELECT providers.data FROM providers
 		JOIN runs ON providers.id=json_extract(runs.data,'$.selection.provider') WHERE runs.id=?`, runID)
-	if err == nil && config.Type == "codex" {
-		if root, relative, err := previewPath(path, "", codexPreviewRoots(provider.SharedStore(config), image)); err == nil {
-			return root, relative, nil
+	if err == nil {
+		switch config.Type {
+		case "codex":
+			if root, relative, err := previewPath(path, "", codexPreviewRoots(provider.SharedStore(config), image)); err == nil {
+				return root, relative, nil
+			}
+		case "antigravity":
+			var native string
+			err := a.Store.DB.QueryRowContext(ctx, `SELECT json_extract(data,'$.nativeId') FROM sessions
+				WHERE id=? AND json_extract(data,'$.selection.provider')=?`, sessionID, config.ID).Scan(&native)
+			if err == nil {
+				dir := provider.AntigravityArtifactDir(provider.WithStateDir(ctx, a.Store.Dir), config, native)
+				if root, relative, err := previewPath(path, "", []string{dir}); err == nil {
+					return root, relative, nil
+				}
+			}
 		}
 	}
 	if !image {
 		return "", "", os.ErrNotExist
 	}
-	root, relative, err := temporaryImagePath(path)
+	canonical, err := a.ResolveHostFile(path)
 	if err != nil {
 		return "", "", err
 	}
-	// A temp path is available only when the assistant linked it in this run.
+	// A host image outside the workspace is available only when the assistant linked it in this run.
 	items, err := store.Get[[]model.Item](ctx, a.Store.DB, `SELECT json_extract(data,'$.items') FROM runs WHERE id=?`, runID)
 	if err != nil {
 		return "", "", err
 	}
 	for _, item := range items {
 		if item.Kind == "text" && hasPreviewImageLink(item.Text, path, a.URL) {
-			return root, relative, nil
+			return filepath.Dir(canonical), filepath.Base(canonical), nil
 		}
 	}
 	return "", "", os.ErrNotExist
@@ -212,8 +220,13 @@ func (a *App) SharedPreviewPath(ctx context.Context, providerID, id, path string
 		return "", "", err
 	}
 	roots := []string{cwd}
-	if config.Type == "codex" {
+	switch config.Type {
+	case "codex":
 		roots = append(roots, codexPreviewRoots(provider.SharedStore(config), image)...)
+	case "antigravity":
+		if dir := provider.AntigravityArtifactDir(provider.WithStateDir(ctx, a.Store.Dir), config, id); dir != "" {
+			roots = append(roots, dir)
+		}
 	}
 	if root, relative, err := previewPath(path, cwd, roots); err == nil {
 		return root, relative, nil
@@ -221,7 +234,7 @@ func (a *App) SharedPreviewPath(ctx context.Context, providerID, id, path string
 	if !image {
 		return "", "", os.ErrNotExist
 	}
-	root, relative, err := temporaryImagePath(path)
+	canonical, err := a.ResolveHostFile(path)
 	if err != nil {
 		return "", "", err
 	}
@@ -232,7 +245,7 @@ func (a *App) SharedPreviewPath(ctx context.Context, providerID, id, path string
 	for _, message := range history.Messages {
 		if message.Role == "assistant" && message.Kind != "reasoning" && message.Kind != "tool" &&
 			hasPreviewImageLink(message.Text, path, a.URL) {
-			return root, relative, nil
+			return filepath.Dir(canonical), filepath.Base(canonical), nil
 		}
 	}
 	return "", "", os.ErrNotExist

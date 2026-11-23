@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -196,8 +197,68 @@ func fileRoutes(mux *http.ServeMux, base string, resolve fileScopeResolver, prot
 	})
 }
 
+func hostFileRoute(mux *http.ServeMux, a *app.App) {
+	mux.HandleFunc("GET /api/host-file", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		canonical, err := a.ResolveHostFile(query.Get("path"))
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		download := query.Get("download") == "true"
+		htmlPreview := query.Get("preview") == "html"
+		if query.Get("raw") == "true" || download || htmlPreview {
+			file, mediaType, err := workspace.OpenHostAsset(canonical)
+			if err != nil {
+				if errors.Is(err, workspace.ErrInvalidFile) {
+					err = &app.Error{Status: 400, Message: err.Error()}
+				}
+				respond(w, nil, err)
+				return
+			}
+			defer file.Close()
+			if htmlPreview && !download && mediaType == "text/html" {
+				htmlPreviewHeaders(w, r, false)
+				if info, err := file.Stat(); err == nil && info.Size() <= workspace.MaxFileBytes {
+					if data, err := io.ReadAll(io.LimitReader(file, workspace.MaxFileBytes+1)); err == nil && len(data) <= workspace.MaxFileBytes {
+						http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(previewImages(data, filepath.Dir(canonical), filepath.Base(canonical))))
+						return
+					}
+				}
+				http.ServeContent(w, r, "", time.Time{}, file)
+				return
+			}
+			w.Header().Set("Content-Type", mediaType)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+			w.Header().Set("Cache-Control", "no-cache")
+			if download || mediaType == "application/octet-stream" {
+				w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(canonical)}))
+			}
+			http.ServeContent(w, r, "", time.Time{}, file)
+			return
+		}
+		if query.Get("asset") == "true" {
+			data, mediaType, err := workspace.ReadHostImage(canonical)
+			writeImageAsset(w, r, data, mediaType, err)
+			return
+		}
+		v, err := workspace.ReadHost(canonical)
+		if errors.Is(err, workspace.ErrUnsupportedPreview) {
+			err = &app.Error{Status: http.StatusUnsupportedMediaType, Message: err.Error()}
+		} else if errors.Is(err, workspace.ErrInvalidFile) {
+			err = &app.Error{Status: 400, Message: err.Error()}
+		}
+		respond(w, v, err)
+	})
+}
+
 func serveImageAsset(w http.ResponseWriter, r *http.Request, root, path string) {
 	data, mediaType, err := workspace.ReadImage(root, path)
+	writeImageAsset(w, r, data, mediaType, err)
+}
+
+func writeImageAsset(w http.ResponseWriter, r *http.Request, data []byte, mediaType string, err error) {
 	if err != nil {
 		if errors.Is(err, workspace.ErrInvalidFile) {
 			err = &app.Error{Status: 400, Message: err.Error()}

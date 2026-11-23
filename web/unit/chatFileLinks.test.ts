@@ -6,8 +6,13 @@ import {
   chatPreviewURL,
   htmlViewerURL,
   parseHtmlPreviewURL,
+  resolveChatFile,
   resolveChatFileLink,
 } from "../src/features/chat/chatFileLinks.ts";
+import {
+  absoluteFilePath,
+  hostFileSelection,
+} from "../src/features/files/filePaths.ts";
 
 const origin = "http://localhost:4789";
 
@@ -120,6 +125,10 @@ test("line references into HTML still resolve to an editor location", () => {
     chatHtmlPreview("report.html:12:3", "/api/runs/1/preview", origin),
     null,
   );
+  assert.equal(
+    chatHtmlPreview("report.html#L12-L20", "/api/runs/1/preview", origin),
+    null,
+  );
   const root = { id: "root", path: "/work" };
   assert.deepEqual(
     resolveChatFileLink(
@@ -132,6 +141,115 @@ test("line references into HTML still resolve to an editor location", () => {
       root,
       path: "report.html",
       location: { line: 12, column: 3, endColumn: 3 },
+    },
+  );
+  assert.deepEqual(
+    chatFileTarget("file:///work/src/App.tsx#L731-L777", origin),
+    {
+      path: "/work/src/App.tsx",
+      fragment: "",
+      location: { line: 731, column: 1, endColumn: 1 },
+    },
+  );
+  assert.deepEqual(chatFileTarget("/work/src/App.tsx#L12C4-L15C8", origin), {
+    path: "/work/src/App.tsx",
+    fragment: "",
+    location: { line: 12, column: 4, endColumn: 4 },
+  });
+});
+
+test("resolveChatFile distinguishes workspace files from read-only host files", () => {
+  const root = { id: "root", path: "/work/lever" };
+  const scope = { roots: [root], primaryRootId: root.id };
+
+  assert.deepEqual(
+    resolveChatFile(
+      "file:///work/lever/web/src/App.tsx#L10-L20",
+      scope,
+      [root],
+      origin,
+    ),
+    {
+      host: false,
+      file: {
+        root,
+        path: "web/src/App.tsx",
+        location: { line: 10, column: 1, endColumn: 1 },
+      },
+    },
+  );
+
+  const brainPath =
+    "file:///Users/me/.gemini/antigravity-cli/brain/abc/design.md";
+  const brain = resolveChatFile(brainPath, scope, [root], origin);
+  assert.deepEqual(brain, {
+    host: true,
+    file: {
+      root: { id: "host", path: "/Users/me/.gemini/antigravity-cli/brain/abc" },
+      path: "design.md",
+    },
+  });
+  assert.equal(
+    absoluteFilePath(brain!.file),
+    "/Users/me/.gemini/antigravity-cli/brain/abc/design.md",
+  );
+  assert.equal(resolveChatFileLink(brainPath, scope, [root], origin), null);
+
+  const plan = resolveChatFile(
+    "~/.claude/plans/spec.md",
+    scope,
+    [root],
+    origin,
+  );
+  assert.deepEqual(plan, {
+    host: true,
+    file: {
+      root: { id: "host", path: "~/.claude/plans" },
+      path: "spec.md",
+    },
+  });
+  assert.equal(absoluteFilePath(plan!.file), "~/.claude/plans/spec.md");
+  assert.equal(
+    resolveChatFile("~/../secret.md", scope, [root], origin),
+    null,
+  );
+
+  const win = resolveChatFile("file:///C:/Users/me/plan.md", scope, [root], origin);
+  assert.deepEqual(win, {
+    host: true,
+    file: {
+      root: { id: "host", path: "C:/Users/me" },
+      path: "plan.md",
+    },
+  });
+  assert.equal(absoluteFilePath(win!.file), "C:/Users/me/plan.md");
+
+  const winRoot = hostFileSelection("C:/plan.md");
+  assert.deepEqual(winRoot, {
+    root: { id: "host", path: "C:/" },
+    path: "plan.md",
+  });
+  assert.equal(absoluteFilePath(winRoot!), "C:/plan.md");
+
+  const unixRoot = hostFileSelection("/notes.md");
+  assert.deepEqual(unixRoot, {
+    root: { id: "host", path: "/" },
+    path: "notes.md",
+  });
+  assert.equal(absoluteFilePath(unixRoot!), "/notes.md");
+
+  for (const invalid of ["/", "~", "C:/", "//server/share/a.md", "relative.md"]) {
+    assert.equal(hostFileSelection(invalid), null);
+  }
+
+  assert.deepEqual(
+    resolveChatFile("README.md", undefined, [], origin, "/work/repo"),
+    {
+      host: true,
+      file: {
+        root: { id: "host", path: "/work/repo" },
+        path: "README.md",
+      },
     },
   );
 });

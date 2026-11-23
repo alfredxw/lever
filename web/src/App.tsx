@@ -127,13 +127,17 @@ import type { OpenConversationMode } from "@/features/agents/AgentSidebarMenus";
 import { displayChatTitle } from "@/features/chat/conversationTitle";
 import { useUnsavedFileWarning } from "@/features/files/fileDrafts";
 import {
+  absoluteFilePath,
   resolveWorkspaceFile,
   type FileSelection,
 } from "@/features/files/filePaths";
 import {
   fileScopeKey,
+  hostFileSource,
   type AgentFileSource,
+  type HostFileSource,
   type ReferenceScope,
+  type SkillFileSource,
 } from "@/features/files/fileSource";
 import { skillEntryTarget } from "@/features/skills/skillsQuery";
 import { Button } from "@/components/ui/button";
@@ -1476,20 +1480,23 @@ export default function App() {
   });
 
   function openFile(
-    file: FileSelection,
+    file: FileSelection & { source?: SkillFileSource | HostFileSource },
     source: AgentFileSource,
     pane?: Pane,
   ) {
     const { root, path } = file;
     const scope = fileScopeKey(source);
-    const id = scope
-      ? `files:${JSON.stringify([scope, root.id, path])}`
-      : `files:${root.id}:${path}`;
+    const id =
+      file.source?.kind === "host"
+        ? `files:host:${absoluteFilePath(file)}`
+        : scope
+          ? `files:${JSON.stringify([scope, root.id, path])}`
+          : `files:${root.id}:${path}`;
     openTab(
       {
         id,
-        sessionId: source.sessionId,
-        workingCopyId: source.workingCopyId,
+        sessionId: file.source ? undefined : source.sessionId,
+        workingCopyId: file.source ? undefined : source.workingCopyId,
         kind: "files",
         title: path.split("/").pop()!,
         // Each open request can reveal the same file and line again.
@@ -1504,7 +1511,7 @@ export default function App() {
     return id;
   }
   function openChatFile(
-    file: FileSelection,
+    file: FileSelection & { source?: SkillFileSource | HostFileSource },
     source: AgentFileSource,
     pane: Pane = "side",
   ) {
@@ -1512,6 +1519,29 @@ export default function App() {
     const id = openFile(file, source, pane);
     if (!file.location) focusWorkspaceTab(id);
   }
+  const openSharedHostFile = useEventCallback(
+    (
+      file: FileSelection & { source?: SkillFileSource | HostFileSource },
+      pane: Pane = "side",
+    ) => {
+      const id = `files:host:${absoluteFilePath(file)}`;
+      openTab(
+        {
+          id,
+          kind: "files",
+          title: file.path.split("/").pop()!,
+          file: {
+            ...file,
+            source: hostFileSource,
+            location: file.location && { ...file.location },
+          },
+        },
+        sharedWorkspaceId,
+        pane,
+      );
+      if (!file.location) focusWorkspaceTab(id);
+    },
+  );
 
   async function openSkill(
     reference: Reference,
@@ -2159,8 +2189,30 @@ export default function App() {
                                   />
                                 ) : t.kind === "shared" ? (
                                   active && (
-                                    <SharedChat conversation={t.shared} />
+                                    <SharedChat
+                                      conversation={t.shared}
+                                      onOpenFile={openSharedHostFile}
+                                    />
                                   )
+                                ) : t.kind === "files" &&
+                                  t.file?.source?.kind === "host" &&
+                                  !agent ? (
+                                  <Files
+                                    source={t.file.source}
+                                    scope={{
+                                      roots: [t.file.root],
+                                      primaryRootId: t.file.root.id,
+                                    }}
+                                    dark={dark}
+                                    initialFile={t.file}
+                                    initialDirectoryOpen={false}
+                                    initialPreview
+                                    active={
+                                      page === "agents" &&
+                                      activeTab?.id === t.id
+                                    }
+                                    onOpenExternalFile={openSharedHostFile}
+                                  />
                                 ) : !agent ? null : conversation &&
                                   !retained &&
                                   !active ? null : t.kind === "draft" ? (
@@ -2540,13 +2592,16 @@ const ScopedTool = memo(function ScopedTool({
   agent: Agent;
   dark: boolean;
   active: boolean;
-  openFile: (file: FileSelection, source: AgentFileSource) => void;
+  openFile: (
+    file: FileSelection & { source?: SkillFileSource | HostFileSource },
+    source: AgentFileSource,
+  ) => void;
   onFeedback: (sessionId: string, content: JSONContent[]) => Promise<void>;
   onReference: (view: SessionView, reference: Reference) => void;
 }) {
   const { t: translate } = useTranslation();
   const composer = useContext(ComposerContext);
-  const skillFile = tab.file?.source ? tab.file : undefined;
+  const externalFile = tab.file?.source ? tab.file : undefined;
   const workingCopyId = sessionId ? undefined : tab.workingCopyId;
   const fileSource: AgentFileSource = {
     kind: "agent",
@@ -2598,16 +2653,21 @@ const ScopedTool = memo(function ScopedTool({
       <WorkspaceSession.Provider value={sessionId}>
         {tab.kind === "files" ? (
           <Files
-            source={skillFile?.source ?? fileSource}
+            source={externalFile?.source ?? fileSource}
             scope={
-              skillFile
-                ? { roots: [skillFile.root], primaryRootId: skillFile.root.id }
+              externalFile
+                ? {
+                    roots: [externalFile.root],
+                    primaryRootId: externalFile.root.id,
+                  }
                 : scopedAgent.profile
             }
+            workspaceRoots={scopedAgent.profile.roots}
+            onOpenExternalFile={(next) => openFile(next, fileSource)}
             dark={dark}
             initialFile={tab.file}
             initialDirectoryOpen={!tab.file}
-            initialPreview={skillFile ? true : undefined}
+            initialPreview={externalFile ? true : undefined}
             active={active}
           />
         ) : (

@@ -597,6 +597,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 	})
 	s.workingCopyRoutes(mux, a)
 	fileRoutes(mux, "/api/agents/{id}", agentFileScope(a), "")
+	hostFileRoute(mux, a)
 	skillRoutes(mux, a)
 	mux.HandleFunc("GET /api/agents/{id}/git-roots", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

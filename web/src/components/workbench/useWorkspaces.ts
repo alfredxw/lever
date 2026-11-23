@@ -1,7 +1,10 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import { arrayMove } from "@dnd-kit/sortable";
 import type { FileSelection } from "@/features/files/filePaths";
-import type { SkillFileSource } from "@/features/files/fileSource";
+import type {
+  HostFileSource,
+  SkillFileSource,
+} from "@/features/files/fileSource";
 import type { TabKind } from "./WorkspaceTabs";
 import type { TurnSelection } from "@/features/diff/TurnChanges";
 import type { DiffTarget } from "@/features/diff/useGitSummary";
@@ -48,7 +51,7 @@ export type WorkspaceTab = {
     }
   | {
       kind: Exclude<TabKind, "chat" | "topic" | "shared" | "browser">;
-      file?: FileSelection & { source?: SkillFileSource };
+      file?: FileSelection & { source?: SkillFileSource | HostFileSource };
       topic?: never;
     }
 );

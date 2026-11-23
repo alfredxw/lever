@@ -8,19 +8,72 @@ export type FileSelection = {
 };
 export type DirectorySelection = { root: Root; path: string };
 
+export const isHomePath = (target: string) => /^~[\\/]/.test(target);
+export const isAbsoluteHostPath = (target: string) =>
+  /^(?:[a-z]:[\\/]|[\\/])/i.test(target);
+export const isHostPath = (target: string) =>
+  isHomePath(target) || isAbsoluteHostPath(target);
+
 export function workspaceFilePath(target: string, cwd?: string): string | null {
-  const absolute = /^(?:[a-z]:[\\/]|[\\/])/i.test(target);
+  if (isHomePath(target)) {
+    const parts: string[] = [];
+    for (const part of target.replaceAll("\\", "/").slice(2).split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") {
+        if (!parts.length) return null;
+        parts.pop();
+      } else parts.push(part);
+    }
+    return parts.length ? `~/${parts.join("/")}` : "~";
+  }
+  const absolute = isAbsoluteHostPath(target);
   if (!absolute && !cwd) return null;
   const path = (absolute ? target : `${cwd}/${target}`).replaceAll("\\", "/");
+  const drive = /^[a-z]:\//i.exec(path)?.[0].slice(0, 2) ?? "";
+  const body = drive ? path.slice(2) : path;
   const parts: string[] = [];
-  for (const part of path.split("/")) {
+  for (const part of body.split("/")) {
     if (!part || part === ".") continue;
     if (part === "..") {
       if (!parts.length) return null;
       parts.pop();
     } else parts.push(part);
   }
+  if (drive) return `${drive}/${parts.join("/")}`;
   return `${path.startsWith("/") ? "/" : ""}${parts.join("/")}`;
+}
+
+export function hostFileSelection(
+  target: string,
+  location?: FileLocation,
+): FileSelection | null {
+  if (
+    !target ||
+    /^[\\/]{2}/.test(target) ||
+    /[\u0000-\u001f\u007f]/.test(target) ||
+    !isHostPath(target)
+  )
+    return null;
+  const normalized = workspaceFilePath(target);
+  if (
+    !normalized ||
+    normalized === "/" ||
+    normalized === "~" ||
+    /^[a-z]:\/?$/i.test(normalized)
+  )
+    return null;
+  const slash = normalized.lastIndexOf("/");
+  if (slash < 0 || slash === normalized.length - 1) return null;
+  const name = normalized.slice(slash + 1);
+  if (!name || name === "." || name === "..") return null;
+  const prefix = normalized.slice(0, slash);
+  const dir =
+    slash === 0 ? "/" : /^[a-z]:$/i.test(prefix) ? `${prefix}/` : prefix;
+  return {
+    root: { id: "host", path: dir },
+    path: name,
+    ...(location && { location }),
+  };
 }
 
 // Resolve against the runtime cwd; an editor can open only paths in its Scope.

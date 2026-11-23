@@ -1,9 +1,13 @@
 import type { Root, Scope } from "@/api/types.gen";
 import {
+  hostFileSelection,
   resolveWorkspaceFile,
+  workspaceFilePath,
   type FileLocation,
   type FileSelection,
 } from "../files/filePaths.ts";
+
+const lineFragment = /^#L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?$/i;
 
 type ChatFileTarget = {
   path: string;
@@ -117,13 +121,49 @@ export function chatFileTarget(
   const absolute = /^(?:[a-z]:[\\/]|[\\/])/i.test(value);
   // Check the scheme after removing the line suffix in links like main.go:20.
   if (!absolute && scheme && value.includes(":")) return null;
-  const line = Number(suffix?.[1]);
-  const column = Number(suffix?.[2]) || 1;
+  const hashLine = !suffix ? lineFragment.exec(fragment) : null;
+  const line = Number(suffix?.[1] ?? hashLine?.[1]);
+  const column = Number(suffix?.[2] ?? hashLine?.[2]) || 1;
   const location =
     Number.isSafeInteger(line) && line > 0 && Number.isSafeInteger(column)
       ? { line, column, endColumn: column }
       : undefined;
-  return { path: value.replaceAll("\\", "/"), fragment, location };
+  return {
+    path: value.replaceAll("\\", "/"),
+    fragment: hashLine && location ? "" : fragment,
+    location,
+  };
+}
+
+export type ResolvedChatFile = {
+  file: FileSelection;
+  host: boolean;
+};
+
+// Relative links start in the session's working directory. Files inside a root
+// available to the Files panel open in workspace mode; other host files open
+// in read-only host preview mode.
+export function resolveChatFile(
+  href: string | undefined,
+  scope: Scope | undefined,
+  roots: Root[],
+  origin: string,
+  cwd?: string,
+): ResolvedChatFile | null {
+  const target = chatFileTarget(href, origin);
+  if (!target) return null;
+  const primary =
+    cwd ?? scope?.roots.find((root) => root.id === scope.primaryRootId)?.path;
+  const workspace = resolveWorkspaceFile(target.path, primary, roots);
+  if (workspace) {
+    return {
+      file: { ...workspace, location: target.location },
+      host: false,
+    };
+  }
+  const resolved = workspaceFilePath(target.path, primary);
+  const host = resolved ? hostFileSelection(resolved, target.location) : null;
+  return host ? { file: host, host: true } : null;
 }
 
 // Relative links start in the session's working directory. Every editor link
@@ -134,9 +174,6 @@ export function resolveChatFileLink(
   roots: Root[],
   origin: string,
 ): FileSelection | null {
-  const target = chatFileTarget(href, origin);
-  if (!target) return null;
-  const primary = scope.roots.find((root) => root.id === scope.primaryRootId);
-  const file = resolveWorkspaceFile(target.path, primary?.path, roots);
-  return file && { ...file, location: target.location };
+  const resolved = resolveChatFile(href, scope, roots, origin);
+  return resolved && !resolved.host ? resolved.file : null;
 }

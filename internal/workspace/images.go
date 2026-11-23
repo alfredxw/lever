@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -18,6 +19,10 @@ func ReadImage(root, path string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	defer f.Close()
+	return readImage(f, path)
+}
+
+func readImage(f *os.File, path string) ([]byte, string, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, "", err

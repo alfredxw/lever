@@ -2485,7 +2485,10 @@ button:focus-visible,
 .file-breadcrumb svg {
   flex-shrink: 0;
 }
-.file-breadcrumb button {
+.file-breadcrumb button,
+.file-breadcrumb-segment {
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2673,6 +2676,30 @@ button:focus-visible,
 }
 .file-markdown details[open] > summary {
   margin-bottom: 12px;
+}
+.file-markdown-carousel {
+  margin: 16px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-background);
+  overflow: hidden;
+}
+.file-markdown-carousel-slide {
+  padding: 16px;
+}
+.file-markdown-carousel-slide > div > :first-child {
+  margin-top: 0;
+}
+.file-markdown-carousel-slide > div > :last-child {
+  margin-bottom: 0;
+}
+.file-markdown-carousel-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
 }
 .file-search-summary,
 .file-search-footnote {

@@ -82,7 +82,9 @@ const fileQueryKey = (target: FileTarget) =>
     fileScopeKey(target.source),
   ] as const;
 export const fileURL = ({ source, root, path }: FileTarget) =>
-  fileEndpoint(source, "file", { root: root.id, rootPath: root.path, path });
+  source.kind === "host"
+    ? `/host-file?${new URLSearchParams({ path: absoluteFilePath({ root, path }) })}`
+    : fileEndpoint(source, "file", { root: root.id, rootPath: root.path, path });
 
 const readFile = (target: FileTarget, signal?: AbortSignal) =>
   api<FileContent>(fileURL(target), undefined, undefined, signal);

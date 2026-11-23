@@ -18,7 +18,7 @@ import {
   RunActivityText,
 } from "./RunActivity";
 import { formatDuration, RunWorkDetails } from "./RunWork";
-import { ChatMarkdown } from "./ChatResponse";
+import { ChatMarkdown, type ChatFiles } from "./ChatResponse";
 
 type SharedExchange = {
   id: string;
@@ -76,11 +76,13 @@ export const SharedTurn = memo(function SharedTurn({
   path,
   runtime,
   activity: live,
+  files,
 }: {
   turn: SharedExchange;
   path: string;
   runtime: string;
   activity?: SharedActivity;
+  files?: ChatFiles;
 }) {
   const { t } = useTranslation();
   const images = (message: SharedMessage) =>
@@ -102,7 +104,11 @@ export const SharedTurn = memo(function SharedTurn({
     <div key={message.id} className="flex flex-col gap-2">
       {images(message)}
       {message.text && (
-        <ChatMarkdown text={message.text} endpoint={`/api${path}/preview`} />
+        <ChatMarkdown
+          text={message.text}
+          endpoint={`/api${path}/preview`}
+          files={files}
+        />
       )}
     </div>
   );

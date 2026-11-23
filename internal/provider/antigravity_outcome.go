@@ -55,7 +55,11 @@ func openAntigravitySessionDB(ctx context.Context, config model.Provider, native
 		return nil
 	}
 	var profile, dataDir string
-	if executable, err := Executable(ctx, config); err == nil && IsAntigravityCLI(config, executable) {
+	executable, err := Executable(ctx, config)
+	if err != nil {
+		executable = config.Command
+	}
+	if IsAntigravityCLI(config, executable) {
 		profile = os.Getenv("ANTIGRAVITY_CLI_CONFIG_DIR")
 		if profile == "" {
 			gemini := os.Getenv("GEMINI_HOME")
@@ -88,6 +92,30 @@ func openAntigravitySessionDB(ctx context.Context, config model.Provider, native
 		dataDir: dataDir,
 		path:    filepath.Join(dataDir, "conversations", native+".db"),
 	}
+}
+
+// AntigravityArtifactDir returns the native artifact directory (brain/<native>)
+// for an Antigravity session, or "" if it cannot be resolved.
+func AntigravityArtifactDir(ctx context.Context, config model.Provider, native string) string {
+	db := openAntigravitySessionDB(ctx, config, native)
+	if db == nil {
+		return ""
+	}
+	profile, err := os.OpenRoot(db.profile)
+	if err != nil {
+		return ""
+	}
+	defer profile.Close()
+	relative, err := filepath.Rel(db.profile, db.dataDir)
+	if err != nil {
+		return ""
+	}
+	directory, err := openManagedSubdir(profile, relative, "brain", native)
+	if err != nil {
+		return ""
+	}
+	defer directory.Close()
+	return directory.Name()
 }
 
 func (s *antigravitySessionDB) regular() os.FileInfo {

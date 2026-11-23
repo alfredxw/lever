@@ -12,8 +12,10 @@ import {
   AlertCircle,
   Copy,
   Download,
+  ExternalLink,
   Eye,
   FileCode,
+  FolderOpen,
   Folders,
   MoreHorizontal,
   RefreshCw,
@@ -21,8 +23,10 @@ import {
   Search,
   WrapText,
 } from "lucide-react";
+import { isMyGo, runtime } from "mygo-runtime";
 import { toast } from "sonner";
-import type { Scope } from "@/api/types.gen";
+import type { Root, Scope } from "@/api/types.gen";
+import { Dialogs } from "@/api/desktop.gen";
 import { APIError } from "@/api/client";
 import { cn } from "@/lib/utils";
 import { useCompactPanel } from "@/hooks/useCompactPanel";
@@ -72,6 +76,8 @@ import {
   isSkillEntry,
   useFileSource,
   type FileSource,
+  type HostFileSource,
+  type SkillFileSource,
 } from "./fileSource";
 import { relocateEntry, useEntryChanges } from "./fileOperations";
 import { fileKind, isTextKind } from "./preview/fileKind";
@@ -98,6 +104,10 @@ const RichTextPreview = lazy(() => import("./preview/RichTextPreview"));
 type SidebarMode = "path" | "content";
 type SidebarView = SidebarMode | "closed";
 
+type ExternalFileSelection = FileSelection & {
+  source?: SkillFileSource | HostFileSource;
+};
+
 export function Files({
   source,
   scope,
@@ -107,6 +117,8 @@ export function Files({
   initialPreview,
   active,
   actions,
+  workspaceRoots,
+  onOpenExternalFile,
 }: {
   source: FileSource;
   scope: Scope;
@@ -116,8 +128,11 @@ export function Files({
   initialPreview?: boolean;
   active: boolean;
   actions?: ReactNode;
+  workspaceRoots?: Root[];
+  onOpenExternalFile?: (file: ExternalFileSelection) => void;
 }) {
   const { t } = useTranslation();
+  const host = source.kind === "host";
   const panel = useRef<HTMLDivElement>(null);
   const directoryToggle = useRef<HTMLButtonElement>(null);
   const [file, setFile] = useState<FileSelection | undefined>(initialFile);
@@ -130,13 +145,13 @@ export function Files({
   );
   const compact = useCompactPanel(panel);
   const [wideSidebar, setWideSidebar] = useState<SidebarView>(
-    initialDirectoryOpen ? "path" : "closed",
+    !host && initialDirectoryOpen ? "path" : "closed",
   );
   const [compactSidebar, setCompactSidebar] = useState<SidebarView>();
   const sidebarView = compact
     ? (compactSidebar ?? (file ? "closed" : "path"))
     : wideSidebar;
-  const showSidebar = sidebarView !== "closed";
+  const showSidebar = !host && sidebarView !== "closed";
   const [wordWrap, setWordWrap] = useState(() => savedPreference("wrap", true));
   const [preview, setPreview] = useFilePreviewMode(initialPreview);
   useEntryChanges((change) => {
@@ -173,7 +188,9 @@ export function Files({
     const setSidebar = compact ? setCompactSidebar : setWideSidebar;
     setSidebar(sidebarView === mode ? "closed" : mode);
   };
-  const navigation = (
+  const navigation = host ? (
+    actions
+  ) : (
     <>
       {actions}
       <ToolbarButton
@@ -197,7 +214,7 @@ export function Files({
       </ToolbarButton>
     </>
   );
-  const sidebar = (
+  const sidebar = !host && (
     <FileSidebar
       scope={scope}
       mode={sidebarView === "closed" ? "path" : sidebarView}
@@ -236,7 +253,9 @@ export function Files({
                   (current) => current && { ...current, location: undefined },
                 );
               }}
+              workspaceRoots={workspaceRoots}
               onFile={selectFile}
+              onOpenExternalFile={onOpenExternalFile}
             />
           ) : (
             <>
@@ -278,7 +297,9 @@ function FilePreview({
   setWordWrap,
   preview,
   setPreview,
+  workspaceRoots,
   onFile,
+  onOpenExternalFile,
 }: {
   file: FileSelection;
   dark: boolean;
@@ -288,10 +309,14 @@ function FilePreview({
   setWordWrap: (value: boolean) => void;
   preview: boolean;
   setPreview: (value: boolean) => void;
+  workspaceRoots?: Root[];
   onFile: (file: FileSelection) => void;
+  onOpenExternalFile?: (file: ExternalFileSelection) => void;
 }) {
   const { t } = useTranslation();
   const source = useFileSource();
+  const host = source.kind === "host";
+  const native = isMyGo();
   const { root, path, location } = file;
   const target = { source, root, path };
   const kind = fileKind(path);
@@ -377,9 +402,17 @@ function FilePreview({
       toast.error(t("chat.copyFailed"));
     }
   };
+  const fullPath =
+    (host ? data?.path : undefined) || absoluteFilePath(file);
+  const canOpenNative = native && !fullPath.startsWith("~");
   return (
     <>
-      <FileToolbar root={root} path={path} onFile={onFile}>
+      <FileToolbar
+        root={root}
+        path={path}
+        displayPath={host ? fullPath : undefined}
+        onFile={onFile}
+      >
         {(!writable || data?.truncated || draft) && (
           <span className="file-save-status" role="status" data-dirty={!!draft}>
             {!writable || data?.truncated
@@ -419,16 +452,16 @@ function FilePreview({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-56">
             <DropdownMenuGroup>
-              <DropdownMenuItem
-                onSelect={() => void copy(absoluteFilePath(file))}
-              >
+              <DropdownMenuItem onSelect={() => void copy(fullPath)}>
                 <Copy />
                 {t("files.copyPath")}
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void copy(path)}>
-                <Copy />
-                {t("files.copyRelativePath")}
-              </DropdownMenuItem>
+              {!host && (
+                <DropdownMenuItem onSelect={() => void copy(path)}>
+                  <Copy />
+                  {t("files.copyRelativePath")}
+                </DropdownMenuItem>
+              )}
               {editable && !unsupported && (
                 <DropdownMenuItem
                   disabled={text === undefined}
@@ -437,6 +470,26 @@ function FilePreview({
                   <Copy />
                   {t("files.copyContents")}
                 </DropdownMenuItem>
+              )}
+              {host && canOpenNative && (
+                <>
+                  <DropdownMenuItem
+                    onSelect={() => void Dialogs.showItemInFolder(fullPath)}
+                  >
+                    <FolderOpen />
+                    {t(
+                      runtime().platform === "darwin"
+                        ? "files.revealInFinder"
+                        : "files.revealInFileManager",
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => void Dialogs.openPath(fullPath)}
+                  >
+                    <ExternalLink />
+                    {t("files.openDefault")}
+                  </DropdownMenuItem>
+                </>
               )}
               <DropdownMenuItem asChild>
                 <a
@@ -539,7 +592,9 @@ function FilePreview({
                           )
                         : (text ?? "")
                     }
+                    workspaceRoots={workspaceRoots}
                     onFile={onFile}
+                    onOpenExternalFile={onOpenExternalFile}
                   />
                 </article>
               )}
