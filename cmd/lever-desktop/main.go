@@ -36,13 +36,14 @@ func main() {
 	}
 	generate := os.Getenv("MYGO_GENERATE") != ""
 	var dir, address, devOrigin *string
-	var freshBackend bool
+	var freshBackend, reloadOnSighup bool
 	if !generate {
 		dir = flag.String("data-dir", host.DefaultDir(), "Local data directory")
 		printDir := flag.Bool("print-data-dir", false, "Print the effective data directory and exit")
 		address = flag.String("listen", "127.0.0.1:4778", "Stable loopback origin for desktop preferences")
 		devOrigin = flag.String("dev-origin", "", "Vite development origin for frontend hot updates")
 		flag.BoolVar(&freshBackend, "fresh-backend", false, "Start the backend from this executable when restarting the desktop")
+		flag.BoolVar(&reloadOnSighup, "reload-on-sighup", false, "Reload the desktop frontend on SIGHUP")
 		serve := flag.Bool(host.DesktopServerFlag, false, "Run the desktop's local backend without a window")
 		flag.Parse()
 		if *printDir {
@@ -99,6 +100,23 @@ func main() {
 	defer backend.Close()
 	if *devOrigin != "" {
 		fmt.Println("Lever Desktop:", backend.URL)
+	}
+	if reloadOnSighup {
+		reload := make(chan os.Signal, 1)
+		signal.Notify(reload, syscall.SIGHUP)
+		defer func() {
+			signal.Stop(reload)
+			close(reload)
+		}()
+		go func() {
+			for range reload {
+				mygo.RunOnMain(func() {
+					if shell := browser.shell; shell != nil && !shell.IsDestroyed() {
+						shell.Page().ReloadIgnoringCache()
+					}
+				})
+			}
+		}()
 	}
 	logFile, logErr := os.OpenFile(filepath.Join(*dir, "desktop.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if logErr == nil {

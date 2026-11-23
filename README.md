@@ -177,7 +177,8 @@ Launches the native desktop shell over the same Go backend and SQLite store, add
 
 | Task | Command | Notes |
 | :--- | :--- | :--- |
-| **Desktop hot reload** *(macOS)* | `./scripts/restart-desktop.sh` | Rebuilds Go + UI, keeps active providers running, proxies Vite HMR |
+| **Apply Go changes** *(macOS)* | `./scripts/restart-backend.sh` | Rebuilds Go, restarts the backend, and reopens the desktop with hot reload |
+| **Recover the desktop frontend** *(macOS)* | `./scripts/restart-frontend.sh` | Restarts Vite and reloads the open window while the backend and runs continue. Start the desktop with `./scripts/restart-backend.sh` first. |
 | **Web hot reload** | `make dev` + `pnpm --dir web dev` | Install deps first (`pnpm --dir web install --frozen-lockfile`); ports `4778` / `5179` |
 | **Package desktop** | `make package` | Outputs to `desktop/dist/`; add `TARGETS=darwin/arm64,windows/amd64` for Windows |
 | **Regenerate types** | `make generate` | Syncs TypeScript DTOs and desktop bindings from Go |

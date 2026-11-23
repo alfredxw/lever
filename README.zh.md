@@ -179,7 +179,8 @@ make desktop
 
 | 任务 | 命令 | 说明 |
 | :--- | :--- | :--- |
-| **桌面热更新**（macOS） | `./scripts/restart-desktop.sh` | 编译 Go 与前端、热替换窗口与后端、保留运行中 provider 并代理 Vite HMR |
+| **应用 Go 改动**（macOS） | `./scripts/restart-backend.sh` | 编译 Go、重启后端，并重新打开桌面窗口，继续使用热更新 |
+| **恢复桌面前端**（macOS） | `./scripts/restart-frontend.sh` | 重启 Vite 并刷新当前窗口，后端与运行中的任务继续执行。先用 `./scripts/restart-backend.sh` 启动桌面。 |
 | **浏览器热更新** | `make dev` + `pnpm --dir web dev` | 先执行 `pnpm --dir web install --frozen-lockfile`，访问 `4778` / `5179` 端口 |
 | **打包桌面应用** | `make package` | 输出到 `desktop/dist/`；加 `TARGETS=darwin/arm64,windows/amd64` 同步构建 Windows |
 | **重新生成类型** | `make generate` | 修改 Go DTO 或桌面绑定后同步 TypeScript 类型 |

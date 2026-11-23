@@ -113,4 +113,4 @@ JXA
 rm -f "${LOCK_PATH}"
 trap - EXIT
 echo "==> Starting the newly built Go backend and desktop with Vite hot updates"
-exec node "${ROOT_DIR}/web/scripts/dev-desktop.mjs" --prebuilt --fresh-backend "$@"
+exec node "${ROOT_DIR}/web/scripts/dev-desktop.mjs" --prebuilt --reload-on-sighup --fresh-backend "$@"
