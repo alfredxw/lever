@@ -2103,20 +2103,40 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   ).toBeFocused();
 
   await sidebarSearch.click();
-  await search.getByRole("radio", { name: "正文", exact: true }).click();
-  await query.fill("正文检索专用内容");
-  await expect(options).toHaveCount(1);
+  const resultTypesGroup = search.getByRole("radiogroup", { name: "结果类型" });
+  await resultTypesGroup.getByRole("radio", { name: "消息", exact: true }).click();
   const messageKinds = search.getByRole("radiogroup", { name: "消息类型" });
+  const allMessages = messageKinds.getByRole("radio", {
+    name: "全部",
+    exact: true,
+  });
   const mainMessages = messageKinds.getByRole("radio", {
     name: "主对话",
     exact: true,
   });
+  await expect(allMessages).toBeChecked();
+  await expect(
+    options.filter({ hasText: "发布计划 A" }).filter({ hasText: "主对话" }),
+  ).toBeVisible();
+  await expect(options.filter({ hasText: "发布排查" }).first()).toBeVisible();
+  await mainMessages.click();
+  await expect(options.filter({ hasText: "发布计划 A" })).toHaveCount(1);
+  await expect(options.filter({ hasText: "发布排查" })).toHaveCount(0);
+  await messageKinds.getByRole("radio", { name: "对比", exact: true }).click();
+  await expect(search.getByText("当前范围内暂无对比会话")).toBeVisible();
+  await search.getByRole("button", { name: "查看全部消息", exact: true }).click();
+  await expect(allMessages).toBeChecked();
+  await expect(options.filter({ hasText: "发布排查" }).first()).toBeVisible();
+  await query.fill("正文检索专用内容");
+  await expect(options).toHaveCount(1);
   await messageKinds.getByRole("radio", { name: "话题", exact: true }).click();
   await expect(search.getByText("没有匹配的结果")).toBeVisible();
   await mainMessages.click();
   await expect(options).toHaveCount(1);
   await mainMessages.click();
-  await expect(mainMessages).not.toBeChecked();
+  await expect(mainMessages).toBeChecked();
+  await allMessages.click();
+  await expect(allMessages).toBeChecked();
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText("发布计划 A");
   await expect(options.first().locator("mark")).toHaveText("正文检索专用内容");
@@ -10127,4 +10147,408 @@ test("file conflict retains the draft until a disk reload succeeds", async ({
   } finally {
     rmSync(filePath, { force: true });
   }
+});
+
+test("sidebar Topics keep their Chat position across prepend pagination, fresh mount, and same-pane collisions", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await createAgent(page, "话题定位稳定性");
+  const overview: Overview = await (
+    await page.request.get("/api/overview")
+  ).json();
+  const agent = overview.agents.find(({ name }) => name === "话题定位稳定性")!;
+  const chatResponse = await page.request.post("/api/chats", {
+    data: { agentId: agent.id, title: "长历史对话" },
+  });
+  expect(chatResponse.ok()).toBe(true);
+  const chat: { id: string } = await chatResponse.json();
+
+  const postAndWait = async (
+    operation: "main" | "topic",
+    text: string,
+  ): Promise<Run> => {
+    const response = await page.request.post("/api/messages", {
+      data: { chatId: chat.id, commandId: randomUUID(), operation, text },
+    });
+    expect(response.ok()).toBe(true);
+    const run = (await response.json()) as Run;
+    await expect
+      .poll(
+        async () => {
+          const runs = (
+            await (
+              await page.request.get(`/api/sessions/${run.sessionId}/runs`)
+            ).json()
+          ).runs as Run[];
+          return runs.find((item) => item.id === run.id)?.status;
+        },
+        { intervals: [50, 100] },
+      )
+      .toBe("completed");
+    return run;
+  };
+
+  const tall = Array.from(
+    { length: 16 },
+    (_, i) => `段落 ${i + 1}：用于拉高聊天记录高度以验证滚动定位。`,
+  ).join("\n\n");
+  await postAndWait("main", `消息 0\n\n${tall}`);
+  const oldTopic = await postAndWait("topic", "很早的话题 T1");
+  for (let i = 2; i <= 10; i++) {
+    await postAndWait("main", `消息 ${i}\n\n${tall}`);
+  }
+  // Lands at the top of the 12-item first page, triggering onLoadEarlier when scrolled to.
+  const midTopic = await postAndWait("topic", "首屏顶部话题 T2");
+  for (let i = 12; i <= 22; i++) {
+    await postAndWait("main", `消息 ${i}\n\n${tall}`);
+  }
+
+  await page.reload();
+  const sidebar = page.locator("#agent-sidebar");
+  const mainStrip = page.locator('.tab-strip[data-pane="main"]');
+  const sideStrip = page.locator('.tab-strip[data-pane="side"]');
+  const mainPanel = page.locator('.tab-panel[data-pane="main"][data-visible="true"]');
+  const mainTopic = (sessionId: string) =>
+    mainPanel.locator(`.topic-thread[data-session-id="${sessionId}"]`);
+
+  // 1. Clicking midTopic while Chat is open in single-pane view triggers split animation
+  // and onLoadEarlier prepend; left pane must stay aligned to midTopic.
+  await sidebar.locator(`[data-session-id="${midTopic.sessionId}"]`).click();
+  await expect(
+    sideStrip.getByRole("tab", { name: "首屏顶部话题 T2", selected: true }),
+  ).toBeVisible();
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+  await page.waitForTimeout(550);
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+
+  // 2. Clicking an older Topic from page 2 scrolls to it in the left pane.
+  await sidebar.locator(`[data-session-id="${oldTopic.sessionId}"]`).click();
+  await expect(mainTopic(oldTopic.sessionId)).toBeInViewport();
+
+  // 3. After manually scrolling away, clicking the same Topic again re-locates it.
+  await mainPanel.locator(".chat-scroll").evaluate((el) => {
+    el.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(mainTopic(oldTopic.sessionId)).not.toBeInViewport();
+  await sidebar.locator(`[data-session-id="${oldTopic.sessionId}"]`).click();
+  await expect(mainTopic(oldTopic.sessionId)).toBeInViewport();
+
+  // 4. Opening a Topic from an empty workspace mounts Chat fresh without scrollToEnd overriding reveal.
+  await page.evaluate((agentId) => {
+    const saved = JSON.parse(localStorage.getItem("lever:workspaces") || "{}");
+    saved[agentId] = { tabs: [], selected: "" };
+    localStorage.setItem("lever:workspaces", JSON.stringify(saved));
+  }, agent.id);
+  await page.reload();
+  await sidebar.locator(`[data-session-id="${midTopic.sessionId}"]`).click();
+  await expect(
+    mainStrip.getByRole("tab", { name: "长历史对话", selected: true }),
+  ).toBeVisible();
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+  await page.waitForTimeout(550);
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+
+  // 5. Right-click "在新标签页打开" also keeps the Topic tab and locates it in Chat.
+  await closeTab(sideStrip.getByRole("tab", { name: "首屏顶部话题 T2" }));
+  await mainPanel.locator(".chat-scroll").evaluate((el) => {
+    el.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(mainTopic(midTopic.sessionId)).not.toBeInViewport();
+  await sidebar
+    .locator(`[data-session-id="${midTopic.sessionId}"]`)
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "在新标签页打开", exact: true }).click();
+  const keptTopicTab = sideStrip.getByRole("tab", {
+    name: "首屏顶部话题 T2",
+    selected: true,
+  });
+  await expect(keptTopicTab).toBeVisible();
+  await expect(keptTopicTab).not.toHaveAttribute("aria-description");
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+
+  // 6. If Chat and Topic collide in the same pane, clicking the Topic separates them and locates it.
+  await mainStrip
+    .getByRole("tab", { name: "长历史对话", exact: true })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "移动到右侧面板", exact: true }).click();
+  await expect(mainStrip.getByRole("tab")).toHaveCount(0);
+  await sidebar.locator(`[data-session-id="${midTopic.sessionId}"]`).click();
+  await expect(
+    mainStrip.getByRole("tab", { name: "长历史对话", selected: true }),
+  ).toBeVisible();
+  await expect(
+    sideStrip.getByRole("tab", { name: "首屏顶部话题 T2", selected: true }),
+  ).toBeVisible();
+  await expect(mainTopic(midTopic.sessionId)).toBeInViewport();
+});
+
+test("sidebar Chats fill main instead of side and side Topic details open opposite", async ({
+  page,
+}) => {
+  await createAgent(page, "分栏归属规则");
+  await send(page, "对话 A 首条消息");
+  const overview: Overview = await (
+    await page.request.get("/api/overview")
+  ).json();
+  const agent = overview.agents.find(({ name }) => name === "分栏归属规则")!;
+  const chatA = overview.chats.find(({ agentId }) => agentId === agent.id)!;
+  const chatBResponse = await page.request.post("/api/chats", {
+    data: { agentId: agent.id, title: "对话 B" },
+  });
+  expect(chatBResponse.ok()).toBe(true);
+  const chatB: { id: string } = await chatBResponse.json();
+  const chatBRunResponse = await page.request.post("/api/messages", {
+    data: {
+      chatId: chatB.id,
+      commandId: randomUUID(),
+      operation: "main",
+      text: "对话 B 内容",
+    },
+  });
+  expect(chatBRunResponse.ok()).toBe(true);
+  const topicResponse = await page.request.post("/api/messages", {
+    data: {
+      chatId: chatA.id,
+      commandId: randomUUID(),
+      operation: "topic",
+      text: "右侧话题查看 [hello.go](hello.go:3)",
+    },
+  });
+  expect(topicResponse.ok()).toBe(true);
+  const topicRun = (await topicResponse.json()) as Run;
+  await expect
+    .poll(
+      async () => {
+        const runs = (
+          await (
+            await page.request.get(`/api/sessions/${topicRun.sessionId}/runs`)
+          ).json()
+        ).runs as Run[];
+        return runs.find((item) => item.id === topicRun.id)?.status;
+      },
+      { intervals: [50, 100] },
+    )
+    .toBe("completed");
+
+  const updatedOverview: Overview = await (
+    await page.request.get("/api/overview")
+  ).json();
+  const mainConvA = updatedOverview.conversations.find(
+    (item) => item.chatId === chatA.id && item.kind === "main",
+  )!;
+  const mainConvB = updatedOverview.conversations.find(
+    (item) => item.chatId === chatB.id && item.kind === "main",
+  )!;
+
+  const sidebar = page.locator("#agent-sidebar");
+  const mainStrip = page.locator('.tab-strip[data-pane="main"]');
+  const sideStrip = page.locator('.tab-strip[data-pane="side"]');
+  const sidePanel = page.locator('.tab-panel[data-pane="side"][data-visible="true"]');
+
+  // Open Topic in side, then close main tab so the left pane is empty while side is active.
+  await sidebar.locator(`[data-session-id="${topicRun.sessionId}"]`).click();
+  await expect(sideStrip.getByRole("tab")).toHaveCount(1);
+  await closeTab(mainStrip.getByRole("tab").first());
+  await expect(mainStrip.getByRole("tab")).toHaveCount(0);
+
+  // 1. Clicking Chat A in Agents sidebar when left pane is empty must open in main, not side.
+  await sidebar.locator(`[data-session-id="${mainConvA.id}"]`).click();
+  await expect(
+    mainStrip.locator(`[role="tab"][id="tab-${encodeURIComponent(chatA.id)}"]`),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(sideStrip.getByRole("tab")).toHaveCount(1);
+
+  // 2. When both panes are non-empty and side pane is active, clicking Chat B still opens in main.
+  await sideStrip.getByRole("tab").first().click();
+  await sidebar.locator(`[data-session-id="${mainConvB.id}"]`).click();
+  await expect(
+    mainStrip.getByRole("tab", { name: "对话 B", selected: true }),
+  ).toBeVisible();
+  await expect(sideStrip.getByRole("tab")).toHaveCount(1);
+
+  // 3. Clicking a Markdown file link inside the side Topic opens Files in the opposite (main) pane.
+  await sidePanel.getByRole("link", { name: "hello.go", exact: true }).click();
+  await expect(
+    mainStrip.getByRole("tab", { name: "hello.go", selected: true }),
+  ).toBeVisible();
+  await expect(sidePanel.locator(".topic-conversation")).toBeVisible();
+
+  // 4. When left pane is empty again, Agent sidebar Files action fills main instead of side.
+  await mainStrip.getByRole("tab").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "关闭所有标签页", exact: true }).click();
+  await expect(mainStrip.getByRole("tab")).toHaveCount(0);
+  await sidebar
+    .locator(`[data-agent-id="${agent.id}"]`)
+    .getByRole("button", { name: `打开 ${agent.name} 的文件`, exact: true })
+    .click();
+  await expect(
+    mainStrip.getByRole("tab", { name: "文件", selected: true }),
+  ).toBeVisible();
+  await expect(sideStrip.getByRole("tab")).toHaveCount(1);
+});
+
+test("per-pane tab limit applies independently per Agent and pane and evicts earliest-left tabs", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto(context().url);
+  const { scope } = context();
+
+  const createApiAgent = async (name: string) => {
+    const response = await page.request.post("/api/agents", {
+      data: {
+        name,
+        profile: {
+          provider: "codex",
+          roots: [{ id: "root", path: scope }],
+          primaryRootId: "root",
+          permission: "ask",
+          instructions: "",
+          skills: [],
+          delegations: [],
+        },
+      },
+    });
+    expect(response.ok()).toBe(true);
+    return (await response.json()) as Agent;
+  };
+  const createApiChat = async (agentId: string, title: string) => {
+    const response = await page.request.post("/api/chats", {
+      data: { agentId, title },
+    });
+    expect(response.ok()).toBe(true);
+    return (await response.json()) as ChatView["chat"];
+  };
+  const sendApiMessage = async (chatId: string, text: string) => {
+    const response = await page.request.post("/api/messages", {
+      data: { chatId, commandId: randomUUID(), operation: "main", text },
+    });
+    expect(response.ok()).toBe(true);
+    return (await response.json()) as Run;
+  };
+
+  const agentA = await createApiAgent("分栏上限 A");
+  const agentB = await createApiAgent("分栏上限 B");
+  const chatA1 = await createApiChat(agentA.id, "左栏对话 1");
+  const chatA2 = await createApiChat(agentA.id, "左栏对话 2");
+  const chatA3 = await createApiChat(agentA.id, "左栏对话 3");
+  const chatB1 = await createApiChat(agentB.id, "AgentB 对话 1");
+  const chatB2 = await createApiChat(agentB.id, "AgentB 对话 2");
+  await sendApiMessage(chatA1.id, "A1 初始消息");
+  await sendApiMessage(chatA2.id, "A2 初始消息");
+  await sendApiMessage(chatA3.id, "A3 初始消息");
+  await sendApiMessage(chatB1.id, "B1 初始消息");
+  await sendApiMessage(chatB2.id, "B2 初始消息");
+
+  await page.reload();
+  const sidebar = page.locator("#agent-sidebar");
+  const mainStrip = page.locator('.tab-strip[data-pane="main"]');
+  const sideStrip = page.locator('.tab-strip[data-pane="side"]');
+
+  // Set per-pane tab limit to 2 in Settings.
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const limitInput = page.getByLabel("单分栏标签页上限", { exact: true });
+  await limitInput.fill("2");
+  await limitInput.press("Enter");
+  await page.getByRole("button", { name: "Agents", exact: true }).click();
+
+  const openKeptInMain = async (chatId: string) => {
+    const overview: Overview = await (
+      await page.request.get("/api/overview")
+    ).json();
+    const conv = overview.conversations.find(
+      (item) => item.chatId === chatId && item.kind === "main",
+    )!;
+    const row = sidebar.locator(`[data-session-id="${conv.id}"]`);
+    await row.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "在新标签页打开", exact: true })
+      .or(page.getByRole("menuitem", { name: "保留标签页", exact: true }))
+      .click();
+  };
+
+  // Agent A: open 2 tabs in main (chatA1, chatA2), then revisit chatA1 so chatA2 is left earlier.
+  await sidebar
+    .locator(`[data-agent-id="${agentA.id}"] .agent-select`)
+    .click();
+  await openKeptInMain(chatA1.id);
+  await openKeptInMain(chatA2.id);
+  await expect(mainStrip.getByRole("tab")).toHaveCount(2);
+  await mainStrip.getByRole("tab", { name: "左栏对话 1", exact: true }).click();
+
+  // Open 3 tool tabs in Agent A's right pane: right pane trims to 2, left pane keeps BOTH tabs!
+  await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
+  await page.getByRole("menuitem", { name: "文件", exact: true }).click();
+  await sideStrip.getByRole("button", { name: "打开标签", exact: true }).click();
+  await page.getByRole("menuitem", { name: "笔记", exact: true }).click();
+  await sideStrip.getByRole("button", { name: "打开标签", exact: true }).click();
+  await page.getByRole("menuitem", { name: "配置", exact: true }).click();
+  await expect(sideStrip.getByRole("tab")).toHaveCount(2);
+  await expect(
+    sideStrip.getByRole("tab", { name: "文件", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    sideStrip.getByRole("tab", { name: "笔记", exact: true }),
+  ).toBeVisible();
+  await expect(
+    sideStrip.getByRole("tab", { name: "配置", exact: true }),
+  ).toBeVisible();
+  await expect(mainStrip.getByRole("tab")).toHaveCount(2);
+  await expect(
+    mainStrip.getByRole("tab", { name: "左栏对话 1", exact: true }),
+  ).toBeVisible();
+  await expect(
+    mainStrip.getByRole("tab", { name: "左栏对话 2", exact: true }),
+  ).toBeVisible();
+
+  // Switch to Agent B and open 2 main tabs + 2 side tabs: Agent A's tabs must NOT be closed.
+  await sidebar
+    .locator(`[data-agent-id="${agentB.id}"] .agent-select`)
+    .click();
+  await openKeptInMain(chatB1.id);
+  await openKeptInMain(chatB2.id);
+  await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
+  await page.getByRole("menuitem", { name: "文件", exact: true }).click();
+  await sideStrip.getByRole("button", { name: "打开标签", exact: true }).click();
+  await page.getByRole("menuitem", { name: "配置", exact: true }).click();
+  await expect(mainStrip.getByRole("tab")).toHaveCount(2);
+  await expect(sideStrip.getByRole("tab")).toHaveCount(2);
+
+  // Switch back to Agent A: both panes still retain their 2 tabs.
+  await sidebar
+    .locator(`[data-agent-id="${agentA.id}"] .agent-select`)
+    .click();
+  await expect(mainStrip.getByRole("tab")).toHaveCount(2);
+  await expect(sideStrip.getByRole("tab")).toHaveCount(2);
+
+  // Send a brand-new message to inactive chatA2: new message activity must NOT prevent chatA2
+  // (which was left earlier than chatA1) from being evicted when opening chatA3.
+  const run = await sendApiMessage(chatA2.id, "后台新消息");
+  await expect
+    .poll(async () => {
+      const runs = (
+        await (
+          await page.request.get(`/api/sessions/${run.sessionId}/runs`)
+        ).json()
+      ).runs as Run[];
+      return runs.find((item) => item.id === run.id)?.status;
+    })
+    .toBe("completed");
+
+  await openKeptInMain(chatA3.id);
+  await expect(mainStrip.getByRole("tab")).toHaveCount(2);
+  await expect(
+    mainStrip.getByRole("tab", { name: "左栏对话 2", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    mainStrip.getByRole("tab", { name: "左栏对话 1", exact: true }),
+  ).toBeVisible();
+  await expect(
+    mainStrip.getByRole("tab", { name: "左栏对话 3", exact: true }),
+  ).toBeVisible();
+  // Right pane still untouched.
+  await expect(sideStrip.getByRole("tab")).toHaveCount(2);
 });

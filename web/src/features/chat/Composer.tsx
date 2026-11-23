@@ -639,6 +639,7 @@ export function Composer({
     beginEdit(run, true);
   });
   useEffect(() => {
+    if (visible === false) return;
     const insertion = composer?.insertions.get(key);
     if (!composer || !insertion) return;
     if (insertion.kind === "files") {
@@ -668,7 +669,7 @@ export function Composer({
     }
     composer.inserted(key, insertion.id);
     requestAnimationFrame(() => textbox.current?.focus());
-  }, [composer, draft.editing, draft.topic, key, sending, uploading, t]);
+  }, [composer, draft.editing, draft.topic, key, sending, uploading, visible, t]);
   const running = Boolean(activeRun && !topicMode);
   const followUp =
     !editingSent &&
@@ -1416,6 +1417,7 @@ export function Composer({
             setDraft((d) => ({ ...d, content, topic: launchTopic || d.topic }));
           }}
           disabled={sending}
+          visible={visible}
           onFiles={(files) => void intake(files)}
           onSubmit={submit}
         />

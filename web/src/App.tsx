@@ -24,6 +24,16 @@ import {
   type WorkspaceTab,
 } from "@/components/workbench/useWorkspaces";
 import {
+  companionPane,
+  locateChatPane,
+  primaryTabPane,
+  resolveTopicPanes,
+} from "@/components/workbench/workspacePanes";
+import {
+  sortPaneTabsMostRecentFirst,
+  tabsExceedingPaneLimit,
+} from "@/components/workbench/workspaceTabLimits";
+import {
   toolTab,
   WorkspaceActions,
   WorkspacePanelControls,
@@ -193,6 +203,11 @@ const noAgents: Agent[] = [];
 const noChats: Overview["chats"] = [];
 const noRequests: Overview["requests"] = [];
 type WorkspaceTabTarget = { agentId: string; tab: WorkspaceTab };
+type RevealTarget = { tabId: string; focusEntry?: boolean } & (
+  | { topicId: string; runId?: never; comparisonId?: never }
+  | { runId: string; topicId?: never; comparisonId?: never }
+  | { comparisonId: string; runId?: never; topicId?: never }
+);
 
 function expandedChatPane(
   workspace: Workspace,
@@ -337,13 +352,15 @@ export default function App() {
   );
   const [focusComposer, setFocusComposer] = useState<string>();
   const onComposerFocused = useCallback(() => setFocusComposer(undefined), []);
+  const revealSequence = useRef(0);
   const [revealEntry, setRevealEntry] = useState<
-    { tabId: string; focusEntry?: boolean } & (
-      | { topicId: string; runId?: never; comparisonId?: never }
-      | { runId: string; topicId?: never; comparisonId?: never }
-      | { comparisonId: string; runId?: never; topicId?: never }
-    )
+    (RevealTarget & { key: number }) | undefined
   >();
+  const requestReveal = useCallback((target?: RevealTarget) => {
+    setRevealEntry(
+      target ? { ...target, key: ++revealSequence.current } : undefined,
+    );
+  }, []);
   const onRevealed = useCallback(() => setRevealEntry(undefined), []);
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => {
@@ -478,7 +495,6 @@ export default function App() {
   const {
     workspaces,
     workspace,
-    windowTabs,
     openTab: openWorkspaceTab,
     keepTab,
     closeTabs,
@@ -832,7 +848,11 @@ export default function App() {
   );
   function openChat(chatId: string, agentId: string, title: string) {
     const chat = overview.data?.chats.find((item) => item.id === chatId);
-    openTab({ id: chatId, kind: "chat", title: chat?.title ?? title }, agentId);
+    openTab(
+      { id: chatId, kind: "chat", title: chat?.title ?? title },
+      agentId,
+      primaryTabPane(workspaceFor(agentId)?.tabs ?? [], chatId),
+    );
     choose(agentId);
     setPage("agents");
   }
@@ -858,7 +878,7 @@ export default function App() {
       openChat(run.chatId, run.agentId, title);
     }
     setFocusComposer(undefined);
-    setRevealEntry({
+    requestReveal({
       tabId: run.topic ? "topic:" + run.sessionId : run.chatId,
       runId: run.runId,
     });
@@ -1011,6 +1031,16 @@ export default function App() {
   function workspaceFor(agentId: string) {
     return agentId === selected ? workspace : workspaces[agentId];
   }
+  function companionPaneFor(ownerId: string, sessionId?: string): Pane {
+    const targetTabs = workspaceFor(ownerId)?.tabs ?? [];
+    const sourceTab =
+      page === "agents" && ownerId === selected
+        ? ((sessionId
+            ? targetTabs.find((tab) => tab.id === `topic:${sessionId}`)
+            : undefined) ?? activeTab)
+        : undefined;
+    return companionPane(targetTabs, sourceTab ? paneOf(sourceTab) : undefined);
+  }
   function conversationTabState(conversation: Conversation) {
     const target = workspaceFor(conversation.agentId);
     const id =
@@ -1038,22 +1068,19 @@ export default function App() {
   ) {
     const id = `topic:${sessionId}`;
     const targetTabs = workspaceFor(agentId)?.tabs ?? [];
-    const existing = targetTabs.find((tab) => tab.id === id);
-    const source = targetTabs.find((tab) => tab.id === chatId);
-    const sourcePane = source ? paneOf(source) : undefined;
-    const pane =
-      preferredPane ??
-      (existing
-        ? paneOf(existing)
-        : sourcePane === "main" || (!sourcePane && revealInChat)
-          ? "side"
-          : "main");
-    if (revealInChat) {
+    const { topicPane, chatPane } = resolveTopicPanes({
+      tabs: targetTabs,
+      chatId,
+      topicTabId: id,
+      preferredPane,
+      revealInChat: !!revealInChat,
+    });
+    if (revealInChat && chatPane) {
       const { tab, comparisonId } = revealInChat;
-      openTab(tab, agentId, sourcePane ?? (pane === "side" ? "main" : "side"), {
+      openTab(tab, agentId, chatPane, {
         activatePane: false,
       });
-      setRevealEntry({
+      requestReveal({
         tabId: chatId,
         focusEntry: false,
         ...(comparisonId ? { comparisonId } : { topicId: sessionId }),
@@ -1067,7 +1094,7 @@ export default function App() {
         topic: { chatId, sessionId },
       },
       agentId,
-      pane,
+      topicPane,
       { mode },
     );
     setFocusComposer(id);
@@ -1102,12 +1129,28 @@ export default function App() {
     );
     choose(session.agentId);
   }
-  function locateComparison(origin: NonNullable<Session["comparison"]>) {
+  function locateComparison(
+    origin: NonNullable<Session["comparison"]>,
+    sourceSessionId?: string,
+  ) {
     const chat = overview.data?.chats.find((item) => item.id === origin.chatId);
     if (!chat) return;
-    openChat(chat.id, chat.agentId, chat.title);
+    const tabs = workspaceFor(chat.agentId)?.tabs ?? [];
+    openTab(
+      { id: chat.id, kind: "chat", title: displayChatTitle(chat, t) },
+      chat.agentId,
+      locateChatPane({
+        tabs,
+        chatId: chat.id,
+        sourceTopicTabId: sourceSessionId
+          ? `topic:${sourceSessionId}`
+          : undefined,
+      }),
+    );
+    choose(chat.agentId);
+    setPage("agents");
     setFocusComposer(undefined);
-    setRevealEntry({ tabId: chat.id, comparisonId: origin.id });
+    requestReveal({ tabId: chat.id, comparisonId: origin.id });
   }
   async function quoteTo(destination: QuoteDestination) {
     const { chatId, quote } = quoteSource!;
@@ -1116,15 +1159,24 @@ export default function App() {
         sessionQuery(destination.sessionId),
       );
       openTopic(view, quote);
+      choose(view.session.agentId);
+      setPage("agents");
       return;
     }
-    const chat = chats.find((item) => item.id === chatId);
-    openTab({
-      id: chatId,
-      kind: "chat",
-      title: chat ? displayChatTitle(chat, t) : t("workspace.newChat"),
-    });
-    if (destination.kind === "main") setChatTopic(selected, chatId);
+    const chat = overview.data?.chats.find((item) => item.id === chatId);
+    const owner = chat?.agentId ?? selected;
+    openTab(
+      {
+        id: chatId,
+        kind: "chat",
+        title: chat ? displayChatTitle(chat, t) : t("workspace.newChat"),
+      },
+      owner,
+      primaryTabPane(workspaceFor(owner)?.tabs ?? [], chatId),
+    );
+    if (destination.kind === "main") setChatTopic(owner, chatId);
+    choose(owner);
+    setPage("agents");
     insertQuote(chatId, quote, destination.kind === "main" ? "main" : "topic");
   }
   function selectChatTopic(agentId: string, chatId: string, topicId?: string) {
@@ -1164,7 +1216,7 @@ export default function App() {
     if (inlinePane) {
       openTab(chatTab, chat.agentId, inlinePane);
       selectChatTopic(chat.agentId, chatId, topicId);
-      setRevealEntry(undefined);
+      requestReveal(undefined);
     } else if (topicId) {
       const topic = data?.conversations.find((item) => item.id === topicId);
       const comparison = topic?.comparison;
@@ -1178,7 +1230,7 @@ export default function App() {
           mode: tabMode,
           revealInChat:
             fromSidebar &&
-            !mode &&
+            mode !== "other" &&
             topic &&
             (!comparison || comparison.chatId === chatId)
               ? { tab: chatTab, comparisonId: comparison?.id }
@@ -1186,14 +1238,19 @@ export default function App() {
         },
       );
     } else {
-      openTab(chatTab, chat.agentId, pane, { mode: tabMode });
+      openTab(
+        chatTab,
+        chat.agentId,
+        primaryTabPane(target?.tabs ?? [], chatId, pane),
+        { mode: tabMode },
+      );
       if (fromSidebar && !mode) setChatTopic(chat.agentId, chatId);
     }
     choose(chat.agentId);
     setPage("agents");
     if (runId) {
       setFocusComposer(undefined);
-      setRevealEntry({ tabId: topicId ? `topic:${topicId}` : chatId, runId });
+      requestReveal({ tabId: topicId ? `topic:${topicId}` : chatId, runId });
     }
   }
   const openNotifiedConversation = useEffectEvent(
@@ -1228,8 +1285,6 @@ export default function App() {
     const chat = overview.data?.chats.find((item) => item.id === chatId);
     if (!chat) return;
     const tabs = workspaceFor(chat.agentId)?.tabs ?? [];
-    const source = tabs.find((tab) => tab.id === `topic:${sessionId}`);
-    const existing = tabs.some((tab) => tab.id === chatId);
     openTab(
       {
         id: chatId,
@@ -1237,14 +1292,11 @@ export default function App() {
         title: displayChatTitle(chat, t),
       },
       chat.agentId,
-      existing || !source
-        ? undefined
-        : paneOf(source) === "main"
-          ? "side"
-          : "main",
+      locateChatPane({ tabs, chatId, sourceTopicTabId: `topic:${sessionId}` }),
     );
     choose(chat.agentId);
-    setRevealEntry({ tabId: chatId, topicId: sessionId });
+    setPage("agents");
+    requestReveal({ tabId: chatId, topicId: sessionId });
   }
   async function replyToDiff(sessionId: string, content: JSONContent[]) {
     try {
@@ -1343,35 +1395,30 @@ export default function App() {
     if (!target) return;
     const pane = paneOf(target);
     if (scope === "others") selectTab(id);
+    const tabs = sortPaneTabsMostRecentFirst(
+      workspace,
+      pane,
+      workspace.tabs.filter(
+        (tab) => paneOf(tab) === pane && (scope === "all" || tab.id !== id),
+      ),
+    );
     closeWorkspaceTabs(
-      windowTabs()
-        .filter(
-          ({ agentId, tab }) =>
-            agentId === selected &&
-            paneOf(tab) === pane &&
-            (scope === "all" || tab.id !== id),
-        )
-        .sort((a, b) => b.order - a.order),
+      tabs.map((tab) => ({ agentId: selected, tab })),
       true,
     );
   }
   const trimWorkspaceTabs = useEffectEvent(() => {
     const limit = preferences.maxWorkspaceTabs;
     if (limit === null) return;
-    const tabs = windowTabs().filter(
-      ({ tab }) => !pendingTerminalCloses.current.has(tab.id),
+    const allWorkspaces = selected
+      ? { ...workspaces, [selected]: workspace }
+      : workspaces;
+    const excess = tabsExceedingPaneLimit(
+      allWorkspaces,
+      limit,
+      pendingTerminalCloses.current,
     );
-    const excess = tabs.length - limit;
-    if (excess <= 0) return;
-    const activeId = workspaceView(workspace, false).activeTab?.id;
-    closeWorkspaceTabs(
-      tabs
-        .filter(
-          ({ agentId, tab }) => agentId !== selected || tab.id !== activeId,
-        )
-        .sort((a, b) => a.order - b.order)
-        .slice(0, excess),
-    );
+    if (excess.length) closeWorkspaceTabs(excess);
   });
   useEffect(() => {
     trimWorkspaceTabs();
@@ -1454,7 +1501,7 @@ export default function App() {
         return true;
       case "newChat":
         if (!agent) return;
-        if (!agent.archived) newChat(agent.id, activePane);
+        if (!agent.archived) newChat(agent.id, mainTab ? activePane : "main");
         return true;
       case "find": {
         const chatId =
@@ -1513,16 +1560,17 @@ export default function App() {
   function openChatFile(
     file: FileSelection & { source?: SkillFileSource | HostFileSource },
     source: AgentFileSource,
-    pane: Pane = "side",
+    pane?: Pane,
   ) {
+    const resolvedPane = pane ?? companionPaneFor(source.id, source.sessionId);
     if (source.id !== selected) choose(source.id);
-    const id = openFile(file, source, pane);
+    const id = openFile(file, source, resolvedPane);
     if (!file.location) focusWorkspaceTab(id);
   }
   const openSharedHostFile = useEventCallback(
     (
       file: FileSelection & { source?: SkillFileSource | HostFileSource },
-      pane: Pane = "side",
+      pane?: Pane,
     ) => {
       const id = `files:host:${absoluteFilePath(file)}`;
       openTab(
@@ -1537,7 +1585,7 @@ export default function App() {
           },
         },
         sharedWorkspaceId,
-        pane,
+        pane ?? companionPaneFor(sharedWorkspaceId),
       );
       if (!file.location) focusWorkspaceTab(id);
     },
@@ -1547,9 +1595,15 @@ export default function App() {
     reference: Reference,
     { sessionId, workingCopyId }: ReferenceScope,
   ) {
-    if (!agent) return;
+    const session = sessionId
+      ? (await queryClient.ensureQueryData(sessionQuery(sessionId))).session
+      : undefined;
+    const owner = session
+      ? overview.data?.agents.find((item) => item.id === session.agentId)
+      : agent;
+    if (!owner) return;
     const params = new URLSearchParams({
-      agentId: agent.id,
+      agentId: owner.id,
       provider: reference.provider ?? "",
       name: reference.name,
       path: reference.path,
@@ -1560,11 +1614,17 @@ export default function App() {
       const file = skillEntryTarget(
         skill,
         sessionId || workingCopyId
-          ? { agentId: agent.id, sessionId, workingCopyId }
+          ? { agentId: owner.id, sessionId, workingCopyId }
           : undefined,
       );
       const id = `files:skill:${skill.id}`;
-      openTab({ id, kind: "files", title: skill.name, file }, agent.id, "side");
+      openTab(
+        { id, kind: "files", title: skill.name, file },
+        owner.id,
+        companionPaneFor(owner.id, sessionId),
+      );
+      if (owner.id !== selected) choose(owner.id);
+      if (page !== "agents") setPage("agents");
       focusWorkspaceTab(id);
     } catch (error) {
       toast.error(
@@ -1635,29 +1695,33 @@ export default function App() {
       { path }: Reference,
       { sessionId, workingCopyId }: ReferenceScope,
     ) => {
-      if (!agent) return;
-      const pane = activePane === "side" ? "main" : "side";
       try {
         const session = sessionId
           ? (await queryClient.ensureQueryData(sessionQuery(sessionId))).session
           : undefined;
+        const owner = session
+          ? overview.data?.agents.find((item) => item.id === session.agentId)
+          : agent;
+        if (!owner) return;
+        const pane = companionPaneFor(owner.id, sessionId);
         const copies =
           !sessionId && workingCopyId
-            ? await queryClient.ensureQueryData(workingCopiesQuery(agent.id))
+            ? await queryClient.ensureQueryData(workingCopiesQuery(owner.id))
             : undefined;
         const scope = session
-          ? (session.agentId === agent.id ? session : undefined)
+          ? session
           : workingCopyId
             ? copies?.find(
                 (copy) => copy.id === workingCopyId && availableGroup(copy),
               )
-            : agent.profile;
+            : owner.profile;
         const file =
           scope && resolveWorkspaceFile(path, undefined, scope.roots);
         if (file) {
+          if (page !== "agents") setPage("agents");
           openChatFile(
             file,
-            { kind: "agent", id: agent.id, sessionId, workingCopyId },
+            { kind: "agent", id: owner.id, sessionId, workingCopyId },
             pane,
           );
         } else {
@@ -1668,7 +1732,8 @@ export default function App() {
       }
     },
   );
-  const openFileReference = agent ? revealFileReference : undefined;
+  const openFileReference =
+    agent || page === "automations" ? revealFileReference : undefined;
   const openReference = useEventCallback(
     async (ref: Reference, scope: ReferenceScope) => {
       if (ref.kind === "skill") return openSkill(ref, scope);
@@ -1727,23 +1792,27 @@ export default function App() {
       composerInsertions,
     ],
   );
-  const openTurnChanges = useEventCallback((selection: TurnSelection, owner: string) => {
-    if (page === "automations") {
-      if (selected !== owner) choose(owner);
-      setPage("agents");
-    }
-    openTab(
-      {
-        id: `diff:${selection.runId}:${selection.rootId}`,
-        kind: "diff",
-        title: t("diff.thisTurn"),
-        diff: selection,
-        sessionId: selection.sessionId,
-      },
-      page === "automations" ? owner : selected,
-      "side",
-    );
-  });
+  const openTurnChanges = useEventCallback(
+    (selection: TurnSelection, owner: string) => {
+      const targetAgent = page === "automations" ? owner : selected;
+      const pane = companionPaneFor(targetAgent, selection.sessionId);
+      if (page === "automations") {
+        if (selected !== owner) choose(owner);
+        setPage("agents");
+      }
+      openTab(
+        {
+          id: `diff:${selection.runId}:${selection.rootId}`,
+          kind: "diff",
+          title: t("diff.thisTurn"),
+          diff: selection,
+          sessionId: selection.sessionId,
+        },
+        targetAgent,
+        pane,
+      );
+    },
+  );
   const openGitDiff = useEventCallback((target: DiffTarget) => {
     if (!agent) return;
     const baseTab = contextualTool(toolTab("diff"), activeTab);
@@ -1751,7 +1820,7 @@ export default function App() {
     openTab(
       { ...baseTab, diffTarget: target },
       agent.id,
-      existing ? paneOf(existing) : "side",
+      existing ? paneOf(existing) : companionPane(workspace.tabs),
     );
   });
   const gitStatus =
@@ -1815,10 +1884,18 @@ export default function App() {
                   markRead={markConversationsRead}
                   canSplit={!compactWorkbench}
                   tabState={conversationTabState}
-                  onNewChat={newChat}
+                  onNewChat={(agentId) =>
+                    newChat(
+                      agentId,
+                      primaryTabPane(
+                        workspaceFor(agentId)?.tabs ?? [],
+                        draftChatId(agentId),
+                      ),
+                    )
+                  }
                   onLocate={(item) =>
                     item.comparison
-                      ? locateComparison(item.comparison)
+                      ? locateComparison(item.comparison, item.id)
                       : locateTopic(item.chatId, item.id)
                   }
                   selectedSessionId={selectedSessionId}
@@ -1857,14 +1934,19 @@ export default function App() {
                       agentActivity?.chats.find(
                         (chat) => chat.agentId === target.id,
                       );
+                    const tabs = workspaceFor(target.id)?.tabs ?? [];
                     if (chat) {
                       openTab(
                         { id: chat.id, kind: "chat", title: chat.title },
                         target.id,
+                        primaryTabPane(tabs, chat.id),
                       );
                       choose(target.id);
                     } else if (!target.archived) {
-                      newChat(target.id);
+                      newChat(
+                        target.id,
+                        primaryTabPane(tabs, draftChatId(target.id)),
+                      );
                     }
                   }}
                   onOpen={(tab, agentId) => {
@@ -2242,6 +2324,7 @@ export default function App() {
                                     openTopics={visibleTopicIds}
                                     pinnedTopicIds={recentState.pinnedIds}
                                     onPinTopic={recentState.setPinned}
+                                    revealKey={reveal?.key}
                                     revealTopic={reveal?.topicId}
                                     revealRun={reveal?.runId}
                                     revealComparison={reveal?.comparisonId}
@@ -2271,12 +2354,16 @@ export default function App() {
                                       if (session.taskId)
                                         showTasks(session.taskId);
                                       else if (session.comparison)
-                                        locateComparison(session.comparison);
+                                        locateComparison(
+                                          session.comparison,
+                                          session.id,
+                                        );
                                       else
                                         locateTopic(session.chatId, session.id);
                                     }}
                                     focus={focusComposer === t.id && active}
                                     onFocused={onComposerFocused}
+                                    revealKey={reveal?.key}
                                     revealRun={reveal?.runId}
                                     onRevealed={onRevealed}
                                   />
@@ -2469,8 +2556,10 @@ export default function App() {
                 openTab(
                   { id: chat.id, kind: "chat", title: chat.title },
                   chat.agentId,
+                  primaryTabPane(workspaceFor(chat.agentId)?.tabs ?? [], chat.id),
                 );
                 choose(chat.agentId);
+                setPage("agents");
                 setForward(undefined);
               }}
             />
@@ -2538,8 +2627,12 @@ export default function App() {
               onSelect={setSelectedAutomation}
               onOpenChat={openTaskChat}
               onOpenFile={(file, source) => {
+                openChatFile(
+                  file,
+                  source,
+                  companionPane(workspaceFor(source.id)?.tabs ?? []),
+                );
                 setPage("agents");
-                openChatFile(file, source);
               }}
             />
           )}

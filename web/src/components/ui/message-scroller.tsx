@@ -18,6 +18,16 @@ type ScrollControls = {
 const estimatedHeight = 260;
 const rowGap = 24;
 const paddingStart = 32;
+const revealSettleMs = 450;
+const scrollKeys = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
 
 type History = {
   active?: boolean;
@@ -47,8 +57,10 @@ export function MessageScrollerProvider({
   );
 }
 
+const emptyControls: React.RefObject<ScrollControls | null> = { current: null };
+
 export function useMessageScroller() {
-  return React.useContext(HistoryContext)!.controls;
+  return React.useContext(HistoryContext)?.controls ?? emptyControls;
 }
 
 const RowContext = React.createContext<{
@@ -105,6 +117,56 @@ export function MessageTimeline<Item>({
   );
   const [atEnd, setAtEnd] = React.useState(!initial);
   const requestedAtStart = React.useRef(false);
+  const activeRef = React.useRef(active);
+  activeRef.current = active;
+  const itemsRef = React.useRef(items);
+  itemsRef.current = items;
+  const itemKeyRef = React.useRef(itemKey);
+  itemKeyRef.current = itemKey;
+  const pendingReveal = React.useRef<{
+    id: string;
+    index: number;
+    until: number;
+  } | null>(null);
+  const realignFrame = React.useRef<number | null>(null);
+  const lastTotalSize = React.useRef(0);
+  const listRef = React.useRef<ReturnType<
+    typeof useVirtualizer<HTMLDivElement, HTMLDivElement>
+  > | null>(null);
+  const itemIndex = React.useCallback(
+    (id: string) =>
+      itemsRef.current.findIndex((item) => itemKeyRef.current(item) === id),
+    [],
+  );
+  const clearPendingReveal = React.useCallback(() => {
+    pendingReveal.current = null;
+    if (realignFrame.current !== null) {
+      cancelAnimationFrame(realignFrame.current);
+      realignFrame.current = null;
+    }
+  }, []);
+  const scheduleRealign = React.useCallback(() => {
+    if (realignFrame.current !== null) return;
+    realignFrame.current = requestAnimationFrame(() => {
+      realignFrame.current = null;
+      const pending = pendingReveal.current;
+      if (!activeRef.current || !pending) return;
+      if (performance.now() > pending.until) {
+        if (!requestedAtStart.current) pendingReveal.current = null;
+        return;
+      }
+      const index = itemIndex(pending.id);
+      if (index < 0) {
+        pendingReveal.current = null;
+        return;
+      }
+      pending.index = index;
+      listRef.current?.scrollToIndex(index, {
+        align: "center",
+        behavior: "instant",
+      });
+    });
+  }, [itemIndex]);
   const getItemKey = React.useCallback(
     (index: number) => itemKey(items[index]),
     [items, itemKey],
@@ -138,31 +200,99 @@ export function MessageTimeline<Item>({
           ),
     initialMeasurementsCache: initial && [initial.item],
     onChange: (instance) => {
-      if (active && instance.scrollElement?.clientHeight)
-        setAtEnd(instance.isAtEnd());
+      if (!active || !instance.scrollElement?.clientHeight) return;
+      setAtEnd(instance.isAtEnd());
+      const size = instance.getTotalSize();
+      if (size !== lastTotalSize.current) {
+        lastTotalSize.current = size;
+        if (pendingReveal.current) scheduleRealign();
+      }
     },
   });
-  const itemIndex = (id: string) =>
-    items.findIndex((item) => itemKey(item) === id);
+  listRef.current = list;
   React.useImperativeHandle(controls, () => ({
-    scrollToEnd: list.scrollToEnd,
+    scrollToEnd: () => {
+      clearPendingReveal();
+      list.scrollToEnd();
+    },
     scrollToMessage: (id) => {
       const index = itemIndex(id);
       if (index < 0) return false;
+      pendingReveal.current = {
+        id,
+        index,
+        until: performance.now() + revealSettleMs,
+      };
       list.scrollToIndex(index, { align: "center", behavior: "instant" });
       return true;
     },
   }));
 
   React.useLayoutEffect(() => {
-    if (!active) return;
+    if (!active) {
+      clearPendingReveal();
+      return;
+    }
+    const pending = pendingReveal.current;
+    if (pending && performance.now() <= pending.until) {
+      const index = itemIndex(pending.id);
+      if (index >= 0) {
+        pending.index = index;
+        list.scrollToIndex(index, { align: "center", behavior: "instant" });
+        return;
+      }
+    }
+    clearPendingReveal();
     const saved = historyId ? positions?.get(historyId) : undefined;
     const anchor =
       saved &&
       list.measurementsCache.find((item) => item.key === saved.item.key);
     if (saved && anchor) list.scrollToOffset(anchor.start + saved.offset);
     else list.scrollToEnd();
-  }, [active, historyId, positions, list]);
+  }, [active, historyId, positions, list, itemIndex, clearPendingReveal]);
+
+  React.useLayoutEffect(() => {
+    const pending = pendingReveal.current;
+    if (!active || !pending) return;
+    const index = itemIndex(pending.id);
+    if (index < 0) {
+      clearPendingReveal();
+      return;
+    }
+    const now = performance.now();
+    const shifted = index !== pending.index;
+    if (shifted && (now <= pending.until || requestedAtStart.current)) {
+      pending.index = index;
+      pending.until = Math.max(pending.until, now + revealSettleMs);
+      list.scrollToIndex(index, { align: "center", behavior: "instant" });
+    } else if (now > pending.until && !requestedAtStart.current) {
+      clearPendingReveal();
+    }
+  }, [active, items, list, itemIndex, clearPendingReveal]);
+
+  React.useEffect(() => {
+    const node = viewport.current;
+    if (!active || !node) return;
+    let lastWidth = node.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const width = node.clientWidth;
+      if (width === lastWidth) return;
+      lastWidth = width;
+      if (pendingReveal.current) scheduleRealign();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [active, scheduleRealign]);
+
+  React.useEffect(
+    () => () => {
+      if (realignFrame.current !== null) {
+        cancelAnimationFrame(realignFrame.current);
+        realignFrame.current = null;
+      }
+    },
+    [],
+  );
 
   const totalSize = list.getTotalSize();
   const rows = list.getVirtualItems();
@@ -189,6 +319,12 @@ export function MessageTimeline<Item>({
         aria-label={t("chat.conversation")}
         tabIndex={0}
         inert={inert}
+        onWheel={clearPendingReveal}
+        onTouchStart={clearPendingReveal}
+        onPointerDown={clearPendingReveal}
+        onKeyDown={(event) => {
+          if (scrollKeys.has(event.key)) clearPendingReveal();
+        }}
         onScroll={({ currentTarget: element }) => {
           if (!active || !element.clientHeight) return;
           const top = element.scrollTop;
@@ -240,7 +376,10 @@ export function MessageTimeline<Item>({
           className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-background"
           aria-label={t("chat.latest")}
           title={t("chat.latest")}
-          onClick={() => list.scrollToEnd({ behavior: "instant" })}
+          onClick={() => {
+            clearPendingReveal();
+            list.scrollToEnd({ behavior: "instant" });
+          }}
         >
           <ArrowDown />
         </Button>

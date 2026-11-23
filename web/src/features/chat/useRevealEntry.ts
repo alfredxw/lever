@@ -9,6 +9,7 @@ export function useRevealEntry(
   view: UseInfiniteQueryResult,
   onRevealed: () => void,
   focusEntry: boolean | "expand" = true,
+  requestKey?: number,
 ) {
   const scroller = useMessageScroller();
   const { data, isFetching, hasNextPage, isFetchNextPageError, fetchNextPage } =
@@ -42,7 +43,7 @@ export function useRevealEntry(
       return () => observer.disconnect();
     } else if (hasNextPage && !isFetching && !isFetchNextPageError) {
       void fetchNextPage({ cancelRefetch: false });
-    } else if (!hasNextPage) {
+    } else if (!hasNextPage && !isFetching) {
       onRevealed();
     }
   }, [
@@ -54,6 +55,7 @@ export function useRevealEntry(
     isFetchNextPageError,
     onRevealed,
     panel,
+    requestKey,
     scroller,
     messageId,
     visible,

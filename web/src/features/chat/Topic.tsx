@@ -338,6 +338,7 @@ export type TopicConversationProps = {
   onLocate?: (session: Session) => void;
   focus: boolean;
   onFocused: () => void;
+  revealKey?: number;
   revealRun?: string;
   onRevealed: () => void;
   visible: boolean;
@@ -383,6 +384,7 @@ function TopicConversationContent({
   onLocate,
   focus,
   onFocused,
+  revealKey,
   revealRun,
   onRevealed,
   visible,
@@ -450,9 +452,11 @@ function TopicConversationContent({
   useRevealEntry(
     panel,
     revealRun,
-    visible && !!overview && !!revealRun,
+    enabled && !!overview && !!revealRun,
     query,
     onRevealed,
+    visible,
+    revealKey,
   );
   useFocusComposer(panel, focus, onFocused);
   if (!overview) return <Loading />;

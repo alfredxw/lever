@@ -152,6 +152,10 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
     }
     if (event.type === "channel-delivery") {
       void queryClient.invalidateQueries({ queryKey: ["chat", event.chatId] });
+      if (event.sessionId)
+        void queryClient.invalidateQueries({
+          queryKey: ["session", event.sessionId],
+        });
       return;
     }
     if (event.type === "delegations") {

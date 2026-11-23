@@ -1,11 +1,19 @@
 import { displayChatTitle } from "@/features/chat/conversationTitle";
 import type { WorkbenchOverview } from "@/components/workbench/workbenchOverview";
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Command } from "cmdk";
 import {
   Check,
   ChevronDown,
+  Columns2,
   FileCode,
   Folder,
   MessageCircle,
@@ -25,7 +33,13 @@ import { api } from "@/api/client";
 import { ErrorNotice } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import {
   InputGroup,
   InputGroupAddon,
@@ -66,9 +80,39 @@ const resultTypes = [
   "file",
 ] as const;
 export type SearchType = (typeof resultTypes)[number];
-const messageKinds = ["main", "comparison", "topic"] as const;
+const messageKinds = ["all", "main", "comparison", "topic"] as const;
+type MessageKind = (typeof messageKinds)[number];
+type ConcreteMessageKind = Exclude<MessageKind, "all">;
 const optionStyle =
-  "cursor-default rounded-md outline-none aria-selected:bg-accent aria-selected:text-accent-foreground";
+  "cursor-default rounded-lg outline-none aria-selected:bg-accent aria-selected:text-accent-foreground";
+
+function conversationMessageKind(
+  conversation: Conversation,
+): ConcreteMessageKind {
+  if (conversation.kind === "main") return "main";
+  return conversation.comparison ? "comparison" : "topic";
+}
+
+function formatSearchTime(timestamp: string | undefined, locale: string) {
+  if (!timestamp) return undefined;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const now = new Date();
+  const text =
+    date.toDateString() === now.toDateString()
+      ? date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })
+      : date.toLocaleDateString(locale, {
+          month: "short",
+          day: "numeric",
+          year:
+            date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+        });
+  const title = date.toLocaleString(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  return { text, title };
+}
 
 function ScopePicker({
   value,
@@ -225,7 +269,10 @@ function FileScopePicker({
 type SearchEntry = {
   id: string;
   title: string;
+  icon?: EntryIcon;
+  badge?: string;
   path?: string;
+  timestamp?: string;
   preview?: string | MessageMatchPart[];
   activity?: Conversation;
   open: () => void;
@@ -266,9 +313,11 @@ const icons = {
   agent: UsersRound,
   chat: MessageCircle,
   topic: MessagesCircle,
+  comparison: Columns2,
   message: TextSearch,
   file: FileCode,
 };
+type EntryIcon = keyof typeof icons;
 
 export function WorkspaceSearch({
   initialScope = "all",
@@ -293,10 +342,10 @@ export function WorkspaceSearch({
   onAgent: (agentId: string) => void;
   onFile: (root: Root, path: string, source: AgentFileSource) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [scope, setScope] = useState<string>(initialScope);
   const [type, setType] = useState<string>(initialType);
-  const [messageKind, setMessageKind] = useState("");
+  const [messageKind, setMessageKind] = useState<MessageKind>("all");
   const [rootId, setRootId] = useState<string>();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState("");
@@ -308,7 +357,7 @@ export function WorkspaceSearch({
     return () => window.clearTimeout(timer);
   }, [term]);
   const searchMessages = !!term && (type === "all" || type === "message");
-  const kind = type === "message" ? messageKind : "";
+  const kind = type === "message" && messageKind !== "all" ? messageKind : "";
   const messages = useQuery({
     queryKey: ["message-search", scope, kind, debounced],
     queryFn: ({ signal }) => {
@@ -515,18 +564,116 @@ export function WorkspaceSearch({
         },
       ];
     });
+  const inMessageScope = (conversation: Conversation) => {
+    if (scope === "all") return true;
+    if (scope.startsWith("agent:")) return conversation.agentId === scope.slice(6);
+    if (scope.startsWith("chat:")) {
+      const chatId = scope.slice(5);
+      return (
+        conversation.chatId === chatId ||
+        conversation.comparison?.chatId === chatId
+      );
+    }
+    return true;
+  };
+  const recentMessageEntries =
+    type === "message" && !term
+      ? [...main.values(), ...topics.values()]
+          .filter(
+            (conversation) =>
+              Boolean(conversation.messageAt) &&
+              inMessageScope(conversation) &&
+              (messageKind === "all" ||
+                conversationMessageKind(conversation) === messageKind),
+          )
+          .sort(
+            (a, b) =>
+              (Date.parse(b.messageAt) || 0) - (Date.parse(a.messageAt) || 0),
+          )
+          .slice(0, 15)
+          .flatMap((conversation): SearchEntry[] => {
+            const chat = chats.get(conversation.chatId);
+            if (!chat) return [];
+            const lane = conversationMessageKind(conversation);
+            const agentName = agents.get(conversation.agentId)?.name;
+            const chatTitle = displayChatTitle(chat, t);
+            const title =
+              lane === "main"
+                ? chatTitle
+                : conversation.title || t("chat.topic");
+            const scopedChat = scope.startsWith("chat:");
+            const path =
+              lane === "comparison"
+                ? scopedChat
+                  ? [agentName, conversation.comparison?.modelName]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  : [agentName, chatTitle].filter(Boolean).join(" › ") ||
+                    undefined
+                : scopedChat
+                  ? undefined
+                  : lane === "main"
+                    ? agentName
+                    : [agentName, chatTitle].filter(Boolean).join(" › ") ||
+                      undefined;
+            return [
+              {
+                id: `recent-message:${conversation.id}`,
+                title,
+                icon: lane === "main" ? "chat" : lane,
+                badge:
+                  messageKind === "all"
+                    ? t(`conversationSearch.messageKind.${lane}`)
+                    : undefined,
+                path,
+                timestamp: conversation.messageAt,
+                preview:
+                  conversation.preview && conversation.preview !== title
+                    ? conversation.preview
+                    : undefined,
+                activity: conversation,
+                open: () =>
+                  lane === "main"
+                    ? onSelect(chat.id)
+                    : onSelect(chat.id, conversation.id),
+              },
+            ];
+          })
+      : [];
   const messageEntries = (matches ?? []).flatMap((match): SearchEntry[] => {
     const chat = chats.get(match.chatId);
     if (!chat) return [];
+    const topic = match.topicId ? topics.get(match.topicId) : undefined;
+    const lane: ConcreteMessageKind = !match.topicId
+      ? "main"
+      : topic?.comparison
+        ? "comparison"
+        : "topic";
+    const agentName = agents.get(chat.agentId)?.name;
+    const chatTitle = displayChatTitle(chat, t);
+    const scopedChat = scope.startsWith("chat:");
+    const path =
+      lane === "comparison"
+        ? scopedChat
+          ? [agentName, topic?.comparison?.modelName]
+              .filter(Boolean)
+              .join(" · ") || undefined
+          : [agentName, chatTitle].filter(Boolean).join(" › ") || undefined
+        : scopedChat
+          ? undefined
+          : match.topicId
+            ? [agentName, chatTitle].filter(Boolean).join(" › ") || undefined
+            : agentName;
     return [
       {
         id: `message:${match.runId}`,
-        title: match.topicId
-          ? topics.get(match.topicId)?.title || t("chat.topic")
-          : displayChatTitle(chat, t),
-        path: match.topicId
-          ? `${agents.get(chat.agentId)?.name} › ${displayChatTitle(chat, t)}`
-          : agents.get(chat.agentId)?.name,
+        title: match.topicId ? topic?.title || t("chat.topic") : chatTitle,
+        icon: lane === "main" ? "chat" : lane,
+        badge:
+          type === "message" && messageKind === "all"
+            ? t(`conversationSearch.messageKind.${lane}`)
+            : undefined,
+        path,
         preview: match.preview ?? match.text,
         open: () => onSelect(chat.id, match.topicId, match.runId),
       },
@@ -558,14 +705,51 @@ export function WorkspaceSearch({
     { kind: "message", entries: messageEntries },
   ] as const;
   const showRecent = type === "all" && scope === "all" && !term;
-  const visibleGroups = groups.flatMap(({ kind, entries }) => {
-    const visible =
-      type === "all" ||
-      type === kind ||
-      (type === "unread" && (kind === "chat" || kind === "topic"));
-    if (!visible || !entries.length) return [];
-    return [{ kind, rows: showRecent ? entries.slice(0, 5) : entries }];
-  });
+  const showRecentMessages = type === "message" && !term;
+  type VisibleGroup = {
+    key: string;
+    defaultIcon: EntryIcon;
+    heading: ReactNode;
+    rows: SearchEntry[];
+  };
+  const visibleGroups: VisibleGroup[] = showRecentMessages
+    ? recentMessageEntries.length
+      ? [
+          {
+            key: `recent-message:${messageKind}`,
+            defaultIcon: "message",
+            heading: (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span>{t(`conversationSearch.recent.${messageKind}`)}</span>
+                  <span className="tabular-nums opacity-70">
+                    {recentMessageEntries.length}
+                  </span>
+                </span>
+                <span className="truncate font-normal opacity-80">
+                  {t(`conversationSearch.recentHint.${messageKind}`)}
+                </span>
+              </>
+            ),
+            rows: recentMessageEntries,
+          },
+        ]
+      : []
+    : groups.flatMap(({ kind, entries }): VisibleGroup[] => {
+        const visible =
+          type === "all" ||
+          type === kind ||
+          (type === "unread" && (kind === "chat" || kind === "topic"));
+        if (!visible || !entries.length) return [];
+        return [
+          {
+            key: kind,
+            defaultIcon: kind,
+            heading: t(`conversationSearch.group.${kind}`),
+            rows: showRecent ? entries.slice(0, 5) : entries,
+          },
+        ];
+      });
   const activeResult = visibleGroups.some(({ rows }) =>
     rows.some(({ id }) => id === selected),
   )
@@ -575,20 +759,38 @@ export function WorkspaceSearch({
     searchMessages && term === debounced ? messages.error : null;
   const searchLabel = t("conversationSearch.title");
   const placeholder =
-    {
-      file: t("conversationSearch.searchFiles"),
-      chat: t("conversationSearch.searchChats"),
-      topic: t("conversationSearch.searchTopics"),
-    }[type] ?? searchLabel;
+    type === "message"
+      ? t(`conversationSearch.searchMessages.${messageKind}`)
+      : ({
+          file: t("conversationSearch.searchFiles"),
+          chat: t("conversationSearch.searchChats"),
+          topic: t("conversationSearch.searchTopics"),
+        }[type] ?? searchLabel);
+  const scopeAgentOptions = overview.agents.map((agent) => ({
+    value: `agent:${agent.id}`,
+    label: agent.name,
+  }));
+  const scopeChatOptions = overview.chats.map((chat) => ({
+    value: `chat:${chat.id}`,
+    label: `${agents.get(chat.agentId)?.name} › ${displayChatTitle(chat, t)}`,
+  }));
+  const currentScopeLabel =
+    [...scopeAgentOptions, ...scopeChatOptions].find(
+      (option) => option.value === scope,
+    )?.label ?? t("conversationSearch.allScopes");
+  const isEmptyRecentMessages = showRecentMessages && !loading;
   const emptyLabel = loading
     ? "common.loading"
     : type === "file" && !roots.length
       ? "conversationSearch.noDirectories"
       : type === "file" && !term
         ? "conversationSearch.enterFileQuery"
-        : type === "message" && !term
-          ? "conversationSearch.enterQuery"
+        : isEmptyRecentMessages
+          ? `conversationSearch.emptyRecent.${messageKind}`
           : "conversationSearch.empty";
+  const stopNavKeys = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") event.stopPropagation();
+  };
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -611,13 +813,13 @@ export function WorkspaceSearch({
           loop
           className="min-w-0"
         >
-          <div className="flex items-center gap-3 border-b px-4 pr-12">
+          <div className="flex items-center gap-3 px-4 pr-12">
             <Search
               className="size-4 shrink-0 text-muted-foreground"
               aria-hidden
             />
             <Command.Input
-              className="h-13 w-full min-w-0 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+              className="h-12 w-full min-w-0 bg-transparent text-base outline-none placeholder:text-muted-foreground"
               placeholder={placeholder}
               value={query}
               maxLength={256}
@@ -627,35 +829,99 @@ export function WorkspaceSearch({
               }}
             />
           </div>
-          <Command.List className="min-h-30 max-h-[min(26rem,55dvh)] overflow-auto px-2 py-1.5">
+          <div className="border-b px-4" onKeyDown={stopNavKeys}>
+            <ToggleGroup
+              type="single"
+              value={type}
+              onValueChange={(value) => value && setType(value)}
+              spacing={1}
+              className="workspace-search-tabs"
+              aria-label={t("conversationSearch.type")}
+            >
+              {resultTypes
+                .filter((item) => item !== "file" || fileSource)
+                .map((item) => (
+                  <ToggleGroupItem key={item} value={item}>
+                    {t(`conversationSearch.type.${item}`)}
+                  </ToggleGroupItem>
+                ))}
+            </ToggleGroup>
+          </div>
+          <Command.List className="min-h-44 max-h-[min(26rem,55dvh)] overflow-auto p-2">
             {!visibleGroups.length &&
               !messageError &&
               !scopeError &&
               !fileError && (
-                <Empty className="py-7" aria-live="polite">
+                <Empty className="gap-3 py-8" aria-live="polite">
                   <EmptyHeader>
                     <EmptyTitle>{t(emptyLabel)}</EmptyTitle>
+                    {isEmptyRecentMessages && scope !== "all" && (
+                      <EmptyDescription>
+                        {t("conversationSearch.emptyRecentScope", {
+                          scope: currentScopeLabel,
+                        })}
+                      </EmptyDescription>
+                    )}
                   </EmptyHeader>
+                  {isEmptyRecentMessages &&
+                    (scope !== "all" || messageKind !== "all") && (
+                      <EmptyContent
+                        className="flex-row flex-wrap justify-center gap-2"
+                        onKeyDown={stopNavKeys}
+                      >
+                        {scope !== "all" && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            onClick={() => setScope("all")}
+                          >
+                            {t("conversationSearch.resetScope")}
+                          </Button>
+                        )}
+                        {messageKind !== "all" && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            onClick={() => setMessageKind("all")}
+                          >
+                            {t("conversationSearch.resetMessageKind")}
+                          </Button>
+                        )}
+                      </EmptyContent>
+                    )}
                 </Empty>
               )}
-            {visibleGroups.map(({ kind, rows }) => {
-              const Icon = icons[kind];
-              return (
-                <Command.Group
-                  key={kind}
-                  heading={t(`conversationSearch.group.${kind}`)}
-                  className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-muted-foreground"
-                >
-                  {rows.map(({ id, title, path, preview, activity, open }) => {
+            {visibleGroups.map(({ key, defaultIcon, heading, rows }) => (
+              <Command.Group
+                key={key}
+                heading={heading}
+                className="[&_[cmdk-group-heading]]:flex [&_[cmdk-group-heading]]:items-center [&_[cmdk-group-heading]]:justify-between [&_[cmdk-group-heading]]:gap-3 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-1.5 [&_[cmdk-group-heading]]:pb-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
+              >
+                {rows.map(
+                  ({
+                    id,
+                    title,
+                    icon,
+                    badge,
+                    path,
+                    timestamp,
+                    preview,
+                    activity,
+                    open,
+                  }) => {
+                    const Icon = icons[icon ?? defaultIcon];
                     const status = activity && statuses.get(activity.id);
                     const unread = isUnread(activity);
+                    const time = formatSearchTime(timestamp, i18n.language);
                     return (
                       <Command.Item
                         key={id}
                         value={id}
                         className={
                           optionStyle +
-                          " flex min-w-0 items-start gap-2.5 px-2.5 py-2 [&_mark]:bg-transparent [&_mark]:font-medium [&_mark]:text-foreground"
+                          " flex min-w-0 items-start gap-2.5 px-2.5 py-2 [&_mark]:rounded-[3px] [&_mark]:bg-foreground/10 [&_mark]:px-0.5 [&_mark]:font-medium [&_mark]:text-foreground dark:[&_mark]:bg-foreground/15"
                         }
                         onSelect={() => {
                           opened.current = true;
@@ -669,9 +935,14 @@ export function WorkspaceSearch({
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-center gap-2">
-                            <span className="truncate">
+                            <span className="truncate font-medium">
                               <SearchHighlight text={title} query={term} />
                             </span>
+                            {badge && (
+                              <span className="inline-flex h-4.5 shrink-0 items-center rounded-[5px] bg-control-hover px-1.5 text-[11px] font-medium text-muted-foreground">
+                                {badge}
+                              </span>
+                            )}
                             {unread && (
                               <span
                                 role="img"
@@ -680,17 +951,27 @@ export function WorkspaceSearch({
                               />
                             )}
                             {status && <RunStatus status={status} />}
-                            {path && (
-                              <span
-                                className="ml-auto max-w-[40%] truncate text-xs text-muted-foreground"
-                                title={path}
-                              >
-                                {path}
+                            {(path || time) && (
+                              <span className="ml-auto flex min-w-0 max-w-[45%] shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                                {path && (
+                                  <span className="truncate" title={path}>
+                                    {path}
+                                  </span>
+                                )}
+                                {time && (
+                                  <time
+                                    dateTime={timestamp}
+                                    title={time.title}
+                                    className="shrink-0 whitespace-nowrap tabular-nums opacity-85"
+                                  >
+                                    {time.text}
+                                  </time>
+                                )}
                               </span>
                             )}
                           </div>
                           {preview && (
-                            <div className="line-clamp-2 text-xs wrap-anywhere text-muted-foreground">
+                            <div className="mt-0.5 line-clamp-2 text-xs wrap-anywhere text-muted-foreground">
                               {typeof preview === "string" ? (
                                 <SearchHighlight text={preview} query={term} />
                               ) : (
@@ -701,10 +982,10 @@ export function WorkspaceSearch({
                         </div>
                       </Command.Item>
                     );
-                  })}
-                </Command.Group>
-              );
-            })}
+                  },
+                )}
+              </Command.Group>
+            ))}
             {messageError && (
               <ErrorNotice
                 error={messageError}
@@ -729,52 +1010,46 @@ export function WorkspaceSearch({
             )}
           </Command.List>
           <div
-            className="flex flex-col gap-2 border-t px-2.5 py-2"
-            onKeyDown={(event) => event.stopPropagation()}
+            className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-t bg-(--panel-background) px-3 py-1.5"
+            onKeyDown={stopNavKeys}
           >
-            {type === "message" && (
+            {type === "message" ? (
               <ToggleGroup
                 type="single"
                 value={messageKind}
-                onValueChange={setMessageKind}
-                size="sm"
+                onValueChange={(value) =>
+                  value && setMessageKind(value as MessageKind)
+                }
                 spacing={1}
-                className="flex-wrap"
+                className="workspace-search-segments"
                 aria-label={t("conversationSearch.messageKind")}
               >
                 {messageKinds.map((item) => (
-                  <ToggleGroupItem
-                    key={item}
-                    value={item}
-                    className="rounded-full text-muted-foreground data-[state=on]:text-foreground"
-                  >
+                  <ToggleGroupItem key={item} value={item}>
                     {t(`conversationSearch.messageKind.${item}`)}
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-            )}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <ToggleGroup
-                type="single"
-                value={type}
-                onValueChange={(value) => value && setType(value)}
-                size="sm"
-                spacing={1}
-                className="flex-wrap"
-                aria-label={t("conversationSearch.type")}
+            ) : (
+              <div
+                className="hidden items-center gap-3 text-xs text-muted-foreground sm:flex"
+                aria-hidden
               >
-                {resultTypes
-                  .filter((item) => item !== "file" || fileSource)
-                  .map((item) => (
-                    <ToggleGroupItem
-                      key={item}
-                      value={item}
-                      className="rounded-full text-muted-foreground data-[state=on]:text-foreground"
-                    >
-                      {t(`conversationSearch.type.${item}`)}
-                    </ToggleGroupItem>
-                  ))}
-              </ToggleGroup>
+                <span className="inline-flex items-center gap-1">
+                  <kbd className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded border bg-background px-1 font-sans text-[10.5px] text-muted-foreground">
+                    ↑↓
+                  </kbd>
+                  <span>{t("conversationSearch.shortcutSelect")}</span>
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <kbd className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded border bg-background px-1 font-sans text-[10.5px] text-muted-foreground">
+                    ↵
+                  </kbd>
+                  <span>{t("conversationSearch.shortcutOpen")}</span>
+                </span>
+              </div>
+            )}
+            <div className="ml-auto flex min-w-0 items-center">
               {type === "file" ? (
                 <FileScopePicker
                   roots={roots}
@@ -788,14 +1063,8 @@ export function WorkspaceSearch({
                     value: "all",
                     label: t("conversationSearch.allScopes"),
                   }}
-                  agents={overview.agents.map((agent) => ({
-                    value: `agent:${agent.id}`,
-                    label: agent.name,
-                  }))}
-                  chats={overview.chats.map((chat) => ({
-                    value: `chat:${chat.id}`,
-                    label: `${agents.get(chat.agentId)?.name} › ${displayChatTitle(chat, t)}`,
-                  }))}
+                  agents={scopeAgentOptions}
+                  chats={scopeChatOptions}
                   onChange={setScope}
                 />
               )}

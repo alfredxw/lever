@@ -11,8 +11,17 @@ import type { DiffTarget } from "@/features/diff/useGitSummary";
 import type { SharedConversationRef } from "@/features/chat/sharedConversations";
 
 import type { TerminalLayout } from "@/features/terminal/terminalSession";
+import { defaultOpenPane, tabPane, type Pane } from "./workspacePanes";
+import {
+  migrateTabLeftOrder,
+  mostRecentlyLeftTab,
+  selectedPaneTab,
+  updateTabLeftOrder,
+  type TabLeftOrder,
+  type TabVisit,
+} from "./workspaceTabLimits";
 
-export type Pane = "main" | "side";
+export type { Pane };
 export type WorkspaceTab = {
   id: string;
   title: string;
@@ -61,16 +70,16 @@ export type Workspace = {
   sideSelected?: string;
   previews?: Partial<Record<Pane, string>>;
   tabHistory?: TabVisit[];
+  tabLeftOrder?: TabLeftOrder;
   sideVisible?: boolean;
   sideMaximized?: boolean;
   activePane?: Pane;
   lastChatId?: string;
   splitRatio?: number;
 };
-type TabVisit = { id: string; order: number };
 type Workspaces = Record<string, Workspace>;
 type WorkspaceState = { workspaces: Workspaces; order: number };
-export const paneOf = (tab: WorkspaceTab): Pane => tab.pane ?? "main";
+export const paneOf = (tab: WorkspaceTab): Pane => tabPane(tab);
 const selectionKey = (pane: Pane) =>
   pane === "main" ? "selected" : "sideSelected";
 
@@ -108,12 +117,7 @@ function keepTabOpen(workspace: Workspace, id: string): Workspace {
 }
 
 function selectedTab(workspace: Workspace, pane: Pane) {
-  const tabs = workspace.tabs.filter((tab) => paneOf(tab) === pane);
-  return (
-    tabs.find((tab) => tab.id === workspace[selectionKey(pane)]) ??
-    recentTab(tabs, workspace.tabHistory) ??
-    tabs[0]
-  );
+  return selectedPaneTab(workspace, pane);
 }
 
 export function workspaceView(workspace: Workspace, compact: boolean) {
@@ -160,7 +164,25 @@ function readWorkspaces(): WorkspaceState {
           order = Math.max(order, visit.order);
           return visit;
         });
-        return [id, { ...workspace, tabHistory }];
+        const leftEntries =
+          workspace.tabLeftOrder && typeof workspace.tabLeftOrder === "object"
+            ? Object.entries(workspace.tabLeftOrder).filter(
+                (entry): entry is [string, number] => {
+                  if (
+                    typeof entry[1] !== "number" ||
+                    !Number.isFinite(entry[1])
+                  )
+                    return false;
+                  order = Math.max(order, entry[1]);
+                  return true;
+                },
+              )
+            : [];
+        const tabLeftOrder =
+          leftEntries.length > 0
+            ? Object.fromEntries(leftEntries)
+            : undefined;
+        return [id, { ...workspace, tabHistory, tabLeftOrder }];
       }),
     );
     return { workspaces, order };
@@ -187,6 +209,7 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
         all[id] ?? (id === agentId ? fallback : { tabs: [], selected: "" });
       const next = change(current);
       if (next === current && !visit) return state;
+      const prevView = workspaceView(current, false);
       const {
         mainTab,
         sideTab,
@@ -195,19 +218,29 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
         activeTab,
         maximized: sideMaximized,
       } = workspaceView(next, false);
-      const previous = next.tabHistory
-        ? undefined
-        : workspaceView(current, false).activeTab;
+      const { tabLeftOrder, order: orderAfterLeave } =
+        next === current
+          ? { tabLeftOrder: current.tabLeftOrder, order: state.order }
+          : updateTabLeftOrder({
+              current,
+              next,
+              prevMainId: prevView.mainTab?.id,
+              prevSideId: prevView.sideTab?.id,
+              nextMainId: mainTab?.id,
+              nextSideId: sideTab?.id,
+              order: state.order,
+            });
+      const previous = next.tabHistory ? undefined : prevView.activeTab;
       const open = new Set(next.tabs.map((tab) => tab.id));
       const latest = next.tabHistory?.[0];
       const recordVisit =
         visit &&
         activeTab &&
-        (state.order === 0 ||
+        (orderAfterLeave === 0 ||
           latest?.id !== activeTab.id ||
-          latest.order !== state.order);
+          latest.order !== orderAfterLeave);
       if (next === current && !recordVisit) return state;
-      const order = recordVisit ? state.order + 1 : state.order;
+      const order = recordVisit ? orderAfterLeave + 1 : orderAfterLeave;
       const tabHistory = (
         next.tabHistory ?? (previous ? [{ id: previous.id, order: 0 }] : [])
       ).filter(
@@ -229,6 +262,7 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
             selected: mainTab?.id ?? "",
             sideSelected: sideTab?.id,
             tabHistory,
+            tabLeftOrder,
             sideVisible,
             sideMaximized,
             activePane,
@@ -249,20 +283,6 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
   return {
     workspaces,
     workspace,
-    windowTabs() {
-      return Object.entries({ ...workspaces, [agentId]: workspace }).flatMap(
-        ([agentId, { tabs, tabHistory }]) => {
-          const visits = new Map(
-            tabHistory?.map(({ id, order }) => [id, order]),
-          );
-          return tabs.map((tab) => ({
-            agentId,
-            tab,
-            order: visits.get(tab.id) ?? Number.MIN_SAFE_INTEGER,
-          }));
-        },
-      );
-    },
     openTab(
       tab: WorkspaceTab,
       id = agentId,
@@ -278,9 +298,12 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
       update(
         (current) => {
           const existing = current.tabs.find((item) => item.id === tab.id);
-          const target =
-            pane ??
-            (existing ? paneOf(existing) : (current.activePane ?? "main"));
+          const target = defaultOpenPane(
+            current.tabs,
+            current.activePane,
+            tab.id,
+            pane,
+          );
           if (existing) {
             const workspace =
               target !== paneOf(existing) || !canPreview?.(tab)
@@ -392,6 +415,7 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
           tabHistory: current.tabHistory?.map((visit) =>
             visit.id === id ? { ...visit, id: tab.id } : visit,
           ),
+          tabLeftOrder: migrateTabLeftOrder(current, id, tab.id),
         };
       }, targetAgentId);
     },
@@ -485,7 +509,7 @@ export function useWorkspaces(agentId: string, fallback: Workspace) {
             .slice(0, current.tabs.indexOf(selected))
             .filter((tab) => paneOf(tab) === pane && !ids.has(tab.id)).length;
           const replacement =
-            recentTab(remaining, current.tabHistory) ??
+            mostRecentlyLeftTab(remaining, current) ??
             remaining[Math.min(index, remaining.length - 1)];
           next[selectionKey(pane)] = replacement?.id ?? "";
         }

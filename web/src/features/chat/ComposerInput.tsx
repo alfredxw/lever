@@ -94,6 +94,7 @@ export function ComposerInput({
   label,
   placeholder,
   disabled,
+  visible: isVisible,
   autoFocus,
 }: {
   chatId: string;
@@ -126,6 +127,7 @@ export function ComposerInput({
   label: string;
   placeholder: string;
   disabled?: boolean;
+  visible?: boolean;
   autoFocus?: boolean;
 }) {
   const { t } = useTranslation();
@@ -672,6 +674,7 @@ export function ComposerInput({
   }, [editor, value]);
 
   useEffect(() => {
+    if (isVisible === false) return;
     const key = reply ? sessionId! : chatId;
     const insertion = composer?.insertions.get(key);
     if (
@@ -710,7 +713,7 @@ export function ComposerInput({
       )
       .run();
     composer.inserted(key, insertion.id);
-  }, [editor, disabled, composer, chatId, sessionId, reply, onCommand]);
+  }, [editor, disabled, isVisible, composer, chatId, sessionId, reply, onCommand]);
 
   function choose(option: Option) {
     if (!editor || disabled) return;

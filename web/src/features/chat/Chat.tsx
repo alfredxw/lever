@@ -94,6 +94,7 @@ type ChatProps = {
   onOpenTopic: (view: SessionView, quote?: MessageQuote) => void;
   pinnedTopicIds: ReadonlySet<string>;
   onPinTopic: (id: string, pinned: boolean) => void;
+  revealKey?: number;
   revealTopic?: string;
   revealRun?: string;
   revealComparison?: string;
@@ -141,6 +142,7 @@ function ChatContent(props: ChatProps) {
     onOpenTopicTool,
     pinnedTopicIds,
     onPinTopic,
+    revealKey,
     revealTopic,
     revealRun,
     revealComparison,
@@ -300,10 +302,11 @@ function ChatContent(props: ChatProps) {
             entry.sessionId === topicToReveal ||
             entry.sourceTopicId === topicToReveal,
         )?.runId),
-    visible && !!overview && (externalReveal || !!returnToTopic),
+    enabled && !!overview && (externalReveal || !!returnToTopic),
     view,
     externalReveal ? onRevealed : onReturned,
-    externalReveal ? focusRevealedEntry : "expand",
+    externalReveal ? (visible ? focusRevealedEntry : false) : "expand",
+    externalReveal ? revealKey : undefined,
   );
   if (!overview || !latestPage)
     return view.error ? (
