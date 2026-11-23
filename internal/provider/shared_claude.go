@@ -232,7 +232,7 @@ func sharedClaudeMeta(path string) (title, cwd string, interactive bool) {
 		if json.Unmarshal(scan.Bytes(), &event) != nil {
 			continue
 		}
-		if event.Side || strings.HasPrefix(event.Entrypoint, "claude-desktop") || strings.HasPrefix(event.Entrypoint, "sdk-") {
+		if event.Side || strings.HasPrefix(event.Entrypoint, "claude-desktop") || strings.HasPrefix(event.Entrypoint, "sdk-") || event.Entrypoint == claudeEntrypoint {
 			return "", "", false
 		}
 		if cwd == "" {

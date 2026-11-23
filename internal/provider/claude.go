@@ -34,13 +34,28 @@ func claudePermission(permission string) string {
 }
 
 type claudePermissionChange struct {
-	mode string
-	done chan error
+	reqID string
+	mode  string
+	done  chan error
+}
+
+func validateClaudeCommandAndSkills(command string, plan SkillPlan, commands []model.Reference) error {
+	if (command == "goal" || command == "loop" || command == "compact") && !slices.ContainsFunc(commands, func(c model.Reference) bool { return c.Name == command }) {
+		return fmt.Errorf("This Claude runtime does not provide /%s", command)
+	}
+	return verifySkillPolicy(plan, commands)
 }
 
 func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
+	stateDir, _ := ctx.Value(stateDirKey{}).(string)
+	prev := defaultClaudePool.take(stateDir, in.Session.ID)
+
 	messageID := in.RunID
 	if in.Recovery != nil {
+		if prev != nil {
+			prev.close()
+			prev = nil
+		}
 		if err := checkClaudeContinuation(ctx, in); err != nil {
 			return err
 		}
@@ -50,55 +65,151 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	}
 	path, err := Executable(ctx, in.Provider)
 	if err != nil {
+		if prev != nil {
+			prev.close()
+		}
 		return err
 	}
 	in.prepareSlashPrompt()
+	command, _ := in.command()
 	profile := in.Profile
 	nativePermission := claudePermission(in.Selection.Permission)
-	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-mode", nativePermission, "--allow-dangerously-skip-permissions", "--permission-prompt-tool", "stdio"}
-	if in.Selection.Model != "" {
-		args = append(args, "--model", in.Selection.Model)
+	cwd := workspace.CWD(in.Session.Scope)
+	entrypoint := claudeProcessEntrypoint(in.Provider)
+	supportsResumeDialog := command != "compact" && (in.Provider.IdleCompaction == "onReturn" || in.Provider.IdleCompaction == "beforeCacheExpires")
+	addDirs := []string{in.Assets}
+	for _, root := range in.Session.Scope.Roots {
+		if root.ID != in.Session.Scope.PrimaryRootID {
+			addDirs = append(addDirs, root.Path)
+		}
 	}
-	if in.Selection.Effort != "" {
-		args = append(args, "--effort", in.Selection.Effort)
-	}
-	settings := object{"fastMode": in.Selection.Fast}
-	if in.Provider.IdleCompaction == "off" {
-		settings["idleCompaction"] = false
-	}
-	args = append(args, claudeSkillArguments(in.Session.Scope, in.Skills, settings)...)
-	if in.Session.NativeID != "" {
-		args = append(args, "--resume", in.Session.NativeID)
-	}
-	args = append(args, "--add-dir", in.Assets)
+	addDirs = append(addDirs, in.Skills.ClaudeDirectories...)
 	for _, file := range in.Attachments {
-		args = append(args, "--add-dir", filepath.Dir(file.Path))
+		addDirs = append(addDirs, filepath.Dir(file.Path))
 	}
-	if in.MCPURL != "" {
-		config := object{"mcpServers": object{"lever": object{"type": "http", "url": in.MCPURL, "headers": object{"Authorization": "Bearer " + in.MCPToken}}}}
-		mcpPath := filepath.Join(in.Assets, "mcp-"+in.RunID+".json")
-		if err := os.WriteFile(mcpPath, []byte(pretty(config)), 0600); err != nil {
+	fingerprint := claudeLaunchFingerprint(in, path, cwd, entrypoint, addDirs, supportsResumeDialog)
+
+	content := []object{}
+	if in.Recovery == nil {
+		content, err = claudeContent(in)
+		if err != nil {
+			if prev != nil {
+				if prev.stopIdle() {
+					defaultClaudePool.park(stateDir, in.Session.ID, prev)
+				} else {
+					prev.close()
+				}
+			}
 			return err
 		}
-		defer os.Remove(mcpPath)
-		args = append(args, "--mcp-config", mcpPath)
 	}
-	cmd := device.Command(path, in.Provider.Args...)
-	cmd.Args = append(cmd.Args, args...)
-	if err := applyProfile(cmd, in.Provider); err != nil {
-		return err
+
+	var r *claudeResident
+	var reused bool
+	if prev != nil {
+		if in.Recovery == nil && in.Session.ID != "" && in.Session.NativeID != "" &&
+			prev.nativeID == in.Session.NativeID && prev.fingerprint == fingerprint &&
+			prev.stopIdle() {
+			if err := validateClaudeCommandAndSkills(command, in.Skills, prev.commands); err != nil {
+				defaultClaudePool.park(stateDir, in.Session.ID, prev)
+				return err
+			}
+			if prev.permission != nativePermission {
+				if err := setClaudePermissionMode(ctx, prev, nativePermission); err != nil {
+					prev.close()
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					prev = nil
+				}
+			}
+			if prev != nil {
+				if prev.mcpRelay != nil {
+					if err := prev.mcpRelay.set(in.MCPURL, in.MCPToken); err != nil {
+						prev.close()
+						return err
+					}
+				}
+				r, reused = prev, true
+			}
+		} else {
+			prev.close()
+		}
 	}
-	cmd.Dir = workspace.CWD(in.Session.Scope)
-	p, err := device.Start(cmd)
-	if err != nil {
-		return err
+
+	if r == nil {
+		args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-mode", nativePermission, "--allow-dangerously-skip-permissions", "--permission-prompt-tool", "stdio"}
+		if in.Selection.Model != "" {
+			args = append(args, "--model", in.Selection.Model)
+		}
+		if in.Selection.Effort != "" {
+			args = append(args, "--effort", in.Selection.Effort)
+		}
+		settings := object{"fastMode": in.Selection.Fast}
+		if in.Provider.IdleCompaction == "off" {
+			settings["idleCompaction"] = false
+		}
+		args = append(args, claudeSkillArguments(in.Session.Scope, in.Skills, settings)...)
+		if in.Session.NativeID != "" {
+			args = append(args, "--resume", in.Session.NativeID)
+		}
+		args = append(args, "--add-dir", in.Assets)
+		for _, file := range in.Attachments {
+			args = append(args, "--add-dir", filepath.Dir(file.Path))
+		}
+		var relay *claudeMCPRelay
+		if in.MCPURL != "" {
+			relay, err = newClaudeMCPRelay(in.Assets, in.MCPURL, in.MCPToken)
+			if err != nil {
+				return err
+			}
+			args = append(args, "--mcp-config", relay.configPath)
+		}
+		cmd := device.Command(path, in.Provider.Args...)
+		cmd.Args = append(cmd.Args, args...)
+		if err := applyProfile(cmd, in.Provider); err != nil {
+			if relay != nil {
+				relay.close()
+			}
+			return err
+		}
+		cmd.Dir = cwd
+		p, err := device.Start(cmd)
+		if err != nil {
+			if relay != nil {
+				relay.close()
+			}
+			return err
+		}
+		r = &claudeResident{
+			p:           p,
+			fingerprint: fingerprint,
+			permission:  nativePermission,
+			mcpRelay:    relay,
+		}
 	}
+
+	p := r.p
+	interruptReqID := r.nextRequestID("interrupt")
+	stopWatch, watchTriggered := watchClaudeTurn(ctx, p, interruptReqID)
 	approvalCtx, stopApprovals := context.WithCancel(ctx)
 	var approvals sync.WaitGroup
 	var nativeID string
+	var canPark bool
 	defer func() {
 		stopApprovals()
-		p.Close()
+		stopWatch()
+		if r.mcpRelay != nil {
+			r.mcpRelay.clear()
+		}
+		if canPark && outcome == nil && ctx.Err() == nil && !watchTriggered.Load() &&
+			in.Session.ID != "" && nativeID != "" && r.alive() {
+			approvals.Wait()
+			r.nativeID = nativeID
+			defaultClaudePool.park(stateDir, in.Session.ID, r)
+			return
+		}
+		r.close()
 		approvals.Wait()
 		if !errors.Is(outcome, ErrPaused) {
 			return
@@ -114,16 +225,17 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 			outcome = errors.Join(ErrUnconfirmed, err)
 		}
 	}()
-	p.Watch(ctx, func() {
-		_ = p.Send(object{"type": "control_request", "request_id": "lever-interrupt", "request": object{"subtype": "interrupt"}})
-	})
-	init := object{"subtype": "initialize", "hooks": object{}, "appendSystemPrompt": profile.Instructions}
-	command, _ := in.command()
-	if command != "compact" && (in.Provider.IdleCompaction == "onReturn" || in.Provider.IdleCompaction == "beforeCacheExpires") {
-		init["supportedDialogKinds"] = []string{"resume_return"}
-	}
-	if err = p.Send(object{"type": "control_request", "request_id": "lever-init", "request": init}); err != nil {
-		return err
+
+	var initReqID string
+	if !reused {
+		init := object{"subtype": "initialize", "hooks": object{}, "appendSystemPrompt": profile.Instructions}
+		if supportsResumeDialog {
+			init["supportedDialogKinds"] = []string{"resume_return"}
+		}
+		initReqID = r.nextRequestID("init")
+		if err = p.Send(object{"type": "control_request", "request_id": initReqID, "request": init}); err != nil {
+			return err
+		}
 	}
 	items := map[string]model.Item{}
 	toolItems := map[string]string{}
@@ -131,10 +243,13 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	nextAssistantBlock := map[string]int{}
 	currentMessage := ""
 	sent := false
-	accepted, pausable := false, in.CanPauseTurn()
+	accepted, pausable, turnBound := false, in.CanPauseTurn(), false
 	bindTurn := func() error {
-		if pausable && accepted && sharedUUID.MatchString(nativeID) {
-			return sink.BindTurn(messageID)
+		if !turnBound && pausable && accepted && sharedUUID.MatchString(nativeID) {
+			if err := sink.BindTurn(messageID); err != nil {
+				return err
+			}
+			turnBound = true
 		}
 		return nil
 	}
@@ -145,13 +260,6 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	var lastModelMessage object
 	var requestedAt time.Time
 	refreshContext := command == "context" || command == "compact"
-	content := []object{}
-	if in.Recovery == nil {
-		content, err = claudeContent(in)
-		if err != nil {
-			return err
-		}
-	}
 	pendingSteers := map[string]bool{}
 	var receiptDeadline <-chan time.Time
 	var receiptTimer *time.Timer
@@ -175,13 +283,52 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 		}
 		return sink.Item(item)
 	}
+	sendInitialPrompt := func() error {
+		requestedAt = time.Now()
+		if err = p.Send(object{"type": "user", "uuid": messageID, "message": object{"role": "user", "content": content}}); err != nil {
+			return err
+		}
+		sent = true
+		sink.EnablePermissionChanges(func(ctx context.Context, permission string) error {
+			change := claudePermissionChange{mode: claudePermission(permission), done: make(chan error, 1)}
+			select {
+			case changes <- change:
+			case <-approvalCtx.Done():
+				return approvalCtx.Err()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case err := <-change.done:
+				return err
+			case <-approvalCtx.Done():
+				select {
+				case err := <-change.done:
+					return err
+				default:
+					return approvalCtx.Err()
+				}
+			case <-ctx.Done():
+				return errors.Join(ErrUnconfirmed, ctx.Err())
+			}
+		})
+		return nil
+	}
+	if reused {
+		nativeID = r.nativeID
+		steering = in.Steers
+		if err = sendInitialPrompt(); err != nil {
+			return err
+		}
+	}
 	for {
 		select {
 		case <-receiptDeadline:
 			return errors.Join(ErrUnconfirmed, errors.New("Claude completed without acknowledging the follow-up input"))
 		case change := <-permissionChanges:
+			change.reqID = r.nextRequestID("permission")
 			changing, permissionChanges = &change, nil
-			if err := p.Send(object{"type": "control_request", "request_id": "lever-permission", "request": object{"subtype": "set_permission_mode", "mode": change.mode}}); err != nil {
+			if err := p.Send(object{"type": "control_request", "request_id": change.reqID, "request": object{"subtype": "set_permission_mode", "mode": change.mode}}); err != nil {
 				change.done <- errors.Join(ErrUnconfirmed, err)
 				return errors.Join(ErrUnconfirmed, err)
 			}
@@ -259,10 +406,10 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 			}
 			switch str(f["type"]) {
 			case "control_response":
-				r := obj(f["response"])
-				if r["request_id"] == "lever-interrupt" && errors.Is(context.Cause(ctx), ErrPauseRequested) {
-					if r["subtype"] != "success" {
-						return errors.Join(ErrUnconfirmed, fail(r))
+				resp := obj(f["response"])
+				if resp["request_id"] == interruptReqID && errors.Is(context.Cause(ctx), ErrPauseRequested) {
+					if resp["subtype"] != "success" {
+						return errors.Join(ErrUnconfirmed, fail(resp))
 					}
 					interruptAcknowledged = true
 					if interrupted {
@@ -270,30 +417,29 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					}
 					continue
 				}
-				if str(r["request_id"]) == "lever-permission" && changing != nil {
+				if changing != nil && str(resp["request_id"]) == changing.reqID {
 					var changeErr error
-					if str(r["subtype"]) != "success" {
-						changeErr = fail(r)
+					if str(resp["subtype"]) != "success" {
+						changeErr = fail(resp)
+					} else {
+						r.permission = changing.mode
 					}
 					changing.done <- changeErr
 					changing, permissionChanges = nil, changes
 					continue
 				}
-				if str(r["request_id"]) != "lever-init" {
+				if initReqID == "" || str(resp["request_id"]) != initReqID {
 					continue
 				}
-				if str(r["subtype"]) != "success" {
-					return fail(r)
+				if str(resp["subtype"]) != "success" {
+					return fail(resp)
 				}
-				state := obj(r["response"])
+				state := obj(resp["response"])
 				if mode := str(state["current_permission_mode"]); mode != "" && mode != nativePermission {
 					return fmt.Errorf("Claude Code could not enable permission mode %s (reported %s)", nativePermission, mode)
 				}
 				commands := claudeSkillReferences(state, in.Provider.ID)
-				if (command == "goal" || command == "loop" || command == "compact") && !slices.ContainsFunc(commands, func(c model.Reference) bool { return c.Name == command }) {
-					return fmt.Errorf("This Claude runtime does not provide /%s", command)
-				}
-				if err := verifySkillPolicy(in.Skills, commands); err != nil {
+				if err := validateClaudeCommandAndSkills(command, in.Skills, commands); err != nil {
 					return err
 				}
 				if in.Selection.Fast {
@@ -304,35 +450,11 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 						return errors.New("Claude did not enable Fast mode")
 					}
 				}
+				r.commands = commands
 				if !sent {
-					requestedAt = time.Now()
-					if err = p.Send(object{"type": "user", "uuid": messageID, "message": object{"role": "user", "content": content}}); err != nil {
+					if err = sendInitialPrompt(); err != nil {
 						return err
 					}
-					sent = true
-					sink.EnablePermissionChanges(func(ctx context.Context, permission string) error {
-						change := claudePermissionChange{mode: claudePermission(permission), done: make(chan error, 1)}
-						select {
-						case changes <- change:
-						case <-approvalCtx.Done():
-							return approvalCtx.Err()
-						case <-ctx.Done():
-							return ctx.Err()
-						}
-						select {
-						case err := <-change.done:
-							return err
-						case <-approvalCtx.Done():
-							select {
-							case err := <-change.done:
-								return err
-							default:
-								return approvalCtx.Err()
-							}
-						case <-ctx.Done():
-							return errors.Join(ErrUnconfirmed, ctx.Err())
-						}
-					})
 				}
 			case "system":
 				if f["subtype"] == "compact_boundary" {
@@ -349,8 +471,10 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					if in.Session.NativeID != "" && id != in.Session.NativeID {
 						return errors.New("Claude resumed a different session")
 					}
-					if err = sink.Bind(id); err != nil {
-						return err
+					if !reused || id != in.Session.NativeID {
+						if err = sink.Bind(id); err != nil {
+							return err
+						}
 					}
 					nativeID = id
 					if err := bindTurn(); err != nil {
@@ -582,7 +706,12 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					loop.idle = true
 					continue
 				}
-				return finishClaude(ctx, p, sink, goalActive && goalSawModel, refreshContext)
+				finishReusable, err := finishClaude(ctx, r, sink, goalActive && goalSawModel, refreshContext)
+				if err != nil {
+					return err
+				}
+				canPark = finishReusable && !subagents.hasRunning() && !loop.waiting()
+				return nil
 			}
 		}
 	}

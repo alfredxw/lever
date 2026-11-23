@@ -269,6 +269,9 @@ func applyProfile(cmd *exec.Cmd, config model.Provider) error {
 	if config.AutoCompactWindow != 0 {
 		cmd.Env = append(cmd.Env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW="+strconv.Itoa(config.AutoCompactWindow))
 	}
+	if config.Type == "claude" {
+		applyClaudeEnvironment(cmd, config)
+	}
 	return nil
 }
 

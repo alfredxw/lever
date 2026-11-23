@@ -377,6 +377,7 @@ func (a *App) DeleteProvider(ctx context.Context, id string) error {
 		a.cancelProviderSetupLocked(id)
 		a.invalidateProviderCatalogsLocked(id, false)
 		err = provider.SetAntigravityKey(provider.WithStateDir(ctx, a.Store.Dir), id, "")
+		a.stopIdleClaudeSessions()
 	}
 	return err
 }

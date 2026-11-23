@@ -11,6 +11,20 @@ type claudeSubagents struct {
 	tools map[string]*subagent
 }
 
+func (s claudeSubagents) hasRunning() bool {
+	for _, agent := range s.calls {
+		if agent != nil && agent.item.Status == "running" {
+			return true
+		}
+	}
+	for _, agent := range s.tasks {
+		if agent != nil && agent.item.Status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
 func isClaudeAgentTool(block object) bool {
 	name := str(block["name"])
 	return str(block["type"]) == "tool_use" && (name == "Agent" || name == "Task")

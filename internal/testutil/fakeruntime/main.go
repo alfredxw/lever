@@ -886,7 +886,7 @@ func claude() {
 						images++
 					}
 				}
-				b, _ := json.Marshal(object{"native": native, "model": modelName, "effort": effort, "fast": settings["fastMode"], "images": images, "input": text, "instructions": instructions, "permission": permission, "cwd": cwd, "availableSkills": fixtureVisibleSkills(commands)})
+				b, _ := json.Marshal(object{"native": native, "pid": os.Getpid(), "entrypoint": os.Getenv("CLAUDE_CODE_ENTRYPOINT"), "model": modelName, "effort": effort, "fast": settings["fastMode"], "images": images, "input": text, "instructions": instructions, "permission": permission, "cwd": cwd, "availableSkills": fixtureVisibleSkills(commands)})
 				text = "wire:" + string(b)
 			}
 			send(object{"type": "system", "subtype": "init", "session_id": native})

@@ -256,6 +256,7 @@ func (a *App) DeleteWorktree(ctx context.Context, agentID, id string) error {
 			a.removingCheckout = ""
 			a.mu.Unlock()
 		}()
+		a.closeIdleClaudeSessions()
 		if err := workspace.RemoveCheckout(ctx, checkout); err != nil {
 			return conflict(err.Error())
 		}

@@ -25,6 +25,7 @@ import (
 	"lever/internal/plugin"
 	"lever/internal/plugin/builtin"
 	"lever/internal/provider"
+	"lever/internal/runhost"
 	"lever/internal/store"
 	"lever/internal/terminal"
 	"lever/internal/workspace"
@@ -52,6 +53,7 @@ type App struct {
 	active               map[string]*execution
 	restarts             []store.RestartRun
 	independentProviders bool
+	hostLease            *runhost.BackendLease
 	closed               bool
 	wg                   sync.WaitGroup
 	worktreeMu           sync.Mutex
@@ -123,6 +125,15 @@ func open(dir string, independent bool) (*App, error) {
 		s.Close()
 		return nil, err
 	}
+	if independent {
+		lease, err := runhost.AcquireBackendLock(dir)
+		if err != nil {
+			cancel()
+			s.Close()
+			return nil, err
+		}
+		a.hostLease = lease
+	}
 	if err = a.restoreRunHosts(); err != nil {
 		a.Close()
 		return nil, err
@@ -148,9 +159,33 @@ func (a *App) Shutdown() {
 	for id := range a.pluginPreviews {
 		a.discardPluginPreviewLocked(id)
 	}
+	lease := a.hostLease
+	a.hostLease = nil
 	a.mu.Unlock()
 	a.Terminals.Close()
 	a.wg.Wait()
+	if a.independentProviders {
+		lease.Release()
+		runhost.StopIdleSessions(a.Store.Dir)
+		runhost.WaitIdleSessions(a.Store.Dir, a.Store.DB, 2*time.Second)
+	} else {
+		provider.CloseClaudeSessions(a.Store.Dir)
+	}
+}
+
+func (a *App) stopIdleClaudeSessions() {
+	if a.independentProviders {
+		runhost.StopIdleSessions(a.Store.Dir)
+	} else {
+		provider.CloseClaudeSessions(a.Store.Dir)
+	}
+}
+
+func (a *App) closeIdleClaudeSessions() {
+	a.stopIdleClaudeSessions()
+	if a.independentProviders {
+		runhost.WaitIdleSessions(a.Store.Dir, a.Store.DB, 2*time.Second)
+	}
 }
 
 func (a *App) RunningCount() int {

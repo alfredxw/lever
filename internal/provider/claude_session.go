@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"lever/internal/device"
 	"lever/internal/model"
 )
 
@@ -156,50 +155,57 @@ func (l *claudeLoop) waiting() bool {
 
 // After a real model turn, ask the native /goal command whether a goal is
 // still active. A successful model result alone cannot establish that.
-func finishClaude(ctx context.Context, p *device.Process, sink Sink, checkGoal, refreshContext bool) error {
+func finishClaude(ctx context.Context, r *claudeResident, sink Sink, checkGoal, refreshContext bool) (bool, error) {
 	if !checkGoal && !refreshContext {
-		return nil
+		return true, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	p := r.p
+	waitGoalResult := checkGoal
 	if checkGoal {
 		if err := p.Send(object{"type": "user", "message": object{"role": "user", "content": "/goal"}}); err != nil {
-			return nil
+			return false, nil
 		}
 	}
+	var contextReqID string
 	if refreshContext {
-		if err := p.Send(object{"type": "control_request", "request_id": "lever-context", "request": object{"subtype": "get_context_usage"}}); err != nil {
-			return nil
+		contextReqID = r.nextRequestID("context")
+		if err := p.Send(object{"type": "control_request", "request_id": contextReqID, "request": object{"subtype": "get_context_usage"}}); err != nil {
+			return false, nil
 		}
 	}
-	for refreshContext || checkGoal {
+	for refreshContext || checkGoal || waitGoalResult {
 		select {
 		case <-ctx.Done():
-			return nil
+			return false, nil
 		case data, ok := <-p.Frames:
 			if !ok {
-				return nil
+				return false, nil
 			}
 			f, err := decode(data)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if checkGoal {
 				if goal, ok := claudeGoalReply(f); ok {
 					if err := sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Goal = goal }); err != nil {
-						return err
+						return false, err
 					}
 					checkGoal = false
 				}
 			}
-			if r := obj(f["response"]); f["type"] == "control_response" && r["request_id"] == "lever-context" {
+			if waitGoalResult && str(f["type"]) == "result" && str(f["parent_tool_use_id"]) == "" {
+				waitGoalResult = false
+			}
+			if r := obj(f["response"]); refreshContext && f["type"] == "control_response" && r["request_id"] == contextReqID {
 				refreshContext = false
 				usage := obj(r["response"])
 				if err := setContextUsage(sink, usage["totalTokens"], usage["maxTokens"]); err != nil {
-					return err
+					return false, err
 				}
 			}
 		}
 	}
-	return nil
+	return true, nil
 }

@@ -109,18 +109,33 @@ func Ensure(ctx context.Context, db *sql.DB, dir, id, phase string) error {
 }
 
 func Main() bool {
-	if len(os.Args) < 2 || os.Args[1] != Flag {
+	if len(os.Args) < 2 {
 		return false
 	}
-	if len(os.Args) != 4 {
-		fmt.Fprintln(os.Stderr, "expected data directory and run ID")
-		os.Exit(2)
+	switch os.Args[1] {
+	case Flag:
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "expected data directory and run ID")
+			os.Exit(2)
+		}
+		if err := Serve(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return true
+	case SessionFlag:
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "expected data directory and session ID")
+			os.Exit(2)
+		}
+		if err := ServeSession(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return true
+	default:
+		return false
 	}
-	if err := Serve(os.Args[2], os.Args[3]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	return true
 }
 
 func Serve(dir, id string) error {
@@ -137,13 +152,18 @@ func Serve(dir, id string) error {
 		return err
 	}
 	defer lock.Unlock()
+	defer provider.CloseClaudeSessions(dir)
 	db, err := store.OpenConnection(dir)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	return serveRun(db, dir, id)
+}
+
+func serveRun(db *sql.DB, dir, id string) error {
 	var raw string
-	err = db.QueryRow("UPDATE runtime_hosts SET phase='running' WHERE run_id=? AND phase='ready' RETURNING input", id).Scan(&raw)
+	err := db.QueryRow("UPDATE runtime_hosts SET phase='running' WHERE run_id=? AND phase='ready' RETURNING input", id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -396,6 +416,7 @@ func (w *worker) controls() error {
 	}
 	return dbErr
 }
+
 // Keep the runtime snapshot readable by older backends that may reattach to
 // this worker. Steering is a turn-local hint added to the mailbox payload.
 type RuntimeUpdate struct {

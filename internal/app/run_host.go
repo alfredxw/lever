@@ -106,9 +106,17 @@ func (e *execution) followHost() error {
 		var phase, detail, finished string
 		err := e.app.Store.DB.QueryRowContext(e.app.ctx, "SELECT phase,error,finished_at FROM runtime_hosts WHERE run_id=?", e.run.ID).Scan(&phase, &detail, &finished)
 		active := phase == "ready" || phase == "running"
-		if err == nil && active && time.Since(lastCheck) >= time.Second {
+		ensureInterval := time.Second
+		if phase == "ready" {
+			ensureInterval = 200 * time.Millisecond
+		}
+		if err == nil && active && time.Since(lastCheck) >= ensureInterval {
 			lastCheck = time.Now()
-			err = runhost.Ensure(e.app.ctx, e.app.Store.DB, e.app.Store.Dir, e.run.ID, phase)
+			if e.provider.Type == "claude" {
+				err = runhost.EnsureSession(e.app.ctx, e.app.Store.DB, e.app.Store.Dir, e.run.ID, e.session.ID, phase)
+			} else {
+				err = runhost.Ensure(e.app.ctx, e.app.Store.DB, e.app.Store.Dir, e.run.ID, phase)
+			}
 		}
 		if err == nil {
 			var more bool
