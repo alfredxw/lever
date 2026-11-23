@@ -2,11 +2,12 @@ import { Maximize2 } from "lucide-react";
 import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Block, type BlockProps } from "streamdown";
-import { Button } from "@/components/ui/button";
+import { ToolbarButton } from "@/components/ui/toolbar-button";
 import {
   ChatPreviewEndpoint,
+  HtmlPreviewActions,
   HtmlPreviewContext,
-  PreviewMenuButton,
+  HtmlPreviewHeader,
 } from "./HtmlPreview";
 import { fileKind } from "@/features/files/preview/fileKind";
 import { HtmlFrame } from "@/features/files/preview/HtmlFrame";
@@ -85,25 +86,24 @@ function VisualizationPreview({
       className="chat-visualization my-2 min-w-0 overflow-hidden rounded-lg border border-border"
       data-wide={wide}
     >
-      <div className="flex items-center gap-2 border-b border-border py-1 pr-1 pl-3 text-xs text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate" title={title}>
+      <HtmlPreviewHeader className="border-b border-border py-1 pr-1 pl-3 text-xs text-muted-foreground">
+        <span className="min-w-0 flex-[1_1_6ch] truncate" title={title}>
           {title}
         </span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={t("chat.expandVisualization")}
-          title={t("chat.expandVisualization")}
-          onClick={({ currentTarget }) => {
-            if (actions) actions.quick(preview, currentTarget);
-            else
-              window.open(htmlViewerURL(src), "_blank", "noopener,noreferrer");
-          }}
-        >
-          <Maximize2 />
-        </Button>
-        <PreviewMenuButton preview={preview} />
-      </div>
+        {actions ? (
+          <HtmlPreviewActions preview={preview} />
+        ) : (
+          <ToolbarButton
+            type="button"
+            label={t("chat.htmlPreviewQuick")}
+            onClick={() =>
+              window.open(htmlViewerURL(src), "_blank", "noopener,noreferrer")
+            }
+          >
+            <Maximize2 />
+          </ToolbarButton>
+        )}
+      </HtmlPreviewHeader>
       <HtmlFrame
         ref={frame}
         className="chat-visualization-frame block w-full border-0"

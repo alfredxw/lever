@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"lever/internal/model"
 	"lever/internal/workspace"
 )
 
@@ -194,5 +196,88 @@ func TestChatPreviewFiles(t *testing.T) {
 			!strings.HasPrefix(res.Header.Get("Content-Security-Policy"), "sandbox") || res.Header.Get("X-Content-Type-Options") != "nosniff") {
 			t.Fatalf("incorrect %s preview: %s %q", tc.kind, res.Header, body)
 		}
+	}
+}
+
+func TestAntigravityHTMLPreview(t *testing.T) {
+	profile := t.TempDir()
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", profile)
+	t.Setenv("GEMINI_HOME", t.TempDir())
+	f := newFixture(t)
+	chat := f.chat(f.acpAgent(model.Provider{ID: "antigravity", Name: "Antigravity"}))
+	run := f.send(chat.ID, "main", "", "HTML report")
+	f.wait(run.ID, "completed")
+	session := f.waitNative(run.SessionID)
+	brain := filepath.Join(profile, "brain")
+	const name = "report #1.html"
+	const document = `<!doctype html><img src="screen.png"><button id="part">Try</button>`
+	writeReport := func(directory string) string {
+		t.Helper()
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, []byte(document), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	report := writeReport(filepath.Join(brain, session.NativeID, "scratch"))
+	if err := os.WriteFile(filepath.Join(filepath.Dir(report), "screen.png"), []byte("\x89PNG\r\n\x1a\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "/runs/" + run.ID + "/preview?kind=html&path="
+	var info struct{ Path string }
+	f.request("GET", endpoint+url.QueryEscape(report)+"&info=true", nil, http.StatusOK, &info)
+	want, err := filepath.EvalSymlinks(report)
+	if err != nil || info.Path != want {
+		t.Fatalf("original path = %q, want %q (%v)", info.Path, want, err)
+	}
+	for _, download := range []bool{false, true} {
+		address := f.s.URL + "/api" + endpoint + url.QueryEscape(report)
+		if download {
+			address += "&download=true"
+		}
+		req, err := http.NewRequest(http.MethodGet, address, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+f.s.Token)
+		req.Header.Set("Sec-Fetch-Dest", "iframe")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("read report (download=%t): %d, %v", download, res.StatusCode, err)
+		}
+		if download {
+			disposition, params, err := mime.ParseMediaType(res.Header.Get("Content-Disposition"))
+			if err != nil || string(body) != document || disposition != "attachment" || params["filename"] != name {
+				t.Fatalf("download did not return the original file: %v, %q", res.Header, body)
+			}
+		} else if !strings.Contains(string(body), `src="data:image/png;base64,`) || !strings.Contains(res.Header.Get("Content-Security-Policy"), "sandbox allow-scripts;") {
+			t.Fatalf("report was not previewed in the sandbox: %v, %q", res.Header, body)
+		}
+	}
+	other := writeReport(filepath.Join(brain, "another-session", "scratch"))
+	denied := func(path string) {
+		t.Helper()
+		for _, suffix := range []string{"", "&info=true", "&download=true"} {
+			f.request("GET", endpoint+url.QueryEscape(path)+suffix, nil, http.StatusNotFound, nil)
+		}
+	}
+	denied(other)
+	if err := os.Symlink(other, filepath.Join(filepath.Dir(report), "linked.html")); err == nil {
+		denied(filepath.Join(filepath.Dir(report), "linked.html"))
+	}
+	nativeDir := filepath.Join(brain, session.NativeID)
+	if err := os.Rename(nativeDir, nativeDir+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(brain, "another-session"), nativeDir); err == nil {
+		denied(report)
 	}
 }

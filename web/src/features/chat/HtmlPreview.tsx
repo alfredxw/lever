@@ -8,17 +8,18 @@ import {
   type ReactNode,
 } from "react";
 import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
+import { cn } from "cn";
 import {
   ChevronUp,
   Copy,
-  Ellipsis,
+  Download,
   ExternalLink,
   Eye,
   FolderOpen,
   Globe,
-  Link2,
   Maximize2,
   RotateCw,
+  type LucideIcon,
 } from "lucide-react";
 import { isMyGo, runtime } from "mygo-runtime";
 import { useTranslation } from "react-i18next";
@@ -31,15 +32,12 @@ import {
   type MenuAction,
   type MenuAnchor,
 } from "@/components/ui/action-context-menu";
-import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { ToolbarButton } from "@/components/ui/toolbar-button";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { HtmlFrame } from "@/features/files/preview/HtmlFrame";
 import { useEventCallback } from "@/hooks/useEventCallback";
-import {
-  htmlViewerURL,
-  parseHtmlPreviewURL,
-  type HtmlPreview,
-} from "./chatFileLinks";
+import { parseHtmlPreviewURL, type HtmlPreview } from "./chatFileLinks";
 
 function previewFile(src: string) {
   const url = new URL(src, location.origin);
@@ -55,6 +53,21 @@ function previewFileQuery(src?: string) {
     queryFn: src ? () => previewFile(src) : skipToken,
     retry: false,
   });
+}
+
+export async function openOriginalHtml(src: string) {
+  const { path } = await previewFile(src);
+  await Dialogs.openPreviewInBrowser(path, new URL(src, location.origin).hash);
+}
+
+function downloadOriginalHtml(src: string) {
+  const url = new URL(src, location.origin);
+  url.hash = "";
+  url.searchParams.set("download", "true");
+  const link = document.createElement("a");
+  link.href = url.href;
+  link.download = "";
+  link.click();
 }
 
 function AttachmentImagesNotice({ src }: { src: string }) {
@@ -92,100 +105,97 @@ function PreviewFrame({
 }
 
 type PreviewMenu = {
-  preview: HtmlPreview;
   anchor: MenuAnchor;
   inline?: () => void;
+};
+type PreviewAction = Omit<MenuAction, "icon" | "run"> & {
+  icon: LucideIcon;
+  run: (trigger: HTMLElement) => void | Promise<unknown>;
 };
 export const ChatPreviewEndpoint = createContext<string | undefined>(undefined);
 export const HtmlPreviewContext = createContext<{
   menu: (preview: HtmlPreview, anchor: MenuAnchor, inline?: () => void) => void;
   quick: (preview: HtmlPreview, trigger: HTMLElement) => void;
+  openTab?: (preview: HtmlPreview) => void;
 } | null>(null);
 
-export function PreviewMenuButton({ preview }: { preview: HtmlPreview }) {
-  const actions = useContext(HtmlPreviewContext);
-  const { t } = useTranslation();
-  if (!actions) return null;
+export function HtmlPreviewHeader({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className: string;
+}) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={t("chat.htmlPreviewMenu")}
-      aria-haspopup="menu"
-      title={t("chat.htmlPreviewMenu")}
-      onClick={({ currentTarget: trigger }) => {
-        const rect = trigger.getBoundingClientRect();
-        actions.menu(preview, { trigger, x: rect.left, y: rect.bottom });
-      }}
-    >
-      <Ellipsis />
-    </Button>
+    <TooltipProvider delayDuration={350}>
+      <header
+        className={cn("flex min-w-0 flex-wrap items-center gap-1", className)}
+      >
+        {children}
+      </header>
+    </TooltipProvider>
   );
 }
 
-function PreviewMenuItems({
+export function HtmlPreviewActions({
+  preview,
+  expanded = false,
   menu,
-  close,
-  onTab,
-  onQuick,
 }: {
-  menu: PreviewMenu;
-  close: (restoreFocus: boolean) => void;
-  onTab?: () => void;
-  onQuick?: () => void;
+  preview: HtmlPreview;
+  expanded?: boolean;
+  menu?: PreviewMenu & { close: (restoreFocus: boolean) => void };
 }) {
+  const host = useContext(HtmlPreviewContext);
   const { t } = useTranslation();
   const desktop = isMyGo();
-  const { src } = menu.preview;
-  const file = useQuery(previewFileQuery(src));
-  if (desktop && file.isLoading) return null;
-  const viewer = htmlViewerURL(src);
-  const items: MenuAction[] = [];
-  if (menu.inline)
+  const { src } = preview;
+  const file = useQuery(previewFileQuery(host ? src : undefined));
+  if (!host || (menu && desktop && file.isLoading)) return null;
+  const items: PreviewAction[] = [];
+  if (menu?.inline)
     items.push({
       id: "inline",
       label: t("chat.htmlPreviewInline"),
       icon: Eye,
       run: menu.inline,
     });
-  if (onTab)
-    items.push({
-      id: "tab",
-      label: t("chat.htmlPreviewTab"),
-      icon: Globe,
-      restoreFocus: false,
-      run: onTab,
-    });
-  if (onQuick)
+  if (!expanded)
     items.push({
       id: "quick",
       label: t("chat.htmlPreviewQuick"),
       icon: Maximize2,
       restoreFocus: false,
-      run: onQuick,
+      run: (trigger) => host.quick(preview, trigger),
+    });
+  if (host.openTab)
+    items.push({
+      id: "tab",
+      label: t("chat.htmlPreviewTab"),
+      icon: Globe,
+      restoreFocus: false,
+      run: () => host.openTab?.(preview),
     });
   items.push({
-    id: "external",
-    label: t(desktop ? "browser.external" : "chat.htmlPreviewBrowserTab"),
-    icon: ExternalLink,
-    run: () => {
-      if (desktop) return Dialogs.openPreviewInBrowser(viewer);
-      window.open(viewer, "_blank", "noopener,noreferrer");
+    id: desktop ? "external" : "download",
+    label: t(desktop ? "browser.external" : "chat.htmlPreviewDownload"),
+    icon: desktop ? ExternalLink : Download,
+    disabled: !file.isSuccess,
+    run: () => (desktop ? openOriginalHtml(src) : downloadOriginalHtml(src)),
+  });
+  items.push({
+    id: "copy-path",
+    label: t("files.copyPath"),
+    icon: Copy,
+    disabled: !file.isSuccess,
+    run: async () => {
+      if (!file.data) return;
+      if (desktop) await Dialogs.writeClipboard(file.data.path, "");
+      else await navigator.clipboard.writeText(file.data.path);
+      toast.success(t("chat.copied"));
     },
   });
-  if (file.data)
-    items.push({
-      id: "copy-path",
-      label: t("files.copyPath"),
-      icon: Copy,
-      run: async () => {
-        if (desktop) await Dialogs.writeClipboard(file.data.path, "");
-        else await navigator.clipboard.writeText(file.data.path);
-        toast.success(t("chat.copied"));
-      },
-    });
-  if (desktop && file.isSuccess)
+  if (desktop)
     items.push({
       id: "reveal",
       label: t(
@@ -194,23 +204,38 @@ function PreviewMenuItems({
           : "files.revealInFileManager",
       ),
       icon: FolderOpen,
+      disabled: !file.isSuccess,
       run: async () => Dialogs.showItemInFolder((await previewFile(src)).path),
     });
-  if (desktop)
-    items.push({
-      id: "pair",
-      label: t("chat.htmlPreviewPairBrowser"),
-      icon: Link2,
-      run: () => Dialogs.pairSystemBrowser(),
-    });
-  return (
-    <ActionContextMenu
-      point={menu.anchor}
-      label={t("chat.htmlPreviewMenu")}
-      actions={items}
-      onClose={close}
-    />
-  );
+  if (menu)
+    return (
+      <ActionContextMenu
+        point={menu.anchor}
+        label={t("chat.htmlPreviewMenu")}
+        actions={items.map((item) => ({
+          ...item,
+          run: () => item.run(menu.anchor.trigger),
+        }))}
+        onClose={menu.close}
+      />
+    );
+  return items.map(({ id, label, icon: Icon, disabled, run }) => (
+    <ToolbarButton
+      key={id}
+      type="button"
+      label={label}
+      disabled={disabled}
+      onClick={async ({ currentTarget }) => {
+        try {
+          await run(currentTarget);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      }}
+    >
+      <Icon />
+    </ToolbarButton>
+  ));
 }
 
 export function HtmlPreviewHost({
@@ -221,7 +246,7 @@ export function HtmlPreviewHost({
   onOpenTab?: (preview: HtmlPreview, file: string) => void;
 }) {
   const { t } = useTranslation();
-  const [menu, setMenu] = useState<PreviewMenu>();
+  const [menu, setMenu] = useState<PreviewMenu & { preview: HtmlPreview }>();
   const [quick, setQuick] = useState<HtmlPreview>();
   const quickTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -239,6 +264,7 @@ export function HtmlPreviewHost({
       );
     }
   });
+  const openTab = onOpenTab ? open : undefined;
   const actions = useMemo(
     () => ({
       menu: (preview: HtmlPreview, anchor: MenuAnchor, inline?: () => void) =>
@@ -247,22 +273,21 @@ export function HtmlPreviewHost({
         returnFocus.current = trigger;
         setQuick(preview);
       },
+      openTab,
     }),
-    [],
+    [openTab],
   );
   const popup = menu && (
-    <PreviewMenuItems
-      menu={menu}
-      close={(restore) => {
-        setMenu(undefined);
-        if (restore) menu.anchor.trigger.focus({ preventScroll: true });
+    <HtmlPreviewActions
+      preview={menu.preview}
+      expanded={!!quick}
+      menu={{
+        ...menu,
+        close: (restore) => {
+          setMenu(undefined);
+          if (restore) menu.anchor.trigger.focus({ preventScroll: true });
+        },
       }}
-      onTab={onOpenTab && (() => void open(menu.preview))}
-      onQuick={
-        !quick
-          ? () => actions.quick(menu.preview, menu.anchor.trigger)
-          : undefined
-      }
     />
   );
   return (
@@ -287,16 +312,16 @@ export function HtmlPreviewHost({
               returnFocus.current?.focus({ preventScroll: true });
             }}
           >
-            <div className="flex min-w-0 items-center gap-2 pr-8">
+            <HtmlPreviewHeader className="pr-8">
               <DialogTitle
                 ref={quickTitle}
                 tabIndex={-1}
-                className="min-w-0 flex-1 truncate outline-none"
+                className="min-w-0 flex-[1_1_6ch] truncate outline-none"
               >
                 {quick.title}
               </DialogTitle>
-              <PreviewMenuButton preview={quick} />
-            </div>
+              <HtmlPreviewActions preview={quick} expanded />
+            </HtmlPreviewHeader>
             <PreviewFrame
               className="chat-visualization-frame min-h-0 w-full flex-1 rounded-md border"
               {...quick}
@@ -325,34 +350,31 @@ export function HtmlPreviewPanel({
       className="flex h-full min-h-0 flex-col"
       aria-label={preview.title}
     >
-      <header className="flex min-w-0 items-center gap-1 border-b py-1 pr-2 pl-3">
-        <span className="min-w-0 flex-1 truncate text-sm" title={preview.title}>
+      <HtmlPreviewHeader className="border-b py-1 pr-2 pl-3">
+        <span
+          className="min-w-0 flex-[1_1_6ch] truncate text-sm"
+          title={preview.title}
+        >
           {preview.title}
         </span>
-        <Button
+        <ToolbarButton
           type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("browser.reload")}
-          title={t("browser.reload")}
+          label={t("browser.reload")}
           onClick={() => setRevision((value) => value + 1)}
         >
           <RotateCw />
-        </Button>
-        <PreviewMenuButton preview={preview} />
+        </ToolbarButton>
+        <HtmlPreviewActions preview={preview} />
         {onCollapse && (
-          <Button
+          <ToolbarButton
             type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("chat.htmlPreviewCollapse")}
-            title={t("chat.htmlPreviewCollapse")}
+            label={t("chat.htmlPreviewCollapse")}
             onClick={onCollapse}
           >
             <ChevronUp />
-          </Button>
+          </ToolbarButton>
         )}
-      </header>
+      </HtmlPreviewHeader>
       <PreviewFrame
         key={revision}
         loading={onCollapse ? "lazy" : undefined}

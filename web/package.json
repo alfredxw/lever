@@ -49,7 +49,7 @@
     "modern-tar": "0.8.6",
     "monaco-editor": "0.55.1",
     "motion": "^14.9.1",
-    "mygo-runtime": "0.7.4",
+    "mygo-runtime": "0.10.0",
     "pdfjs-dist": "6.4.299",
     "qrcode.react": "4.2.0",
     "radix-ui": "1.8.0",

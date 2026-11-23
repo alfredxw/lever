@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -46,6 +47,51 @@ func TestMain(tests *testing.M) {
 		os.Exit(1)
 	}
 	os.Exit(code)
+}
+
+func TestSystemBrowserOpensOriginalHTML(t *testing.T) {
+	if os.Getenv("LEVER_TEST_SYSTEM_BROWSER") != "1" {
+		t.Skip("set LEVER_TEST_SYSTEM_BROWSER=1 to open a fixture in the system browser")
+	}
+	loaded := make(chan string, 1)
+	receipt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/loaded" {
+			http.NotFound(w, req)
+			return
+		}
+		select {
+		case loaded <- req.URL.Query().Get("href"):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<title>Lever HTML check complete</title><script>window.close()</script>`)
+	}))
+	defer receipt.Close()
+	path := filepath.Join(t.TempDir(), "报告 #100%.htm")
+	html := fmt.Sprintf(`<script>location.replace(%q + encodeURIComponent(location.href))</script>`, receipt.URL+"/loaded?href=")
+	if err := os.WriteFile(path, []byte(html), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fragment = "#part%202"
+	expected, err := htmlFileURL(path, fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Dialogs{}).OpenPreviewInBrowser(path, fragment); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case href := <-loaded:
+		if href != expected {
+			t.Fatalf("browser loaded %q, want %q", href, expected)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("system browser did not load the original HTML")
+	}
 }
 
 func TestNativeBrowserWorkbench(t *testing.T) {

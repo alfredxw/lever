@@ -7,13 +7,19 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { isMyGo } from "mygo-runtime";
+import { toast } from "sonner";
 import {
   defaultComponents,
   StreamdownContext,
   type ExtraProps,
 } from "streamdown";
 import { rowMenuHandlers } from "@/components/ui/action-context-menu";
-import { ChatPreviewEndpoint, HtmlPreviewContext } from "./HtmlPreview";
+import {
+  ChatPreviewEndpoint,
+  HtmlPreviewContext,
+  openOriginalHtml,
+} from "./HtmlPreview";
 import {
   chatHtmlPreview,
   htmlViewerURL,
@@ -171,6 +177,13 @@ export function ChatHtmlLink({
   const actions = useContext(HtmlPreviewContext);
   const inline = useInlineHtmlPreview();
   const expanded = inline?.src === preview.src;
+  const openFile = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!isMyGo()) return;
+    event.preventDefault();
+    void openOriginalHtml(preview.src).catch((error) =>
+      toast.error(String(error)),
+    );
+  };
   return (
     <a
       href={htmlViewerURL(preview.src)}
@@ -191,6 +204,10 @@ export function ChatHtmlLink({
       onClick={(event) => {
         if (inline && followInChat(event))
           inline.toggle(preview, event.currentTarget);
+        else openFile(event);
+      }}
+      onAuxClick={(event) => {
+        if (event.button === 1) openFile(event);
       }}
     >
       <InsideChatLink.Provider value>{children}</InsideChatLink.Provider>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,11 +84,19 @@ func (s *Server) serveChatPreview(w http.ResponseWriter, r *http.Request, run, k
 		serveImageAsset(w, r, root, relative)
 		return
 	}
-	if r.URL.Query().Get("info") == "true" {
+	download := r.URL.Query().Get("download") == "true"
+	if download || r.URL.Query().Get("info") == "true" {
 		if err == nil {
 			file, _, openErr := workspace.OpenAsset(root, relative)
 			if openErr == nil {
 				defer file.Close()
+				if download {
+					htmlPreviewHeaders(w, r, false)
+					w.Header().Set("Content-Type", "application/octet-stream")
+					w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(relative)}))
+					http.ServeContent(w, r, "", time.Time{}, file)
+					return
+				}
 				info := struct {
 					Path        string `json:"path"`
 					NeedsImages bool   `json:"needsImages,omitempty"`

@@ -97,7 +97,6 @@ func main() {
 		return
 	}
 	defer backend.Close()
-	dialogs.origin, dialogs.pairURL = backend.URL, backend.PairURL
 	if *devOrigin != "" {
 		fmt.Println("Lever Desktop:", backend.URL)
 	}

@@ -13,18 +13,35 @@ import (
 	"lever/internal/workspace"
 )
 
-type Dialogs struct{ origin, pairURL string }
+type Dialogs struct{}
 
-func (d *Dialogs) PairSystemBrowser() error {
-	return mygo.Shell.OpenExternal(d.pairURL)
+func (*Dialogs) OpenPreviewInBrowser(path, fragment string) error {
+	link, err := htmlFileURL(path, fragment)
+	if err != nil {
+		return err
+	}
+	return openInSystemBrowser(link)
 }
 
-func (d *Dialogs) OpenPreviewInBrowser(viewer string) error {
-	link, err := url.Parse(viewer)
-	if err != nil || link.IsAbs() || link.Host != "" || !strings.HasPrefix(link.Path, "/view/") || strings.Contains(link.Path, `\`) {
-		return errors.New("invalid preview page")
+func htmlFileURL(path, fragment string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	local := filepath.ToSlash(path)
+	if !filepath.IsAbs(path) || strings.HasPrefix(local, "//") || (ext != ".html" && ext != ".htm") {
+		return "", errors.New("expected a local HTML file")
 	}
-	return mygo.Shell.OpenExternal(d.origin + link.String())
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("expected a regular HTML file")
+	}
+	link, err := url.Parse(fragment)
+	if err != nil || (fragment != "" && !strings.HasPrefix(fragment, "#")) {
+		return "", errors.New("invalid HTML fragment")
+	}
+	link.Scheme, link.Path = "file", "/"+strings.TrimPrefix(local, "/")
+	return link.String(), nil
 }
 
 type ContextMenuItem struct {

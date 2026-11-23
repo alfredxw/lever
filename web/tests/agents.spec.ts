@@ -1389,8 +1389,7 @@ test("chat previews HTML inline, resolves report images and copies the actual fi
     .toBe(1);
   await frame.getByRole("link", { name: "查看原图" }).click();
   await expect(frame.locator("img")).toBeVisible();
-  await panel.getByRole("button", { name: "HTML 预览选项" }).click();
-  await page.getByRole("menuitem", { name: "复制绝对路径" }).click();
+  await panel.getByRole("button", { name: "复制绝对路径" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-copied", path);
   await panel.getByRole("button", { name: "收起预览" }).click();
   await expect(link).toBeFocused();
@@ -1418,8 +1417,7 @@ test("chat previews HTML inline, resolves report images and copies the actual fi
     "download",
     report,
   );
-  await uploaded.getByRole("button", { name: "HTML 预览选项" }).click();
-  await page.getByRole("menuitem", { name: "复制绝对路径" }).click();
+  await uploaded.getByRole("button", { name: "复制绝对路径" }).click();
   await expect(page.locator("html")).toHaveAttribute(
     "data-copied",
     /[/\\]attachments[/\\][\w-]+[/\\]Inline report\.html$/,
@@ -1429,7 +1427,7 @@ test("chat previews HTML inline, resolves report images and copies the actual fi
   await expect(uploaded).toHaveCount(0);
 });
 
-test("chat HTML links reuse a side tab and offer quick and paired browser previews", async ({
+test("chat HTML links preview in Lever and hand off the original file", async ({
   page,
   browser,
 }) => {
@@ -1508,25 +1506,31 @@ test("chat HTML links reuse a side tab and offer quick and paired browser previe
   await expect(prompt.locator('iframe[src$="#notes"]')).toHaveCount(0);
   const inline = turn.locator(".chat-visualization");
   await expect(inline.locator("iframe")).toHaveAttribute("title", "内嵌图表");
-  await inline.getByRole("button", { name: "HTML 预览选项" }).click();
   await expect(
-    page.getByRole("menuitem", { name: "复制绝对路径" }),
+    inline.getByRole("button", { name: "复制绝对路径" }),
   ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await inline.getByRole("button", { name: "展开 HTML 预览" }).click();
+  const quick = inline.getByRole("button", { name: "快速预览" });
+  await quick.press("Enter");
   const expanded = page.getByRole("dialog", { name: "内嵌图表" });
   await expect(
     expanded.frameLocator("iframe").getByRole("button", { name: "Try" }),
   ).toBeVisible();
+  await expect(expanded.getByRole("button", { name: "快速预览" })).toHaveCount(
+    0,
+  );
   await expanded.press("Escape");
-  await replyLink.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "在 Lever 网页标签中打开" }).click();
+  await expect(quick).toBeFocused();
+  const replyPreviewId = await replyLink.getAttribute("aria-controls");
+  await turn
+    .locator(`[id="${replyPreviewId}"]`)
+    .getByRole("button", { name: "在网页标签中打开" })
+    .click();
   const panel = page.getByRole("tabpanel", { name, exact: true });
   await expect(panel).toHaveAttribute("data-pane", "side");
   await expect(pasted).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await jump.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "在 Lever 网页标签中打开" }).click();
+  await page.getByRole("menuitem", { name: "在网页标签中打开" }).click();
   await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
   await expect(panel.locator("iframe")).toHaveAttribute("src", /#notes$/);
   await expect(panel.locator("iframe")).toHaveAttribute(
@@ -1549,22 +1553,19 @@ test("chat HTML links reuse a side tab and offer quick and paired browser previe
   ).toBeVisible();
   await dialog.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await panel.getByRole("button", { name: "HTML 预览选项" }).click();
   await expect(
-    page.getByRole("menuitem", { name: /Finder|文件管理器/ }),
+    panel.getByRole("button", { name: /Finder|文件管理器/ }),
   ).toHaveCount(0);
-  const opened = page.context().waitForEvent("page");
-  await page.getByRole("menuitem", { name: "在浏览器新标签页中打开" }).click();
-  const external = await opened;
-  await expect(
-    external.frameLocator("iframe").getByRole("button", { name: "Try" }),
-  ).toBeVisible();
-  await expect(external).toHaveTitle(name);
-  expect(external.url()).toBe(section.href.replace("/api/", "/view/"));
+  const downloading = page.waitForEvent("download");
+  await panel.getByRole("button", { name: "下载原始 HTML 文件" }).click();
+  const downloaded = await downloading;
+  expect(downloaded.suggestedFilename()).toBe(name);
+  expect(readFileSync((await downloaded.path())!)).toEqual(readFileSync(path));
+  expect(page.context().pages()).toHaveLength(1);
   const unpaired = await browser.newContext({ locale: "zh-CN" });
   try {
     const viewer = await unpaired.newPage();
-    await viewer.goto(external.url());
+    await viewer.goto(section.href.replace("/api/", "/view/"));
     await expect(viewer.getByRole("alert")).toContainText("尚未与 Lever 配对");
     await expect(viewer.locator("iframe")).toHaveCount(0);
     const pairing = await unpaired.newPage();
@@ -1577,6 +1578,59 @@ test("chat HTML links reuse a side tab and offer quick and paired browser previe
   } finally {
     await unpaired.close();
   }
+  await page.evaluate(() => {
+    Reflect.set(window, "mygo", {
+      platform: "darwin",
+      callWith(method: string, args: unknown[]) {
+        if (method === "Dialogs.OpenPreviewInBrowser")
+          document.body.dataset.openedHtml = JSON.stringify(args);
+        if (method === "Dialogs.ShowItemInFolder")
+          document.body.dataset.revealedHtml = JSON.stringify(args);
+        return Promise.resolve();
+      },
+    });
+  });
+  await jump.click();
+  const jumpPreviewId = await jump.getAttribute("aria-controls");
+  const header = prompt.locator(`[id="${jumpPreviewId}"] header`);
+  const external = header.getByRole("button", { name: "在系统浏览器中打开" });
+  await expect(external).toBeEnabled();
+  expect(
+    await header
+      .getByRole("button")
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute("aria-label")),
+      ),
+  ).toEqual([
+    "刷新",
+    "快速预览",
+    "在网页标签中打开",
+    "在系统浏览器中打开",
+    "复制绝对路径",
+    "在 Finder 中显示",
+    "收起预览",
+  ]);
+  await header.getByRole("button", { name: "快速预览" }).hover();
+  await expect(page.getByRole("tooltip", { name: "快速预览" })).toBeVisible();
+  await prompt.locator(`[id="${jumpPreviewId}"]`).evaluate((element) => {
+    element.style.width = "200px";
+  });
+  expect(
+    await header.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await external.click();
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-opened-html",
+    JSON.stringify([path, "#notes"]),
+  );
+  await header.getByRole("button", { name: "在 Finder 中显示" }).click();
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-revealed-html",
+    JSON.stringify([path]),
+  );
+  expect(page.context().pages()).toHaveLength(1);
 });
 
 test("chat file links open in the side pane at the cited line", async ({
