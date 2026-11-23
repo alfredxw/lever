@@ -105,7 +105,7 @@ func (a *App) Suggestions(ctx context.Context, chatID, agentID, sessionID, copyI
 }
 
 func (a *App) directorySkillReferences(ctx context.Context, scope model.Scope, config model.Provider, profile model.Profile) ([]model.Reference, error) {
-	paths, err := a.skillReferencePaths(ctx, scope, config)
+	paths, err := a.skillReferencePaths(ctx, a.Store.DB, scope, config)
 	if err != nil {
 		return nil, err
 	}

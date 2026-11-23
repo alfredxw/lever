@@ -49,6 +49,7 @@ export function FileSidebar({
   hidden,
   selected,
   directory,
+  detail,
   onFile,
 }: {
   scope: Scope;
@@ -56,7 +57,8 @@ export function FileSidebar({
   hidden: boolean;
   selected?: FileSelection;
   directory?: DirectorySelection;
-  onFile: (file: FileSelection) => void;
+  detail?: { rootLabel: string; entryPath?: string };
+  onFile: (file: FileSelection, created?: boolean) => void;
 }) {
   const { t } = useTranslation();
   const source = useFileSource();
@@ -146,7 +148,15 @@ export function FileSidebar({
       aria-label={t(mode === "content" ? "files.search" : "files.directory")}
     >
       <div className="file-sidebar-heading">
-        <span>{t(mode === "content" ? "files.search" : "files.allFiles")}</span>
+        {detail ? (
+          <span className="truncate font-mono" title={root?.path}>
+            {detail.rootLabel}/
+          </span>
+        ) : (
+          <span>
+            {t(mode === "content" ? "files.search" : "files.allFiles")}
+          </span>
+        )}
         {mode === "path" && (
           <div className="file-actions">
             {!fileReadOnly(source) && (
@@ -162,17 +172,19 @@ export function FileSidebar({
                 >
                   <FilePlus2 />
                 </ToolbarButton>
-                <ToolbarButton
-                  label={t("files.newFolder")}
-                  disabled={!destination}
-                  onClick={() => {
-                    setQueries((old) => ({ ...old, path: "" }));
-                    if (destination)
-                      setCreating({ target: destination, directory: true });
-                  }}
-                >
-                  <FolderPlus />
-                </ToolbarButton>
+                {!detail && (
+                  <ToolbarButton
+                    label={t("files.newFolder")}
+                    disabled={!destination}
+                    onClick={() => {
+                      setQueries((old) => ({ ...old, path: "" }));
+                      if (destination)
+                        setCreating({ target: destination, directory: true });
+                    }}
+                  >
+                    <FolderPlus />
+                  </ToolbarButton>
+                )}
               </>
             )}
             <ToolbarButton
@@ -189,23 +201,25 @@ export function FileSidebar({
             >
               <RefreshCw className={fetching ? "animate-spin" : ""} />
             </ToolbarButton>
-            <ToolbarButton
-              label={t("files.collapseAll")}
-              onClick={() => {
-                setExpanded(
-                  (old) =>
-                    new Set(
-                      Array.from(old).filter(
-                        (key) => !key.startsWith(`${root?.id}:`),
+            {!detail && (
+              <ToolbarButton
+                label={t("files.collapseAll")}
+                onClick={() => {
+                  setExpanded(
+                    (old) =>
+                      new Set(
+                        Array.from(old).filter(
+                          (key) => !key.startsWith(`${root?.id}:`),
+                        ),
                       ),
-                    ),
-                );
-                setQueries((old) => ({ ...old, path: "" }));
-                setTarget(root ? { root, path: "." } : undefined);
-              }}
-            >
-              <ChevronsDownUp />
-            </ToolbarButton>
+                  );
+                  setQueries((old) => ({ ...old, path: "" }));
+                  setTarget(root ? { root, path: "." } : undefined);
+                }}
+              >
+                <ChevronsDownUp />
+              </ToolbarButton>
+            )}
           </div>
         )}
       </div>
@@ -232,47 +246,52 @@ export function FileSidebar({
           </Select>
         </div>
       )}
-      <div className="file-search-input">
-        <InputGroup>
-          <InputGroupAddon>
-            <Search />
-          </InputGroupAddon>
-          <InputGroupInput
-            key={mode}
-            ref={searchInput}
-            autoFocus={mode === "content" && !hidden}
-            aria-label={t(mode === "content" ? "files.search" : "files.filter")}
-            placeholder={t(
-              mode === "content" ? "files.searchPlaceholder" : "files.filter",
-            )}
-            value={input}
-            onChange={(event) =>
-              setQueries((old) => ({ ...old, [mode]: event.target.value }))
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Escape")
-                setQueries((old) => ({ ...old, [mode]: "" }));
-            }}
-          />
-          {input && (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                aria-label={t("files.clearSearch")}
-                onClick={() => setQueries((old) => ({ ...old, [mode]: "" }))}
-              >
-                <X />
-              </InputGroupButton>
+      {!detail && (
+        <div className="file-search-input">
+          <InputGroup>
+            <InputGroupAddon>
+              <Search />
             </InputGroupAddon>
-          )}
-        </InputGroup>
-      </div>
+            <InputGroupInput
+              key={mode}
+              ref={searchInput}
+              autoFocus={mode === "content" && !hidden}
+              aria-label={t(
+                mode === "content" ? "files.search" : "files.filter",
+              )}
+              placeholder={t(
+                mode === "content" ? "files.searchPlaceholder" : "files.filter",
+              )}
+              value={input}
+              onChange={(event) =>
+                setQueries((old) => ({ ...old, [mode]: event.target.value }))
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Escape")
+                  setQueries((old) => ({ ...old, [mode]: "" }));
+              }}
+            />
+            {input && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("files.clearSearch")}
+                  onClick={() => setQueries((old) => ({ ...old, [mode]: "" }))}
+                >
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
+      )}
       <div className="file-sidebar-scroll">
         {mode === "path" && !input ? (
           root && (
             <FileTree
               key={`${root.id}:${root.path}`}
               root={root}
+              entryPath={detail?.entryPath}
               creation={creating}
               onCreationStarted={() => setCreating(undefined)}
               onFile={onFile}

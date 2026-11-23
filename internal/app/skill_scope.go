@@ -22,11 +22,43 @@ type skillDirectory struct {
 	managed, subscription, claudeNative bool
 	packageOnly, runtimeNative          bool
 	providers                           []string
+	removed                             removedSkillPaths
+}
+
+func (a *App) skillDirectoriesForScope(ctx context.Context, q store.Queryer, scope model.Scope, config model.Provider) ([]skillDirectory, error) {
+	managed, err := a.skillsDir()
+	if err != nil {
+		return nil, err
+	}
+	owned := []skillDirectory{{path: managed, managed: true}}
+	ids, err := store.List[string](ctx, q, "SELECT json_quote(id) FROM skill_subscriptions ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		dir, err := a.skillSubscriptionDir(id)
+		if err != nil {
+			return nil, err
+		}
+		owned = append(owned, skillDirectory{path: dir, subscription: true})
+	}
+	dirs, err := a.collectSkillDirectories(ctx, scope, owned, config)
+	if err != nil {
+		return nil, err
+	}
+	removed, err := loadRemovedSkillPaths(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	for i := range dirs {
+		dirs[i].removed = removed
+	}
+	return dirs, nil
 }
 
 // Scope contributes its configured directories. Only Skill collection
 // directories are searched, regardless of the size of the workspace.
-func (a *App) skillDirectoriesForScope(ctx context.Context, scope model.Scope, configs ...model.Provider) ([]skillDirectory, error) {
+func (a *App) collectSkillDirectories(ctx context.Context, scope model.Scope, owned []skillDirectory, configs ...model.Provider) ([]skillDirectory, error) {
 	var sources []skillDirectory
 	index := map[string]int{}
 	add := func(dir skillDirectory) {
@@ -34,7 +66,7 @@ func (a *App) skillDirectoriesForScope(ctx context.Context, scope model.Scope, c
 			return
 		}
 		path, err := workspace.Canonical(dir.path)
-		if err != nil {
+		if err != nil || (dir.subscription && path != dir.path) {
 			return
 		}
 		if i, ok := index[path]; ok {
@@ -47,19 +79,8 @@ func (a *App) skillDirectoriesForScope(ctx context.Context, scope model.Scope, c
 		dir.path = path
 		sources = append(sources, dir)
 	}
-	managed, err := a.skillsDir()
-	if err != nil {
-		return nil, err
-	}
-	add(skillDirectory{path: managed, managed: true})
-	if subsRoot, err := a.skillSubscriptionsRoot(); err == nil {
-		if entries, err := os.ReadDir(subsRoot); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-					add(skillDirectory{path: filepath.Join(subsRoot, entry.Name()), subscription: true})
-				}
-			}
-		}
+	for _, dir := range owned {
+		add(dir)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		add(skillDirectory{path: filepath.Join(home, ".agents", "skills")})
@@ -131,7 +152,7 @@ func (a *App) skillDirectoriesForScope(ctx context.Context, scope model.Scope, c
 func (s skillDirectory) packages(ctx context.Context) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		if s.packageOnly {
-			if ctx.Err() == nil && skillDirectoryAvailable(s.path) {
+			if ctx.Err() == nil && !s.removed[s.path] && skillDirectoryAvailable(s.path) {
 				yield(s.path)
 			}
 			return
@@ -163,7 +184,7 @@ func (s skillDirectory) packages(ctx context.Context) iter.Seq[string] {
 			if err != nil || !info.Mode().IsRegular() {
 				return nil
 			}
-			if !yield(dir) {
+			if !s.removed[dir] && !yield(dir) {
 				return fs.SkipAll
 			}
 			if entry.IsDir() {
@@ -187,8 +208,8 @@ func (s skillDirectory) scan(ctx context.Context) []model.Skill {
 	return skills
 }
 
-func (a *App) skillReferencePaths(ctx context.Context, scope model.Scope, config model.Provider) (map[string]bool, error) {
-	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
+func (a *App) skillReferencePaths(ctx context.Context, q store.Queryer, scope model.Scope, config model.Provider) (map[string]bool, error) {
+	dirs, err := a.skillDirectoriesForScope(ctx, q, scope, config)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +235,7 @@ func (a *App) skillSources(ctx context.Context, q store.Queryer, scope model.Sco
 	if !provider.ConfiguredCapabilities(config).Skills {
 		return results, nil
 	}
-	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
+	dirs, err := a.skillDirectoriesForScope(ctx, q, scope, config)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +255,7 @@ func (a *App) prepareSkillPlan(ctx context.Context, scope model.Scope, profile m
 	if !caps.Skills {
 		return plan, cleanup, nil
 	}
-	dirs, err := a.skillDirectoriesForScope(ctx, scope, config)
+	dirs, err := a.skillDirectoriesForScope(ctx, a.Store.DB, scope, config)
 	if err != nil {
 		return plan, cleanup, err
 	}
@@ -301,23 +322,43 @@ func (a *App) prepareSkillPlan(ctx context.Context, scope model.Scope, profile m
 			shared = append(shared, dir)
 		}
 	}
+	stage := filepath.Join(assets, "scope-skills")
 	if len(shared) == 0 {
+		_ = os.RemoveAll(stage)
 		return plan, cleanup, ctx.Err()
 	}
-	stage, err := os.MkdirTemp(assets, ".scope-skills-")
-	if err != nil {
+	if err := os.MkdirAll(stage, 0700); err != nil {
 		return plan, cleanup, err
 	}
-	plan.ClaudeStage = stage
-	cleanup = func() { _ = os.RemoveAll(stage) }
+	keep := make(map[string]bool, len(shared))
 	for _, dir := range shared {
-		addDir := filepath.Join(stage, "lever-"+hash(dir.path)[:12])
-		if err := mountClaudeSkillRoot(dir.path, addDir); err != nil {
+		name := "lever-" + hash(dir.path)[:12]
+		keep[name] = true
+		addDir := filepath.Join(stage, name)
+		if err := syncClaudeSkillRoot(dir.path, addDir); err != nil {
 			return plan, cleanup, err
 		}
 		plan.ClaudeDirectories = append(plan.ClaudeDirectories, addDir)
 	}
+	if entries, err := os.ReadDir(stage); err == nil {
+		for _, entry := range entries {
+			if !keep[entry.Name()] {
+				_ = os.RemoveAll(filepath.Join(stage, entry.Name()))
+			}
+		}
+	}
 	return plan, cleanup, ctx.Err()
+}
+
+func syncClaudeSkillRoot(source, dir string) error {
+	target := filepath.Join(dir, ".claude", "skills")
+	if link, err := os.Readlink(target); err == nil && link == source {
+		return nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return mountClaudeSkillRoot(source, dir)
 }
 
 func mountClaudeSkillRoot(source, dir string) error {

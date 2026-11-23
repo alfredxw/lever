@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -27,22 +27,31 @@ const intervals: UpdateSettings["interval"][] = ["1h", "6h", "24h"];
 
 export function SkillSubscriptionsView({
   subscriptions,
+  focusId,
   settings,
   settingsPending,
   onSaveSettings,
   onAddSubscription,
+  onRemove,
   onBack,
 }: {
   subscriptions: SkillSubscription[];
+  focusId?: string;
   settings: UpdateSettings;
   settingsPending: boolean;
   onSaveSettings: (next: UpdateSettings) => void;
   onAddSubscription: () => void;
+  onRemove: (subscription: SkillSubscription) => void;
   onBack: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const modeId = useId();
   const intervalId = useId();
+  const focusedSource = useRef<HTMLHeadingElement>(null);
+  const focusAvailable = subscriptions.some((sub) => sub.id === focusId);
+  useEffect(() => {
+    if (focusAvailable) focusedSource.current?.focus();
+  }, [focusId, focusAvailable]);
 
   const invalidate = () => {
     void queryClient.invalidateQueries(skillSubscriptionsQuery);
@@ -107,16 +116,6 @@ export function SkillSubscriptionsView({
       if (result.skippedModified > 0) {
         toast.info(t("skills.syncSkipped", { count: result.skippedModified }));
       }
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const removeOne = useMutation({
-    mutationFn: (id: string) =>
-      api(`/skill-subscriptions/${id}`, {}, "DELETE"),
-    onSuccess: () => {
-      invalidate();
-      toast.success(t("skills.subscriptionRemoved"));
     },
     onError: (error) => toast.error(error.message),
   });
@@ -274,8 +273,7 @@ export function SkillSubscriptionsView({
                     : undefined;
                   const busy =
                     (checkOne.isPending && checkOne.variables === sub.id) ||
-                    (syncOne.isPending && syncOne.variables === sub.id) ||
-                    (removeOne.isPending && removeOne.variables === sub.id);
+                    (syncOne.isPending && syncOne.variables === sub.id);
                   return (
                     <div
                       key={sub.id}
@@ -284,9 +282,13 @@ export function SkillSubscriptionsView({
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[13.5px] font-semibold text-foreground">
+                            <h3
+                              ref={sub.id === focusId ? focusedSource : undefined}
+                              tabIndex={-1}
+                              className="text-[13.5px] font-semibold text-foreground"
+                            >
                               {sub.name}
-                            </span>
+                            </h3>
                             <Badge
                               variant="outline"
                               className="h-5 px-1.5 text-[11px] font-normal tabular-nums"
@@ -398,7 +400,7 @@ export function SkillSubscriptionsView({
                           variant="ghost"
                           className="ms-auto text-muted-foreground hover:text-destructive"
                           disabled={busy}
-                          onClick={() => removeOne.mutate(sub.id)}
+                          onClick={() => onRemove(sub)}
                         >
                           <Trash2 data-icon="inline-start" />
                           {t("skills.removeSubscription")}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, Search, Users } from "lucide-react";
+import { ChevronDown, Plus, Search, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { api, queryClient } from "@/api/client";
@@ -226,6 +226,7 @@ export function SkillAgentsPopover({
                 total: activeAgents.length,
               })}
             </span>
+            <ChevronDown className="size-3" />
           </Button>
         )}
       </PopoverTrigger>

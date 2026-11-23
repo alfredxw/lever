@@ -108,6 +108,19 @@ type ExternalFileSelection = FileSelection & {
   source?: SkillFileSource | HostFileSource;
 };
 
+export type FileDocumentControls = {
+  path: string;
+  preview: boolean;
+  sourceAvailable: boolean;
+  readOnly: boolean;
+  status: ReactNode;
+  setPreview: (value: boolean) => void;
+  canSave: boolean;
+  save: () => void;
+};
+
+type DocumentHeader = (document?: FileDocumentControls) => ReactNode;
+
 export function Files({
   source,
   scope,
@@ -116,7 +129,7 @@ export function Files({
   initialDirectoryOpen = true,
   initialPreview,
   active,
-  actions,
+  detail,
   workspaceRoots,
   onOpenExternalFile,
 }: {
@@ -127,7 +140,13 @@ export function Files({
   initialDirectoryOpen?: boolean;
   initialPreview?: boolean;
   active: boolean;
-  actions?: ReactNode;
+  detail?: {
+    rootLabel: string;
+    header: (
+      directoryToggle: ReactNode,
+      document?: FileDocumentControls,
+    ) => ReactNode;
+  };
   workspaceRoots?: Root[];
   onOpenExternalFile?: (file: ExternalFileSelection) => void;
 }) {
@@ -165,8 +184,9 @@ export function Files({
       /* View preferences are optional in restricted webviews. */
     }
   }, [wordWrap]);
-  const selectFile = (next: FileSelection) => {
+  const selectFile = (next: FileSelection, created = false) => {
     setFile(next);
+    if (detail && created) setPreview(false);
     if (compact) {
       if (
         panel.current
@@ -188,11 +208,22 @@ export function Files({
     const setSidebar = compact ? setCompactSidebar : setWideSidebar;
     setSidebar(sidebarView === mode ? "closed" : mode);
   };
-  const navigation = host ? (
-    actions
-  ) : (
+  const treeToggle = (
+    <ToolbarButton
+      ref={directoryToggle}
+      label={t(
+        sidebarView === "path" ? "files.hideDirectory" : "files.showDirectory",
+      )}
+      active={sidebarView === "path"}
+      onClick={() => toggleSidebar("path")}
+    >
+      <Folders />
+    </ToolbarButton>
+  );
+  const documentHeader: DocumentHeader | undefined =
+    detail && ((document) => detail.header(treeToggle, document));
+  const navigation = !host && !detail && (
     <>
-      {actions}
       <ToolbarButton
         label={t("files.search")}
         active={sidebarView === "content"}
@@ -200,18 +231,7 @@ export function Files({
       >
         <Search />
       </ToolbarButton>
-      <ToolbarButton
-        ref={directoryToggle}
-        label={t(
-          sidebarView === "path"
-            ? "files.hideDirectory"
-            : "files.showDirectory",
-        )}
-        active={sidebarView === "path"}
-        onClick={() => toggleSidebar("path")}
-      >
-        <Folders />
-      </ToolbarButton>
+      {treeToggle}
     </>
   );
   const sidebar = !host && (
@@ -221,6 +241,9 @@ export function Files({
       hidden={!showSidebar}
       selected={file}
       directory={directory}
+      detail={
+        detail && { rootLabel: detail.rootLabel, entryPath: initialFile?.path }
+      }
       onFile={selectFile}
     />
   );
@@ -242,15 +265,19 @@ export function Files({
               ])}
               file={file}
               dark={dark}
-              active={active}
+              active={active && !(detail && compact && showSidebar)}
               navigation={navigation}
+              documentHeader={documentHeader}
               wordWrap={wordWrap}
               setWordWrap={setWordWrap}
               preview={preview}
               setPreview={(value) => {
                 setPreview(value);
-                setFile(
-                  (current) => current && { ...current, location: undefined },
+                if (detail && compact) setCompactSidebar("closed");
+                setFile((current) =>
+                  current?.location
+                    ? { ...current, location: undefined }
+                    : current,
                 );
               }}
               workspaceRoots={workspaceRoots}
@@ -259,15 +286,20 @@ export function Files({
             />
           ) : (
             <>
-              <FileToolbar
-                root={
-                  scope.roots.find((root) => root.id === scope.primaryRootId) ??
-                  scope.roots[0]
-                }
-                onFile={selectFile}
-              >
-                {navigation}
-              </FileToolbar>
+              {documentHeader ? (
+                documentHeader()
+              ) : (
+                <FileToolbar
+                  root={
+                    scope.roots.find(
+                      (root) => root.id === scope.primaryRootId,
+                    ) ?? scope.roots[0]
+                  }
+                  onFile={selectFile}
+                >
+                  {navigation}
+                </FileToolbar>
+              )}
               <main className="file-preview">
                 <Empty>
                   <EmptyHeader>
@@ -293,6 +325,7 @@ function FilePreview({
   dark,
   active,
   navigation,
+  documentHeader,
   wordWrap,
   setWordWrap,
   preview,
@@ -305,6 +338,7 @@ function FilePreview({
   dark: boolean;
   active: boolean;
   navigation: ReactNode;
+  documentHeader?: DocumentHeader;
   wordWrap: boolean;
   setWordWrap: (value: boolean) => void;
   preview: boolean;
@@ -341,7 +375,8 @@ function FilePreview({
   const unsupported =
     content.error instanceof APIError && content.error.status === 415;
   const text = draft?.content ?? data?.content;
-  const showPreview = richText && preview && !location;
+  const showPreview =
+    (documentHeader ? editable : richText) && preview && !location;
   const showSource = !showPreview && !!data;
   const [sourceOpened, setSourceOpened] = useState(false);
   useEffect(() => {
@@ -402,28 +437,40 @@ function FilePreview({
       toast.error(t("chat.copyFailed"));
     }
   };
-  const fullPath =
-    (host ? data?.path : undefined) || absoluteFilePath(file);
+  const fullPath = (host ? data?.path : undefined) || absoluteFilePath(file);
   const canOpenNative = native && !fullPath.startsWith("~");
-  return (
-    <>
+  const readOnly = !writable || !!data?.truncated;
+  const status = (readOnly || draft) && (
+    <span className="file-save-status" role="status" data-dirty={!!draft}>
+      {readOnly
+        ? t("files.readOnly")
+        : draft?.reloading
+          ? t("common.loading")
+          : draft?.saving
+            ? t("files.saving")
+            : t("files.unsaved")}
+    </span>
+  );
+  function renderHeader() {
+    if (documentHeader)
+      return documentHeader({
+        path,
+        preview: showPreview || !editable || unsupported,
+        sourceAvailable: editable && !!data && !unsupported,
+        readOnly,
+        status,
+        setPreview,
+        canSave,
+        save,
+      });
+    return (
       <FileToolbar
         root={root}
         path={path}
         displayPath={host ? fullPath : undefined}
         onFile={onFile}
       >
-        {(!writable || data?.truncated || draft) && (
-          <span className="file-save-status" role="status" data-dirty={!!draft}>
-            {!writable || data?.truncated
-              ? t("files.readOnly")
-              : draft?.reloading
-                ? t("common.loading")
-                : draft?.saving
-                  ? t("files.saving")
-                  : t("files.unsaved")}
-          </span>
-        )}
+        {status}
         {richText && (
           <ToolbarButton
             label={t(showPreview ? "files.showSource" : "files.preview")}
@@ -527,6 +574,11 @@ function FilePreview({
         </DropdownMenu>
         {navigation}
       </FileToolbar>
+    );
+  }
+  return (
+    <>
+      {renderHeader()}
       <main className="file-preview">
         <PreviewDownload.Provider value={`${resource}&download=true`}>
           {conflict ? (
@@ -576,6 +628,14 @@ function FilePreview({
             <>
               {data.truncated && (
                 <div className="file-warning">{t("files.truncated")}</div>
+              )}
+              {showPreview && kind === "text" && (
+                <pre
+                  className="file-text-preview"
+                  aria-label={t("files.preview")}
+                >
+                  <code>{text}</code>
+                </pre>
               )}
               {showPreview && kind === "markdown" && (
                 <article

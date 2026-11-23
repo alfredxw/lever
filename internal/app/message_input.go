@@ -107,7 +107,7 @@ func (a *App) validateReferences(ctx context.Context, q store.Queryer, reference
 			case !native || config.Type == "pi":
 				if skillPaths == nil {
 					var err error
-					skillPaths, err = a.skillReferencePaths(ctx, session.Scope, config)
+					skillPaths, err = a.skillReferencePaths(ctx, q, session.Scope, config)
 					if err != nil {
 						return err
 					}

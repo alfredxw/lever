@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -31,6 +32,7 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 		skills, err := a.Skills(r.Context())
 		respond(w, skills, err)
 	})
+	skillRemovalRoutes(mux, "/api/skills/{id}", a.DeleteSkill)
 	mux.HandleFunc("GET /api/skill-update-settings", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.SkillUpdateSettings(r.Context())
 		respond(w, v, err)
@@ -69,9 +71,7 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 		v, err := a.UpdateSkillSubscription(r.Context(), r.PathValue("id"), input.Name, input.UpdatePolicy)
 		respond(w, v, err)
 	})
-	mux.HandleFunc("DELETE /api/skill-subscriptions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, map[string]bool{"deleted": true}, a.DeleteSkillSubscription(r.Context(), r.PathValue("id")))
-	})
+	skillRemovalRoutes(mux, "/api/skill-subscriptions/{id}", a.DeleteSkillSubscription)
 	mux.HandleFunc("POST /api/skill-subscriptions/{id}/check", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.CheckSkillSubscription(r.Context(), r.PathValue("id"))
 		respond(w, v, err)
@@ -138,6 +138,24 @@ func skillRoutes(mux *http.ServeMux, a *app.App) {
 		dirs, err := a.SkillScope(r.Context(), r.PathValue("id"), write, skillReferenceScope(r))
 		return dirs, func() {}, err
 	}, model.SkillEntry)
+}
+
+func skillRemovalRoutes(mux *http.ServeMux, path string, remove func(context.Context, string, bool) (model.SkillRemovalResult, error)) {
+	mux.HandleFunc("DELETE "+path, func(w http.ResponseWriter, r *http.Request) {
+		result, err := remove(r.Context(), r.PathValue("id"), r.URL.Query().Get("deleteFiles") == "true")
+		respond(w, result, err)
+	})
+	mux.HandleFunc("POST "+path+"/remove", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			DeleteFiles bool `json:"deleteFiles"`
+		}
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		result, err := remove(r.Context(), r.PathValue("id"), input.DeleteFiles)
+		respond(w, result, err)
+	})
 }
 
 func skillReferenceScope(r *http.Request) app.SkillReferenceScope {

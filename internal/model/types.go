@@ -33,6 +33,7 @@ type UpdateSettings struct {
 type SkillSubscription struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
+	Directory       string          `json:"directory,omitempty"`
 	Source          PluginGitSource `json:"source"`
 	Commit          string          `json:"commit"`
 	Tree            string          `json:"tree"`
@@ -60,6 +61,11 @@ type SkillSubscriptionSyncResult struct {
 	Updated         int               `json:"updated"`
 	Removed         int               `json:"removed"`
 	SkippedModified int               `json:"skippedModified"`
+}
+
+type SkillRemovalResult struct {
+	Deleted            bool   `json:"deleted"`
+	RemainingDirectory string `json:"remainingDirectory,omitempty"`
 }
 
 type SkillOrigin struct {

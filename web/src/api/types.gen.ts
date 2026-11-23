@@ -605,6 +605,7 @@ export interface UpdateSettings {
 export interface SkillSubscription {
   id: string;
   name: string;
+  directory?: string;
   source: PluginGitSource;
   commit: string;
   tree: string;
@@ -630,6 +631,10 @@ export interface SkillSubscriptionSyncResult {
   updated: number /* int */;
   removed: number /* int */;
   skippedModified: number /* int */;
+}
+export interface SkillRemovalResult {
+  deleted: boolean;
+  remainingDirectory?: string;
 }
 export interface SkillOrigin {
   directory: string;

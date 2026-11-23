@@ -435,6 +435,11 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 			}
 		}
 		agent.UpdatedAt = now()
+		if len(p.Skills) > 0 {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM removed_skill_directories WHERE path IN (SELECT value FROM json_each(?))", store.JSON(p.Skills)); err != nil {
+				return err
+			}
+		}
 		_, err := tx.Exec("INSERT INTO agents(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", agent.ID, store.JSON(agent))
 		if err != nil {
 			return err

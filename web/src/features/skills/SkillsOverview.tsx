@@ -268,6 +268,7 @@ export function SkillsOverview({
   onOpenSubscriptions,
   onResolveConflict,
   onOpen,
+  onSkillAction,
   onCreate,
   onSubscribe,
   visible,
@@ -288,6 +289,7 @@ export function SkillsOverview({
   onOpenSubscriptions: () => void;
   onResolveConflict: (skill: Skill) => void;
   onOpen: (skill: Skill) => void;
+  onSkillAction: (skill: Skill) => void;
   onCreate: () => void;
   onSubscribe: () => void;
   visible: boolean;
@@ -765,6 +767,7 @@ export function SkillsOverview({
                       (duplicateNames.get(skill.name.toLowerCase()) ?? 0) > 1
                     }
                     onOpen={() => onOpen(skill)}
+                    onAction={onSkillAction}
                     control={control}
                     onUpdate={() =>
                       skill.localModified

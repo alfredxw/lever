@@ -1,9 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle,
   ChevronRight,
-  Download,
   LayoutGrid,
   Plus,
   Rss,
@@ -38,17 +36,20 @@ import {
   SecondarySidebar,
   useSecondarySidebarState,
 } from "@/components/workbench/SecondarySidebar";
-import { Files } from "@/features/files/Files";
 import { directoryName, displayPath } from "@/lib/paths";
-import { SkillAgentsPopover } from "./SkillAgentsPopover";
 import { SkillConflictDialog } from "./SkillConflictDialog";
 import { SkillDialog, type SkillDialogMode } from "./SkillDialog";
+import { SkillFiles } from "./SkillFiles";
 import { SkillOriginGlyph } from "./SkillOriginGlyph";
+import {
+  SkillActionButton,
+  SkillRemovalDialog,
+  type SkillRemovalTarget,
+} from "./SkillRemoval";
 import { SkillsOverview, type SkillFilters } from "./SkillsOverview";
 import { SkillSubscriptionsView } from "./SkillSubscriptionsView";
 import {
   matchesSkill,
-  skillEntryTarget,
   skillOrigins,
   skillsQuery,
   skillSubscriptionsQuery,
@@ -100,7 +101,9 @@ export default function SkillsPage({
     revision: number;
     edit: boolean;
   }>();
-  const [subscriptionsActive, setSubscriptionsActive] = useState(false);
+  const [subscriptionView, setSubscriptionView] = useState<{
+    focusId?: string;
+  }>();
   const [openSource, setOpenSource] = useState<SkillGroup["kind"] | undefined>(
     "scope",
   );
@@ -112,14 +115,10 @@ export default function SkillsPage({
   });
   const [dialog, setDialog] = useState<SkillDialogMode>();
   const [conflictSkill, setConflictSkill] = useState<Skill>();
+  const [removal, setRemoval] = useState<SkillRemovalTarget>();
   const frame = useRef<HTMLElement>(null);
 
   const skills = library.data ?? [];
-  const selected = skills.find((skill) => skill.id === selection?.id);
-  const file = useMemo(
-    () => selected && skillEntryTarget(selected),
-    [selected?.id, selected?.path, selected?.managed, selected?.subscriptionId],
-  );
 
   const saveUpdateSettings = useMutation({
     mutationFn: (next: UpdateSettings) =>
@@ -228,6 +227,7 @@ export default function SkillsPage({
   const entries = groups.flatMap((group) =>
     group.entries.map((skill) => ({ skill, group })),
   );
+  const selected = entries.find(({ skill }) => skill.id === selection?.id);
   const hits = sidebarTerm
     ? entries.filter(({ skill }) => matchesSkill(skill, sidebarTerm))
     : [];
@@ -246,7 +246,7 @@ export default function SkillsPage({
   }
 
   function select(skill: Skill, edit = false) {
-    setSubscriptionsActive(false);
+    setSubscriptionView(undefined);
     setSelection((current) => ({
       id: skill.id,
       revision: (current?.revision ?? 0) + 1,
@@ -260,19 +260,24 @@ export default function SkillsPage({
   }
 
   function showOverview(source?: string, search = "", closeSidebar = true) {
-    setSubscriptionsActive(false);
+    setSubscriptionView(undefined);
     setSelection(undefined);
     if (source) setFilters({ source, search, status: "allStatuses" });
     if (closeSidebar) revealContent();
   }
 
-  function showSubscriptions() {
+  function openSubscriptions(focusId?: string) {
     setSelection(undefined);
-    setSubscriptionsActive(true);
+    setSubscriptionView({ focusId });
     revealContent();
   }
+  const showSubscriptions = () => openSubscriptions();
 
-  const inOverview = !selection && !subscriptionsActive;
+  function requestSkillRemoval(skill: Skill) {
+    setRemoval({ skill });
+  }
+
+  const inOverview = !selection && !subscriptionView;
 
   function renderRow({ skill, group }: { skill: Skill; group: SkillGroup }) {
     const path = displayPath(skill.path, homeDir);
@@ -283,7 +288,7 @@ export default function SkillsPage({
         variant="ghost"
         className="sidebar-nav-item skills-row"
         title={path}
-        aria-current={selected?.id === skill.id ? "page" : undefined}
+        aria-current={selection?.id === skill.id ? "page" : undefined}
         onClick={() => select(skill)}
       >
         {sidebarTerm && <SkillOriginGlyph kind={group.kind} compact />}
@@ -348,7 +353,7 @@ export default function SkillsPage({
             <Button
               variant="ghost"
               className="sidebar-nav-item"
-              aria-current={subscriptionsActive ? "page" : undefined}
+              aria-current={subscriptionView ? "page" : undefined}
               onClick={showSubscriptions}
             >
               <Rss data-icon="inline-start" className="text-muted-foreground" />
@@ -533,6 +538,7 @@ export default function SkillsPage({
             onCheckAllUpdates={() => checkAllSubs.mutate()}
             onOpenSubscriptions={showSubscriptions}
             onResolveConflict={setConflictSkill}
+            onSkillAction={requestSkillRemoval}
             onOpen={select}
             onCreate={() => setDialog("create")}
             onSubscribe={() => setDialog("subscribe")}
@@ -540,96 +546,41 @@ export default function SkillsPage({
           />
         )}
 
-        {subscriptionsActive && (
+        {subscriptionView && (
           <SkillSubscriptionsView
             subscriptions={subscriptions}
+            focusId={subscriptionView.focusId}
             settings={updateSettings}
             settingsPending={saveUpdateSettings.isPending}
             onSaveSettings={(next) => saveUpdateSettings.mutate(next)}
             onAddSubscription={() => setDialog("subscribe")}
+            onRemove={(subscription) => setRemoval({ subscription })}
             onBack={() => showOverview()}
           />
         )}
 
         {selection &&
-          (selected?.available && file ? (
-            <div className="skills-files-shell">
-              {selected.subscriptionId &&
-                (selected.localModified || selected.updateAvailable) && (
-                  <div
-                    className="skills-files-banner"
-                    data-tone={selected.localModified ? "warn" : "update"}
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-2">
-                      {selected.localModified ? (
-                        <AlertTriangle className="size-3.5 shrink-0" />
-                      ) : (
-                        <Download className="size-3.5 shrink-0" />
-                      )}
-                      <span className="text-xs">
-                        {selected.localModified
-                          ? t("skills.localModifiedBanner")
-                          : t("skills.updateAvailableBanner")}
-                      </span>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {selected.localModified ? (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          onClick={() => setConflictSkill(selected)}
-                        >
-                          {t("skills.resolveConflict")}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          onClick={showSubscriptions}
-                        >
-                          {t("skills.reviewAndSync")}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              <div className="min-h-0 flex-1">
-                <Files
-                  key={`${selected.id}:${selection.revision}`}
-                  source={file.source}
-                  scope={{ roots: [file.root], primaryRootId: file.root.id }}
-                  initialFile={file}
-                  initialPreview={!selection.edit}
-                  dark={dark}
-                  active={!compact || !sidebar}
-                  actions={
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("common.overview")}
-                        title={t("common.overview")}
-                        onClick={() => showOverview()}
-                      >
-                        <LayoutGrid />
-                      </Button>
-                      <SkillAgentsPopover
-                        skill={selected}
-                        agents={agents}
-                        providers={providers}
-                        variant="toolbar"
-                      />
-                    </>
-                  }
-                />
-              </div>
-            </div>
+          (selected?.skill.available ? (
+            <SkillFiles
+              key={`${selected.skill.id}:${selection.revision}`}
+              skill={selected.skill}
+              kind={selected.group.kind}
+              agents={agents}
+              providers={providers}
+              initialPreview={!selection.edit}
+              dark={dark}
+              active={!compact || !sidebar}
+              onOverview={() => showOverview()}
+              onConflict={() => setConflictSkill(selected.skill)}
+              onSubscriptions={() => openSubscriptions(selected.skill.subscriptionId)}
+              onAction={requestSkillRemoval}
+            />
           ) : (
             <div className="skills-empty">
               <ErrorNotice
                 error={
                   selected
-                    ? `${t("skills.unavailable")} · ${displayPath(selected.path, homeDir)}`
+                    ? `${t("skills.unavailable")} · ${displayPath(selected.skill.path, homeDir)}`
                     : t("skills.unavailable")
                 }
                 retry={() => void library.refetch()}
@@ -638,6 +589,9 @@ export default function SkillsPage({
                 <LayoutGrid />
                 {t("common.overview")}
               </Button>
+              {selected && (
+                <SkillActionButton skill={selected.skill} onAction={requestSkillRemoval} />
+              )}
             </div>
           ))}
       </div>
@@ -656,6 +610,18 @@ export default function SkillsPage({
             setSidebarSearch("");
             setOpenSource("subscribed");
             showOverview(`sub:${sub.id}`);
+          }}
+        />
+      )}
+
+      {removal && (
+        <SkillRemovalDialog
+          target={removal}
+          onClose={() => setRemoval(undefined)}
+          onRemoved={() => {
+            if ("skill" in removal && selection?.id === removal.skill.id)
+              showOverview();
+            setRemoval(undefined);
           }}
         />
       )}

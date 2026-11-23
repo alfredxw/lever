@@ -1,14 +1,64 @@
 package httpapi_test
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lever/internal/model"
 )
+
+func TestDeletingSkillSubscriptionDuringSync(t *testing.T) {
+	f := newFixture(t)
+	repo := newPluginRepository(t)
+	repo.write("alpha/SKILL.md", "# Alpha\n", 0600)
+	repo.commit("v1")
+	var sub model.SkillSubscription
+	f.request("POST", "/skill-subscriptions", map[string]string{"url": pluginRepoURL}, 200, &sub)
+	var skills []model.Skill
+	f.request("GET", "/skills", nil, 200, &skills)
+	if len(skills) != 1 {
+		t.Fatalf("expected one installed Skill: %v", skills)
+	}
+	gate := t.TempDir()
+	t.Setenv("LEVER_TEST_SYNC_GATE", gate)
+	ssh := filepath.Join(gate, "ssh")
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\ntouch \"$LEVER_TEST_SYNC_GATE/started\"\nwhile [ ! -f \"$LEVER_TEST_SYNC_GATE/resume\" ]; do sleep 0.05; done\nexec git-upload-pack \"$LEVER_TEST_PLUGIN_REPO\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_SSH_COMMAND", "'"+strings.ReplaceAll(ssh, "'", "'\\''")+"'")
+	resume := filepath.Join(gate, "resume")
+	defer os.WriteFile(resume, nil, 0600)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.a.SyncSkillSubscription(t.Context(), sub.ID)
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if _, err := os.Stat(filepath.Join(gate, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sync did not reach the Git transport")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	f.request("DELETE", "/skill-subscriptions/"+sub.ID+"?deleteFiles=true", nil, 200, nil)
+	if err := os.WriteFile(resume, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("sync of a removed subscription returned %v", err)
+	}
+	if _, err := os.Stat(skills[0].Path); !os.IsNotExist(err) {
+		t.Fatalf("sync restored a deleted Skill: %v", err)
+	}
+}
 
 func TestSkillSubscriptionsSyncLocalEditProtectionAndFork(t *testing.T) {
 	f := newFixture(t)
@@ -115,10 +165,41 @@ func TestSkillSubscriptionsSyncLocalEditProtectionAndFork(t *testing.T) {
 		t.Fatalf("unexpected skill settings: %+v", skillSettings)
 	}
 
-	// Delete subscription cleans up files
-	f.request("DELETE", "/skill-subscriptions/"+sub.ID, nil, 200, nil)
+	agent := f.agent("codex")
+	agent.Profile.Skills = []string{beta.Path, forked.Path}
+	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+	f.request("POST", "/skills", map[string]string{"directory": beta.Path}, 200, nil)
+	f.request("DELETE", "/skills/"+beta.ID, nil, 200, nil)
+	f.request("GET", "/skills/"+beta.ID+"/files", nil, 404, nil)
+	f.request("POST", "/skills/"+beta.ID+"/resolve-update", map[string]string{"strategy": "overwrite"}, 404, nil)
+	f.request("DELETE", "/skills/"+alpha.ID+"?deleteFiles=true", nil, 200, nil)
+	repo.write("skills/beta/SKILL.md", "# Beta v3\n", 0600)
+	repo.write("skills/gamma/SKILL.md", "# Gamma v3\n", 0600)
+	repo.commit("v3")
+	var synced model.SkillSubscriptionSyncResult
+	f.request("POST", "/skill-subscriptions/"+sub.ID+"/sync", nil, 200, &synced)
+	if synced.Subscription.SkillCount != 1 || synced.Updated != 1 {
+		t.Fatalf("removing individual Skills broke sibling updates: %#v", synced)
+	}
 	if _, err := os.Stat(alpha.Path); !os.IsNotExist(err) {
-		t.Fatalf("expected subscription files removed, stat err=%v", err)
+		t.Fatalf("sync restored a deleted directory: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(beta.Path, model.SkillEntry)); err != nil || string(got) != string(gotBeta) {
+		t.Fatalf("sync changed a removed Skill's retained files: %q, %v", got, err)
+	}
+	f.request("GET", "/skills", nil, 200, &skills)
+	if len(skills) != 2 || findSkill(skills, "gamma") == nil || findSkill(skills, forked.Name) == nil {
+		t.Fatalf("removing a subscribed Skill affected another Skill: %#v", skills)
+	}
+	gamma := findSkill(skills, "gamma")
+	f.request("DELETE", "/skill-subscriptions/"+sub.ID, nil, 200, nil)
+	if got, err := os.ReadFile(filepath.Join(gamma.Path, model.SkillEntry)); err != nil || string(got) != "# Gamma v3\n" {
+		t.Fatalf("unsubscribe changed retained files: %q, %v", got, err)
+	}
+	f.request("GET", "/skills/"+gamma.ID+"/files", nil, 404, nil)
+	f.request("GET", "/skills", nil, 200, &skills)
+	if len(skills) != 1 || skills[0].ID != forked.ID || len(skills[0].AgentIDs) != 1 || skills[0].AgentIDs[0] != agent.ID {
+		t.Fatalf("unsubscribing must remove stale registrations and preserve the attached fork: %#v", skills)
 	}
 }
 

@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
-import { ChevronRight, Download, TriangleAlert } from "lucide-react";
+import { Download, TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Agent, ProviderInfo, Skill } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 import { directoryName, displayPath } from "@/lib/paths";
 import { SkillAgentsPopover } from "./SkillAgentsPopover";
 import { SkillOriginGlyph } from "./SkillOriginGlyph";
+import { SkillActionButton } from "./SkillRemoval";
 import type { SkillGroup } from "./skillsQuery";
 
 function libraryPath(skill: Skill, homeDir: string) {
@@ -27,6 +28,7 @@ export function SkillLibraryItem({
   duplicate,
   control,
   onOpen,
+  onAction,
   onUpdate,
 }: {
   skill: Skill;
@@ -39,6 +41,7 @@ export function SkillLibraryItem({
   duplicate: boolean;
   control?: ReactNode;
   onOpen: () => void;
+  onAction: (skill: Skill) => void;
   onUpdate: () => void;
 }) {
   const { t } = useTranslation();
@@ -71,14 +74,9 @@ export function SkillLibraryItem({
             /{skill.name}
           </code>
         </div>
-        <div className="skill-item-action">
-          {control ??
-            (list && (
-              <ChevronRight
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
-            ))}
+        <div className="skill-item-action gap-1">
+          {control}
+          <SkillActionButton skill={skill} compact onAction={onAction} />
         </div>
       </div>
       <p className="skill-item-description" title={skill.description}>

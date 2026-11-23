@@ -53,6 +53,7 @@ function combineDirectories(queries: UseQueryResult<FileEntry[]>[]) {
 export function FileTree({
   root,
   path = ".",
+  entryPath,
   onFile,
   onDirectory,
   selected,
@@ -65,7 +66,8 @@ export function FileTree({
   onCreationStarted?: () => void;
   root: Root;
   path?: string;
-  onFile: (file: FileSelection) => void;
+  entryPath?: string;
+  onFile: (file: FileSelection, created?: boolean) => void;
   onDirectory?: (directory: DirectorySelection) => void;
   selected?: FileSelection;
   expanded: Set<string>;
@@ -99,7 +101,7 @@ export function FileTree({
       }
     }
   });
-  const reveal = (entry: FileEntry) => {
+  const reveal = (entry: FileEntry, created = false) => {
     const next = { root, path: entry.path };
     const parts = entry.path
       .split("/")
@@ -111,7 +113,7 @@ export function FileTree({
       ),
     );
     if (entry.directory) onDirectory?.(next);
-    else onFile(next);
+    else onFile(next, created);
   };
   const prefix = path === "." ? "" : `${path}/`;
   const directories = [
@@ -188,6 +190,11 @@ export function FileTree({
     initialExpansion: "closed",
     flattenEmptyDirectories: false,
     icons: { set: "complete", colored: true },
+    sort: entryPath
+      ? (left, right) =>
+          Number(right.path === entryPath) - Number(left.path === entryPath) ||
+          (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+      : "default",
     // An ignored child should not show a change badge on its parent.
     unsafeCSS: `[data-item-section="git"] { display: none; }`,
     search: false,
@@ -240,7 +247,7 @@ export function FileTree({
             client.invalidateQueries({ queryKey: [key] }),
           ),
         );
-        reveal(entry);
+        reveal(entry, true);
       } else {
         await changeEntry(source, target, "move", destination);
       }
@@ -330,18 +337,24 @@ export function FileTree({
     try {
       const selection = model.getSelectedPaths();
       const focused = model.getFocusedPath();
+      const openPaths = directories
+        .slice(1)
+        .map((directory) => directory.slice(prefix.length) + "/");
       model.resetPaths(draft.current ? [...paths, draft.current.path] : paths, {
-        initialExpandedPaths: directories
-          .slice(1)
-          .map((directory) => directory.slice(prefix.length) + "/"),
+        initialExpandedPaths: entryPath ? undefined : openPaths,
       });
+      if (entryPath)
+        for (const path of openPaths) {
+          const item = model.getItem(path);
+          if (item && "expand" in item) item.expand();
+        }
       model.setGitStatus(gitStatus);
       for (const path of selection) model.getItem(path)?.select();
       if (focused) model.focusPath(focused);
     } finally {
       syncing.current = false;
     }
-  }, [model, paths, gitStatus, prefix, expanded, revision]);
+  }, [model, paths, gitStatus, prefix, expanded, revision, entryPath]);
   const selectedPath =
     selected?.root.id === root.id && selected.path.startsWith(prefix)
       ? selected.path.slice(prefix.length)

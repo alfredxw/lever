@@ -56,6 +56,8 @@ func (a *App) SaveAgentSkillPreferences(ctx context.Context, id, version string,
 	}
 	attachPath = strings.TrimSpace(attachPath)
 	detachPath = strings.TrimSpace(detachPath)
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if attachPath != "" {
 		canonical, err := workspace.Canonical(attachPath)
 		if err != nil || !skillDirectoryAvailable(canonical) {
@@ -68,8 +70,6 @@ func (a *App) SaveAgentSkillPreferences(ctx context.Context, id, version string,
 			detachPath = canonical
 		}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	var agent model.Agent
 	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
 		agent, err = store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", id)
@@ -101,6 +101,9 @@ func (a *App) SaveAgentSkillPreferences(ctx context.Context, id, version string,
 				return invalid("Skill directory names must be unique")
 			}
 			agent.Profile.Skills = append(agent.Profile.Skills, attachPath)
+			if _, err := tx.ExecContext(ctx, "DELETE FROM removed_skill_directories WHERE path=?", attachPath); err != nil {
+				return err
+			}
 			changed = true
 		}
 		if detachPath != "" {
@@ -190,12 +193,16 @@ ORDER BY 1`)
 	return skills, nil
 }
 
-func (a *App) discoveredSkillDirectories(ctx context.Context) ([]skillDirectory, error) {
-	roots, err := store.List[model.Root](ctx, a.Store.DB, `
+func (a *App) skillLibraryRoots(ctx context.Context) ([]model.Root, error) {
+	return store.List[model.Root](ctx, a.Store.DB, `
 SELECT DISTINCT json_object('path', json_extract(root.value, '$.path'))
 FROM agents, json_each(agents.data, '$.profile.roots') AS root
 WHERE root.type = 'object'
 ORDER BY 1`)
+}
+
+func (a *App) discoveredSkillDirectories(ctx context.Context) ([]skillDirectory, error) {
+	roots, err := a.skillLibraryRoots(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -211,14 +218,11 @@ func (a *App) librarySkillDirectories(ctx context.Context, scope model.Scope) ([
 	var dirs []skillDirectory
 	indexes := map[string]int{}
 	for _, config := range append([]model.Provider{{}}, configs...) {
-		sources, err := a.skillDirectoriesForScope(ctx, scope, config)
+		sources, err := a.collectSkillDirectories(ctx, scope, nil, config)
 		if err != nil {
 			return nil, err
 		}
 		for _, source := range sources {
-			if source.managed || source.subscription {
-				continue
-			}
 			index, ok := indexes[source.path]
 			if !ok {
 				index = len(dirs)
@@ -309,12 +313,16 @@ func describeSkill(skill model.Skill) model.Skill {
 	return skill
 }
 
-func (a *App) Skills(ctx context.Context) ([]model.Skill, error) {
+func (a *App) librarySkillEntries(ctx context.Context) (map[string]model.Skill, error) {
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := a.registeredSkills(ctx)
 	if err != nil {
 		return nil, err
 	}
-	subDirs, subMeta, err := a.subscribedSkillDirectories(ctx)
+	subDirs, subMeta, err := a.subscribedSkillDirectories(ctx, removed)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +362,17 @@ func (a *App) Skills(ctx context.Context) ([]model.Skill, error) {
 			}
 		}
 	}
+	for path := range removed {
+		delete(entries, hash(path))
+	}
+	return entries, ctx.Err()
+}
+
+func (a *App) Skills(ctx context.Context) ([]model.Skill, error) {
+	entries, err := a.librarySkillEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
 	skills := make([]model.Skill, 0, len(entries))
 	for _, skill := range entries {
 		skills = append(skills, describeSkill(skill))
@@ -378,6 +397,8 @@ func (a *App) CreateSkill(name string) (model.Skill, error) {
 }
 
 func (a *App) CreateSkillWithOptions(name, description, template string) (model.Skill, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	name = strings.TrimSpace(name)
 	if len(name) > 64 || !skillName.MatchString(name) || !filepath.IsLocal(name) {
 		return model.Skill{}, invalid("Use up to 64 lowercase letters, digits and hyphens for the skill name")
@@ -416,17 +437,36 @@ func (a *App) CreateSkillWithOptions(name, description, template string) (model.
 	if err := workspace.CreateText(stage, model.SkillEntry, content); err != nil {
 		return model.Skill{}, err
 	}
-	if _, err := workspace.ChangeEntry(dir, filepath.Base(stage), "move", name); err != nil {
+	path := filepath.Join(dir, name)
+	moved := false
+	err = a.Store.Write(context.Background(), func(tx *sql.Tx) error {
+		if _, err := tx.Exec("DELETE FROM removed_skill_directories WHERE path=?", path); err != nil {
+			return err
+		}
+		if err := store.Event(tx, model.Event{Type: "skills"}); err != nil {
+			return err
+		}
+		_, err := workspace.ChangeEntry(dir, filepath.Base(stage), "move", name)
+		moved = err == nil
+		return err
+	})
+	if err != nil {
+		if moved {
+			_, restoreErr := workspace.ChangeEntry(dir, name, "move", filepath.Base(stage))
+			return model.Skill{}, errors.Join(err, restoreErr)
+		}
 		if errors.Is(err, os.ErrExist) {
 			return model.Skill{}, conflict("A skill with this directory name already exists")
 		}
 		return model.Skill{}, err
 	}
-	skill := describeSkill(skillAt(filepath.Join(dir, name), true))
+	skill := describeSkill(skillAt(path, true))
 	return skill, nil
 }
 
 func (a *App) AddSkillDirectory(ctx context.Context, directory string) (model.Skill, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	path, err := workspace.Canonical(strings.TrimSpace(directory))
 	if err != nil {
 		return model.Skill{}, invalid("Choose a directory containing a regular SKILL.md file")
@@ -443,12 +483,18 @@ func (a *App) AddSkillDirectory(ctx context.Context, directory string) (model.Sk
 	if !skill.Available {
 		return model.Skill{}, invalid("Choose a directory containing a regular SKILL.md file")
 	}
-	if !skill.Managed {
-		if _, err := a.Store.DB.ExecContext(ctx, "INSERT OR IGNORE INTO skill_directories(path) VALUES(?)", path); err != nil {
-			return model.Skill{}, err
+	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM removed_skill_directories WHERE path=?", path); err != nil {
+			return err
 		}
-	}
-	return skill, nil
+		if !skill.Managed {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO skill_directories(path) VALUES(?)", path); err != nil {
+				return err
+			}
+		}
+		return store.Event(tx, model.Event{Type: "skills"})
+	})
+	return skill, err
 }
 
 type SkillReferenceScope struct {
@@ -541,13 +587,17 @@ func findSkillDirectory(ctx context.Context, dirs []skillDirectory, id string) m
 }
 
 func (a *App) skillByID(ctx context.Context, id string, source SkillReferenceScope) (model.Skill, error) {
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return model.Skill{}, err
+	}
 	entries, err := a.registeredSkills(ctx)
 	if err != nil {
 		return model.Skill{}, err
 	}
 	skill, known := entries[id]
-	if !known {
-		if subDirs, subMeta, subErr := a.subscribedSkillDirectories(ctx); subErr == nil {
+	if !known || !skill.Managed {
+		if subDirs, subMeta, subErr := a.subscribedSkillDirectories(ctx, removed); subErr == nil {
 			if found := findSkillDirectory(ctx, subDirs, id); found.Path != "" {
 				if meta, ok := subMeta[found.Path]; ok {
 					found.SubscriptionID = meta.subID
@@ -581,7 +631,7 @@ func (a *App) skillByID(ctx context.Context, id string, source SkillReferenceSco
 			return model.Skill{}, err
 		}
 	}
-	if skill.Path == "" || !skillDirectoryAvailable(skill.Path) {
+	if skill.Path == "" || removed[skill.Path] || !skillDirectoryAvailable(skill.Path) {
 		return model.Skill{}, errSkillUnavailable
 	}
 	return skill, nil

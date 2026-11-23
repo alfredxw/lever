@@ -1733,9 +1733,11 @@ test("Files opens the directory by default when its pane is wide enough", async 
   const showDirectory = files.getByRole("button", { name: "显示文件目录" });
   const hideDirectory = files.getByRole("button", { name: "隐藏文件目录" });
   await expect(directory).toBeVisible();
+  await expect(file.locator('svg[data-icon-token="go"]')).toBeVisible();
   await file.click();
   await expect(editor).toBeVisible();
   await expect(directory).toBeVisible();
+  expect((await editor.boundingBox())!.x).toBeLessThan((await directory.boundingBox())!.x);
 
   await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
   await page.getByRole("menuitem", { name: "配置", exact: true }).click();
@@ -9643,20 +9645,40 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
   );
   const editor = library.locator(".monaco-editor:visible .view-lines");
   await expect(editor).toContainText(name);
+  const editMode = library.getByRole("radio", { name: "编辑", exact: true });
+  const previewMode = library.getByRole("radio", { name: "预览", exact: true });
+  await expect(editMode).toBeChecked();
   await editor.click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.insertText(content);
+  await previewMode.click();
+  await expect(previewMode).toBeChecked();
+  await expect(library.getByRole("heading", { name: "Review workspace" })).toBeVisible();
   await expect
     .poll(() => readFileSync(join(skill.path, "SKILL.md"), "utf8"))
     .toBe(content);
-  await library.getByRole("button", { name: "预览", exact: true }).click();
-  await expect(
-    library.getByRole("heading", { name: "Review workspace" }),
-  ).toBeVisible();
   await library.getByRole("link", { name: "Checklist" }).click();
   await expect(
     library.getByRole("heading", { name: "Review checklist" }),
   ).toBeVisible();
+  const tree = library.getByRole("complementary", { name: "文件目录", exact: true });
+  await tree.getByRole("button", { name: "刷新目录" }).click();
+  const checklist = tree.getByRole("treeitem", { name: "checklist.md", exact: true });
+  await expect(checklist).toHaveAttribute("aria-selected", "true");
+  await expect(checklist.locator('svg[data-icon-token="markdown"]')).toBeVisible();
+  await expect(tree.getByRole("treeitem").first()).toHaveAccessibleName("SKILL.md");
+  await expect(library.getByRole("navigation", { name: "文件路径" })).toContainText("references/checklist.md");
+  const [menuBox, treeBox, docBox] = await Promise.all([
+    library.getByRole("navigation", { name: "技能", exact: true }).boundingBox(),
+    tree.boundingBox(),
+    library.locator(".file-preview").boundingBox(),
+  ]);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(treeBox!.x + 1);
+  expect(treeBox!.x + treeBox!.width).toBeCloseTo(docBox!.x, 0);
+  await editMode.click();
+  await expect(editor).toContainText("# Review checklist");
+  await expect(checklist).toHaveAttribute("aria-selected", "true");
+  await previewMode.click();
 
   await library
     .getByRole("button", { name: "添加到技能库", exact: true })
@@ -9672,6 +9694,12 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
   await expect(
     library.getByRole("status").filter({ hasText: "只读" }),
   ).toBeVisible();
+  await expect(editMode).toHaveCount(0);
+  await library.getByRole("radio", { name: "源码", exact: true }).click();
+  await expect(editor).toContainText("# Team review");
+  await expect(library.getByRole("button", { name: "保存文件" })).toHaveCount(0);
+  await expect(tree.getByRole("button", { name: "新建文件" })).toHaveCount(0);
+  await previewMode.click();
   await expect(
     library
       .getByRole("group", { name: "外部目录", exact: true })
@@ -9712,6 +9740,11 @@ test("Skills edits managed files and attaches them from Agent Profile", async ({
   await library
     .getByRole("button", { name: "显示文件目录", exact: true })
     .click();
+  const modesBox = (await library.getByRole("radiogroup", { name: "文件显示模式" }).boundingBox())!;
+  expect(modesBox.y + modesBox.height).toBeLessThanOrEqual((await tree.boundingBox())!.y);
+  await previewMode.click();
+  await expect(tree).toBeHidden();
+  await library.getByRole("button", { name: "显示文件目录", exact: true }).click();
   await library
     .getByRole("treeitem", { name: "SKILL.md", exact: true })
     .click();

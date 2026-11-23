@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -123,6 +125,148 @@ test("Plugins embeds shared Provider, Task Source, Event Source config and persi
   await expect(plugins.getByText("全局默认更新策略")).toBeVisible();
 });
 
+test("Skill files open new documents in edit mode and preview the unsaved draft", async ({ page }) => {
+  await page.goto(serverContext().url);
+  const name = `guide-${randomUUID().slice(0, 8)}`;
+  const response = await page.request.post("/api/skills", { data: { name } });
+  expect(response.ok()).toBeTruthy();
+  const skill = await response.json();
+  writeFileSync(join(skill.path, "icon.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6"/></svg>');
+  await openPrimary(page, "技能");
+  const library = page.getByRole("region", { name: "技能", exact: true });
+  const nav = library.getByRole("navigation", { name: "技能", exact: true });
+  await nav.getByRole("button", { name: "Lever 托管", exact: true }).click();
+  await nav.getByRole("button", { name, exact: true }).click();
+  const tree = library.getByRole("complementary", { name: "文件目录" });
+  const preview = library.getByRole("radio", { name: "预览", exact: true });
+  await tree.getByRole("treeitem", { name: "icon.svg", exact: true }).click();
+  await expect(preview).toBeChecked();
+  await expect(library.getByRole("radio", { name: "源码", exact: true })).toBeDisabled();
+  await tree.getByRole("button", { name: "新建文件" }).click();
+  const filename = tree.locator("[data-item-rename-input]");
+  await filename.fill("guide.md");
+  await filename.press("Enter");
+  await expect(library.getByRole("radio", { name: "编辑", exact: true })).toBeChecked();
+  const editor = library.locator(".monaco-editor:visible .view-lines");
+  await editor.click();
+  const holdSave = Promise.withResolvers<void>();
+  await page.route((url) => url.pathname.endsWith("/file") && url.searchParams.get("path") === "guide.md", async (route) => {
+    if (route.request().method() === "PUT") await holdSave.promise;
+    await route.continue();
+  });
+  try {
+    await page.keyboard.insertText("# Unsaved guide");
+    await preview.click();
+    await expect(library.getByRole("heading", { name: "Unsaved guide" })).toBeVisible();
+    expect(readFileSync(join(skill.path, "guide.md"), "utf8")).toBe("");
+    await library.getByRole("button", { name: "删除技能", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: `删除技能 · ${name}` });
+    await dialog.getByRole("button", { name: "仅从技能库移除", exact: true }).click();
+    await expect(dialog).toContainText("请先保存或放弃");
+    await dialog.getByRole("button", { name: "取消" }).click();
+  } finally {
+    holdSave.resolve();
+  }
+  await expect.poll(() => readFileSync(join(skill.path, "guide.md"), "utf8")).toBe("# Unsaved guide");
+});
+
+test("Skills lets users keep or delete original directories across sources", async ({
+  page,
+}) => {
+  const { url, otherScope } = serverContext();
+  await page.goto(url);
+  const name = `removal-${randomUUID().slice(0, 8)}`;
+  const created = await page.request.post("/api/skills", { data: { name } });
+  expect(created.ok()).toBeTruthy();
+  const managed = await created.json();
+  const external = join(otherScope, name);
+  mkdirSync(external);
+  const manifest = `---\nname: ${name}\n---\n\n# External copy\n`;
+  writeFileSync(join(external, "SKILL.md"), manifest);
+  const added = await page.request.post("/api/skills", {
+    data: { directory: external },
+  });
+  expect(added.ok()).toBeTruthy();
+  const { homeDir } = await (await page.request.get("/api/overview")).json();
+  const autoName = `auto-${name}`;
+  const autoPath = join(homeDir, ".agents", "skills", autoName);
+  mkdirSync(autoPath, { recursive: true });
+  writeFileSync(join(autoPath, "SKILL.md"), "# Discovered\n");
+  await page.reload();
+  await openPrimary(page, "技能");
+  const skills = page.getByRole("region", { name: "技能", exact: true });
+  const overview = skills.getByRole("region", { name: "Skills 技能库" });
+  const dialog = page.getByRole("dialog");
+  const checkbox = dialog.getByRole("checkbox", { name: "同时删除磁盘上的原目录" });
+  const managedCard = overview.getByRole("group", { name, exact: true }).filter({
+    has: page.getByRole("button", { name, exact: true }),
+  });
+  await managedCard
+    .getByRole("button", { name: `删除技能 · ${name}`, exact: true })
+    .click();
+  await expect(dialog).toContainText(managed.path);
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  await expect(dialog).toContainText("此操作无法撤销");
+  await dialog.getByRole("button", { name: "取消" }).click();
+  expect(existsSync(managed.path)).toBe(true);
+  await overview.getByRole("button", { name, exact: true }).click();
+  await skills.getByRole("button", { name: "删除技能", exact: true }).click();
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  await page.route(
+    (url) => url.pathname === `/api/skills/${managed.id}/remove`,
+    (route) => route.fulfill({ status: 409, json: { error: "目录正在使用" } }),
+    { times: 1 },
+  );
+  const confirm = dialog.getByRole("button", { name: "移除并删除目录", exact: true });
+  await confirm.click();
+  await expect(dialog).toContainText("目录正在使用");
+  expect(existsSync(managed.path)).toBe(true);
+  await confirm.click();
+  await expect(overview).toBeVisible();
+  await expect(managedCard).toHaveCount(0);
+  expect(existsSync(managed.path)).toBe(false);
+
+  await overview.getByRole("radio", { name: "列表", exact: true }).click();
+  await overview
+    .getByRole("button", { name: `删除技能 · ${name}`, exact: true })
+    .click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(dialog).toContainText(external);
+  await dialog
+    .getByRole("button", { name: "仅从技能库移除", exact: true })
+    .click();
+  await expect(
+    overview.getByRole("button", { name: "External copy" }),
+  ).toHaveCount(0);
+  expect(readFileSync(join(external, "SKILL.md"), "utf8")).toBe(manifest);
+
+  await overview
+    .getByRole("button", { name: `删除技能 · ${autoName}`, exact: true })
+    .click();
+  await expect(dialog).toContainText(autoName);
+  await dialog.getByRole("button", { name: "仅从技能库移除", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.reload();
+  await openPrimary(page, "技能");
+  await expect(overview.getByRole("group", { name, exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    overview.getByRole("group", { name: autoName, exact: true }),
+  ).toHaveCount(0);
+  expect(readFileSync(join(autoPath, "SKILL.md"), "utf8")).toBe("# Discovered\n");
+  expect((await page.request.post("/api/skills", { data: { directory: external } })).ok()).toBeTruthy();
+  await page.reload();
+  await openPrimary(page, "技能");
+  await overview.getByRole("button", { name: `删除技能 · ${name}`, exact: true }).click();
+  await checkbox.check();
+  await confirm.click();
+  await expect(dialog).toHaveCount(0);
+  expect(existsSync(external)).toBe(false);
+});
+
 test("Skills supports Git subscriptions, Files editing with local-edit protection, conflict resolution, and list view", async ({
   page,
 }) => {
@@ -193,7 +337,7 @@ test("Skills supports Git subscriptions, Files editing with local-edit protectio
 
   // Toggle Compact List density mode
   await overview.getByRole("radio", { name: "列表", exact: true }).click();
-  await expect(overview.locator(".skills-list-row")).toHaveCount(2);
+  await expect(overview.locator(".skills-list-row").filter({ hasText: /sub-alpha|sub-beta/ })).toHaveCount(2);
   await overview.getByRole("radio", { name: "卡片", exact: true }).click();
 
   // Open sub-alpha in Files editor and edit SKILL.md locally
@@ -202,8 +346,15 @@ test("Skills supports Git subscriptions, Files editing with local-edit protectio
     library.getByRole("heading", { name: "Alpha V1", exact: true }),
   ).toBeVisible();
   // Subscribed skill is editable (not read-only)
-  await library.getByRole("button", { name: "显示源码", exact: true }).click();
+  const tree = library.getByRole("complementary", { name: "文件目录" });
+  await tree.getByRole("treeitem", { name: "scripts", exact: true }).click();
+  await tree.getByRole("treeitem", { name: "check.sh", exact: true }).click();
+  await expect(library.locator(".file-text-preview")).toContainText("echo ok");
+  await expect(library.getByRole("radio", { name: "预览", exact: true })).toBeChecked();
+  await library.getByRole("radio", { name: "编辑", exact: true }).click();
   const editor = library.locator(".monaco-editor:visible .view-lines");
+  await expect(editor).toContainText("echo ok");
+  await tree.getByRole("treeitem", { name: "SKILL.md", exact: true }).click();
   await expect(editor).toContainText("Alpha V1");
   await editor.click();
   await page.keyboard.press("ControlOrMeta+a");
@@ -267,6 +418,27 @@ test("Skills supports Git subscriptions, Files editing with local-edit protectio
   await expect(
     library.getByRole("heading", { name: "Alpha Local Custom", exact: true }),
   ).toBeVisible();
+  await library.getByRole("button", { name: "总览", exact: true }).click();
+  const subscribedAlpha = alphaCard.filter({ has: page.getByRole("button", { name: "Alpha V2", exact: true }) });
+  await subscribedAlpha.getByRole("button", { name: "删除技能 · sub-alpha", exact: true }).click();
+  const single = page.getByRole("dialog", { name: "删除技能 · sub-alpha" });
+  await single.getByRole("button", { name: "仅从技能库移除" }).click();
+  await expect(subscribedAlpha).toHaveCount(0);
+  await expect(overview.getByRole("button", { name: "Alpha Local Custom", exact: true })).toBeVisible();
+  await expect(overview.getByRole("group", { name: "sub-beta", exact: true })).toBeVisible();
+  await library.getByRole("navigation", { name: "技能" }).getByRole("button", { name: /订阅与更新/ }).click();
+  const subscriptions = library.getByRole("region", { name: "订阅与更新", exact: true });
+  await expect(subscriptions.getByRole("heading", { name: "team-pack", exact: true })).toBeVisible();
+  const remove = subscriptions.getByRole("button", { name: "移除订阅", exact: true });
+  await remove.click();
+  const confirmation = page.getByRole("dialog", { name: "移除订阅 · team-pack" });
+  await expect(confirmation).toContainText("1 个技能");
+  await expect(confirmation.getByRole("checkbox")).not.toBeChecked();
+  await confirmation.getByRole("button", { name: "取消" }).click();
+  await expect(subscriptions.getByText("team-pack", { exact: true })).toBeVisible();
+  await remove.click();
+  await confirmation.getByRole("button", { name: "移除订阅", exact: true }).click();
+  await expect(subscriptions.getByText("team-pack", { exact: true })).toHaveCount(0);
 });
 
 test("Skills keeps a large catalog searchable in both the sidebar and the library", async ({

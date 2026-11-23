@@ -464,6 +464,54 @@ func TestSkillLibraryAndFileScopes(t *testing.T) {
 	if after.Content != manifest {
 		t.Fatal("editing the managed skill changed the same-name external skill")
 	}
+
+	other := f.agent("codex")
+	other.Profile.Skills = []string{original.Path}
+	f.request("PUT", "/agents/"+other.ID, other, 200, &other)
+	agent.Profile.Skills = []string{managed.Path}
+	agent.Profile.DisabledSkills = []string{managed.Name}
+	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+	f.request("DELETE", "/skills/"+managed.ID, nil, 200, nil)
+	f.request("DELETE", "/skills/"+managed.ID, nil, 404, nil)
+	f.request("GET", file(managed, model.SkillEntry), nil, 404, nil)
+	if got, err := os.ReadFile(filepath.Join(managed.Path, model.SkillEntry)); err != nil || string(got) != content {
+		t.Fatalf("default removal changed the managed original: %q, %v", got, err)
+	}
+	f.request("GET", "/skills", nil, 200, &catalog)
+	if len(catalog) != 1 || catalog[0].ID != original.ID || !slices.Equal(catalog[0].AgentIDs, []string{other.ID}) {
+		t.Fatalf("deletion affected the same-name external Skill: %#v", catalog)
+	}
+	var overview model.Overview
+	f.request("GET", "/overview", nil, 200, &overview)
+	index := slices.IndexFunc(overview.Agents, func(item model.Agent) bool { return item.ID == agent.ID })
+	if index < 0 || len(overview.Agents[index].Profile.Skills) != 0 || overview.Agents[index].UpdatedAt == agent.UpdatedAt ||
+		!slices.Equal(overview.Agents[index].Profile.DisabledSkills, []string{managed.Name}) {
+		t.Fatal("deletion must detach only the directory and invalidate the changed Profile version")
+	}
+
+	var restored model.Skill
+	f.request("POST", "/skills", map[string]string{"directory": managed.Path}, 200, &restored)
+	if restored.ID != managed.ID || !restored.Managed {
+		t.Fatalf("restored Skill lost its managed identity: %#v", restored)
+	}
+	f.request("DELETE", "/skills/"+managed.ID+"?deleteFiles=true", nil, 200, nil)
+	if _, err := os.Stat(managed.Path); !os.IsNotExist(err) {
+		t.Fatalf("expected the managed directory to be deleted: %v", err)
+	}
+	f.request("DELETE", "/skills/"+original.ID, nil, 200, nil)
+	f.request("GET", "/skills", nil, 200, &catalog)
+	if len(catalog) != 0 {
+		t.Fatalf("external registration or Profile reference survived: %#v", catalog)
+	}
+	if content, err := os.ReadFile(filepath.Join(original.Path, model.SkillEntry)); err != nil || string(content) != manifest {
+		t.Fatalf("unlink changed external files: %q, %v", content, err)
+	}
+	f.request("POST", "/skills", map[string]string{"directory": original.Path}, 200, nil)
+	if err := os.Remove(filepath.Join(original.Path, model.SkillEntry)); err != nil {
+		t.Fatal(err)
+	}
+	f.request("DELETE", "/skills/"+original.ID+"?deleteFiles=true", nil, 409, nil)
+	f.request("DELETE", "/skills/"+original.ID, nil, 200, nil)
 }
 
 func TestSkillLibraryDiscoversUserAndScopeDirectories(t *testing.T) {
@@ -565,6 +613,105 @@ func TestSkillLibraryDiscoversUserAndScopeDirectories(t *testing.T) {
 	if len(catalog) != len(fixtures)-1 {
 		t.Fatalf("removed Scope still contributes Skills: %#v", catalog)
 	}
+	discovered := catalog[0]
+	f.request("DELETE", "/skills/"+discovered.ID, nil, 200, nil)
+	f.request("GET", "/skills/"+discovered.ID+"/files", nil, 404, nil)
+	f.request("GET", "/skills", nil, 200, &catalog)
+	if len(catalog) != len(fixtures)-2 || slices.ContainsFunc(catalog, func(s model.Skill) bool { return s.ID == discovered.ID }) {
+		t.Fatalf("a removed discovered directory reappeared or affected a sibling: %#v", catalog)
+	}
+	var sources []model.SkillSource
+	f.request("POST", "/skills/scope", map[string]any{"scope": agent.Profile.Scope, "provider": agent.Profile.Provider}, 200, &sources)
+	for _, src := range sources {
+		if slices.ContainsFunc(src.Skills, func(s model.Skill) bool { return s.ID == discovered.ID }) {
+			t.Fatal("a removed Skill reappeared through scope discovery")
+		}
+	}
+	f.request("POST", "/skills", map[string]string{"directory": discovered.Path}, 200, nil)
+	f.request("GET", "/skills/"+discovered.ID+"/files", nil, 200, nil)
+	f.request("DELETE", "/skills/"+discovered.ID+"?deleteFiles=true", nil, 200, nil)
+	if _, err := os.Stat(discovered.Path); !os.IsNotExist(err) {
+		t.Fatalf("expected discovered directory to be deleted: %v", err)
+	}
+}
+
+func TestDeleteSkillKeepsWorkspaceRoot(t *testing.T) {
+	f := newFixture(t)
+	f.agent("codex")
+	manifest := filepath.Join(f.root, model.SkillEntry)
+	if err := os.WriteFile(manifest, []byte("# Project Skill"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var skill model.Skill
+	f.request("POST", "/skills", map[string]string{"directory": f.root}, 200, &skill)
+	f.request("DELETE", "/skills/"+skill.ID+"?deleteFiles=true", nil, 409, nil)
+	f.request("GET", "/skills/"+skill.ID+"/files", nil, 200, nil)
+	f.request("DELETE", "/skills/"+skill.ID, nil, 200, nil)
+	if _, err := os.Stat(manifest); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemovedSkillStaysOutOfLibraryAfterRestart(t *testing.T) {
+	data := t.TempDir()
+	first, err := app.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := first.CreateSkill("retained-skill")
+	if err == nil {
+		_, err = first.DeleteSkill(t.Context(), skill.ID, false)
+	}
+	if closeErr := first.Close(); closeErr != nil || err != nil {
+		t.Fatalf("remove and close: %v, %v", err, closeErr)
+	}
+	reopened, err := app.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	catalog, err := reopened.Skills(t.Context())
+	if err != nil || slices.ContainsFunc(catalog, func(s model.Skill) bool { return s.ID == skill.ID }) {
+		t.Fatalf("removed directory returned after restart: %v, %v", catalog, err)
+	}
+	restored, err := reopened.AddSkillDirectory(t.Context(), skill.Path)
+	if err != nil || !restored.Managed || restored.ID != skill.ID {
+		t.Fatalf("could not restore the retained original: %#v, %v", restored, err)
+	}
+}
+
+func TestDeleteSkillReportsFilesLeftOnDisk(t *testing.T) {
+	f := newFixture(t)
+	path := filepath.Join(t.TempDir(), "read-only-original")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, model.SkillEntry), []byte("# Read only"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var skill model.Skill
+	f.request("POST", "/skills", map[string]string{"directory": path}, 200, &skill)
+	if err := os.Chmod(path, 0500); err != nil {
+		t.Fatal(err)
+	}
+	var result model.SkillRemovalResult
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0700)
+		if result.RemainingDirectory != "" {
+			_ = os.Chmod(result.RemainingDirectory, 0700)
+		}
+	})
+	if err := os.WriteFile(filepath.Join(path, "probe"), nil, 0600); err == nil {
+		t.Skip("test account can write to read-only directories")
+	}
+	f.request("POST", "/skills/"+skill.ID+"/remove", map[string]bool{"deleteFiles": true}, 200, &result)
+	if !result.Deleted || filepath.Dir(result.RemainingDirectory) != filepath.Dir(skill.Path) {
+		t.Fatalf("missing retained files location: %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(result.RemainingDirectory, model.SkillEntry)); err != nil {
+		t.Fatal(err)
+	}
+	f.request("GET", "/skills/"+skill.ID+"/files", nil, 404, nil)
 }
 
 func TestSkillPreferenceUpdatePreservesProfile(t *testing.T) {

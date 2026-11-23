@@ -191,28 +191,36 @@ func defaultSubscriptionName(source model.PluginGitSource) string {
 	return base
 }
 
-func (a *App) hydrateSkillSubscription(rec skillSubscriptionRecord) model.SkillSubscription {
+func (a *App) hydrateSkillSubscription(rec skillSubscriptionRecord, removed removedSkillPaths) model.SkillSubscription {
 	dto := rec.SkillSubscription
+	dto.SkillCount, dto.ModifiedCount = 0, 0
 	dir, err := a.skillSubscriptionDir(rec.ID)
 	if err != nil {
 		return dto
 	}
-	rels, err := discoverSkillsInTree(dir)
-	if err != nil {
-		return dto
-	}
-	dto.SkillCount = len(rels)
-	modified := 0
+	dto.Directory = dir
+	rels, _ := discoverSkillsInTree(dir)
 	for _, rel := range rels {
 		skillDir := filepath.Join(dir, filepath.FromSlash(rel))
+		if removed[skillDir] {
+			continue
+		}
+		dto.SkillCount++
 		if expected, ok := rec.SyncedHashes[rel]; ok && expected != "" {
 			if cur, err := skillDirHash(skillDir); err == nil && cur != expected {
-				modified++
+				dto.ModifiedCount++
 			}
 		}
 	}
-	dto.ModifiedCount = modified
 	return dto
+}
+
+func (a *App) skillSubscriptionDetails(ctx context.Context, rec skillSubscriptionRecord) (model.SkillSubscription, error) {
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return model.SkillSubscription{}, err
+	}
+	return a.hydrateSkillSubscription(rec, removed), nil
 }
 
 func (a *App) SkillSubscriptions(ctx context.Context) ([]model.SkillSubscription, error) {
@@ -221,8 +229,12 @@ func (a *App) SkillSubscriptions(ctx context.Context) ([]model.SkillSubscription
 		return nil, err
 	}
 	out := make([]model.SkillSubscription, 0, len(records))
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return nil, err
+	}
 	for _, rec := range records {
-		out = append(out, a.hydrateSkillSubscription(rec))
+		out = append(out, a.hydrateSkillSubscription(rec, removed))
 	}
 	return out, nil
 }
@@ -316,7 +328,7 @@ func (a *App) CreateSkillSubscription(ctx context.Context, input model.SkillSubs
 		_ = os.RemoveAll(destRoot)
 		return model.SkillSubscription{}, err
 	}
-	return a.hydrateSkillSubscription(rec), nil
+	return a.hydrateSkillSubscription(rec, nil), nil
 }
 
 func (a *App) UpdateSkillSubscription(ctx context.Context, id string, name, policy *string) (model.SkillSubscription, error) {
@@ -353,28 +365,19 @@ func (a *App) UpdateSkillSubscription(ctx context.Context, id string, name, poli
 	if err != nil {
 		return model.SkillSubscription{}, err
 	}
-	return a.hydrateSkillSubscription(updated), nil
+	return a.skillSubscriptionDetails(ctx, updated)
 }
 
-func (a *App) DeleteSkillSubscription(ctx context.Context, id string) error {
+func (a *App) DeleteSkillSubscription(ctx context.Context, id string, deleteFiles bool) (model.SkillRemovalResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	dir, err := a.skillSubscriptionDir(id)
 	if err != nil {
-		return err
+		return model.SkillRemovalResult{}, err
 	}
-	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "DELETE FROM skill_subscriptions WHERE id=?", id)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return sql.ErrNoRows
-		}
-		return store.Event(tx, model.Event{Type: "skills"})
+	return a.removeSkillDirectory(ctx, skillRemoval{
+		path: dir, unsubscribeID: id, deleteFiles: deleteFiles,
 	})
-	if err != nil {
-		return err
-	}
-	return os.RemoveAll(dir)
 }
 
 func (a *App) CheckSkillSubscription(ctx context.Context, id string) (model.SkillSubscription, error) {
@@ -414,7 +417,7 @@ func (a *App) CheckSkillSubscription(ctx context.Context, id string) (model.Skil
 	if err != nil {
 		return model.SkillSubscription{}, err
 	}
-	return a.hydrateSkillSubscription(rec), nil
+	return a.skillSubscriptionDetails(ctx, rec)
 }
 
 func (a *App) SyncSkillSubscription(ctx context.Context, id string) (model.SkillSubscriptionSyncResult, error) {
@@ -450,11 +453,18 @@ func (a *App) SyncSkillSubscription(ctx context.Context, id string) (model.Skill
 	if len(remoteRels) == 0 {
 		return model.SkillSubscriptionSyncResult{}, invalid("No SKILL.md directories found in target revision")
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	rec, err = a.skillSubscriptionRecordByID(ctx, a.Store.DB, id)
+	if err != nil {
+		return model.SkillSubscriptionSyncResult{}, err
+	}
 	destRoot, err := a.skillSubscriptionDir(rec.ID)
 	if err != nil {
 		return model.SkillSubscriptionSyncResult{}, err
 	}
-	if err := os.MkdirAll(destRoot, 0700); err != nil {
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
 		return model.SkillSubscriptionSyncResult{}, err
 	}
 	if rec.SyncedHashes == nil {
@@ -469,9 +479,9 @@ func (a *App) SyncSkillSubscription(ctx context.Context, id string) (model.Skill
 	for _, rel := range remoteRels {
 		remoteSet[rel] = true
 		srcDir := filepath.Join(stage, filepath.FromSlash(rel))
-		dstDir := destRoot
-		if rel != "." {
-			dstDir = filepath.Join(destRoot, filepath.FromSlash(rel))
+		dstDir := filepath.Join(destRoot, filepath.FromSlash(rel))
+		if removed.blocksSync(destRoot, dstDir) {
+			continue
 		}
 		remoteHash, err := skillDirHash(srcDir)
 		if err != nil {
@@ -522,6 +532,9 @@ func (a *App) SyncSkillSubscription(ctx context.Context, id string) (model.Skill
 			continue
 		}
 		dstDir := filepath.Join(destRoot, filepath.FromSlash(rel))
+		if removed.blocksSync(destRoot, dstDir) {
+			continue
+		}
 		if curHash, err := skillDirHash(dstDir); err == nil && prevHash != "" && curHash != prevHash {
 			result.SkippedModified++
 			continue
@@ -554,7 +567,7 @@ func (a *App) SyncSkillSubscription(ctx context.Context, id string) (model.Skill
 	if err != nil {
 		return model.SkillSubscriptionSyncResult{}, err
 	}
-	result.Subscription = a.hydrateSkillSubscription(rec)
+	result.Subscription = a.hydrateSkillSubscription(rec, removed)
 	return result, nil
 }
 
@@ -593,6 +606,37 @@ func (a *App) ResolveSkillUpdate(ctx context.Context, skillID, strategy string) 
 		return describeSkill(skillAt(skillPath, false)), nil
 	}
 
+	stage, err := os.MkdirTemp("", "lever-skill-resolve-")
+	if err != nil {
+		return model.Skill{}, err
+	}
+	defer os.RemoveAll(stage)
+
+	_, err = plugin.GitTree(ctx, sub.Source, targetCommit, stage)
+	if err != nil {
+		return model.Skill{}, err
+	}
+	srcDir := filepath.Join(stage, filepath.FromSlash(rel))
+	if _, err := os.Lstat(filepath.Join(srcDir, model.SkillEntry)); err != nil {
+		return model.Skill{}, invalid("Skill no longer exists in target revision")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sub, err = a.skillSubscriptionRecordByID(ctx, a.Store.DB, sub.ID)
+	if err != nil {
+		return model.Skill{}, err
+	}
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return model.Skill{}, err
+	}
+	root, err := a.skillSubscriptionDir(sub.ID)
+	if err != nil {
+		return model.Skill{}, err
+	}
+	if removed.blocksSync(root, skillPath) {
+		return model.Skill{}, errSkillUnavailable
+	}
 	var forkedSkill *model.Skill
 	if strategy == "fork" {
 		managedRoot, err := a.skillsDir()
@@ -612,20 +656,6 @@ func (a *App) ResolveSkillUpdate(ctx context.Context, skillID, strategy string) 
 		forkedSkill = &sk
 	}
 
-	stage, err := os.MkdirTemp("", "lever-skill-resolve-")
-	if err != nil {
-		return model.Skill{}, err
-	}
-	defer os.RemoveAll(stage)
-
-	_, err = plugin.GitTree(ctx, sub.Source, targetCommit, stage)
-	if err != nil {
-		return model.Skill{}, err
-	}
-	srcDir := filepath.Join(stage, filepath.FromSlash(rel))
-	if _, err := os.Lstat(filepath.Join(srcDir, model.SkillEntry)); err != nil {
-		return model.Skill{}, invalid("Skill no longer exists in target revision")
-	}
 	if err := os.RemoveAll(skillPath); err != nil {
 		return model.Skill{}, err
 	}
@@ -642,7 +672,7 @@ func (a *App) ResolveSkillUpdate(ctx context.Context, skillID, strategy string) 
 	sub.SyncedHashes[rel] = remoteHash
 	delete(sub.SkippedCommits, rel)
 	// If no other skills remain locally modified, mark subscription caught up
-	if a.hydrateSkillSubscription(sub).ModifiedCount == 0 && sub.AvailableCommit == targetCommit {
+	if a.hydrateSkillSubscription(sub, removed).ModifiedCount == 0 && sub.AvailableCommit == targetCommit {
 		sub.Commit = targetCommit
 		sub.Available = false
 		sub.AvailableCommit = ""
@@ -698,6 +728,10 @@ func uniqueManagedSkillName(root, base string) string {
 }
 
 func (a *App) findSubscribedSkill(ctx context.Context, skillID string) (skillSubscriptionRecord, string, string, error) {
+	removed, err := loadRemovedSkillPaths(ctx, a.Store.DB)
+	if err != nil {
+		return skillSubscriptionRecord{}, "", "", err
+	}
 	records, err := a.skillSubscriptionRecords(ctx)
 	if err != nil {
 		return skillSubscriptionRecord{}, "", "", err
@@ -720,7 +754,7 @@ func (a *App) findSubscribedSkill(ctx context.Context, skillID string) (skillSub
 			if err != nil {
 				continue
 			}
-			if hash(canon) == skillID {
+			if !removed[canon] && hash(canon) == skillID {
 				return rec, rel, canon, nil
 			}
 		}
@@ -728,7 +762,7 @@ func (a *App) findSubscribedSkill(ctx context.Context, skillID string) (skillSub
 	return skillSubscriptionRecord{}, "", "", errSkillUnavailable
 }
 
-func (a *App) subscribedSkillDirectories(ctx context.Context) ([]skillDirectory, map[string]subscribedSkillMeta, error) {
+func (a *App) subscribedSkillDirectories(ctx context.Context, removed removedSkillPaths) ([]skillDirectory, map[string]subscribedSkillMeta, error) {
 	records, err := a.skillSubscriptionRecords(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -741,10 +775,10 @@ func (a *App) subscribedSkillDirectories(ctx context.Context) ([]skillDirectory,
 			continue
 		}
 		canonRoot, err := workspace.Canonical(root)
-		if err != nil {
+		if err != nil || canonRoot != root {
 			continue
 		}
-		dirs = append(dirs, skillDirectory{path: canonRoot, subscription: true})
+		dirs = append(dirs, skillDirectory{path: canonRoot, subscription: true, removed: removed})
 		rels, err := discoverSkillsInTree(canonRoot)
 		if err != nil {
 			continue
@@ -755,7 +789,7 @@ func (a *App) subscribedSkillDirectories(ctx context.Context) ([]skillDirectory,
 				p = filepath.Join(canonRoot, filepath.FromSlash(rel))
 			}
 			canonSkill, err := workspace.Canonical(p)
-			if err != nil {
+			if err != nil || removed[canonSkill] {
 				continue
 			}
 			modified := false
