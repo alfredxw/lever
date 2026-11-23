@@ -120,11 +120,17 @@ Lever 直接编排本机已安装的 CLI 与 ACP 服务，沿用原有登录态�
 
 - **多账号连接**：在 **设置 → 运行时 → 添加连接** 可为 Codex / Claude Code 创建独立配置目录并打开原生登录终端（查找顺序：`~/.local/bin` → Homebrew → `/usr/local/bin` → NVM → `PATH`；遵循 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`PI_CODING_AGENT_DIR`）。
 - **原生应用续聊**：在 **Agents → 最近** 可直接读取并续聊本机 **Codex App** 与 **Claude Code** 会话；在 Lever 新建的对话需等当前轮结束后再在原生应用续聊。
-- **通过命令行查询对话上下文（JSON）**：
+- **通过本机 CLI 操作各模块与通信（JSON）**：
   ```sh
-  lever chat list --limit 20
+  lever agent list --full
+  lever providers models --provider codex
+  lever chat send --agent '<agent-id>' --operation topic --text '汇总今日进展' --wait
+  lever run answer --request '<request-id>' --allow=true
   lever context find --chat '<chat-id>' --query '架构决策'
   lever context read --target '<session-id>' # 或 --target main
+  lever automations create --name '每日巡检' --agent '<agent-id>' --time 09:00 --model '<model>' --permission auto_review --prompt '...'
+  lever automations import-codex --dry-run
+  lever work-items list && lever notes list && lever events tail --type runs
   ```
 
 </details>

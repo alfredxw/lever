@@ -806,8 +806,8 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 		}
 		if input.WorkingCopyID != "" {
-			if !create || origin.parentRunID != "" || (input.Operation != "topic" && origin.task == nil && origin.automation == nil) {
-				return invalid("A directory group can only be selected for a new Topic or task")
+			if !create || origin.parentRunID != "" || (!newChat && input.Operation != "topic" && origin.task == nil && origin.automation == nil) {
+				return invalid("A directory group can only be selected for a new Chat, Topic or task")
 			}
 			copy, err := a.selectGroup(ctx, tx, agent, input.WorkingCopyID)
 			if err != nil {

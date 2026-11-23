@@ -27,7 +27,7 @@ func main() {
 	address := flag.String("listen", "127.0.0.1:4778", "Loopback listen address")
 	devOrigin := flag.String("dev-origin", "", "Allowed Vite development origin")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: lever [server flags]\n       lever agent list [flags]\n       lever automations list [flags]\n       lever automations emit --id <id> [--data <json>] [--key <idempotency-key>] [flags]\n       lever chat list [--agent <id>] [--limit <n>] [flags]\n       lever context find [--chat <id>] [--query <text>] [flags]\n       lever context read [--chat <id>] --target <main|sessionId> [flags]\n       lever work-items create --agent <id> --title <title> [flags]")
+		fmt.Fprintln(os.Stderr, cli.UsageText)
 		flag.PrintDefaults()
 	}
 	flag.Parse()

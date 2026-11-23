@@ -118,11 +118,17 @@ Lever orchestrates the CLIs already installed on your machine—reusing your exi
 
 - **Multi-account setup:** Open **Settings → Runtimes → Add connection** to sign in to another Codex or Claude Code account in an isolated profile directory. Executable lookup checks `~/.local/bin` → Homebrew → `/usr/local/bin` → NVM → `PATH`, and respects `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `PI_CODING_AGENT_DIR`.
 - **Native app continuity:** Open **Agents → Recent** to read and continue local **Codex App** or **Claude Code** sessions. For conversations started in Lever, wait for the active turn to finish before resuming in the native app.
-- **Query conversations from terminals, scripts, or other Agents (JSON):**
+- **Operate modules and communicate from terminals, scripts, or other Agents (JSON):**
   ```sh
-  lever chat list --limit 20
+  lever agent list --full
+  lever providers models --provider codex
+  lever chat send --agent '<agent-id>' --operation topic --text 'Summarize progress' --wait
+  lever run answer --request '<request-id>' --allow=true
   lever context find --chat '<chat-id>' --query 'architecture decision'
   lever context read --target '<session-id>' # or --target main
+  lever automations create --name 'Daily audit' --agent '<agent-id>' --time 09:00 --model '<model>' --permission auto_review --prompt '...'
+  lever automations import-codex --dry-run
+  lever work-items list && lever notes list && lever events tail --type runs
   ```
 
 </details>

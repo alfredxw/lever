@@ -11,18 +11,26 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
-	"lever/internal/app"
 	"lever/internal/localipc"
 	"lever/internal/model"
 )
 
 const executionTokenEnv = "LEVER_EXECUTION_TOKEN"
+
+const UsageText = `Usage: lever [server flags]
+       lever agent list|get|create|update [flags]
+       lever providers list|models [flags]
+       lever chat list|create|send [flags]
+       lever run get|wait|stop|pause|resume|answer [flags]
+       lever context find|read [flags]
+       lever automations list|get|create|update|enable|disable|archive|run|history|emit|import-codex [flags]
+       lever work-items list|get|create|update|dispatch [flags]
+       lever notes list|get|create [flags]
+       lever events tail [flags]`
 
 func Run(args []string, dataDir string, out, errOut io.Writer) (bool, error) {
 	return RunWithInput(args, dataDir, os.Stdin, out, errOut)
@@ -34,268 +42,96 @@ func RunWithInput(args []string, dataDir string, in io.Reader, out, errOut io.Wr
 	}
 	switch args[0] {
 	case "agent":
-		return true, runAgent(args[1:], dataDir, out, errOut)
+		return true, runAgent(args[1:], dataDir, in, out, errOut)
+	case "providers":
+		return true, runProviders(args[1:], dataDir, out, errOut)
 	case "automations":
 		return true, runAutomations(args[1:], dataDir, in, out, errOut)
 	case "chat":
-		return true, runChat(args[1:], dataDir, out, errOut)
+		return true, runChat(args[1:], dataDir, in, out, errOut)
+	case "run":
+		return true, runRun(args[1:], dataDir, out, errOut)
 	case "context":
 		return true, runContext(args[1:], dataDir, out, errOut)
 	case "work-items":
 		return true, runWorkItems(args[1:], dataDir, out, errOut)
+	case "notes":
+		return true, runNotes(args[1:], dataDir, in, out, errOut)
+	case "events":
+		return true, runEvents(args[1:], dataDir, out, errOut)
 	default:
 		return false, nil
 	}
 }
 
-func runAgent(args []string, dataDir string, out, errOut io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: lever agent list [flags]")
-		return nil
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		*s = append(*s, value)
 	}
-	if args[0] != "list" {
-		return fmt.Errorf("unknown agent command %q", args[0])
-	}
-	flags := flag.NewFlagSet("lever agent list", flag.ContinueOnError)
-	flags.SetOutput(errOut)
-	flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-	if err := parseFlags(flags, args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	return request(dataDir, http.MethodGet, "/agents", "", nil, out)
+	return nil
 }
 
-func runChat(args []string, dataDir string, out, errOut io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: lever chat list [--agent <id>] [--limit <n>] [flags]")
-		return nil
-	}
-	if args[0] != "list" {
-		return fmt.Errorf("unknown chat command %q", args[0])
-	}
-	flags := flag.NewFlagSet("lever chat list", flag.ContinueOnError)
-	flags.SetOutput(errOut)
-	flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-	var agentID string
-	var limit int
-	flags.StringVar(&agentID, "agent", "", "Filter chats by Agent ID")
-	flags.IntVar(&limit, "limit", 20, "Maximum number of chats to return (1-100)")
-	if err := parseFlags(flags, args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	query := url.Values{}
-	if agentID = strings.TrimSpace(agentID); agentID != "" {
-		query.Set("agent", agentID)
-	}
-	if limit != 20 {
-		query.Set("limit", strconv.Itoa(limit))
-	}
-	path := "/chats"
-	if encoded := query.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	return request(dataDir, http.MethodGet, path, strings.TrimSpace(os.Getenv(executionTokenEnv)), nil, out)
+type optionalBool struct {
+	set   bool
+	value bool
 }
 
-func runContext(args []string, dataDir string, out, errOut io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: lever context find [--chat <id>] [--query <text>] [flags]")
-		fmt.Fprintln(out, "       lever context read [--chat <id>] --target <main|sessionId> [flags]")
-		return nil
+func (b *optionalBool) String() string {
+	if !b.set {
+		return ""
 	}
-	token := strings.TrimSpace(os.Getenv(executionTokenEnv))
-	switch args[0] {
-	case "find":
-		flags := flag.NewFlagSet("lever context find", flag.ContinueOnError)
-		flags.SetOutput(errOut)
-		flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-		var input app.FindContextCLIInput
-		flags.StringVar(&input.ChatID, "chat", "", "Chat ID from lever chat list (optional inside an active Lever execution)")
-		flags.StringVar(&input.Query, "query", "", "Keyword or phrase to search; omit to list recent Topics")
-		if err := parseFlags(flags, args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil
-			}
-			return err
-		}
-		input.ChatID = strings.TrimSpace(input.ChatID)
-		if token == "" && input.ChatID == "" {
-			return errors.New("--chat is required outside an active Lever execution")
-		}
-		return request(dataDir, http.MethodPost, "/context/find", token, input, out)
-	case "read":
-		flags := flag.NewFlagSet("lever context read", flag.ContinueOnError)
-		flags.SetOutput(errOut)
-		flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-		var input app.ReadContextCLIInput
-		var runID, itemID, cursorRaw string
-		var offset int
-		flags.StringVar(&input.ChatID, "chat", "", "Chat ID (optional inside an active Lever execution or when --target is a sessionId)")
-		flags.StringVar(&input.Target, "target", "", "main or a Topic/Chat sessionId (required)")
-		flags.StringVar(&runID, "run", "", "Anchor runId to start reading from")
-		flags.StringVar(&itemID, "item", "", "Anchor itemId within --run")
-		flags.IntVar(&offset, "offset", 0, "UTF-8 byte offset within the anchored message")
-		flags.StringVar(&input.Direction, "direction", "", "older (default) or newer; newer requires --run")
-		flags.StringVar(&cursorRaw, "cursor", "", "JSON nextCursor returned by a previous lever context read")
-		if err := parseFlags(flags, args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil
-			}
-			return err
-		}
-		input.ChatID = strings.TrimSpace(input.ChatID)
-		input.Target = strings.TrimSpace(input.Target)
-		if input.Target == "" {
-			return errors.New("--target is required")
-		}
-		if cursorRaw = strings.TrimSpace(cursorRaw); cursorRaw != "" {
-			if runID != "" || itemID != "" || offset != 0 || input.Direction != "" {
-				return errors.New("--cursor cannot be combined with --run, --item, --offset, or --direction")
-			}
-			var cursor app.ContextCursor
-			if err := json.Unmarshal([]byte(cursorRaw), &cursor); err != nil {
-				return fmt.Errorf("invalid --cursor JSON: %w", err)
-			}
-			input.Cursor = &cursor
-		} else if runID != "" {
-			if offset < 0 {
-				return errors.New("--offset must be non-negative")
-			}
-			input.Anchor = &app.ContextAnchor{RunID: runID, ItemID: itemID, Offset: offset}
-		} else if itemID != "" || offset != 0 {
-			return errors.New("--item and --offset require --run")
-		}
-		if token == "" && input.ChatID == "" && input.Target == "main" {
-			return errors.New("--chat is required when --target is main outside an active Lever execution")
-		}
-		return request(dataDir, http.MethodPost, "/context/read", token, input, out)
+	if b.value {
+		return "true"
+	}
+	return "false"
+}
+func (b *optionalBool) IsBoolFlag() bool { return true }
+func (b *optionalBool) Set(raw string) error {
+	b.set = true
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "true", "1", "yes":
+		b.value = true
+		return nil
+	case "false", "0", "no":
+		b.value = false
+		return nil
 	default:
-		return fmt.Errorf("unknown context command %q", args[0])
+		return fmt.Errorf("invalid boolean value %q", raw)
 	}
 }
 
-func runWorkItems(args []string, dataDir string, out, errOut io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: lever work-items create [flags]")
+type selectionFlags struct {
+	provider   string
+	model      string
+	effort     string
+	permission string
+	fast       optionalBool
+}
+
+func (f *selectionFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&f.provider, "provider", "", "Runtime provider ID override")
+	fs.StringVar(&f.model, "model", "", "Model ID override")
+	fs.StringVar(&f.effort, "effort", "", "Reasoning effort override (e.g. low, medium, high, xhigh, max)")
+	fs.StringVar(&f.permission, "permission", "", "Permission policy override (e.g. ask, auto_review, accept_edits, full_access)")
+	fs.Var(&f.fast, "fast", "Enable fast mode (true/false)")
+}
+
+func (f *selectionFlags) toSelection() *model.Selection {
+	sel := model.Selection{
+		Provider:   strings.TrimSpace(f.provider),
+		Model:      strings.TrimSpace(f.model),
+		Effort:     strings.TrimSpace(f.effort),
+		Permission: strings.TrimSpace(f.permission),
+		Fast:       f.fast.set && f.fast.value,
+	}
+	if sel == (model.Selection{}) && !f.fast.set {
 		return nil
 	}
-	if args[0] != "create" {
-		return fmt.Errorf("unknown work-items command %q", args[0])
-	}
-	flags := flag.NewFlagSet("lever work-items create", flag.ContinueOnError)
-	flags.SetOutput(errOut)
-	flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-	var item model.WorkItemInput
-	var agentID string
-	flags.StringVar(&agentID, "agent", "", "Agent ID from lever agent list (required)")
-	flags.StringVar(&item.Title, "title", "", "Work item title (required)")
-	flags.StringVar(&item.Body, "body", "", "Description for the Agent")
-	flags.StringVar(&item.RequestKey, "request-key", "", "Stable key to reuse when retrying a creation")
-	if err := parseFlags(flags, args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" || strings.TrimSpace(item.Title) == "" {
-		return errors.New("--agent and --title are required")
-	}
-	return request(dataDir, http.MethodPost, "/agents/"+url.PathEscape(agentID)+"/work-items", "", item, out)
-}
-
-func runAutomations(args []string, dataDir string, in io.Reader, out, errOut io.Writer) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: lever automations list [flags]")
-		fmt.Fprintln(out, "       lever automations emit --id <id> [--data <json>] [--key <idempotency-key>] [flags]")
-		return nil
-	}
-	token := strings.TrimSpace(os.Getenv(executionTokenEnv))
-	switch args[0] {
-	case "list":
-		flags := flag.NewFlagSet("lever automations list", flag.ContinueOnError)
-		flags.SetOutput(errOut)
-		flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-		if err := parseFlags(flags, args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil
-			}
-			return err
-		}
-		return request(dataDir, http.MethodGet, "/automations", token, nil, out)
-	case "emit":
-		flags := flag.NewFlagSet("lever automations emit", flag.ContinueOnError)
-		flags.SetOutput(errOut)
-		flags.StringVar(&dataDir, "data-dir", dataDir, "Lever data directory (or LEVER_DATA_DIR)")
-		var id, data, key string
-		flags.StringVar(&id, "id", "", "Automation ID from lever automations list (required)")
-		flags.StringVar(&data, "data", "", "JSON event payload up to 16 KiB, or '-' to read stdin")
-		flags.StringVar(&key, "key", "", "Optional idempotency key (up to 200 bytes)")
-		if err := parseFlags(flags, args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil
-			}
-			return err
-		}
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return errors.New("--id is required")
-		}
-		if len(key) > 200 {
-			return errors.New("Idempotency-Key can have up to 200 bytes")
-		}
-		payload, err := readEventPayload(data, in)
-		if err != nil {
-			return err
-		}
-		var headers map[string]string
-		if key != "" {
-			headers = map[string]string{"Idempotency-Key": key}
-		}
-		return requestWithHeaders(dataDir, http.MethodPost, "/automations/"+url.PathEscape(id)+"/events", token, headers, payload, out)
-	default:
-		return fmt.Errorf("unknown automations command %q", args[0])
-	}
-}
-
-func readEventPayload(data string, in io.Reader) (json.RawMessage, error) {
-	var raw []byte
-	if data != "" && data != "-" {
-		raw = []byte(data)
-	} else {
-		if in == nil {
-			return nil, errors.New("pass --data <json> or pipe JSON to stdin")
-		}
-		if data == "" {
-			if file, ok := in.(*os.File); ok {
-				if info, err := file.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-					return nil, errors.New("pass --data <json> or pipe JSON to stdin")
-				}
-			}
-		}
-		var err error
-		raw, err = io.ReadAll(io.LimitReader(in, app.MaxAutomationEventBytes+1))
-		if err != nil {
-			return nil, err
-		}
-	}
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return nil, errors.New("pass --data <json> or pipe JSON to stdin")
-	}
-	if len(raw) > app.MaxAutomationEventBytes {
-		return nil, errors.New("Send a JSON event up to 16 KiB")
-	}
-	if !json.Valid(raw) {
-		return nil, errors.New("Event payload must be valid JSON")
-	}
-	return json.RawMessage(raw), nil
+	return &sel
 }
 
 func parseFlags(flags *flag.FlagSet, args []string) error {
@@ -308,22 +144,101 @@ func parseFlags(flags *flag.FlagSet, args []string) error {
 	return nil
 }
 
+func readTextArg(value string, in io.Reader, limit int64) (string, error) {
+	if value != "" && value != "-" {
+		return value, nil
+	}
+	if in == nil {
+		return "", nil
+	}
+	if value == "" {
+		if file, ok := in.(*os.File); ok {
+			if info, err := file.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+				return "", nil
+			}
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(in, limit+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(raw)) > limit {
+		return "", fmt.Errorf("input exceeds %d bytes", limit)
+	}
+	return string(raw), nil
+}
+
+func readJSONArg(raw string, in io.Reader, limit int64, dst any) error {
+	text, err := readTextArg(raw, in, limit)
+	if err != nil {
+		return err
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("expected JSON payload via --json or stdin")
+	}
+	dec := json.NewDecoder(strings.NewReader(text))
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	return nil
+}
+
+func ipcClient(dataDir string, timeout time.Duration) http.Client {
+	return http.Client{
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return localipc.Dial(ctx, dataDir)
+			},
+		},
+	}
+}
+
 func request(dataDir, method, path, token string, input any, out io.Writer) error {
-	return requestWithHeaders(dataDir, method, path, token, nil, input, out)
+	return requestWithTimeout(dataDir, method, path, token, nil, input, 10*time.Second, out)
 }
 
 func requestWithHeaders(dataDir, method, path, token string, headers map[string]string, input any, out io.Writer) error {
+	return requestWithTimeout(dataDir, method, path, token, headers, input, 10*time.Second, out)
+}
+
+func requestWithTimeout(dataDir, method, path, token string, headers map[string]string, input any, timeout time.Duration, out io.Writer) error {
+	raw, err := requestRaw(context.Background(), dataDir, method, path, token, headers, input, timeout)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewEncoder(out).Encode(raw)
+}
+
+func requestDecode(ctx context.Context, dataDir, method, path, token string, headers map[string]string, input any, timeout time.Duration, dst any) error {
+	raw, err := requestRaw(ctx, dataDir, method, path, token, headers, input, timeout)
+	if err != nil {
+		return err
+	}
+	if dst == nil {
+		return nil
+	}
+	return json.Unmarshal(raw, dst)
+}
+
+func requestRaw(ctx context.Context, dataDir, method, path, token string, headers map[string]string, input any, timeout time.Duration) (json.RawMessage, error) {
 	var body io.Reader
 	if input != nil {
 		data, err := json.Marshal(input)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, "http://lever"+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, "http://lever"+path, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -334,32 +249,48 @@ func requestWithHeaders(dataDir, method, path, token string, headers map[string]
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := http.Client{
-		Timeout:       10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return localipc.Dial(ctx, dataDir)
-			},
-		},
-	}
+	client := ipcClient(dataDir, timeout)
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("connect to the running Lever instance for %q: %w", dataDir, err)
+		return nil, fmt.Errorf("connect to the running Lever instance for %q: %w", dataDir, err)
 	}
 	defer res.Body.Close()
 	decoder := json.NewDecoder(res.Body)
 	if res.StatusCode != http.StatusOK {
 		var payload struct{ Error string }
 		if decoder.Decode(&payload) == nil && payload.Error != "" {
+			return nil, fmt.Errorf("Lever: %s", payload.Error)
+		}
+		return nil, fmt.Errorf("Lever: %s", res.Status)
+	}
+	var result json.RawMessage
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func requestStream(ctx context.Context, dataDir, path, token string, out io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://lever"+path, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := ipcClient(dataDir, 0)
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect to the running Lever instance for %q: %w", dataDir, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		var payload struct{ Error string }
+		if json.NewDecoder(res.Body).Decode(&payload) == nil && payload.Error != "" {
 			return fmt.Errorf("Lever: %s", payload.Error)
 		}
 		return fmt.Errorf("Lever: %s", res.Status)
 	}
-	var result json.RawMessage
-	if err := decoder.Decode(&result); err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(result)
+	_, err = io.Copy(out, res.Body)
+	return err
 }
