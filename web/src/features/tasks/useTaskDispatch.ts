@@ -5,9 +5,24 @@ import type {
   Agent,
   ExternalTaskDispatch,
   NoteHandover,
+  Overview,
+  Selection,
   TaskLocation,
   TaskQueueInput,
+  WorkingCopy,
 } from "@/api/types.gen";
+import {
+  isModelUnavailable,
+  modelSelection,
+  selectedModel,
+} from "@/features/chat/useComposerModel";
+import { modelsQuery, providersQuery } from "@/features/runtime/queries";
+import {
+  readRuntimePreferences,
+  recentAgentSelection,
+} from "@/features/runtime/runtimePreferences";
+import { copyKey } from "@/features/worktrees/queries";
+import { primaryDirectory } from "@/features/worktrees/scope";
 import type { NoteAsset } from "./noteAsset";
 import {
   taskBlocks,
@@ -26,6 +41,51 @@ export type TaskDispatchTarget = TaskTarget & {
 };
 
 export type TaskDispatchOptions = Omit<ExternalTaskDispatch, "commandId">;
+
+function stripPermission({
+  provider,
+  model,
+  effort,
+  fast,
+}: Selection): Selection {
+  return { provider, model, effort, fast };
+}
+
+export async function resolveTaskSelection(
+  agent: Agent | undefined,
+  cwd: string,
+  explicit?: Selection,
+): Promise<Selection | undefined> {
+  if (explicit) return stripPermission(explicit);
+  if (!agent) return undefined;
+  const recent = recentAgentSelection(
+    agent.profile,
+    readRuntimePreferences(agent.id),
+  );
+  if (!recent) return undefined;
+  try {
+    const providers = await queryClient.ensureQueryData(providersQuery);
+    if (
+      !providers.some(
+        (runtime) => runtime.id === recent.provider && runtime.available,
+      )
+    ) {
+      return undefined;
+    }
+    const catalog = await queryClient.ensureQueryData(
+      modelsQuery(recent.provider, cwd),
+    );
+    if (isModelUnavailable(recent, catalog)) return undefined;
+    const model = selectedModel(recent, catalog);
+    const resolved =
+      model && ((!recent.model && model.id) || !catalog?.provisional)
+        ? modelSelection(recent, model)
+        : recent;
+    return stripPermission(resolved);
+  } catch {
+    return undefined;
+  }
+}
 
 export function taskDispatchAgent(
   agents: Agent[],
@@ -65,8 +125,24 @@ export function useTaskDispatch() {
     }: TaskTarget & Pick<TaskDispatchTarget, "images">,
     options: TaskDispatchOptions,
   ) {
+    const agent = queryClient
+      .getQueryData<Overview>(["overview"])
+      ?.agents.find((item) => item.id === options.agentId);
+    const copy = options.workingCopyId
+      ? queryClient
+          .getQueryData<WorkingCopy[]>(copyKey(options.agentId))
+          ?.find((item) => item.id === options.workingCopyId)
+      : undefined;
+    const cwd = copy
+      ? primaryDirectory(copy)
+      : agent
+        ? primaryDirectory(agent.profile)
+        : "";
+    const selection = await resolveTaskSelection(agent, cwd, options.selection);
+    const { selection: _ignored, ...rest } = options;
     let input: Omit<TaskQueueInput, "commandId"> = {
-      ...options,
+      ...rest,
+      ...(selection ? { selection } : {}),
       record,
       taskId: id,
       title: "",

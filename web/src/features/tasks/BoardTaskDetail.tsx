@@ -479,15 +479,7 @@ export function BoardTaskDetail({
             )}
           </span>
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {task && status && (
-            <TaskBoardActions
-              task={{ ...target, title: task.title }}
-              status={status}
-              disabled={actionsDisabled}
-              onDeleted={onClose}
-            />
-          )}
+        <div className="ml-auto flex shrink-0 items-center gap-1 empty:hidden">
           {(onPrev || onNext) && (
             <>
               <Button
@@ -1188,47 +1180,59 @@ export function BoardTaskDetail({
               </Button>
             </form>
           )}
-          <TaskDetailActions
-            task={{ title: task.title, status }}
-            onOpenChat={
-              execution && (() => onOpenChat(execution, task.title))
-            }
-            openChatLabel={
-              execution?.topic ? t("automations.openTopic") : undefined
-            }
-            onAssign={
-              canAssign && !actionsDisabled
-                ? () => setAssigning(true)
-                : undefined
-            }
-            onComplete={
-              actionsDisabled ? undefined : () => update.mutate(true)
-            }
-            onReopen={
-              actionsDisabled
-                ? undefined
-                : status === "closed"
-                  ? () => workflowUpdate.mutate("reopen")
-                  : () => update.mutate(false)
-            }
-            onAccept={
-              !actionsDisabled && status === "unconfirmed"
-                ? () => workflowUpdate.mutate("accept")
-                : undefined
-            }
-            onAcceptAndEnqueue={
-              !actionsDisabled &&
-              status === "unconfirmed" &&
-              activeAgents.length > 0
-                ? () => void acceptAndEnqueue()
-                : undefined
-            }
-            onWithdraw={
-              !actionsDisabled && queue
-                ? () => workflowUpdate.mutate("withdraw")
-                : undefined
-            }
-          />
+          <div className="task-board-detail-footer-actions">
+            <TaskBoardActions
+              task={{ ...target, title: task.title }}
+              status={status}
+              disabled={actionsDisabled}
+              size="icon-sm"
+              align="start"
+              side="top"
+              hideRestore
+              onDeleted={onClose}
+            />
+            <TaskDetailActions
+              task={{ title: task.title, status }}
+              onOpenChat={
+                execution && (() => onOpenChat(execution, task.title))
+              }
+              openChatLabel={
+                execution?.topic ? t("automations.openTopic") : undefined
+              }
+              onAssign={
+                canAssign && !actionsDisabled
+                  ? () => setAssigning(true)
+                  : undefined
+              }
+              onComplete={
+                actionsDisabled ? undefined : () => update.mutate(true)
+              }
+              onReopen={
+                actionsDisabled
+                  ? undefined
+                  : status === "closed"
+                    ? () => workflowUpdate.mutate("reopen")
+                    : () => update.mutate(false)
+              }
+              onAccept={
+                !actionsDisabled && status === "unconfirmed"
+                  ? () => workflowUpdate.mutate("accept")
+                  : undefined
+              }
+              onAcceptAndEnqueue={
+                !actionsDisabled &&
+                status === "unconfirmed" &&
+                activeAgents.length > 0
+                  ? () => void acceptAndEnqueue()
+                  : undefined
+              }
+              onWithdraw={
+                !actionsDisabled && queue
+                  ? () => workflowUpdate.mutate("withdraw")
+                  : undefined
+              }
+            />
+          </div>
         </footer>
       )}
     </>

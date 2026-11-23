@@ -67,22 +67,24 @@ type TaskViewFilters struct {
 }
 
 type TaskDispatch struct {
-	TaskID        string `json:"taskId"`
-	NoteID        string `json:"noteId,omitempty"`
-	Version       string `json:"version,omitempty"`
-	CommandID     string `json:"commandId"`
-	AgentID       string `json:"agentId"`
-	WorkingCopyID string `json:"workingCopyId,omitempty"`
-	Title         string `json:"title"`
-	Text          string `json:"text"`
-	Note          string `json:"note,omitempty"`
+	TaskID        string     `json:"taskId"`
+	NoteID        string     `json:"noteId,omitempty"`
+	Version       string     `json:"version,omitempty"`
+	CommandID     string     `json:"commandId"`
+	AgentID       string     `json:"agentId"`
+	WorkingCopyID string     `json:"workingCopyId,omitempty"`
+	Selection     *Selection `json:"selection,omitempty"`
+	Title         string     `json:"title"`
+	Text          string     `json:"text"`
+	Note          string     `json:"note,omitempty"`
 }
 
 type ExternalTaskDispatch struct {
-	CommandID     string `json:"commandId"`
-	AgentID       string `json:"agentId"`
-	WorkingCopyID string `json:"workingCopyId,omitempty"`
-	Note          string `json:"note,omitempty"`
+	CommandID     string     `json:"commandId"`
+	AgentID       string     `json:"agentId"`
+	WorkingCopyID string     `json:"workingCopyId,omitempty"`
+	Selection     *Selection `json:"selection,omitempty"`
+	Note          string     `json:"note,omitempty"`
 }
 
 type TaskQueueInput struct {
@@ -338,6 +340,22 @@ type TaskDeadlineInput struct {
 type TaskReminderSettings struct {
 	DefaultRemindOffsets []int  `json:"defaultRemindOffsets"` // Lead minutes (e.g. [30]); empty = disabled by default
 	AllDayReminderTime   string `json:"allDayReminderTime"`   // "HH:MM" local wall time, default "09:00"
+}
+
+type TaskChatMode string
+
+const (
+	TaskChatModeSingle   TaskChatMode = "single"
+	TaskChatModeBySource TaskChatMode = "bySource"
+	TaskChatModeNewChat  TaskChatMode = "newChat"
+)
+
+func (mode TaskChatMode) Valid() bool {
+	return mode == TaskChatModeSingle || mode == TaskChatModeBySource || mode == TaskChatModeNewChat
+}
+
+type TaskDispatchSettings struct {
+	ChatMode TaskChatMode `json:"chatMode"`
 }
 
 type TaskReminderNotice struct {

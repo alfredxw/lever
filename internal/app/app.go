@@ -566,14 +566,8 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 	if input.ReplaceRunID != "" && (input.AgentID != "" || input.EditRunID != "" || input.WorkingCopyID != "" || input.Delivery != "" || len(afterRunIDs) > 0) {
 		return run, invalid("An edited sent message must run in its original conversation")
 	}
-	if input.Selection != nil {
-		s := input.Selection
-		if len(s.Model) > 4096 || strings.ContainsAny(s.Model, "\x00\r\n") {
-			return run, invalid("Invalid model")
-		}
-		if len(s.Effort) > 200 || strings.ContainsAny(s.Effort+s.Permission, "\x00\r\n") || len(s.Permission) > 200 {
-			return run, invalid("Invalid runtime options")
-		}
+	if err := validateSelection(input.Selection); err != nil {
+		return run, err
 	}
 	digest := hash(input)
 	if origin.channel != nil {
@@ -585,7 +579,7 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 		// A retry has the same intent even if the source was synced again.
 		digest = hash(taskCommand{origin.task.TaskID, model.ExternalTaskDispatch{
 			CommandID: input.CommandID, AgentID: input.AgentID, WorkingCopyID: input.WorkingCopyID,
-			Note: origin.task.Note,
+			Selection: origin.task.Selection, Note: origin.task.Note,
 		}})
 	} else if origin.task != nil {
 		digest = hash(origin.task)
@@ -625,12 +619,19 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				return err
 			}
 		}
+		var destination taskDestination
 		newChat := input.AgentID != ""
 		if origin.personal != nil {
 			chat, err = origin.personal.chat(ctx, tx, input.AgentID)
 			newChat = chat.ID == ""
 		} else if task != nil {
-			chat, err = taskChat(ctx, tx, origin.taskRecord, *task, delivery, origin.taskQueue)
+			settings, settingsErr := taskDispatchSettings(ctx, tx)
+			if settingsErr != nil {
+				return settingsErr
+			}
+			destination, err = resolveTaskDestination(ctx, tx, settings.ChatMode, origin.taskRecord, *task, delivery, origin.taskQueue)
+			chat = destination.chat
+			input.Operation = destination.operation
 			newChat = chat.ID == ""
 		} else if !newChat {
 			chat, err = store.Get[model.Chat](ctx, tx, "SELECT data FROM chats WHERE id=?", input.ChatID)
@@ -644,20 +645,8 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				chat.Source, chat.Channel, chat.Title = "channel", turn.install, turn.title
 			}
 			if task != nil {
-				switch origin.taskRecord {
-				case model.TaskRecordNote:
-					chat.Title, chat.Source, chat.NoteID = delivery.noteTitle, "note", task.NoteID
-				case model.TaskRecordExternal:
-					title := delivery.sourceTitle
-					if title == "" {
-						title = taskSourceChatTitle
-					}
-					chat.Title, chat.Source, chat.TaskSourceID = title, "taskSource", delivery.sourceID
-				case model.TaskRecordWorkItem:
-					chat.Title, chat.Source = workItemsChatTitle, "workItem"
-				default:
-					chat.Title, chat.Source, chat.TaskID = task.Title, "task", task.TaskID
-				}
+				chat.Title, chat.Source = destination.title, destination.source
+				chat.NoteID, chat.TaskSourceID, chat.TaskID = destination.noteID, destination.taskSourceID, destination.taskID
 			}
 			if fire := origin.automation; fire != nil {
 				chat.Title, chat.Source = fire.plan.Name, "automation"

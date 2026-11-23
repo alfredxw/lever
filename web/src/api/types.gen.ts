@@ -336,6 +336,7 @@ export interface TaskDispatch {
   commandId: string;
   agentId: string;
   workingCopyId?: string;
+  selection?: Selection;
   title: string;
   text: string;
   note?: string;
@@ -344,6 +345,7 @@ export interface ExternalTaskDispatch {
   commandId: string;
   agentId: string;
   workingCopyId?: string;
+  selection?: Selection;
   note?: string;
 }
 export interface TaskQueueInput extends TaskDispatch {
@@ -559,6 +561,13 @@ export interface TaskDeadlineInput {
 export interface TaskReminderSettings {
   defaultRemindOffsets: number /* int */[]; // Lead minutes (e.g. [30]); empty = disabled by default
   allDayReminderTime: string; // "HH:MM" local wall time, default "09:00"
+}
+export const TaskChatModeSingle = "single";
+export const TaskChatModeBySource = "bySource";
+export const TaskChatModeNewChat = "newChat";
+export type TaskChatMode = typeof TaskChatModeSingle | typeof TaskChatModeBySource | typeof TaskChatModeNewChat;
+export interface TaskDispatchSettings {
+  chatMode: TaskChatMode;
 }
 export interface TaskReminderNotice {
   id: string;

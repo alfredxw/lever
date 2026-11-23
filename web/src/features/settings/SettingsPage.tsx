@@ -70,6 +70,12 @@ import {
   useSaveTaskReminderSettings,
   useTaskReminderSettings,
 } from "@/features/tasks/taskDeadlines";
+import {
+  defaultTaskDispatchSettings,
+  taskChatModes,
+  useSaveTaskDispatchSettings,
+  useTaskDispatchSettings,
+} from "@/features/tasks/taskDispatchSettings";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
 
@@ -100,6 +106,11 @@ const sectionGroups = [
           "chatWidth",
           "chatWidthDescription",
           "workbench",
+          "taskChatMode",
+          "taskChatModeDescription",
+          "taskChatMode.single",
+          "taskChatMode.bySource",
+          "taskChatMode.newChat",
           "openNewTopicOnCreate",
           "openNewTopicOnCreateDescription",
           "agentActivity",
@@ -284,6 +295,9 @@ export function SettingsPage({
   const taskRemindersQuery = useTaskReminderSettings(visible);
   const saveTaskReminders = useSaveTaskReminderSettings();
   const taskReminders = taskRemindersQuery.data ?? defaultReminderSettings;
+  const taskDispatchQuery = useTaskDispatchSettings(visible);
+  const saveTaskDispatch = useSaveTaskDispatchSettings();
+  const taskDispatch = taskDispatchQuery.data ?? defaultTaskDispatchSettings;
   const defaultReminderValue =
     taskReminders.defaultRemindOffsets.length > 0
       ? String(taskReminders.defaultRemindOffsets[0])
@@ -454,6 +468,25 @@ export function SettingsPage({
               <code>const agent = "Lever";</code>
             </section>
             <SettingsGroup title={t("settings.workbench")}>
+              <SettingsChoiceRow
+                title={t("settings.taskChatMode")}
+                description={t("settings.taskChatModeDescription")}
+                value={taskDispatch.chatMode}
+                disabled={saveTaskDispatch.isPending}
+                onChange={(value) => {
+                  const chatMode = taskChatModes.find((mode) => mode === value);
+                  if (chatMode && chatMode !== taskDispatch.chatMode) {
+                    saveTaskDispatch.mutate(
+                      { chatMode },
+                      { onError: (error) => toast.error(error.message) },
+                    );
+                  }
+                }}
+                options={taskChatModes.map((value) => ({
+                  value,
+                  label: t(`settings.taskChatMode.${value}`),
+                }))}
+              />
               <SettingsRow
                 id="settings-open-new-topic"
                 title={t("settings.openNewTopicOnCreate")}

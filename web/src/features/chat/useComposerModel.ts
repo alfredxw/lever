@@ -1,7 +1,7 @@
 import type { Catalog, ModelInfo, Selection } from "@/api/types.gen";
 import { useModels, useProviders } from "@/features/runtime/queries";
 
-function unavailable(
+export function isModelUnavailable(
   selection: Selection,
   catalog: Catalog | null | undefined,
 ) {
@@ -50,20 +50,20 @@ export function useComposerModel(
   const candidateCatalog = useModels(
     candidate.provider,
     cwd,
-    !candidateUnavailable,
+    !!candidate.provider && !candidateUnavailable,
   );
   const useFallback =
     profileFallback &&
     (candidateUnavailable ||
       (candidateCatalog.isSuccess &&
-        unavailable(candidate, candidateCatalog.data)));
+        isModelUnavailable(candidate, candidateCatalog.data)));
   const choice = useFallback ? profileFallback : candidate;
   const differentProvider = choice.provider !== candidate.provider;
   const disabled = runtimeUnavailable(choice.provider);
   const fallbackCatalog = useModels(
     choice.provider,
     cwd,
-    differentProvider && !disabled,
+    !!choice.provider && differentProvider && !disabled,
   );
   const catalog = differentProvider ? fallbackCatalog : candidateCatalog;
   const model = selectedModel(choice, catalog.data);
@@ -81,7 +81,7 @@ export function useComposerModel(
     model,
     selection,
     runtimeUnavailable: disabled,
-    modelUnavailable: catalog.isSuccess && unavailable(choice, catalog.data),
+    modelUnavailable: catalog.isSuccess && isModelUnavailable(choice, catalog.data),
     checkingPreference:
       !!profileFallback &&
       !useFallback &&

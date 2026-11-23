@@ -471,6 +471,7 @@ export const enUS = {
   "tasks.filterSource": "Source",
   "tasks.source.written": "Written tasks",
   "tasks.source.workItem": "Work item",
+  "tasks.worksChat": "Works",
   "tasks.workItemsChat": "Work items",
   "tasks.source.agent": "Agent",
   "tasks.source.github": "GitHub",
@@ -616,8 +617,9 @@ export const enUS = {
     "Send immediately when an Agent is available. If you need to choose one, the sidebar opens.",
   "tasks.handoverDefaultAgent": "Default Agent",
   "tasks.handoverClearAgent": "Clear default",
+  "tasks.handoverChatDefault": "Default",
   "tasks.handoverChatHelp":
-    "Each handover opens a Topic. Mentions take priority over the default Agent. Other Agents use their own dedicated Chat for this note.",
+    "Mentions take priority over the default Agent. Without an existing Chat selected, handovers follow the work conversation setting.",
   "tasks.handoverSelectChat": "Select an existing Chat to save.",
   "tasks.dispatchNote": "Note (optional)",
   "tasks.assignee": "Agent",
@@ -1783,6 +1785,12 @@ export const enUS = {
   "settings.shortcutReserved": "This key combination is reserved.",
   "settings.interface": "Interface",
   "settings.workbench": "Workbench",
+  "settings.taskChatMode": "Work item conversations",
+  "settings.taskChatModeDescription":
+    "How assigned work items, notes, and external tasks open for an Agent. Notes with a specific existing Chat still open Topics there.",
+  "settings.taskChatMode.single": "Single chat",
+  "settings.taskChatMode.bySource": "By source",
+  "settings.taskChatMode.newChat": "New chat",
   "settings.notifications": "Notifications and reminders",
   "settings.languageDescription":
     "Language used for the app interface and native menus.",

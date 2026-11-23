@@ -30,9 +30,9 @@ func TestAgentCompletesOnlyTheAssignedItem(t *testing.T) {
 	}
 	var chatView model.ChatView
 	f.request("GET", "/chats/"+run.ChatID, nil, 200, &chatView)
-	if chatView.Chat.Source != "workItem" || chatView.Chat.TaskID != "" || len(chatView.Sessions) != 1 ||
+	if chatView.Chat.Source != "works" || chatView.Chat.TaskID != "" || len(chatView.Sessions) != 1 ||
 		chatView.Sessions[0].Kind != "topic" || chatView.Sessions[0].TaskID != item.ID {
-		t.Fatalf("work item did not run in a dedicated workItem Chat Topic: %+v", chatView)
+		t.Fatalf("work item did not run in the unified Works Chat Topic: %+v", chatView)
 	}
 	f.request("PATCH", "/tasks/work-items/"+item.ID, map[string]bool{"done": false}, 200, nil)
 	// A fire targeting the work items Chat must never complete a work item.

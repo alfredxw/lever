@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Agent } from "@/api/types.gen";
+import type { Agent, Selection } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
 import { MessageResponse } from "@/components/ai-elements/message-response";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,13 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelPicker } from "@/features/chat/ModelPicker";
+import { useComposerModel } from "@/features/chat/useComposerModel";
+import {
+  recentAgentSelection,
+  selectionForAgentProvider,
+  useRuntimePreferences,
+} from "@/features/runtime/runtimePreferences";
 import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPicker";
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
@@ -57,16 +64,58 @@ export function TaskDispatchPanel({
     handover.data,
   );
   const [copyId, setCopy] = useState<string>();
+  const [modelOverride, setModelOverride] = useState<Selection>();
+  const [modelOpen, setModelOpen] = useState(false);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<unknown>();
   const copies = useWorkingCopies(agent?.id ?? "", !!agent && !noteContext);
   const copy = copies.data?.find((item) => item.id === copyId);
-  const directory = copy
+  const modelCwd = copy
     ? primaryDirectory(copy)
-    : !noteContext && agent && primaryDirectory(agent.profile);
+    : agent
+      ? primaryDirectory(agent.profile)
+      : "";
+  const directory = !noteContext && modelCwd;
+  const preferences = useRuntimePreferences(agent?.id ?? "");
+  const profileSelection: Selection = agent
+    ? {
+        provider: agent.profile.provider,
+        model: agent.profile.model,
+        effort: "",
+        fast: false,
+      }
+    : { provider: "", model: "", effort: "", fast: false };
+  const recent = agent
+    ? recentAgentSelection(agent.profile, preferences)
+    : undefined;
+  const {
+    providers,
+    catalog,
+    selection,
+    runtimeUnavailable,
+    modelUnavailable,
+    checkingPreference,
+  } = useComposerModel(
+    modelOverride ?? recent ?? profileSelection,
+    modelCwd,
+    !modelOverride && recent ? profileSelection : undefined,
+  );
+  const preferFavorites =
+    preferences?.favoriteSelections?.[selection.provider] === selection.model;
+  const modelError =
+    agent && !checkingPreference
+      ? runtimeUnavailable
+        ? t("composer.runtimeDisabled")
+        : modelUnavailable
+          ? t("composer.modelUnavailable")
+          : ""
+      : "";
   const canDispatch =
-    !!agent && !!task.title && (!copyId || availableGroup(copy));
+    !!agent &&
+    !!task.title &&
+    (!copyId || availableGroup(copy)) &&
+    !modelError;
   const images = !!task.images?.length && (
     <ul
       className="task-dispatch-images"
@@ -94,6 +143,14 @@ export function TaskDispatchPanel({
           await onDispatch({
             agentId: agent.id,
             workingCopyId: copyId,
+            selection: modelOverride
+              ? {
+                  provider: selection.provider,
+                  model: selection.model,
+                  effort: selection.effort,
+                  fast: selection.fast,
+                }
+              : undefined,
             note: note.trim() || undefined,
           });
         } catch (failure) {
@@ -126,12 +183,45 @@ export function TaskDispatchPanel({
                 onChange={(id) => {
                   setAgent(id);
                   setCopy(undefined);
+                  setModelOverride(undefined);
                 }}
                 disabled={sending}
                 className="w-full"
                 capsule={!!noteContext}
               />
             </div>
+            {agent && (
+              <div className="grid min-w-0 gap-1">
+                <span>{t("profile.model")}</span>
+                <ModelPicker
+                  key={agent.id}
+                  providers={providers}
+                  catalog={catalog}
+                  cwd={modelCwd}
+                  open={modelOpen}
+                  onOpenChange={setModelOpen}
+                  value={selection}
+                  preferFavorites={preferFavorites}
+                  selectionForProvider={(provider, previous) =>
+                    selectionForAgentProvider(
+                      agent.profile,
+                      provider,
+                      preferences,
+                      previous,
+                    )
+                  }
+                  onChange={(next) =>
+                    setModelOverride({
+                      provider: next.provider,
+                      model: next.model,
+                      effort: next.effort,
+                      fast: next.fast,
+                    })
+                  }
+                  disabled={sending}
+                />
+              </div>
+            )}
             {!noteContext &&
               agent &&
               (copyId || copies.data?.some(availableGroup)) && (
@@ -148,6 +238,11 @@ export function TaskDispatchPanel({
                 </div>
               )}
           </div>
+          {modelError && (
+            <p className="text-xs text-destructive" role="alert">
+              {modelError}
+            </p>
+          )}
           {directory && (
             <code className="task-directory-path" title={directory}>
               {directory}

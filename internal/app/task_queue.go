@@ -378,12 +378,27 @@ func (a *App) prepareQueuedTask(ctx context.Context, tx *sql.Tx, note model.Task
 	if err := validateMessage(entry.CommandID, taskMessage(entry.Text, entry.Note), nil, nil, nil); err != nil {
 		return err
 	}
+	if err := validateSelection(entry.Selection); err != nil {
+		return err
+	}
 	agent, err := store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", entry.AgentID)
 	if err != nil {
 		return err
 	}
 	if agent.Archived {
 		return conflict("Agent is archived")
+	}
+	if entry.Selection != nil {
+		fallback := model.Selection{
+			Provider:   agent.Profile.Provider,
+			Model:      agent.Profile.Model,
+			Permission: agent.Profile.Permission,
+		}
+		resolved, _, err := resolveSelection(ctx, tx, *entry.Selection, fallback)
+		if err != nil {
+			return err
+		}
+		entry.Selection = &resolved
 	}
 	entry.Scope = agent.Profile.Scope
 	if entry.WorkingCopyID != "" {
@@ -518,7 +533,7 @@ WHERE agent_id=? AND state='queued' AND error='' ORDER BY position,id LIMIT 1`, 
 	}
 	_, err = a.sendLocked(ctx, model.SendInput{
 		CommandID: ID(), AgentID: agentID, WorkingCopyID: entry.WorkingCopyID,
-		Operation: "topic", Text: taskMessage(entry.Text, entry.Note),
+		Selection: entry.Selection, Operation: "topic", Text: taskMessage(entry.Text, entry.Note),
 	}, sendOrigin{task: &entry.TaskDispatch, taskRecord: entry.Record, taskQueue: &entry})
 	if err == nil {
 		return true, nil

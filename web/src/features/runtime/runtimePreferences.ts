@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { Selection } from "@/api/types.gen";
+import type { Agent, Selection } from "@/api/types.gen";
 
-type RuntimePreferences = {
+export type RuntimePreferences = {
   provider?: string;
   models: Record<string, Pick<Selection, "model" | "effort" | "fast">>;
   favoriteSelections?: Record<string, string>;
@@ -39,6 +39,51 @@ function useStoredPreference(key: string) {
 function savePreference(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value));
   changes.dispatchEvent(new Event("change"));
+}
+
+export function readRuntimePreferences(agentId: string) {
+  if (!agentId || typeof localStorage === "undefined") return undefined;
+  return parse(localStorage.getItem(storageKey(agentId)));
+}
+
+export function selectionForAgentProvider(
+  profile: Pick<Agent["profile"], "provider" | "model">,
+  provider: string,
+  preferences?: RuntimePreferences,
+  previous?: Selection,
+): Selection {
+  if (previous) {
+    return {
+      provider: previous.provider,
+      model: previous.model,
+      effort: previous.effort,
+      fast: previous.fast,
+    };
+  }
+  const fallback: Selection =
+    provider === profile.provider
+      ? {
+          provider: profile.provider,
+          model: profile.model,
+          effort: "",
+          fast: false,
+        }
+      : { provider, model: "", effort: "", fast: false };
+  const remembered = preferences?.models[provider];
+  return {
+    provider,
+    model: remembered?.model ?? fallback.model,
+    effort: remembered?.effort ?? fallback.effort,
+    fast: remembered?.fast ?? fallback.fast,
+  };
+}
+
+export function recentAgentSelection(
+  profile: Pick<Agent["profile"], "provider" | "model">,
+  preferences?: RuntimePreferences,
+): Selection | undefined {
+  if (!preferences?.provider) return undefined;
+  return selectionForAgentProvider(profile, preferences.provider, preferences);
 }
 
 export function useRuntimePreferences(agentId: string) {

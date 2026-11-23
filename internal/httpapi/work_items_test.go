@@ -147,7 +147,7 @@ func TestWorkItemDispatchUsesDedicatedChatTopicAndOriginReference(t *testing.T) 
 	f := newFixture(t)
 	owner, other := f.agent("codex"), f.agent("claude")
 
-	// 1. Multiple standalone work items on the same Agent share one dedicated "workItem" Chat with separate Topics.
+	// 1. Multiple standalone work items on the same Agent share the unified "works" Chat with separate Topics.
 	var firstItem, secondItem, otherItem model.WorkItem
 	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "First board item", Body: "Detail one"}, 200, &firstItem)
 	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "Second board item", Body: "Detail two"}, 200, &secondItem)
@@ -181,8 +181,8 @@ func TestWorkItemDispatchUsesDedicatedChatTopicAndOriginReference(t *testing.T) 
 	}
 	var ownerChat model.ChatView
 	f.request("GET", "/chats/"+firstRun.ChatID, nil, 200, &ownerChat)
-	if ownerChat.Chat.Source != "workItem" || ownerChat.Chat.Title != "Work items" || ownerChat.Chat.TaskID != "" || len(ownerChat.Sessions) != 2 {
-		t.Fatalf("unexpected dedicated workItem Chat: %+v", ownerChat)
+	if ownerChat.Chat.Source != "works" || ownerChat.Chat.Title != "Works" || ownerChat.Chat.TaskID != "" || len(ownerChat.Sessions) != 2 {
+		t.Fatalf("unexpected unified Works Chat: %+v", ownerChat)
 	}
 	titles := map[string]string{}
 	for _, s := range ownerChat.Sessions {

@@ -335,6 +335,7 @@ func TestExternalTaskDispatchGroupsBySourceChatAndKeepsOpenTopicOutOfScope(t *te
 	})
 
 	f := newFixture(t)
+	f.request("PUT", "/settings/task-dispatch", model.TaskDispatchSettings{ChatMode: model.TaskChatModeBySource}, 200, nil)
 	agentA, agentB := f.agent("codex"), f.agent("claude")
 	var alpha, beta model.TaskSource
 	f.request("POST", "/tasks/sources", map[string]string{"pluginId": "lever.github", "contributionId": "github", "target": "example/alpha"}, 200, &alpha)

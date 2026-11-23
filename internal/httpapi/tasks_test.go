@@ -107,7 +107,7 @@ func TestTaskDispatchUsesSavedNoteAndKeepsTopicLink(t *testing.T) {
 	}
 	var chat model.ChatView
 	f.request("GET", "/chats/"+run.ChatID, nil, 200, &chat)
-	if chat.Chat.NoteID != note.ID || chat.Chat.Title != "Work" || len(chat.Sessions) != 1 ||
+	if chat.Chat.Source != "works" || chat.Chat.Title != "Works" || len(chat.Sessions) != 1 ||
 		chat.Sessions[0].Kind != "topic" || chat.Sessions[0].TaskID != taskID || chat.Sessions[0].Title != "Check search" ||
 		len(chat.Runs) != 1 || chat.Runs[0].Input != input.Text {
 		t.Fatalf("editing the note changed the Chat or its input: %#v", chat)

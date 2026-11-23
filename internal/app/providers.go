@@ -37,7 +37,20 @@ func configuredProvider(ctx context.Context, q store.Queryer, id string) (model.
 
 func resolveSelection(ctx context.Context, q store.Queryer, selection, fallback model.Selection) (model.Selection, model.Provider, error) {
 	if selection.Provider == "" {
-		selection = fallback
+		if selection == (model.Selection{}) {
+			selection = fallback
+		} else {
+			selection.Provider = fallback.Provider
+			if selection.Model == "" {
+				selection.Model = fallback.Model
+			}
+			if selection.Permission == "" {
+				selection.Permission = fallback.Permission
+			}
+			if selection.Effort == "" {
+				selection.Effort = fallback.Effort
+			}
+		}
 	}
 	config, err := configuredProvider(ctx, q, selection.Provider)
 	if err != nil {

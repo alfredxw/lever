@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { TFunction } from "i18next";
 import {
+  ChevronDown,
   ClipboardList,
   Eye,
   LoaderCircle,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { PermissionInfo } from "@/api/types.gen";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,7 +42,7 @@ type PermissionProps = {
   onChange: (value: string) => void;
 };
 
-function permissionLabel(
+export function permissionLabel(
   t: TFunction,
   providerType: string | undefined,
   id: string,
@@ -168,12 +170,24 @@ export function PermissionMenu({
   nextTurn,
   activeValue,
   autoApproving,
+  showLabel,
+  compact,
+  side = "top",
+  align = "end",
+  className,
+  id,
 }: PermissionProps & {
   disabled?: boolean;
   pending?: boolean;
   nextTurn: boolean;
   activeValue?: string;
   autoApproving?: boolean;
+  showLabel?: boolean;
+  compact?: boolean;
+  side?: "top" | "bottom";
+  align?: "start" | "center" | "end";
+  className?: string;
+  id?: string;
 }) {
   const { t } = useTranslation();
   if (!permissions.length) return null;
@@ -193,26 +207,56 @@ export function PermissionMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <InputGroupButton
-          variant="ghost"
-          size="icon-sm"
-          disabled={disabled || pending}
-          aria-label={`${label} · ${status}`}
-          title={`${label} · ${status}`}
-        >
-          {pending ? (
-            <LoaderCircle
-              className="animate-spin text-muted-foreground"
+        {showLabel ? (
+          <Button
+            id={id}
+            type="button"
+            variant="outline"
+            size={compact ? "xs" : "sm"}
+            disabled={disabled || pending}
+            aria-label={`${label} · ${status}`}
+            title={`${label} · ${status}`}
+            className={className}
+          >
+            {pending ? (
+              <LoaderCircle
+                className="size-3.5 animate-spin text-muted-foreground"
+                aria-hidden="true"
+              />
+            ) : (
+              <CurrentIcon className={`size-3.5 ${tone}`} aria-hidden="true" />
+            )}
+            <span className="truncate">{current}</span>
+            <ChevronDown
+              className="size-3 text-muted-foreground"
               aria-hidden="true"
             />
-          ) : (
-            <CurrentIcon className={tone} aria-hidden="true" />
-          )}
-        </InputGroupButton>
+          </Button>
+        ) : (
+          <InputGroupButton
+            id={id}
+            variant="ghost"
+            size="icon-sm"
+            disabled={disabled || pending}
+            aria-label={`${label} · ${status}`}
+            title={`${label} · ${status}`}
+            className={className}
+          >
+            {pending ? (
+              <LoaderCircle
+                className="animate-spin text-muted-foreground"
+                aria-hidden="true"
+              />
+            ) : (
+              <CurrentIcon className={tone} aria-hidden="true" />
+            )}
+          </InputGroupButton>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent
         aria-label={label}
-        side="top"
+        side={side}
+        align={align}
         sideOffset={8}
         collisionPadding={12}
         className="w-72 max-w-[calc(100vw-24px)]"

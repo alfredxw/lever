@@ -79,9 +79,9 @@ func handoverChat(ctx context.Context, q store.Queryer, id, agentID string) (mod
 	return chat, err
 }
 
-// Resolve the destination inside the same write that creates the Topic. A
-// queued task keeps its chosen Chat, while dedicated Chats are found lazily.
-func noteTaskChat(ctx context.Context, q store.Queryer, task model.TaskDispatch, queued *queuedTask) (model.Chat, error) {
+// Resolve the explicit Chat chosen for a note handover. A queued task keeps
+// its chosen Chat, while direct dispatches read the note's current handover.
+func explicitNoteHandoverChat(ctx context.Context, q store.Queryer, task model.TaskDispatch, queued *queuedTask) (model.Chat, error) {
 	var id string
 	if queued != nil {
 		id = queued.DestinationChatID
@@ -92,11 +92,15 @@ func noteTaskChat(ctx context.Context, q store.Queryer, task model.TaskDispatch,
 			return model.Chat{}, err
 		}
 	}
-	if id != "" {
-		return handoverChat(ctx, q, id, task.AgentID)
+	if id == "" {
+		return model.Chat{}, nil
 	}
+	return handoverChat(ctx, q, id, task.AgentID)
+}
+
+func noteDedicatedChat(ctx context.Context, q store.Queryer, agentID, noteID string) (model.Chat, error) {
 	chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
-WHERE agent_id=? AND json_type(data,'$.noteId')='text' AND json_extract(data,'$.noteId')=?`, task.AgentID, task.NoteID)
+WHERE agent_id=? AND json_type(data,'$.noteId')='text' AND json_extract(data,'$.noteId')=?`, agentID, noteID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}

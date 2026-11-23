@@ -2626,3 +2626,143 @@ test("Task deadlines prioritize earlier DDL on Board & List, configure custom re
     })
     .toEqual([60]);
 });
+
+test("Board and Inbox detail unify work item actions in the footer without duplicate menu items", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  const agent: Agent = await (
+    await page.request.post("/api/agents", {
+      data: {
+        name: "Footer Actions Agent",
+        profile: {
+          provider: "codex",
+          permission: "ask",
+          roots: [{ id: "root", path: scope }],
+          primaryRootId: "root",
+        },
+      },
+    })
+  ).json();
+
+  const proposedResp = await page.request.post("/api/tasks/work-items", {
+    data: {
+      title: "Proposed footer triage item",
+      body: "Verify footer-unified triage actions.",
+      assigneeAgentId: agent.id,
+    },
+  });
+  expect(proposedResp.ok()).toBeTruthy();
+  const proposedItem = await proposedResp.json();
+
+  // Simulate an Agent-proposed (unconfirmed) item so it surfaces in Inbox with triage actions.
+  await page.route("**/api/tasks/work-items", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const list = await res.json();
+    await route.fulfill({
+      response: res,
+      json: list.map((item: { id: string }) =>
+        item.id === proposedItem.id
+          ? { ...item, createdByAgentId: agent.id }
+          : item,
+      ),
+    });
+  });
+  await page.route(`**/api/tasks/work-items/${proposedItem.id}`, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const item = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...item, createdByAgentId: agent.id },
+    });
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "工作", exact: true }).click();
+  const sidebar = page.locator("#task-sidebar");
+  await sidebar.getByRole("button", { name: /^需我处理/ }).click();
+
+  const inbox = page.locator(".task-inbox");
+  const inboxRow = inbox
+    .locator(".task-inbox-item")
+    .filter({ hasText: "Proposed footer triage item" });
+  await expect(inboxRow).toBeVisible();
+  await inboxRow.click();
+
+  const inboxDetail = inbox.locator(".task-inbox-detail");
+  const inboxHeader = inboxDetail.locator(".task-board-detail-header");
+  const inboxFooter = inboxDetail.locator(".task-board-detail-footer");
+
+  // Header no longer hosts the work-item overflow menu; footer hosts it on the left.
+  await expect(
+    inboxHeader.getByRole("button", { name: "工作项操作" }),
+  ).toHaveCount(0);
+  const inboxManage = inboxFooter.getByRole("button", { name: "工作项操作" });
+  const acceptEnqueue = inboxFooter.getByRole("button", {
+    name: "收下并入队",
+    exact: true,
+  });
+  await expect(inboxManage).toBeVisible();
+  await expect(acceptEnqueue).toBeVisible();
+  const manageBox = (await inboxManage.boundingBox())!;
+  const primaryBox = (await acceptEnqueue.boundingBox())!;
+  expect(manageBox.x).toBeLessThan(primaryBox.x);
+
+  // Unconfirmed item menu omits redundant "移回待办".
+  await inboxManage.click();
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "归档工作项" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "从工作台删除" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "移回待办" })).toHaveCount(0);
+
+  // Archive directly from the footer menu -> item leaves Inbox.
+  await menu.getByRole("menuitem", { name: "归档工作项" }).click();
+  await expect(inboxRow).toHaveCount(0);
+
+  // Switch to Board -> show closed item -> open detail dialog and check footer menu deduplication.
+  await sidebar.getByRole("button", { name: "全部", exact: true }).click();
+  const board = page.locator(".tasks-board");
+  await board.getByRole("button", { name: /^筛选/ }).click();
+  const filterDialog = page.getByRole("dialog", { name: "筛选", exact: true });
+  await filterDialog.getByRole("button", { name: "状态", exact: true }).click();
+  await filterDialog.getByRole("checkbox", { name: "已归档", exact: true }).click();
+  await page.keyboard.press("Escape");
+
+  const closedCard = board
+    .locator(".task-board-card")
+    .filter({ hasText: "Proposed footer triage item" });
+  await expect(closedCard).toBeVisible();
+  await closedCard.locator(".task-board-card-open").click();
+
+  const detailDialog = page.locator(".task-board-detail");
+  await expect(detailDialog).toBeVisible();
+  await expect(
+    detailDialog
+      .locator(".task-board-detail-header")
+      .getByRole("button", { name: "工作项操作" }),
+  ).toHaveCount(0);
+  const dialogFooter = detailDialog.locator(".task-board-detail-footer");
+  await expect(
+    dialogFooter.getByRole("button", { name: "重新打开任务", exact: true }),
+  ).toBeVisible();
+  await dialogFooter.getByRole("button", { name: "工作项操作" }).click();
+  const closedMenu = page.getByRole("menu");
+  await expect(
+    closedMenu.getByRole("menuitem", { name: "移回待办" }),
+  ).toBeVisible();
+  await expect(
+    closedMenu.getByRole("menuitem", { name: "从工作台删除" }),
+  ).toBeVisible();
+  await expect(
+    closedMenu.getByRole("menuitem", { name: "取消归档" }),
+  ).toHaveCount(0);
+  await closedMenu.getByRole("menuitem", { name: "移回待办" }).click();
+  await expect(
+    dialogFooter.getByRole("button", { name: "标记完成", exact: true }),
+  ).toBeVisible();
+});

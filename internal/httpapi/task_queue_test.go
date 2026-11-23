@@ -167,7 +167,7 @@ func TestTaskQueueStartIntervalSurvivesRestart(t *testing.T) {
 	}
 	var overview model.Overview
 	next.request("GET", "/overview", nil, 200, &overview)
-	if len(overview.Chats) != 1 || overview.Chats[0].Source != "workItem" || len(overview.Conversations) != 2 {
+	if len(overview.Chats) != 1 || overview.Chats[0].Source != "works" || len(overview.Conversations) != 2 {
 		t.Fatalf("recovery created duplicate Chats or Topics: chats=%+v conversations=%+v", overview.Chats, overview.Conversations)
 	}
 }

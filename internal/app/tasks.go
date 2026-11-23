@@ -137,9 +137,23 @@ ON CONFLICT(task_id) DO UPDATE SET accepted=1`, id)
 }
 
 const (
+	worksChatTitle      = "Works"
 	workItemsChatTitle  = "Work items"
 	taskSourceChatTitle = "Task source"
 )
+
+func validateSelection(selection *model.Selection) error {
+	if selection == nil {
+		return nil
+	}
+	if len(selection.Model) > 4096 || strings.ContainsAny(selection.Model, "\x00\r\n") {
+		return invalid("Invalid model")
+	}
+	if len(selection.Effort) > 200 || strings.ContainsAny(selection.Effort+selection.Permission, "\x00\r\n") || len(selection.Permission) > 200 {
+		return invalid("Invalid runtime options")
+	}
+	return nil
+}
 
 func (a *App) acceptTask(ctx context.Context, tx *sql.Tx, record model.TaskRecord, input model.TaskDispatch, queued *queuedTask) (taskDelivery, error) {
 	note, err := a.openTaskSource(ctx, tx, record, input.TaskID, input.NoteID)
@@ -205,26 +219,94 @@ JOIN task_sources s ON s.id=e.source_id WHERE e.id=?`, input.TaskID).Scan(&sourc
 	return delivery, nil
 }
 
-func taskChat(ctx context.Context, q store.Queryer, record model.TaskRecord, task model.TaskDispatch, delivery taskDelivery, queued *queuedTask) (model.Chat, error) {
-	switch record {
-	case model.TaskRecordNote:
-		return noteTaskChat(ctx, q, task, queued)
-	case model.TaskRecordExternal:
-		chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
+type taskDestination struct {
+	chat         model.Chat
+	operation    string
+	source       string
+	title        string
+	noteID       string
+	taskSourceID string
+	taskID       string
+}
+
+func resolveTaskDestination(ctx context.Context, q store.Queryer, mode model.TaskChatMode, record model.TaskRecord, task model.TaskDispatch, delivery taskDelivery, queued *queuedTask) (taskDestination, error) {
+	if record == model.TaskRecordNote {
+		chat, err := explicitNoteHandoverChat(ctx, q, task, queued)
+		if err != nil {
+			return taskDestination{}, err
+		}
+		if chat.ID != "" {
+			return taskDestination{chat: chat, operation: "topic"}, nil
+		}
+	}
+	switch mode {
+	case model.TaskChatModeNewChat:
+		return taskDestination{
+			operation: "main",
+			source:    "task",
+			title:     task.Title,
+			taskID:    task.TaskID,
+		}, nil
+	case model.TaskChatModeBySource:
+		switch record {
+		case model.TaskRecordNote:
+			chat, err := noteDedicatedChat(ctx, q, task.AgentID, task.NoteID)
+			return taskDestination{
+				chat:      chat,
+				operation: "topic",
+				source:    "note",
+				title:     delivery.noteTitle,
+				noteID:    task.NoteID,
+			}, err
+		case model.TaskRecordExternal:
+			chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
 WHERE agent_id=? AND json_type(data,'$.taskSourceId')='text' AND json_extract(data,'$.taskSourceId')=?`, task.AgentID, delivery.sourceID)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = nil
-		}
-		return chat, err
-	case model.TaskRecordWorkItem:
-		chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
+			if errors.Is(err, sql.ErrNoRows) {
+				err = nil
+			}
+			title := delivery.sourceTitle
+			if title == "" {
+				title = taskSourceChatTitle
+			}
+			return taskDestination{
+				chat:         chat,
+				operation:    "topic",
+				source:       "taskSource",
+				title:        title,
+				taskSourceID: delivery.sourceID,
+			}, err
+		case model.TaskRecordWorkItem:
+			chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
 WHERE agent_id=? AND json_extract(data,'$.source')='workItem'`, task.AgentID)
+			if errors.Is(err, sql.ErrNoRows) {
+				err = nil
+			}
+			return taskDestination{
+				chat:      chat,
+				operation: "topic",
+				source:    "workItem",
+				title:     workItemsChatTitle,
+			}, err
+		default:
+			return taskDestination{
+				operation: "main",
+				source:    "task",
+				title:     task.Title,
+				taskID:    task.TaskID,
+			}, nil
+		}
+	default:
+		chat, err := store.Get[model.Chat](ctx, q, `SELECT data FROM chats
+WHERE agent_id=? AND json_extract(data,'$.source')='works'`, task.AgentID)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 		}
-		return chat, err
-	default:
-		return model.Chat{}, nil
+		return taskDestination{
+			chat:      chat,
+			operation: "topic",
+			source:    "works",
+			title:     worksChatTitle,
+		}, err
 	}
 }
 
@@ -287,7 +369,7 @@ func (a *App) DispatchTask(ctx context.Context, input model.TaskDispatch) (model
 	defer a.notesMu.Unlock()
 	return a.sendLocked(ctx, model.SendInput{
 		CommandID: input.CommandID, AgentID: input.AgentID, WorkingCopyID: input.WorkingCopyID,
-		Operation: "topic", Text: taskMessage(input.Text, input.Note),
+		Selection: input.Selection, Operation: "topic", Text: taskMessage(input.Text, input.Note),
 	}, sendOrigin{task: &input, taskRecord: model.TaskRecordNote})
 }
 
@@ -297,10 +379,10 @@ func (a *App) dispatchStoredTask(ctx context.Context, record model.TaskRecord, i
 	note := strings.TrimSpace(input.Note)
 	return a.sendLocked(ctx, model.SendInput{
 		CommandID: input.CommandID, AgentID: input.AgentID, WorkingCopyID: input.WorkingCopyID,
-		Operation: "topic", Text: taskMessage(text, note),
+		Selection: input.Selection, Operation: "topic", Text: taskMessage(text, note),
 	}, sendOrigin{
 		taskRecord: record,
-		task:       &model.TaskDispatch{TaskID: id, Title: string(label[:min(len(label), 80)]), AgentID: input.AgentID, Note: note},
+		task:       &model.TaskDispatch{TaskID: id, Title: string(label[:min(len(label), 80)]), AgentID: input.AgentID, Selection: input.Selection, Note: note},
 	})
 }
 

@@ -1267,6 +1267,25 @@ button.task-agent-mention:is(:active, [aria-expanded="true"]) {
 .task-dispatch .composer-directory-trigger:is(:hover, :focus-visible) {
   background: var(--control-focus);
 }
+:is(.task-dispatch, .task-handover-form) .model-trigger {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+  border: 1px solid var(--border);
+  background: var(--control-background);
+  padding-inline: 10px;
+  font-size: var(--text-control);
+  font-weight: 400;
+}
+:is(.task-dispatch, .task-handover-form) .model-trigger > :last-child {
+  margin-inline-start: auto;
+}
+:is(.task-dispatch, .task-handover-form) .model-trigger:hover {
+  background: var(--control-hover);
+}
+:is(.task-dispatch, .task-handover-form) .model-trigger:focus-visible {
+  background: var(--control-focus);
+}
 .task-directory-path {
   overflow-wrap: anywhere;
 }
@@ -2028,7 +2047,12 @@ button.task-agent-mention:is(:active, [aria-expanded="true"]) {
   padding: 10px 14px;
   background: var(--sidebar);
 }
-.task-board-detail-footer:has(.task-detail-actions:empty),
+.task-board-detail-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .task-detail-actions:empty {
   display: none;
 }

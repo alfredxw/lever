@@ -183,6 +183,12 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       });
       return;
     }
+    if (event.type === "task-dispatch-settings") {
+      void queryClient.invalidateQueries({
+        queryKey: ["task-dispatch-settings"],
+      });
+      return;
+    }
     if (event.type === "task-sources") {
       void queryClient.invalidateQueries({ queryKey: ["task-sources"] });
       return;

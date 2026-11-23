@@ -26,16 +26,28 @@ export function TaskBoardActions({
   task,
   status,
   disabled,
+  align = "end",
+  side,
+  size = "icon-xs",
+  hideRestore = false,
   onDeleted,
 }: {
   task: TaskTarget & { title: string };
   status: TaskStatus;
   disabled?: boolean;
+  align?: "start" | "center" | "end";
+  side?: "top" | "right" | "bottom" | "left";
+  size?: "icon-xs" | "icon-sm";
+  hideRestore?: boolean;
   onDeleted?: () => void;
 }) {
   const { t } = useTranslation();
   const [confirming, setConfirming] = useState(false);
   const update = useTaskWorkflowUpdate(task);
+  const showReturnTodo = status !== "todo" && status !== "unconfirmed";
+  const showArchive = status !== "closed";
+  const showRestore = status === "closed" && !hideRestore;
+  const hasSecondaryActions = showReturnTodo || showArchive || showRestore;
   function change(action: "todo" | "close" | "reopen" | "delete") {
     update.mutate(action, {
       onSuccess: () => {
@@ -50,7 +62,7 @@ export function TaskBoardActions({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
-            size="icon-xs"
+            size={size}
             variant="ghost"
             aria-label={t("tasks.manageItem")}
             aria-description={task.title}
@@ -59,25 +71,26 @@ export function TaskBoardActions({
             <Ellipsis />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {status !== "todo" && (
+        <DropdownMenuContent align={align} side={side}>
+          {showReturnTodo && (
             <DropdownMenuItem onSelect={() => change("todo")}>
               <ListTodo />
               {t("tasks.returnTodo")}
             </DropdownMenuItem>
           )}
-          {status === "closed" ? (
+          {showRestore && (
             <DropdownMenuItem onSelect={() => change("reopen")}>
               <Undo2 />
               {t("tasks.restoreItem")}
             </DropdownMenuItem>
-          ) : (
+          )}
+          {showArchive && (
             <DropdownMenuItem onSelect={() => change("close")}>
               <Archive />
               {t("tasks.archiveItem")}
             </DropdownMenuItem>
           )}
-          <DropdownMenuSeparator />
+          {hasSecondaryActions && <DropdownMenuSeparator />}
           <DropdownMenuItem
             variant="destructive"
             onSelect={() => setConfirming(true)}

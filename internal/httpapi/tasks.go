@@ -309,4 +309,17 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 		saved, err := s.App.SaveTaskReminderSettings(r.Context(), input)
 		respond(w, saved, err)
 	})
+	mux.HandleFunc("GET /api/settings/task-dispatch", func(w http.ResponseWriter, r *http.Request) {
+		settings, err := s.App.TaskDispatchSettings(r.Context())
+		respond(w, settings, err)
+	})
+	mux.HandleFunc("PUT /api/settings/task-dispatch", func(w http.ResponseWriter, r *http.Request) {
+		var input model.TaskDispatchSettings
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		saved, err := s.App.SaveTaskDispatchSettings(r.Context(), input)
+		respond(w, saved, err)
+	})
 }

@@ -213,7 +213,7 @@ function SettingsForm({
             }}
           >
             <ToggleGroupItem value="dedicated">
-              {t("automations.chatSource.dedicated")}
+              {t("tasks.handoverChatDefault")}
             </ToggleGroupItem>
             <ToggleGroupItem value="existing">
               {t("automations.chatSource.existing")}
