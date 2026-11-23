@@ -33,6 +33,7 @@ export interface AutomationTarget {
   agentId: string;
   chatId?: string;
   workingCopyId?: string;
+  selection?: Selection;
   prompt?: string; // Optional per-target supplemental instructions.
   enabled?: boolean; // Defaults to true.
 }
@@ -41,6 +42,7 @@ export interface AutomationInput {
   prompt: string;
   trigger: AutomationTrigger;
   destination: AutomationDestination;
+  selection?: Selection; // Optional task-level model/effort/fast/permission override.
   targets?: AutomationTarget[]; // Optional multi-Agent / multi-Scope execution targets.
   notifyPolicy?: '' | 'always' | 'actionable' | 'silent';
   deliveryMode?: '' | 'deliver' | 'audit' | 'propose' | 'curate';

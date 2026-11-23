@@ -342,8 +342,47 @@ func (a *App) sendAutomationLocked(ctx context.Context, fire automationFire) err
 			input.WorkingCopyID = destination.WorkingCopyID
 		}
 	}
+	override := target.Selection
+	if override == nil {
+		override = plan.Selection
+	}
+	if override != nil {
+		base, err := a.automationSelectionBase(ctx, input.ChatID, destination.AgentID, destination.Mode)
+		if err != nil {
+			return err
+		}
+		input.Selection = mergeAutomationSelection(override, base)
+	}
 	_, err := a.sendLocked(ctx, input, sendOrigin{automation: &fire})
 	return err
+}
+
+func (a *App) automationSelectionBase(ctx context.Context, chatID, agentID, mode string) (model.Selection, error) {
+	if chatID != "" && mode == "chat" {
+		session, err := store.Get[model.Session](ctx, a.Store.DB, "SELECT data FROM sessions WHERE chat_id=? AND kind='main'", chatID)
+		if err == nil {
+			return session.Selection, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return model.Selection{}, err
+		}
+	}
+	if agentID == "" && chatID != "" {
+		chat, err := store.Get[model.Chat](ctx, a.Store.DB, "SELECT data FROM chats WHERE id=?", chatID)
+		if err != nil {
+			return model.Selection{}, err
+		}
+		agentID = chat.AgentID
+	}
+	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", agentID)
+	if err != nil {
+		return model.Selection{}, err
+	}
+	return model.Selection{
+		Provider:   agent.Profile.Provider,
+		Model:      agent.Profile.Model,
+		Permission: agent.Profile.Permission,
+	}, nil
 }
 
 func advanceAutomation(ctx context.Context, tx *sql.Tx, fire automationFire) error {

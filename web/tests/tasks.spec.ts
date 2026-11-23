@@ -80,7 +80,7 @@ test("quiet automations keep their history and surface requests under Agents", a
   await expect(dialog).toBeHidden();
   const detail = page.getByRole("article");
   await expect(detail.getByRole("heading", { name: quiet.name })).toBeVisible();
-  await expect(detail.getByText("仅需处理时显示")).toBeVisible();
+  await expect(detail.getByText("静默 · 仅失败提醒")).toBeVisible();
   const enable = detail.getByRole("switch", { name: /启用/ });
   await enable.click();
   await expect(
@@ -246,7 +246,8 @@ test("an automation work item opens its plan and handles an archived plan", asyn
   await sidebar.getByTitle("Triage webhook").click();
   const detail = page.getByRole("article");
   await expect(detail.getByRole("button", { name: "立即运行" })).toHaveCount(0);
-  await detail.getByText("事件接入", { exact: true }).click();
+  await detail.getByRole("tab", { name: "规则配置" }).click();
+  await expect(detail.getByText("事件接入", { exact: true })).toBeVisible();
   await expect(detail.getByRole("button", { name: "复制 cURL" })).toBeVisible();
 
   const works = primary.getByRole("button", { name: "工作" });
@@ -388,23 +389,29 @@ test("automations support inline editing, multi-target flat runs, silent monitor
     }),
   ).toHaveCount(1);
 
-  // Open plan -> inline multi-target addition without modal -> flat multi-target runs + scope filter
+  // Open plan -> switch to Settings tab -> explicitly pick and add 2nd scope -> flat multi-target runs + scope filter
   await sidebar.getByTitle(prPlan.name).click();
   const detail = page.getByRole("article");
   await expect(
     detail.getByRole("heading", { name: prPlan.name }),
   ).toBeVisible();
-  await detail.getByRole("button", { name: "多 Agent / 范围" }).click();
-  await expect(detail.getByText(/2 个范围共用本条规则/)).toBeVisible();
+  // Summary strip stays read-only without quick "+ Add Scope" action
+  await expect(
+    detail.getByRole("button", { name: "多 Agent / 范围" }),
+  ).toHaveCount(0);
 
-  // Pick frontendAgent on the 2nd target row if needed and dispatch both targets
-  const secondTargetRow = detail.locator(".automation-target-row").nth(1);
-  await secondTargetRow.getByRole("button").first().click();
+  await detail.getByRole("tab", { name: "规则配置" }).click();
+  // Trigger schedule is flat (visible without expanding a 2nd-layer details section)
+  await expect(detail.getByText("触发方式", { exact: true }).first()).toBeVisible();
+  await detail.getByRole("button", { name: "添加 Agent / 范围" }).click();
+  await detail.locator("#automation-add-scope-agent").click();
   await page
     .getByRole("option", { name: frontendAgent.name, exact: true })
     .click();
+  await detail.getByRole("button", { name: "确认添加" }).click();
+  await expect(detail.getByText(/2 个范围共用本条规则/)).toBeVisible();
+  await expect(detail.locator(".automation-target-row")).toHaveCount(2);
 
-  await detail.getByRole("button", { name: "收起配置" }).click();
   await detail.getByRole("button", { name: "立即运行" }).click();
 
   const history = detail.getByRole("region", { name: "运行历史" });
@@ -431,9 +438,13 @@ test("automations support inline editing, multi-target flat runs, silent monitor
   const reader = detail.locator(".automation-reader");
   await expect(reader).toBeVisible();
   const correction = "Always attach rollback SQL before opening schema PRs";
-  await reader.locator("textarea").fill(correction);
-  await reader.getByRole("button", { name: "发送" }).click();
-  await expect(reader.getByText(correction)).toBeVisible();
+  await reader
+    .getByRole("textbox", { name: "回复话题", exact: true })
+    .fill(correction);
+  await reader.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(
+    reader.locator(".automation-thread-turn").getByText(correction),
+  ).toBeVisible();
 
   const promoteSave = page.waitForResponse(
     (res) =>
@@ -551,6 +562,160 @@ test("automation artifacts stay searchable and open one at a time on narrow scre
     const runs: TaskExecution[] = await (await page.request.get("/api/tasks/executions")).json();
     return runs.find((run) => run.taskId === created.id)?.agentId;
   }).toBe(agent.id);
+});
+
+test("automation reader reuses Chat run activity, image preview, and fixed-session Composer", async ({
+  page,
+}) => {
+  const { url, scope } = taskFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  const agent: Agent = await (
+    await page.request.post("/api/agents", {
+      data: {
+        name: "Reader Chat Reuse Agent",
+        profile: {
+          provider: "codex",
+          permission: "ask",
+          roots: [{ id: "root", path: scope }],
+          primaryRootId: "root",
+        },
+      },
+    })
+  ).json();
+
+  // Main-session automation with tool-call activity + follow-up in fixedSession main mode
+  const plan: Automation = await (
+    await page.request.post("/api/tasks/automations", {
+      data: {
+        name: "Main-session tool audit",
+        prompt: "[command-exits] Audit build commands",
+        notifyPolicy: "always",
+        deliveryMode: "deliver",
+        workItem: false,
+        trigger: { kind: "schedule", schedule: { intervalMinutes: 1440 } },
+        destination: { mode: "chat", agentId: agent.id },
+      },
+    })
+  ).json();
+
+  // Second automation echoing a Markdown image link to verify ImagePreviewProvider
+  const imagePlan: Automation = await (
+    await page.request.post("/api/tasks/automations", {
+      data: {
+        name: "Screenshot report",
+        prompt: "![Snapshot](https://example.invalid/snapshot.png)",
+        notifyPolicy: "always",
+        deliveryMode: "deliver",
+        workItem: false,
+        trigger: { kind: "schedule", schedule: { intervalMinutes: 1440 } },
+        destination: { mode: "topic", agentId: agent.id },
+      },
+    })
+  ).json();
+
+  for (const item of [plan, imagePlan]) {
+    const res = await page.request.post(`/api/tasks/automations/${item.id}/run`, {
+      data: { commandId: crypto.randomUUID() },
+    });
+    expect(res.ok()).toBeTruthy();
+  }
+  await expect
+    .poll(async () => {
+      const feed: AutomationRun[] = await (
+        await page.request.get("/api/tasks/automation-runs")
+      ).json();
+      const mine = feed.filter(
+        (r) => r.automationId === plan.id || r.automationId === imagePlan.id,
+      );
+      return mine.length === 2 && mine.every((r) => r.status === "completed");
+    })
+    .toBe(true);
+
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("button", { name: "自动化", exact: true })
+    .click();
+
+  const sidebar = page.locator("#automation-sidebar");
+  await sidebar.getByTitle(plan.name).click();
+  const reader = page.locator(".automation-reader");
+  await expect(reader).toBeVisible();
+
+  // Root run exposes Chat's RunWork / RunActivity trace (tool calls are expandable)
+  const workToggle = reader.locator(".run-work-toggle").first();
+  await expect(workToggle).toBeVisible();
+  await workToggle.click();
+  await expect(reader.locator(".run-activity")).toBeVisible();
+
+  // Fixed-session Composer hides Chat/Topic mode switcher and keeps pure Chat UI without helper copy
+  await expect(reader.locator(".composer-mode-button")).toHaveCount(0);
+  await expect(reader.locator(".automation-quick-prompts")).toHaveCount(0);
+  await expect(reader.getByText("原地追问或调教规则")).toHaveCount(0);
+  await expect(
+    reader.getByRole("button", { name: "选择模型和运行时", exact: true }),
+  ).toBeVisible();
+
+  const textbox = reader.getByRole("textbox", {
+    name: "发送消息",
+    exact: true,
+  });
+  const followUpText = "Check exit codes and re-run build verification";
+  await textbox.fill(followUpText);
+
+  // Sending from main-session automation reader posts operation: "main"
+  const sendReq = page.waitForRequest(
+    (req) => req.url().endsWith("/api/messages") && req.method() === "POST",
+  );
+  await reader.getByRole("button", { name: "发送", exact: true }).click();
+  const payload = (await sendReq).postDataJSON() as { operation: string };
+  expect(payload.operation).toBe("main");
+
+  const followUpTurn = reader.locator(".automation-thread-turn").first();
+  await expect(followUpTurn).toContainText(followUpText);
+  await expect(followUpTurn).toHaveAttribute("data-status", "completed");
+
+  // Chat MessageActions (quote & edit) operate directly on the reader's Composer
+  await followUpTurn
+    .locator(".user-message")
+    .getByRole("button", { name: "引用消息", exact: true })
+    .click();
+  await expect(reader.locator(".composer-quote")).toContainText(followUpText);
+  await reader
+    .locator(".composer-quote")
+    .getByRole("button")
+    .click();
+  await expect(reader.locator(".composer-quote")).toHaveCount(0);
+
+  await followUpTurn
+    .locator(".user-message")
+    .getByRole("button", { name: "从这里编辑", exact: true })
+    .click();
+  await expect(reader.locator(".queue-heading")).toBeVisible();
+  await expect(textbox).toContainText(followUpText);
+  await reader
+    .getByRole("button", { name: "取消编辑已发送消息", exact: true })
+    .click();
+  await expect(reader.locator(".queue-heading")).toHaveCount(0);
+
+  // Markdown image inside automation output renders safely with ImagePreviewProvider
+  const onePixelPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await page.route("https://example.invalid/snapshot.png", (route) =>
+    route.fulfill({ contentType: "image/png", body: onePixelPng }),
+  );
+  await sidebar.getByTitle(imagePlan.name).click();
+  await expect(reader).toBeVisible();
+  const imageLink = reader.locator("a.chat-image-link").first();
+  await expect(imageLink).toBeVisible();
+  await imageLink.click();
+  const preview = reader.getByRole("region", { name: "图片预览", exact: true });
+  await expect(preview).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(preview).toHaveCount(0);
 });
 
 test("GitHub Sources and saved Board views expose Issue and PR choices", async ({

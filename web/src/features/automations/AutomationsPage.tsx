@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -10,6 +10,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { active, api, queryClient } from "@/api/client";
@@ -18,6 +19,7 @@ import type {
   Automation,
   AutomationRun,
   Chat,
+  MessageQuote,
   Request,
   TaskExecution,
   WorkItem,
@@ -36,26 +38,34 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import {
   SecondarySidebar,
   useSecondarySidebarState,
 } from "@/components/workbench/SecondarySidebar";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import type { OpenChatFile } from "@/features/chat/ChatResponse";
+import type { OpenRun } from "@/features/chat/DelegatedTasks";
 import { useCompactPanel } from "@/hooks/useCompactPanel";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { pluginsQuery } from "@/features/plugins/pluginsQuery";
 import { TaskDispatchPanel } from "@/features/tasks/TaskDispatchPanel";
 import { useTaskActivity } from "@/features/tasks/taskWorkflow";
 import { useTaskDispatch } from "@/features/tasks/useTaskDispatch";
 import { primaryDirectory } from "@/features/worktrees/scope";
+import { AutomationConfigView } from "./AutomationConfigView";
 import { AutomationEditor } from "./AutomationEditor";
 import { AutomationMonitor } from "./AutomationMonitor";
+import { AutomationPlanHeader } from "./AutomationPlanHeader";
 import { AutomationPlanIcon } from "./AutomationPlanIcon";
-import { AutomationRuleRibbon } from "./AutomationRuleRibbon";
 import { AutomationRunCard } from "./AutomationRunCard";
 import { createFindingWorkItem, type AutomationDispatchTarget } from "./AutomationRunOutput";
 import { AutomationRunReader } from "./AutomationRunReader";
 import { AutomationSparkline } from "./AutomationSparkline";
+import {
+  AutomationSummaryStrip,
+  usePlanConfigAttention,
+} from "./AutomationSummaryStrip";
 import {
   automationHistoryQuery,
   automationPath,
@@ -70,6 +80,8 @@ import {
   planTargets,
   runNeedsAttention,
   triggerLabel,
+  type AutomationConfigSection,
+  type AutomationPlanTab,
   type EventSourceOption,
 } from "./automationsQuery";
 import "./automations.css";
@@ -113,6 +125,9 @@ export default function AutomationsPage({
   onSelect,
   onOpenChat,
   onOpenFile,
+  onOpenRun,
+  onOpenAgent,
+  onForward,
 }: {
   agents: Agent[];
   defaultAgentId?: string;
@@ -122,6 +137,9 @@ export default function AutomationsPage({
   onSelect: (id?: string) => void;
   onOpenChat: (run: TaskExecution, title: string) => void;
   onOpenFile: OpenChatFile;
+  onOpenRun: OpenRun;
+  onOpenAgent: (id: string) => void;
+  onForward: (message: MessageQuote) => void;
 }) {
   const { t, i18n } = useTranslation();
   const { compact, sidebar, setSidebar } = useSecondarySidebarState();
@@ -134,7 +152,12 @@ export default function AutomationsPage({
   const stage = useRef<HTMLElement>(null);
   const narrowStage = useCompactPanel(stage, 760);
   const [scopeFilter, setScopeFilter] = useState<string>("all");
-  const [ribbonExpanded, setRibbonExpanded] = useState(false);
+  const [planTab, setPlanTab] = useState<AutomationPlanTab>("runs");
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [configJump, setConfigJump] = useState<{
+    section: AutomationConfigSection;
+    seq: number;
+  }>();
   const [dispatchTarget, setDispatchTarget] = useState<AutomationDispatchTarget>();
   const dispatchTrigger = useRef<HTMLButtonElement | null>(null);
   const [now, setNow] = useState(Date.now);
@@ -316,12 +339,33 @@ export default function AutomationsPage({
       .includes(term),
   );
 
-  function selectPlan(id: string, expandConfig = false) {
+  function selectPlan(
+    id: string,
+    tab: AutomationPlanTab = "runs",
+    section?: AutomationConfigSection,
+  ) {
     setScopeFilter("all");
-    setRibbonExpanded(expandConfig);
+    setPlanTab(tab);
+    setTabSwitchCount(0);
+    setConfigJump(section ? { section, seq: Date.now() } : undefined);
     setSelectedRunId(undefined);
     onSelect(id);
     if (compact) setSidebar(false);
+  }
+
+  function switchPlanTab(
+    nextTab: AutomationPlanTab,
+    section?: AutomationConfigSection,
+  ) {
+    if (nextTab !== planTab) {
+      setPlanTab(nextTab);
+      setTabSwitchCount((n) => n + 1);
+    }
+    if (section) {
+      setConfigJump((prev) => ({ section, seq: (prev?.seq ?? 0) + 1 }));
+    } else if (nextTab === "runs") {
+      setConfigJump(undefined);
+    }
   }
 
   function selectWorkbench(nextView: WorkbenchView) {
@@ -476,8 +520,9 @@ export default function AutomationsPage({
         onEditRule={
           plan
             ? () => {
-                if (selectedId !== plan.id) selectPlan(plan.id, true);
-                else setRibbonExpanded(true);
+                if (selectedId !== plan.id)
+                  selectPlan(plan.id, "config", "prompt");
+                else switchPlanTab("config", "prompt");
                 setSelectedRunId(run.id);
               }
             : undefined
@@ -652,7 +697,7 @@ export default function AutomationsPage({
                             subtitle={sub}
                             selected={selectedRow?.plan.id === plan.id}
                             hasAttention={attentionPlanIds.has(plan.id)}
-                            onSelect={(id) => selectPlan(id, false)}
+                            onSelect={(id) => selectPlan(id, "runs")}
                           />
                         );
                       })}
@@ -703,35 +748,38 @@ export default function AutomationsPage({
             )}
           </Empty>
         ) : selectedRow ? (
-          <article className="automation-plan-article">
-            <AutomationRuleRibbon
-              key={selectedRow.plan.id}
-              plan={selectedRow.plan}
-              agents={agents}
-              chats={chats}
-              eventSources={sources}
-              kind={selectedRow.kind}
-              timing={selectedRow.timing}
-              next={selectedRow.next}
-              busy={runNow.isPending}
-              expanded={ribbonExpanded}
-              onExpandedChange={setRibbonExpanded}
-              onRunNow={(targetId) =>
-                runNow.mutate({ planId: selectedRow.plan.id, targetId })
-              }
-              onArchived={() => {
-                queryClient.setQueryData<Automation[]>(
-                  automationsQuery.queryKey,
-                  (cached) =>
-                    cached?.filter(({ id }) => id !== selectedRow.plan.id),
-                );
-                void queryClient.invalidateQueries({
-                  queryKey: automationRunsFeedQuery.queryKey,
-                });
-                onSelect(undefined);
-              }}
-            />
-
+          <AutomationPlanArticle
+            key={selectedRow.plan.id}
+            plan={selectedRow.plan}
+            agents={agents}
+            chats={chats}
+            eventSources={sources}
+            kind={selectedRow.kind}
+            timing={selectedRow.timing}
+            next={selectedRow.next}
+            tab={planTab}
+            tabSwitchCount={tabSwitchCount}
+            configJump={configJump}
+            runCount={rawPlanRuns.length}
+            busy={runNow.isPending}
+            onTabChange={(nextTab) => switchPlanTab(nextTab)}
+            onOpenSection={(section) => switchPlanTab("config", section)}
+            onRunNow={(targetId) => {
+              runNow.mutate({ planId: selectedRow.plan.id, targetId });
+              if (planTab !== "runs") switchPlanTab("runs");
+            }}
+            onArchived={() => {
+              queryClient.setQueryData<Automation[]>(
+                automationsQuery.queryKey,
+                (cached) =>
+                  cached?.filter(({ id }) => id !== selectedRow.plan.id),
+              );
+              void queryClient.invalidateQueries({
+                queryKey: automationRunsFeedQuery.queryKey,
+              });
+              onSelect(undefined);
+            }}
+          >
             {selectedPlanTargets.length > 1 && (
               <div className="automation-scope-bar">
                 <span className="automation-scope-label">
@@ -822,6 +870,7 @@ export default function AutomationsPage({
                   run={activeRun}
                   plan={selectedRow.plan}
                   agent={activeRunAgent}
+                  agents={agents}
                   requests={requests}
                   workItems={activeRunWorkItems}
                   workflows={workflows}
@@ -829,11 +878,14 @@ export default function AutomationsPage({
                   onClose={() => setReaderClosed(true)}
                   onOpenChat={onOpenChat}
                   onOpenFile={onOpenFile}
+                  onOpenRun={onOpenRun}
+                  onOpenAgent={onOpenAgent}
+                  onForward={onForward}
                   onDispatchWorkItem={openDispatch}
                 />
               )}
             </div>
-          </article>
+          </AutomationPlanArticle>
         ) : rows.length === 0 ? (
           <Empty>
             <EmptyMedia variant="icon">
@@ -855,10 +907,12 @@ export default function AutomationsPage({
             allRuns={searchedRuns}
             agents={agents}
             attentionPlanIds={attentionPlanIds}
-            onOpenPlan={(id) => selectPlan(id, false)}
+            onOpenPlan={(id) => selectPlan(id, "runs")}
             onOpenRun={(planId, runId) => {
               setScopeFilter("all");
-              setRibbonExpanded(false);
+              setPlanTab("runs");
+              setTabSwitchCount(0);
+              setConfigJump(undefined);
               setSelectedRunId(runId);
               setReaderClosed(false);
               onSelect(planId);
@@ -1005,6 +1059,7 @@ export default function AutomationsPage({
                   run={activeRun}
                   plan={activeRunPlan}
                   agent={activeRunAgent}
+                  agents={agents}
                   requests={requests}
                   workItems={activeRunWorkItems}
                   workflows={workflows}
@@ -1012,6 +1067,9 @@ export default function AutomationsPage({
                   onClose={() => setReaderClosed(true)}
                   onOpenChat={onOpenChat}
                   onOpenFile={onOpenFile}
+                  onOpenRun={onOpenRun}
+                  onOpenAgent={onOpenAgent}
+                  onForward={onForward}
                   onDispatchWorkItem={openDispatch}
                 />
               )}
@@ -1039,7 +1097,7 @@ export default function AutomationsPage({
             );
             void plans.refetch();
             setSearch("");
-            selectPlan(plan.id, true);
+            selectPlan(plan.id, "runs");
             setCreating(false);
           }}
         />
@@ -1070,6 +1128,128 @@ export default function AutomationsPage({
         />
       )}
     </section>
+  );
+}
+
+function AutomationPlanArticle({
+  plan,
+  agents,
+  chats,
+  eventSources,
+  kind,
+  timing,
+  next,
+  tab,
+  tabSwitchCount,
+  configJump,
+  runCount,
+  busy,
+  onTabChange,
+  onOpenSection,
+  onRunNow,
+  onArchived,
+  children,
+}: {
+  plan: Automation;
+  agents: Agent[];
+  chats: Chat[];
+  eventSources: EventSourceOption[];
+  kind: string;
+  timing: string;
+  next: string;
+  tab: AutomationPlanTab;
+  tabSwitchCount: number;
+  configJump?: { section: AutomationConfigSection; seq: number };
+  runCount: number;
+  busy: boolean;
+  onTabChange: (tab: AutomationPlanTab) => void;
+  onOpenSection: (section: AutomationConfigSection) => void;
+  onRunNow: (targetId?: string) => void;
+  onArchived: () => void;
+  children: ReactNode;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const { hasConfigAttention } = usePlanConfigAttention(plan, agents);
+  const [savedNotice, setSavedNotice] = useState(false);
+  const savedTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(savedTimer.current), []);
+
+  function notifySaved() {
+    setSavedNotice(true);
+    window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => setSavedNotice(false), 2400);
+  }
+
+  const panelTransition = reducedMotion
+    ? { duration: 0 }
+    : { duration: 0.18, ease: [0.23, 1, 0.32, 1] as const };
+  const panelInitial =
+    tabSwitchCount > 0 && !reducedMotion ? { opacity: 0, y: 6 } : false;
+
+  return (
+    <article className="automation-plan-article">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          if (value === "runs" || value === "config") onTabChange(value);
+        }}
+        className="automation-plan-tabs-root"
+      >
+        <AutomationPlanHeader
+          plan={plan}
+          tab={tab}
+          runCount={runCount}
+          hasConfigAttention={hasConfigAttention}
+          busy={busy}
+          savedNotice={savedNotice}
+          onRunNow={() => onRunNow()}
+          onArchived={onArchived}
+        />
+
+        <TabsContent value="runs" asChild>
+          <motion.div
+            key={`runs-${tabSwitchCount}`}
+            className="automation-plan-panel"
+            initial={panelInitial}
+            animate={{ opacity: 1, y: 0 }}
+            transition={panelTransition}
+          >
+            <AutomationSummaryStrip
+              plan={plan}
+              agents={agents}
+              kind={kind}
+              timing={timing}
+              next={next}
+              onOpenSection={onOpenSection}
+              onSaved={notifySaved}
+            />
+            {children}
+          </motion.div>
+        </TabsContent>
+
+        <TabsContent value="config" asChild>
+          <motion.div
+            key={`config-${tabSwitchCount}`}
+            className="automation-plan-panel"
+            initial={panelInitial}
+            animate={{ opacity: 1, y: 0 }}
+            transition={panelTransition}
+          >
+            <AutomationConfigView
+              plan={plan}
+              agents={agents}
+              chats={chats}
+              eventSources={eventSources}
+              busy={busy}
+              jumpTarget={configJump}
+              onRunNow={onRunNow}
+              onSaved={notifySaved}
+            />
+          </motion.div>
+        </TabsContent>
+      </Tabs>
+    </article>
   );
 }
 

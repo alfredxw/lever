@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -59,7 +59,7 @@ export function canEditSentMessage(run: Run) {
   );
 }
 
-type RunContentProps = {
+export type RunContentProps = {
   run: Run;
   agent: Agent;
   agents: Agent[];
@@ -71,6 +71,13 @@ type RunContentProps = {
   requests: Request[];
   sessionBusy: boolean;
   showRuntimeHandoff?: boolean;
+  hideUserMessage?: boolean;
+  hideAgentHeader?: boolean;
+  hideTurnChanges?: boolean;
+  canRecover?: boolean;
+  afterUserMessage?: ReactNode;
+  wrapBody?: (body: ReactNode) => ReactNode;
+  onRetried?: () => void;
   onEdit?: (run: Run) => void;
   sourceTopicId?: string;
   onOpenSourceTopic?: (
@@ -94,7 +101,7 @@ export const RunContent = memo(function RunContent(props: RunContentProps) {
   );
 });
 
-function RunMessages({
+export function RunMessages({
   run,
   agent,
   agents,
@@ -106,6 +113,13 @@ function RunMessages({
   requests,
   sessionBusy,
   showRuntimeHandoff = true,
+  hideUserMessage = false,
+  hideAgentHeader = false,
+  hideTurnChanges = false,
+  canRecover = true,
+  afterUserMessage,
+  wrapBody,
+  onRetried,
   onQuote,
   onForward,
   onEdit,
@@ -123,22 +137,28 @@ function RunMessages({
     },
   });
   const [confirmStopped, setConfirmStopped] = useState(false);
-  const recovery = !agent.archived &&
+  const recovery = canRecover &&
+    !agent.archived &&
     !run.channel &&
     !run.superseded &&
     canRecoverRun(run.status) && (
       <RunRecoveryButton
         run={run}
         disabled={sessionBusy}
-        onRetried={() =>
-          requestAnimationFrame(() => scroller.current?.scrollToEnd())
-        }
+        onRetried={() => {
+          onRetried?.();
+          requestAnimationFrame(() => scroller.current?.scrollToEnd());
+        }}
       />
     );
   const retryReply = useMutation({
     mutationFn: () => api(`/runs/${run.id}/channel-reply/retry`, {}),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["session", run.sessionId],
+      });
+    },
   });
   const output = run.items
     .filter((item) => item.kind === "text")
@@ -183,26 +203,31 @@ function RunMessages({
   );
   return (
     <>
-      {run.channel && (
-        <p className="text-right text-xs text-muted-foreground">
-          {formatChannelOrigin(session.channel, t) ||
-            t("channels.fromChannel")}
-        </p>
+      {!hideUserMessage && (
+        <>
+          {run.channel && (
+            <p className="text-right text-xs text-muted-foreground">
+              {formatChannelOrigin(session.channel, t) ||
+                t("channels.fromChannel")}
+            </p>
+          )}
+          <UserMessage
+            chatId={run.chatId}
+            sessionId={run.sessionId}
+            message={run}
+            archived={agent.archived}
+            onQuote={onQuote}
+            onForward={onForward}
+            footerActions={createTopicAction}
+            onEdit={
+              onEdit && !agent.archived && !sessionBusy && canEditSentMessage(run)
+                ? () => onEdit(run)
+                : undefined
+            }
+          />
+          {afterUserMessage}
+        </>
       )}
-      <UserMessage
-        chatId={run.chatId}
-        sessionId={run.sessionId}
-        message={run}
-        archived={agent.archived}
-        onQuote={onQuote}
-        onForward={onForward}
-        footerActions={createTopicAction}
-        onEdit={
-          onEdit && !agent.archived && !sessionBusy && canEditSentMessage(run)
-            ? () => onEdit(run)
-            : undefined
-        }
-      />
       {run.handoff && showRuntimeHandoff && (
         <div className="runtime-handoff">
           <RuntimeIcon provider={run.selection.provider} size={14} />
@@ -213,12 +238,14 @@ function RunMessages({
       )}
       <Message className="agent-message" aria-label={agent.name}>
         <MessageContent className="gap-4">
-          <MessageHeader className="agent-author gap-2 px-0">
-            <AgentAvatar agent={agent} size="sm" />
-            <span className="truncate">{agent.name}</span>
-          </MessageHeader>
+          {!hideAgentHeader && (
+            <MessageHeader className="agent-author gap-2 px-0">
+              <AgentAvatar agent={agent} size="sm" />
+              <span className="truncate">{agent.name}</span>
+            </MessageHeader>
+          )}
           {!hasCollaboration && work}
-          {body}
+          {wrapBody ? wrapBody(body) : body}
           {run.createdAgents?.map(({ agentId, name }) => {
             const created = agents.find((agent) => agent.id === agentId);
             return (
@@ -363,7 +390,7 @@ function RunMessages({
               </div>
             )}
           {retryReply.error && <ErrorNotice error={retryReply.error} />}
-          <TurnChanges run={run} />
+          {!hideTurnChanges && <TurnChanges run={run} />}
           <MessageActions
             chatId={run.chatId}
             message={{

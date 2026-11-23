@@ -4,6 +4,7 @@ import { api } from "@/api/client";
 import type {
   Automation,
   AutomationEventSource,
+  AutomationInput,
   AutomationRun,
   AutomationTarget,
   EventSourceContribution,
@@ -49,6 +50,32 @@ export const automationWorkItemsQuery = queryOptions({
 
 export type NotifyPolicy = "always" | "actionable" | "silent";
 export type DeliveryMode = "deliver" | "audit" | "propose" | "curate";
+export type AutomationPlanTab = "runs" | "config";
+export type AutomationConfigSection =
+  | "prompt"
+  | "targets"
+  | "trigger"
+  | "output";
+
+export function automationInputFromPlan(
+  plan: Automation,
+  overrides?: Partial<AutomationInput>,
+): AutomationInput {
+  const notifyPolicy = overrides?.notifyPolicy ?? notifyPolicyOf(plan);
+  return {
+    name: plan.name,
+    prompt: plan.prompt,
+    trigger: plan.trigger,
+    destination: plan.destination,
+    selection: plan.selection,
+    targets: plan.targets,
+    notifyPolicy,
+    deliveryMode: deliveryModeOf(plan),
+    workItem: plan.workItem,
+    quiet: notifyPolicy === "silent",
+    ...overrides,
+  };
+}
 
 export type EventSourceOption = {
   pluginId: string;

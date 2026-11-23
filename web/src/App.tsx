@@ -2641,6 +2641,12 @@ export default function App() {
               selectedId={selectedAutomation}
               onSelect={setSelectedAutomation}
               onOpenChat={openTaskChat}
+              onOpenRun={chatNavigation.onOpenRun}
+              onOpenAgent={(id) => {
+                chatNavigation.onOpenAgent(id);
+                setPage("agents");
+              }}
+              onForward={setForward}
               onOpenFile={(file, source) => {
                 openChatFile(
                   file,

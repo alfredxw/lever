@@ -80,6 +80,7 @@ export function AutomationMonitor({
         prompt: plan.prompt,
         trigger: plan.trigger,
         destination: plan.destination,
+        selection: plan.selection,
         targets: plan.targets,
         notifyPolicy,
         deliveryMode: plan.deliveryMode,

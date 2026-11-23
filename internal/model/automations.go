@@ -30,12 +30,13 @@ type AutomationDestination struct {
 }
 
 type AutomationTarget struct {
-	ID            string `json:"id"`
-	AgentID       string `json:"agentId"`
-	ChatID        string `json:"chatId,omitempty"`
-	WorkingCopyID string `json:"workingCopyId,omitempty"`
-	Prompt        string `json:"prompt,omitempty"`  // Optional per-target supplemental instructions.
-	Enabled       *bool  `json:"enabled,omitempty"` // Defaults to true.
+	ID            string     `json:"id"`
+	AgentID       string     `json:"agentId"`
+	ChatID        string     `json:"chatId,omitempty"`
+	WorkingCopyID string     `json:"workingCopyId,omitempty"`
+	Selection     *Selection `json:"selection,omitempty"`
+	Prompt        string     `json:"prompt,omitempty"`  // Optional per-target supplemental instructions.
+	Enabled       *bool      `json:"enabled,omitempty"` // Defaults to true.
 }
 
 func (t AutomationTarget) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
@@ -45,7 +46,8 @@ type AutomationInput struct {
 	Prompt       string                `json:"prompt"`
 	Trigger      AutomationTrigger     `json:"trigger"`
 	Destination  AutomationDestination `json:"destination"`
-	Targets      []AutomationTarget    `json:"targets,omitempty"` // Optional multi-Agent / multi-Scope execution targets.
+	Selection    *Selection            `json:"selection,omitempty"` // Optional task-level model/effort/fast/permission override.
+	Targets      []AutomationTarget    `json:"targets,omitempty"`   // Optional multi-Agent / multi-Scope execution targets.
 	NotifyPolicy string                `json:"notifyPolicy,omitempty" tstype:"'' | 'always' | 'actionable' | 'silent'"`
 	DeliveryMode string                `json:"deliveryMode,omitempty" tstype:"'' | 'deliver' | 'audit' | 'propose' | 'curate'"`
 	WorkItem     *bool                 `json:"workItem,omitempty"` // Defaults to true for existing automations.
@@ -71,6 +73,7 @@ func (a AutomationInput) EffectiveTargets() []AutomationTarget {
 			AgentID:       a.Destination.AgentID,
 			ChatID:        a.Destination.ChatID,
 			WorkingCopyID: a.Destination.WorkingCopyID,
+			Selection:     a.Selection,
 		}}
 	}
 	out := make([]AutomationTarget, 0, len(a.Targets))

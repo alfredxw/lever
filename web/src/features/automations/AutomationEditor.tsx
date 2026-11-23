@@ -20,6 +20,7 @@ import type {
   AutomationTarget,
   AutomationTrigger,
   Chat,
+  Selection,
 } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPic
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
 import { Choice, FormRow, ToggleRow } from "./AutomationFormControls";
+import { AutomationRuntimeControls } from "./AutomationRuntimeControls";
 import { AutomationScheduleFields } from "./AutomationScheduleFields";
 import { scheduleDraft, scheduleInput } from "./automationSchedule";
 import {
@@ -152,6 +154,9 @@ export function AutomationEditor({
     "existing" | "dedicated" | undefined
   >(plan ? (plan.destination.chatId ? "existing" : "dedicated") : undefined);
   const [copyId, setCopy] = useState(plan?.destination.workingCopyId);
+  const [selection, setSelection] = useState<Selection | undefined>(
+    plan?.selection ?? plan?.targets?.[0]?.selection,
+  );
   const [workItem, setWorkItem] = useState(
     plan ? (plan.workItem ?? true) : false,
   );
@@ -174,6 +179,12 @@ export function AutomationEditor({
   const chat = ownedChats.find((item) => item.id === chatId);
   const groupApplicable = !!agent && (mode !== "chat" || !existing);
   const copies = useWorkingCopies(agentId, groupApplicable);
+  const selectedCopy = copies.data?.find((copy) => copy.id === copyId);
+  const runtimeCwd = selectedCopy
+    ? primaryDirectory(selectedCopy)
+    : agent
+      ? primaryDirectory(agent.profile)
+      : "";
   const count = Number(batchSize);
   const source = eventSources.find(
     (item) => item.pluginId + "/" + item.contribution.id === sourceKey,
@@ -238,6 +249,7 @@ export function AutomationEditor({
       setChat("");
       setChatSource(undefined);
       setCopy(undefined);
+      setSelection(undefined);
     }
     setExtraTargets(
       ids.slice(1).map(
@@ -285,6 +297,7 @@ export function AutomationEditor({
                       id: plan?.targets?.[0]?.id || crypto.randomUUID(),
                       agentId,
                       workingCopyId: groupApplicable ? copyId : undefined,
+                      selection,
                       enabled: true,
                     },
                     ...extraTargets,
@@ -314,6 +327,7 @@ export function AutomationEditor({
                 chatId: existing ? chatId : undefined,
                 workingCopyId: groupApplicable ? copyId : undefined,
               },
+              selection: extraTargets.length > 0 ? undefined : selection,
               targets,
               notifyPolicy: quiet ? "silent" : notifyPolicy,
               deliveryMode,
@@ -420,6 +434,7 @@ export function AutomationEditor({
                           setChat("");
                           setChatSource(undefined);
                           setCopy(undefined);
+                          setSelection(undefined);
                         }}
                       />
                       {agents.length > 1 && (
@@ -469,7 +484,13 @@ export function AutomationEditor({
                           onChange={(value) =>
                             setExtraTargets((prev) =>
                               prev.map((item, i) =>
-                                i === idx ? { ...item, agentId: value } : item,
+                                i === idx
+                                  ? {
+                                      ...item,
+                                      agentId: value,
+                                      selection: undefined,
+                                    }
+                                  : item,
                               ),
                             )
                           }
@@ -490,6 +511,55 @@ export function AutomationEditor({
                       </div>
                     </FormRow>
                   ))}
+                {agent && (
+                  <div className="automation-runtime-form-row">
+                    <span className="automation-runtime-form-label">
+                      {extraTargets.length > 0
+                        ? `${agent.name} · ${t("automations.runtime")}`
+                        : t("automations.runtime")}
+                    </span>
+                    <AutomationRuntimeControls
+                      agent={agent}
+                      cwd={runtimeCwd}
+                      value={selection}
+                      onChange={setSelection}
+                      disabled={save.isPending}
+                      idPrefix="automation-editor"
+                    />
+                  </div>
+                )}
+                {extraTargets.map((extra, idx) => {
+                  const extraAgent = agents.find(
+                    (item) => item.id === extra.agentId,
+                  );
+                  if (!extraAgent) return null;
+                  return (
+                    <div
+                      key={`${extra.id}-runtime`}
+                      className="automation-runtime-form-row"
+                    >
+                      <span className="automation-runtime-form-label">
+                        {`${extraAgent.name} · ${t("automations.runtime")}`}
+                      </span>
+                      <AutomationRuntimeControls
+                        agent={extraAgent}
+                        value={extra.selection}
+                        onChange={(nextSelection) =>
+                          setExtraTargets((prev) =>
+                            prev.map((item, i) =>
+                              i === idx
+                                ? { ...item, selection: nextSelection }
+                                : item,
+                            ),
+                          )
+                        }
+                        disabled={save.isPending}
+                        compact
+                        idPrefix={`automation-editor-extra-${idx}`}
+                      />
+                    </div>
+                  );
+                })}
               </FieldGroup>
               <div className="automation-editor-prompt">
                 <FieldLabel className="sr-only" htmlFor="automation-prompt">

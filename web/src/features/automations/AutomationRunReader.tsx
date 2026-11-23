@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   ChevronDown,
-  Send,
   Sparkles,
   SquareKanban,
   X,
@@ -16,31 +15,45 @@ import type {
   Automation,
   AutomationInput,
   AutomationRun,
+  MessageQuote,
   Request,
   Run,
   TaskExecution,
   TaskWorkflow,
   WorkItem,
 } from "@/api/types.gen";
-import { MessageResponse } from "@/components/ai-elements/message-response";
 import { ErrorNotice, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
-import { RequestCard } from "@/features/chat/RequestCard";
+import type { OpenChatFile } from "@/features/chat/ChatResponse";
+import { Composer } from "@/features/chat/Composer";
+import { ComposerContext } from "@/features/chat/ComposerContext";
+import type { OpenRun } from "@/features/chat/DelegatedTasks";
 import {
-  canRecoverRun,
-  RunRecoveryButton,
-} from "@/features/chat/RunRecoveryButton";
-import { ChatResponse, type OpenChatFile } from "@/features/chat/ChatResponse";
+  ImagePreview,
+  ImagePreviewProvider,
+  useImagePreview,
+} from "@/features/chat/ImagePreview";
 import {
+  chatDelegationsQuery,
   sessionQuery as sessionInfoQuery,
   sessionRunsQuery,
+  useChatActivity,
 } from "@/features/chat/queries";
+import { RequestCard } from "@/features/chat/RequestCard";
+import { RunMessages } from "@/features/chat/RunContent";
 import { TurnChanges } from "@/features/diff/TurnChanges";
-import { AutomationDiffExcerpt } from "./AutomationDiffExcerpt";
-import { AutomationRunOutput, type OpenAutomationDispatch } from "./AutomationRunOutput";
-import { AutomationRunControls } from "./AutomationRunControls";
 import { directoryName } from "@/lib/paths";
+import { AutomationDiffExcerpt } from "./AutomationDiffExcerpt";
+import {
+  AutomationRunStatusPill,
+  LinkedWorkItemsList,
+} from "./AutomationRunCard";
+import { AutomationRunControls } from "./AutomationRunControls";
+import {
+  AutomationRunOutput,
+  type OpenAutomationDispatch,
+} from "./AutomationRunOutput";
 import {
   automationPath,
   automationsQuery,
@@ -50,10 +63,6 @@ import {
   isSilentOutcome,
   planTargets,
 } from "./automationsQuery";
-import {
-  AutomationRunStatusPill,
-  LinkedWorkItemsList,
-} from "./AutomationRunCard";
 
 function runTextOutput(run?: Run) {
   if (!run) return "";
@@ -71,22 +80,11 @@ function formatJson(raw: string) {
   }
 }
 
-export function AutomationRunReader({
-  run,
-  plan,
-  agent,
-  requests,
-  workItems,
-  workflows,
-  executions,
-  onClose,
-  onOpenChat,
-  onOpenFile,
-  onDispatchWorkItem,
-}: {
+type AutomationRunReaderProps = {
   run: AutomationRun;
   plan?: Automation;
   agent?: Agent;
+  agents: Agent[];
   requests: Request[];
   workItems: WorkItem[];
   workflows: ReadonlyMap<string, TaskWorkflow>;
@@ -94,27 +92,75 @@ export function AutomationRunReader({
   onClose?: () => void;
   onOpenChat: (execution: TaskExecution, title: string) => void;
   onOpenFile: OpenChatFile;
+  onOpenRun: OpenRun;
+  onOpenAgent: (id: string) => void;
+  onForward: (message: MessageQuote) => void;
   onDispatchWorkItem: OpenAutomationDispatch;
-}) {
+};
+
+export function AutomationRunReader(props: AutomationRunReaderProps) {
+  return (
+    <aside
+      className="automation-reader"
+      aria-label={props.plan?.name ?? props.run.name}
+    >
+      <ImagePreviewProvider>
+        <AutomationRunReaderContent {...props} />
+      </ImagePreviewProvider>
+    </aside>
+  );
+}
+
+function AutomationRunReaderContent({
+  run,
+  plan,
+  agent,
+  agents,
+  requests,
+  workItems,
+  workflows,
+  executions,
+  onClose,
+  onOpenChat,
+  onOpenFile,
+  onOpenRun,
+  onOpenAgent,
+  onForward,
+  onDispatchWorkItem,
+}: AutomationRunReaderProps) {
   const { t, i18n } = useTranslation();
-  const [draft, setDraft] = useState("");
+  const preview = useImagePreview();
+  const composer = useContext(ComposerContext);
   const [promotedRuns, setPromotedRuns] = useState<Record<string, string>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const chatId = run.execution?.chatId;
   const sessionId = run.execution?.sessionId;
   const rootRunId = run.execution?.runId;
+
   const sessionQuery = useInfiniteQuery({
     ...sessionRunsQuery(sessionId ?? ""),
     enabled: !!sessionId,
+    subscribed: !!sessionId,
   });
   const info = useQuery({
     ...sessionInfoQuery(sessionId ?? ""),
     enabled: !!sessionId,
+    subscribed: !!sessionId,
   });
+  const activity = useChatActivity(chatId ?? "", !!chatId);
+  const delegations = useQuery({
+    ...chatDelegationsQuery(chatId ?? ""),
+    enabled: !!chatId,
+    subscribed: !!chatId,
+  });
+
+  const liveRoot = activity.data?.runs.find((item) => item.id === rootRunId);
   const listedRoot = sessionQuery.data?.pages
     .flatMap((page) => page.runs)
     .find((item) => item.id === rootRunId);
   const knownRoot =
+    liveRoot ??
     listedRoot ??
     (info.data?.root?.id === rootRunId ? info.data?.root : undefined);
   const rootRunQuery = useQuery({
@@ -126,20 +172,44 @@ export function AutomationRunReader({
   });
 
   const sessionRuns = useMemo(() => {
-    const map = new Map<string, Run>();
-    if (rootRunQuery.data) map.set(rootRunQuery.data.id, rootRunQuery.data);
+    const bySeq = new Map<number, Run>();
+    if (
+      rootRunQuery.data &&
+      !rootRunQuery.data.superseded &&
+      rootRunQuery.data.sequence > 0
+    ) {
+      bySeq.set(rootRunQuery.data.sequence, rootRunQuery.data);
+    }
     for (const page of sessionQuery.data?.pages ?? []) {
       for (const item of page.runs) {
-        if (!item.superseded) map.set(item.id, item);
+        if (!item.superseded) bySeq.set(item.sequence, item);
       }
     }
-    return [...map.values()].sort((a, b) => a.sequence - b.sequence);
-  }, [sessionQuery.data?.pages, rootRunQuery.data]);
+    for (const item of activity.data?.runs ?? []) {
+      if (
+        item.sessionId === sessionId &&
+        !item.superseded &&
+        (active(item.status) ||
+          item.status === "paused" ||
+          (item.status === "queued" && item.id === rootRunId))
+      ) {
+        bySeq.set(item.sequence, item);
+      }
+    }
+    return [...bySeq.values()].sort((a, b) => a.sequence - b.sequence);
+  }, [
+    sessionQuery.data?.pages,
+    rootRunQuery.data,
+    activity.data?.runs,
+    sessionId,
+    rootRunId,
+  ]);
 
   const rootRun = knownRoot ?? rootRunQuery.data;
+  const session = info.data?.session;
   const followUpRuns = useMemo(
     () =>
-      rootRun
+      rootRun && rootRun.sequence > 0
         ? sessionRuns.filter(
             (item) =>
               item.sequence > rootRun.sequence &&
@@ -149,47 +219,68 @@ export function AutomationRunReader({
     [sessionRuns, rootRun, run.nextFireSequence],
   );
 
-  const runIdsInScope = useMemo(
+  const allAgents = activity.data?.agents ?? agents;
+  const allRequests = activity.data?.requests ?? requests;
+  const activeRun = session
+    ? activity.data?.runs.find(
+        (item) => item.sessionId === session.id && active(item.status),
+      )
+    : undefined;
+  const pausedRun = session
+    ? activity.data?.runs.find(
+        (item) => item.sessionId === session.id && item.status === "paused",
+      )
+    : undefined;
+  const queuedRuns = useMemo(
     () =>
-      new Set([
-        ...(rootRunId ? [rootRunId] : []),
-        ...followUpRuns.map((item) => item.id),
-      ]),
-    [rootRunId, followUpRuns],
+      session
+        ? (activity.data?.runs.filter(
+            (item) =>
+              item.sessionId === session.id &&
+              item.status === "queued" &&
+              !(rootRun?.status === "queued" && item.id === rootRun.id),
+          ) ?? [])
+        : [],
+    [activity.data?.runs, session, rootRun?.id, rootRun?.status],
   );
-  const pendingRequests = useMemo(
-    () => requests.filter((req) => runIdsInScope.has(req.runId)),
-    [requests, runIdsInScope],
+  const sessionBusy = Boolean(activeRun);
+  const canReply = Boolean(
+    run.execution && !run.nextFireSequence && session && agent,
+  );
+  const composerKey = session
+    ? session.kind === "topic"
+      ? session.id
+      : session.chatId
+    : "";
+
+  const quote = composer?.quote;
+  const edit = composer?.edit;
+  const quoteMessage = useCallback(
+    (message: MessageQuote) => {
+      if (composerKey) quote?.(composerKey, message);
+    },
+    [composerKey, quote],
+  );
+  const editMessage = useCallback(
+    (turn: Run) => {
+      if (composerKey) edit?.(composerKey, turn);
+    },
+    [composerKey, edit],
   );
 
-  const sendReply = useMutation({
-    mutationFn: (text: string) => {
-      if (!run.execution) throw new Error(t("automations.noExecutionSession"));
-      return api<Run>("/messages", {
-        commandId: crypto.randomUUID(),
-        chatId: run.execution.chatId,
-        sessionId: run.execution.sessionId,
-        operation: run.execution.topic ? "reply" : "main",
-        text,
-      });
-    },
-    onSuccess: () => {
-      setDraft("");
-      if (sessionId)
-        void queryClient.invalidateQueries({
-          queryKey: ["session", sessionId],
-        });
-      void queryClient.invalidateQueries({ queryKey: ["automation-runs"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["automation-runs", run.automationId],
-      });
-      requestAnimationFrame(() => {
-        if (scrollRef.current)
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      });
-    },
-    onError: (error) => toast.error(error.message),
-  });
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (scrollRef.current)
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    });
+  }, []);
+
+  const invalidateAutomationRuns = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["automation-runs"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["automation-runs", run.automationId],
+    });
+  }, [run.automationId]);
 
   const promoteRule = useMutation({
     mutationFn: async ({
@@ -219,6 +310,7 @@ export function AutomationRunReader({
             : plan.prompt,
         trigger: plan.trigger,
         destination: plan.destination,
+        selection: plan.selection,
         targets: nextTargets,
         notifyPolicy: plan.notifyPolicy,
         deliveryMode: plan.deliveryMode,
@@ -261,30 +353,24 @@ export function AutomationRunReader({
     onError: (error) => toast.error(error.message),
   });
 
-  useEffect(() => {
-    setDraft("");
-  }, [run.id]);
-
-  const rootOutput = runTextOutput(rootRun);
+  const effectiveStatus = rootRun?.status ?? run.status;
   const report =
     !!run.reportItems?.length && !!plan && deliveryModeOf(plan) === "audit";
-  function response(text: string, turn: Run) {
-    const session = info.data?.session;
-    return session ? (
-      <ChatResponse
-        text={text}
-        running={active(turn.status)}
-        session={session}
-        agentRoots={agent?.profile.roots}
-        onOpenFile={onOpenFile}
-        runId={turn.id}
-      />
-    ) : (
-      <MessageResponse text={text} running={active(turn.status)} />
-    );
-  }
+  const hasRootChat = Boolean(rootRun && session && agent);
+  const fallbackRequests = useMemo(
+    () =>
+      !hasRootChat && rootRunId
+        ? allRequests.filter((req) => req.runId === rootRunId)
+        : [],
+    [hasRootChat, rootRunId, allRequests],
+  );
+
   const silent = isSilentOutcome(run, plan);
-  const duration = formatRunDuration(run.createdAt, run.finishedAt, t);
+  const duration = formatRunDuration(
+    run.createdAt,
+    rootRun?.finishedAt ?? run.finishedAt,
+    t,
+  );
   const timestamp = run.plannedAt
     ? new Date(run.plannedAt * 1000).toISOString()
     : run.createdAt;
@@ -300,18 +386,30 @@ export function AutomationRunReader({
             : "automations.schedule",
         );
 
-  const delivery = plan ? deliveryModeOf(plan) : "deliver";
-  const quickPrompts =
-    run.status === "failed"
-      ? [t("automations.qp.failed1"), t("automations.qp.failed2")]
-      : delivery === "deliver"
-        ? [t("automations.qp.deliver1"), t("automations.qp.deliver2")]
-        : delivery === "audit"
-          ? [t("automations.qp.audit1"), t("automations.qp.audit2")]
-          : [t("automations.qp.default1"), t("automations.qp.default2")];
+  const outputSection = (
+    <AutomationRunOutput
+      run={run}
+      report={report}
+      linkedItems={workItems}
+      onFix={onDispatchWorkItem}
+    >
+      {rootRun && (
+        <TurnChanges
+          run={rootRun}
+          preview={(rootId, file) => (
+            <AutomationDiffExcerpt
+              run={rootRun}
+              rootId={rootId}
+              path={file.path}
+            />
+          )}
+        />
+      )}
+    </AutomationRunOutput>
+  );
 
   return (
-    <aside className="automation-reader" aria-label={plan?.name ?? run.name}>
+    <>
       <header className="automation-reader-head">
         {agent && <AgentAvatar agent={agent} size="sm" />}
         <div className="min-w-0 flex-1">
@@ -360,151 +458,172 @@ export function AutomationRunReader({
         </div>
       </header>
 
-      <div ref={scrollRef} className="automation-reader-scroll">
-        <div className="flex flex-wrap items-center gap-2">
-          <AutomationRunStatusPill status={run.status} silent={silent} />
-          <span className="text-xs text-muted-foreground">{triggerText}</span>
-          {rootRunId && <AutomationRunControls id={rootRunId} status={run.status} canPause={rootRun?.canPause ?? run.canPause} />}
-          {rootRun &&
-            !rootRun.channel &&
-            !rootRun.superseded &&
-            !agent?.archived &&
-            !run.nextFireSequence &&
-            canRecoverRun(rootRun.status) && (
-              <RunRecoveryButton
-                run={rootRun}
-                disabled={sessionRuns.some((turn) => active(turn.status))}
-                onRetried={() =>
-                  void queryClient.invalidateQueries({
-                    queryKey: ["automation-runs"],
-                  })
-                }
+      <div className="automation-reader-body">
+        <div
+          ref={scrollRef}
+          className="automation-reader-scroll"
+          inert={!!preview.file || undefined}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <AutomationRunStatusPill
+              status={effectiveStatus}
+              silent={silent}
+            />
+            <span className="text-xs text-muted-foreground">{triggerText}</span>
+            {rootRunId && (!canReply || effectiveStatus === "queued") && (
+              <AutomationRunControls
+                id={rootRunId}
+                status={effectiveStatus}
+                canPause={rootRun?.canPause ?? run.canPause}
               />
             )}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="ml-auto"
-            disabled={convertToWorkItem.isPending}
-            onClick={() => convertToWorkItem.mutate()}
-          >
-            <SquareKanban data-icon="inline-start" />
-            {t("automations.convertToWorkItem")}
-          </Button>
-        </div>
-
-        {pendingRequests.map((req) => (
-          <RequestCard key={req.id} request={req} />
-        ))}
-
-        {run.error && <div className="automation-run-error">{run.error}</div>}
-
-        {((!!sessionId && sessionQuery.isPending) || rootRunQuery.isFetching) &&
-        !rootOutput &&
-        !run.summary ? (
-          <Loading />
-        ) : sessionQuery.error && !rootOutput && !run.summary ? (
-          <ErrorNotice
-            error={sessionQuery.error}
-            retry={() => void sessionQuery.refetch()}
-          />
-        ) : rootOutput && rootRun && !report ? (
-          <div className="automation-reader-brief">
-            {response(rootOutput, rootRun)}
+            <Button
+              size="xs"
+              variant="ghost"
+              className="ml-auto"
+              disabled={convertToWorkItem.isPending}
+              onClick={() => convertToWorkItem.mutate()}
+            >
+              <SquareKanban data-icon="inline-start" />
+              {t("automations.convertToWorkItem")}
+            </Button>
           </div>
-        ) : run.summary ? (
-          <p className="automation-reader-brief">{run.summary}</p>
-        ) : !run.error ? (
-          <p className="text-xs text-muted-foreground">
-            {active(run.status) || run.status === "queued"
-              ? t("status." + run.status)
-              : t("tasks.noResult")}
-          </p>
-        ) : null}
 
-        <AutomationRunOutput run={run} report={report} linkedItems={workItems} onFix={onDispatchWorkItem}>
-          {rootRun && (
-            <TurnChanges
-              run={rootRun}
-              preview={(rootId, file) => (
-                <AutomationDiffExcerpt
-                  run={rootRun}
-                  rootId={rootId}
-                  path={file.path}
-                />
-              )}
-            />
-          )}
-        </AutomationRunOutput>
-        {report && rootOutput && rootRun && (
-          <details className="automation-payload-details">
-            <summary>
-              <ChevronDown />
-              {t("automations.fullReport")}
-            </summary>
-            <div className="automation-reader-brief px-2.5 pb-2">
-              {response(rootOutput, rootRun)}
+          {report && outputSection}
+
+          {hasRootChat && rootRun && session && agent ? (
+            <div
+              className="run-content automation-root-turn"
+              data-run-id={rootRun.id}
+              data-status={rootRun.status}
+            >
+              <RunMessages
+                run={rootRun}
+                agent={agent}
+                agents={allAgents}
+                delegatedRuns={delegations.data?.outgoing[rootRun.id]}
+                onOpenRun={onOpenRun}
+                onOpenAgent={onOpenAgent}
+                session={session}
+                onOpenFile={onOpenFile}
+                requests={allRequests}
+                sessionBusy={sessionBusy}
+                hideUserMessage
+                hideAgentHeader
+                hideTurnChanges
+                canRecover={!run.nextFireSequence}
+                wrapBody={
+                  report
+                    ? (content) =>
+                        content ? (
+                          <details className="automation-payload-details">
+                            <summary>
+                              <ChevronDown aria-hidden="true" />
+                              {t("automations.fullReport")}
+                            </summary>
+                            <div className="px-2.5 pb-2">{content}</div>
+                          </details>
+                        ) : null
+                    : undefined
+                }
+                onRetried={() => {
+                  invalidateAutomationRuns();
+                  scrollToBottom();
+                }}
+                onQuote={canReply ? quoteMessage : undefined}
+                onForward={onForward}
+              />
             </div>
-          </details>
-        )}
-
-        {run.eventPayload && (
-          <details
-            className="automation-payload-details"
-            open={run.status === "failed"}
-          >
-            <summary>
-              <ChevronDown aria-hidden="true" />
-              {t("automations.eventPayload")}
-            </summary>
-            <pre className="automation-json-pre">
-              {formatJson(run.eventPayload)}
-            </pre>
-          </details>
-        )}
-
-        <LinkedWorkItemsList
-          items={workItems}
-          workflows={workflows}
-          executions={executions}
-          onDispatch={onDispatchWorkItem}
-        />
-
-        <section className="automation-thread-section">
-          <h4>
-            {t("automations.followUpHeading")}
-            {followUpRuns.length > 0 && (
-              <span className="tabular-nums"> ({followUpRuns.length})</span>
-            )}
-          </h4>
-          {followUpRuns.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t("automations.followUpEmpty")}
-            </p>
           ) : (
+            <>
+              {fallbackRequests.map((req) => (
+                <RequestCard key={req.id} request={req} />
+              ))}
+              {run.error && (
+                <div className="automation-run-error">{run.error}</div>
+              )}
+              {((!!sessionId &&
+                (sessionQuery.isPending || info.isPending)) ||
+                rootRunQuery.isFetching) &&
+              !run.summary ? (
+                <Loading />
+              ) : (sessionQuery.error || info.error) && !run.summary ? (
+                <ErrorNotice
+                  error={sessionQuery.error ?? info.error}
+                  retry={() => {
+                    void sessionQuery.refetch();
+                    void info.refetch();
+                  }}
+                />
+              ) : run.summary ? (
+                <p className="automation-reader-brief">{run.summary}</p>
+              ) : !run.error ? (
+                <p className="text-xs text-muted-foreground">
+                  {active(effectiveStatus) || effectiveStatus === "queued"
+                    ? t("status." + effectiveStatus)
+                    : t("tasks.noResult")}
+                </p>
+              ) : null}
+            </>
+          )}
+
+          {!report && outputSection}
+
+          {run.eventPayload && (
+            <details
+              className="automation-payload-details"
+              open={effectiveStatus === "failed"}
+            >
+              <summary>
+                <ChevronDown aria-hidden="true" />
+                {t("automations.eventPayload")}
+              </summary>
+              <pre className="automation-json-pre">
+                {formatJson(run.eventPayload)}
+              </pre>
+            </details>
+          )}
+
+          <LinkedWorkItemsList
+            items={workItems}
+            workflows={workflows}
+            executions={executions}
+            onDispatch={onDispatchWorkItem}
+          />
+
+          {followUpRuns.length > 0 && session && agent && (
             <div className="automation-thread-list">
               {followUpRuns.map((turn) => {
-                const replyOutput = runTextOutput(turn);
                 const promoted = promotedRuns[turn.id];
+                const ruleText = turn.input.trim();
                 return (
-                  <div key={turn.id} className="automation-thread-turn">
-                    {turn.input && (
-                      <div className="automation-msg-bubble automation-msg-bubble--user">
-                        <div className="automation-msg-meta">
-                          <strong>{t("automations.you")}</strong>
-                          <span>·</span>
-                          <time
-                            className="tabular-nums"
-                            dateTime={turn.createdAt}
-                            title={new Date(turn.createdAt).toLocaleString(
-                              i18n.language,
-                            )}
-                          >
-                            {formatCompactTime(turn.createdAt, i18n.language)}
-                          </time>
-                        </div>
-                        <p className="whitespace-pre-wrap">{turn.input}</p>
-                        {plan && (
+                  <div
+                    key={turn.id}
+                    className="run-content automation-thread-turn"
+                    data-run-id={turn.id}
+                    data-status={turn.status}
+                  >
+                    <RunMessages
+                      run={turn}
+                      agent={agent}
+                      agents={allAgents}
+                      delegatedRuns={delegations.data?.outgoing[turn.id]}
+                      onOpenRun={onOpenRun}
+                      onOpenAgent={onOpenAgent}
+                      session={session}
+                      onOpenFile={onOpenFile}
+                      requests={allRequests}
+                      sessionBusy={sessionBusy}
+                      canRecover={!run.nextFireSequence}
+                      onRetried={() => {
+                        invalidateAutomationRuns();
+                        scrollToBottom();
+                      }}
+                      onQuote={canReply ? quoteMessage : undefined}
+                      onForward={onForward}
+                      onEdit={canReply && edit ? editMessage : undefined}
+                      afterUserMessage={
+                        plan && ruleText ? (
                           <div className="automation-msg-promote">
                             {promoted ? (
                               <span
@@ -516,62 +635,9 @@ export function AutomationRunReader({
                               </span>
                             ) : isMultiTarget && run.targetId ? (
                               <>
-                                <span className="inline-flex items-center gap-1">
-                                  <Sparkles
-                                    className="size-3"
-                                    aria-hidden="true"
-                                  />
-                                  {t("automations.promoteHint")}
-                                </span>
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <Button
-                                    size="xs"
-                                    variant="outline"
-                                    disabled={promoteRule.isPending}
-                                    onClick={() =>
-                                      promoteRule.mutate({
-                                        runKey: turn.id,
-                                        ruleText: turn.input,
-                                        scope: "global",
-                                      })
-                                    }
-                                  >
-                                    {t("automations.promoteGlobal", {
-                                      count: planTargets(plan).length,
-                                    })}
-                                  </Button>
-                                  <Button
-                                    size="xs"
-                                    variant="default"
-                                    disabled={promoteRule.isPending}
-                                    onClick={() =>
-                                      promoteRule.mutate({
-                                        runKey: turn.id,
-                                        ruleText: turn.input,
-                                        scope: "target",
-                                      })
-                                    }
-                                  >
-                                    {t("automations.promoteTarget", {
-                                      name: agent?.name ?? "",
-                                    })}
-                                  </Button>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="flex w-full items-center justify-between gap-2">
-                                <span className="inline-flex items-center gap-1 truncate">
-                                  <Sparkles
-                                    className="size-3 shrink-0"
-                                    aria-hidden="true"
-                                  />
-                                  <span className="truncate">
-                                    {t("automations.promoteDetected")}
-                                  </span>
-                                </span>
                                 <Button
                                   size="xs"
-                                  variant="outline"
+                                  variant="ghost"
                                   disabled={promoteRule.isPending}
                                   onClick={() =>
                                     promoteRule.mutate({
@@ -581,115 +647,80 @@ export function AutomationRunReader({
                                     })
                                   }
                                 >
-                                  {t("automations.promoteRule")}
+                                  <Sparkles data-icon="inline-start" />
+                                  {t("automations.promoteGlobal", {
+                                    count: planTargets(plan).length,
+                                  })}
                                 </Button>
-                              </div>
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={promoteRule.isPending}
+                                  onClick={() =>
+                                    promoteRule.mutate({
+                                      runKey: turn.id,
+                                      ruleText: turn.input,
+                                      scope: "target",
+                                    })
+                                  }
+                                >
+                                  {t("automations.promoteTarget", {
+                                    name: agent.name,
+                                  })}
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                disabled={promoteRule.isPending}
+                                onClick={() =>
+                                  promoteRule.mutate({
+                                    runKey: turn.id,
+                                    ruleText: turn.input,
+                                    scope: "global",
+                                  })
+                                }
+                              >
+                                <Sparkles data-icon="inline-start" />
+                                {t("automations.promoteRule")}
+                              </Button>
                             )}
                           </div>
-                        )}
-                      </div>
-                    )}
-                    {(replyOutput || turn.error || active(turn.status) || turn.status === "paused" || turn.status === "queued") && (
-                      <div className="automation-msg-bubble">
-                        <div className="automation-msg-meta">
-                          {agent && <AgentAvatar agent={agent} size="xs" />}
-                          <strong>{agent?.name ?? "Agent"}</strong>
-                          <span>·</span>
-                          <time
-                            className="tabular-nums"
-                            dateTime={turn.finishedAt || turn.createdAt}
-                            title={new Date(
-                              turn.finishedAt || turn.createdAt,
-                            ).toLocaleString(i18n.language)}
-                          >
-                            {formatCompactTime(
-                              turn.finishedAt || turn.createdAt,
-                              i18n.language,
-                            )}
-                          </time>
-                          <AutomationRunControls id={turn.id} status={turn.status} canPause={turn.canPause} />
-                          {turn.status === "paused" && !turn.superseded && !agent?.archived && !run.nextFireSequence && (
-                            <RunRecoveryButton run={turn} disabled={sessionRuns.some((other) => active(other.status))} />
-                          )}
-                        </div>
-                        {turn.error && (
-                          <div className="automation-run-error">
-                            {turn.error}
-                          </div>
-                        )}
-                        {replyOutput ? (
-                          response(replyOutput, turn)
-                        ) : active(turn.status) ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("status." + turn.status)}
-                          </span>
-                        ) : null}
-                        <TurnChanges run={turn} />
-                      </div>
-                    )}
+                        ) : undefined
+                      }
+                    />
                   </div>
                 );
               })}
             </div>
           )}
-        </section>
+        </div>
+        <ImagePreview />
       </div>
 
-      {run.execution && !run.nextFireSequence && (
-        <form
-          className="automation-reader-foot"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const text = draft.trim();
-            if (!text || sendReply.isPending) return;
-            sendReply.mutate(text);
-          }}
-        >
-          <div className="automation-composer">
-            <textarea
-              value={draft}
-              rows={2}
-              placeholder={t("automations.followUpPlaceholder")}
-              disabled={sendReply.isPending}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault();
-                  const text = draft.trim();
-                  if (text && !sendReply.isPending) sendReply.mutate(text);
-                }
-              }}
-            />
-            <div className="automation-composer-foot">
-              <div className="automation-quick-prompts">
-                {quickPrompts.map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    className="automation-qp-chip"
-                    disabled={sendReply.isPending}
-                    onClick={() => sendReply.mutate(preset)}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <Button
-                type="submit"
-                size="xs"
-                disabled={!draft.trim() || sendReply.isPending}
-              >
-                <Send data-icon="inline-start" />
-                {t("automations.sendFollowUp")}
-              </Button>
-            </div>
-          </div>
-        </form>
+      {canReply && session && agent && chatId && (
+        <footer className="automation-reader-foot">
+          <Composer
+            agentId={agent.id}
+            agents={allAgents}
+            chatId={chatId}
+            session={session}
+            profile={agent.profile}
+            reply={session.kind === "topic"}
+            fixedSession
+            activeRun={activeRun}
+            pausedRun={pausedRun}
+            queuedRuns={queuedRuns}
+            archived={agent.archived}
+            visible
+            onSent={() => {
+              invalidateAutomationRuns();
+              scrollToBottom();
+            }}
+          />
+        </footer>
       )}
-    </aside>
+    </>
   );
 }

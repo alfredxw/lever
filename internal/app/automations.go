@@ -52,8 +52,64 @@ func (a *App) Automations(ctx context.Context) ([]model.Automation, error) {
   ))`+automationFrom+" ORDER BY a.rowid DESC")
 }
 
+func (a *App) Automation(ctx context.Context, id string) (model.Automation, error) {
+	return store.Get[model.Automation](ctx, a.Store.DB, automationProjection+`,
+  'recentRuns',(SELECT json_group_array(json_object('runId',run_id,'targetId',target_id,'agentId',agent_id,'status',status,'createdAt',created_at)) FROM (
+    SELECT ar.run_id, NULLIF(ar.target_id,'') AS target_id,
+      COALESCE(NULLIF(ar.agent_id,''), r.agent_id) AS agent_id,
+      COALESCE(r.status,NULLIF(ar.status,''),'cancelled') AS status, ar.created_at
+    FROM automation_runs ar LEFT JOIN runs r ON r.id=ar.run_id
+    WHERE ar.automation_id=a.id ORDER BY ar.rowid DESC LIMIT 14
+  ))`+automationFrom+" AND a.id=?", id)
+}
+
 func getAutomation(ctx context.Context, q store.Queryer, id string) (model.Automation, error) {
 	return store.Get[model.Automation](ctx, q, automationProjection+automationFrom+" AND a.id=?", id)
+}
+
+func normalizeAutomationSelection(s *model.Selection) (*model.Selection, error) {
+	if s == nil {
+		return nil, nil
+	}
+	v := model.Selection{
+		Provider:   strings.TrimSpace(s.Provider),
+		Model:      strings.TrimSpace(s.Model),
+		Permission: strings.TrimSpace(s.Permission),
+		Effort:     strings.TrimSpace(s.Effort),
+		Fast:       s.Fast,
+	}
+	if v == (model.Selection{}) {
+		return nil, nil
+	}
+	if len(v.Provider) > 256 || strings.ContainsAny(v.Provider, "\x00\r\n") {
+		return nil, invalid("Invalid runtime options")
+	}
+	if err := validateSelection(&v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func mergeAutomationSelection(override *model.Selection, base model.Selection) *model.Selection {
+	if override == nil {
+		return nil
+	}
+	sel := *override
+	if sel.Provider == "" {
+		sel.Provider = base.Provider
+	}
+	if sel.Provider == base.Provider {
+		if sel.Model == "" {
+			sel.Model = base.Model
+		}
+		if sel.Permission == "" {
+			sel.Permission = base.Permission
+		}
+		if sel.Effort == "" {
+			sel.Effort = base.Effort
+		}
+	}
+	return &sel
 }
 
 func (a *App) SaveAutomation(ctx context.Context, id string, input model.AutomationInput) (model.Automation, error) {
@@ -110,6 +166,10 @@ func (a *App) SaveAutomation(ctx context.Context, id string, input model.Automat
 	if len(input.Targets) > maxAutomationTargets {
 		return model.Automation{}, invalid("Use up to 20 execution targets")
 	}
+	var err error
+	if input.Selection, err = normalizeAutomationSelection(input.Selection); err != nil {
+		return model.Automation{}, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(input.Targets) > 0 {
@@ -125,13 +185,20 @@ func (a *App) SaveAutomation(ctx context.Context, id string, input model.Automat
 			if len(target.Prompt) > 4<<10 {
 				return model.Automation{}, invalid("Target instructions can be up to 4 KiB")
 			}
+			if target.Selection, err = normalizeAutomationSelection(target.Selection); err != nil {
+				return model.Automation{}, err
+			}
 			dst := model.AutomationDestination{
 				Mode:          input.Destination.Mode,
 				AgentID:       target.AgentID,
 				ChatID:        target.ChatID,
 				WorkingCopyID: target.WorkingCopyID,
 			}
-			if err := a.validateAutomationDestination(ctx, &dst); err != nil {
+			effectiveSelection := target.Selection
+			if effectiveSelection == nil {
+				effectiveSelection = input.Selection
+			}
+			if err := a.validateAutomationDestination(ctx, &dst, effectiveSelection); err != nil {
 				return model.Automation{}, err
 			}
 			target.AgentID, target.ChatID, target.WorkingCopyID = dst.AgentID, dst.ChatID, dst.WorkingCopyID
@@ -140,7 +207,7 @@ func (a *App) SaveAutomation(ctx context.Context, id string, input model.Automat
 		input.Destination.ChatID = input.Targets[0].ChatID
 		input.Destination.WorkingCopyID = input.Targets[0].WorkingCopyID
 	} else {
-		if err := a.validateAutomationDestination(ctx, &input.Destination); err != nil {
+		if err := a.validateAutomationDestination(ctx, &input.Destination, input.Selection); err != nil {
 			return model.Automation{}, err
 		}
 	}
@@ -150,7 +217,7 @@ func (a *App) SaveAutomation(ctx context.Context, id string, input model.Automat
 		id = ID()
 	}
 	var credentials automationCredentialChange
-	err := a.Store.Write(ctx, func(tx *sql.Tx) error {
+	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
 		old := model.Automation{Enabled: true}
 		if !creating {
 			var err error
@@ -253,7 +320,7 @@ func usesDedicatedChat(destination model.AutomationDestination) bool {
 	return destination.Mode != "newChat" && destination.ChatID == ""
 }
 
-func (a *App) validateAutomationDestination(ctx context.Context, destination *model.AutomationDestination) error {
+func (a *App) validateAutomationDestination(ctx context.Context, destination *model.AutomationDestination, selection *model.Selection) error {
 	switch destination.Mode {
 	case "chat", "topic":
 		if destination.ChatID != "" {
@@ -282,9 +349,22 @@ func (a *App) validateAutomationDestination(ctx context.Context, destination *mo
 		return err
 	}
 	if destination.WorkingCopyID != "" {
-		_, err = a.selectGroup(ctx, a.Store.DB, agent, destination.WorkingCopyID)
+		if _, err = a.selectGroup(ctx, a.Store.DB, agent, destination.WorkingCopyID); err != nil {
+			return err
+		}
 	}
-	return err
+	if selection != nil {
+		base := model.Selection{
+			Provider:   agent.Profile.Provider,
+			Model:      agent.Profile.Model,
+			Permission: agent.Profile.Permission,
+		}
+		merged := mergeAutomationSelection(selection, base)
+		if _, _, err := resolveSelection(ctx, a.Store.DB, *merged, base); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) SetAutomationEnabled(ctx context.Context, id string, enabled bool) error {
@@ -305,11 +385,15 @@ func (a *App) SetAutomationEnabled(ctx context.Context, id string, enabled bool)
 					ChatID:        target.ChatID,
 					WorkingCopyID: target.WorkingCopyID,
 				}
-				if err := a.validateAutomationDestination(ctx, &dst); err != nil {
+				sel := target.Selection
+				if sel == nil {
+					sel = plan.Selection
+				}
+				if err := a.validateAutomationDestination(ctx, &dst, sel); err != nil {
 					return err
 				}
 			}
-		} else if err := a.validateAutomationDestination(ctx, &plan.Destination); err != nil {
+		} else if err := a.validateAutomationDestination(ctx, &plan.Destination, plan.Selection); err != nil {
 			return err
 		}
 		if plan.Trigger.Kind == "schedule" {

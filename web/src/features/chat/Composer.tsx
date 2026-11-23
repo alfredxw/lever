@@ -134,6 +134,7 @@ export function Composer({
   session,
   profile,
   reply,
+  fixedSession,
   topicLauncher,
   compact,
   activeRun,
@@ -151,6 +152,7 @@ export function Composer({
   session?: Session;
   profile: Profile;
   reply?: boolean;
+  fixedSession?: boolean;
   topicLauncher?: { topicId: string; backButton: ReactElement };
   compact?: boolean;
   activeRun?: Run;
@@ -169,8 +171,9 @@ export function Composer({
   const reduceMotion = useReducedMotion();
   const key = reply ? session!.id : chatId;
   useEffect(() => {
-    if (!reply && !draftAgentId) recoverTopicLauncherDraft(chatId);
-  }, [chatId, draftAgentId, reply]);
+    if (!reply && !fixedSession && !draftAgentId)
+      recoverTopicLauncherDraft(chatId);
+  }, [chatId, draftAgentId, fixedSession, reply]);
   const submissionKey = `lever:submission:${key}`;
   const sending = useIsMutating({ mutationKey: ["message", key] }) > 0;
   const [draft, setDraft] = useComposerDraft(key);
@@ -178,7 +181,7 @@ export function Composer({
   const pending = readSubmission(key);
   const backToMessagesButton = topicLauncher?.backButton;
   const launchTopic = !!topicLauncher && !draft.editing && !pending;
-  const topicMode = !reply && (launchTopic || draft.topic);
+  const topicMode = !reply && !fixedSession && (launchTopic || draft.topic);
   const operation = reply ? "reply" : topicMode ? "topic" : "main";
   const selectionField =
     topicMode && !draft.editing ? "topicSelection" : "sessionSelection";
@@ -360,6 +363,7 @@ export function Composer({
   );
   const canStartComparison =
     !reply &&
+    !fixedSession &&
     !topicLauncher &&
     !draft.editing &&
     !mapped.pending &&
@@ -562,7 +566,7 @@ export function Composer({
           : nextDraft,
       );
       if (draftAgentId) saveComposerDraft(result.chatId, nextDraft);
-      else if (!reply) recoverTopicLauncherDraft(chatId);
+      else if (!reply && !fixedSession) recoverTopicLauncherDraft(chatId);
       if ("operation" in input && input.replaceRunId)
         void queryClient.invalidateQueries({ queryKey: ["message-search"] });
       const root = composerRoot.current;
@@ -654,8 +658,11 @@ export function Composer({
       return;
     }
     if (sending || insertion.kind !== "quote") return;
-    const topic =
-      insertion.mode === undefined ? draft.topic : insertion.mode === "topic";
+    const topic = fixedSession
+      ? draft.topic
+      : insertion.mode === undefined
+        ? draft.topic
+        : insertion.mode === "topic";
     if (draft.editing && topic !== draft.topic) {
       toast.error(t("chat.quoteWhileEditing"));
     } else {
@@ -669,7 +676,7 @@ export function Composer({
     }
     composer.inserted(key, insertion.id);
     requestAnimationFrame(() => textbox.current?.focus());
-  }, [composer, draft.editing, draft.topic, key, sending, uploading, visible, t]);
+  }, [composer, draft.editing, draft.topic, fixedSession, key, sending, uploading, visible, t]);
   const running = Boolean(activeRun && !topicMode);
   const followUp =
     !editingSent &&
@@ -1076,13 +1083,13 @@ export function Composer({
         setAfterPickerKey((n) => n + 1);
         setDraft((d) => ({
           ...d,
-          topic: reply || d.editing || topicLauncher ? d.topic : true,
+          topic: reply || fixedSession || d.editing || topicLauncher ? d.topic : true,
           comparisonAgents: undefined,
           comparisonModels: undefined,
           afterRunIds: preselected,
         }));
       }
-    } else if (!editingSent && !topicLauncher) {
+    } else if (!editingSent && !topicLauncher && !fixedSession) {
       setDraft((d) => ({
         ...d,
         topic: command === "topic",
@@ -1165,7 +1172,7 @@ export function Composer({
       <InputGroup
         className={cn(
           "composer",
-          reply && "topic-composer",
+          (reply || fixedSession) && "topic-composer",
           topicLauncher && "composer-topic-launcher",
           dragging && "is-dragging",
         )}
@@ -1388,7 +1395,7 @@ export function Composer({
             profile.disabledSkills,
           ])}
           reply={reply}
-          fixedDestination={editingSent || !!topicLauncher}
+          fixedDestination={editingSent || !!topicLauncher || !!fixedSession}
           useAgentProfiles={!!comparisonAgents}
           canStartComparison={canStartComparison}
           canStartAfter={canStartAfter}
@@ -1478,7 +1485,7 @@ export function Composer({
                   )}
                 </InputGroupButton>
                 {!compact && backToMessagesButton}
-                {!reply && !topicLauncher && !editingSent && (
+                {!reply && !fixedSession && !topicLauncher && !editingSent && (
                   <MotionInputGroupButton
                     variant="ghost"
                     size="sm"

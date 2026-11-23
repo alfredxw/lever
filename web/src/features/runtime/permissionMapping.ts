@@ -1,17 +1,14 @@
 import type { Catalog, Selection } from "@/api/types.gen";
+import { findPermission } from "./permissionPolicy";
 import { useModels } from "./queries";
 
-export type PermissionSource = Pick<Selection, "provider" | "permission">;
+export {
+  findPermission,
+  isAskPermission,
+  recommendedUnattendedPermission,
+} from "./permissionPolicy";
 
-export function findPermission(
-  catalog: Catalog | null | undefined,
-  id?: string,
-) {
-  return (
-    catalog?.permissions.find((option) => option.id === id) ??
-    catalog?.legacyPermissions?.find((option) => option.id === id)
-  );
-}
+export type PermissionSource = Pick<Selection, "provider" | "permission">;
 
 export function usePermissionMapping(
   source: PermissionSource | undefined,
