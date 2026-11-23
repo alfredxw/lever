@@ -110,6 +110,8 @@ const (
 	DefaultAvatarEmoji = "🤖"
 )
 
+const StarterAvatarPreset = "lever"
+
 type Avatar struct {
 	Kind  string `json:"kind"`
 	Value string `json:"value"` // An empty monogram uses the Agent's current initials.

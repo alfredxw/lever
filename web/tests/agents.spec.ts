@@ -10552,3 +10552,204 @@ test("per-pane tab limit applies independently per Agent and pane and evicts ear
   // Right pane still untouched.
   await expect(sideStrip.getByRole("tab")).toHaveCount(2);
 });
+
+test("starter Lever Agent shows Lever logo and Agents support custom image avatars", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1360, height: 860 });
+  await page.goto(context().url);
+
+  const sidebar = page.locator("#agent-sidebar");
+  const leverRow = sidebar.locator(".agent-contact").filter({
+    has: page.getByRole("button", { name: "Lever", exact: true }),
+  });
+  await expect(leverRow).toHaveCount(1);
+  const leverSidebarImg = leverRow.locator(".agent-avatar img");
+  await expect(leverSidebarImg).toBeVisible();
+  await expect
+    .poll(() => leverSidebarImg.evaluate((el: HTMLImageElement) => el.naturalWidth))
+    .toBeGreaterThan(0);
+
+  // Open the starter Lever Agent's Profile and inspect its AvatarPicker.
+  await leverRow
+    .getByRole("button", { name: "打开 Lever 的配置", exact: true })
+    .click();
+  const profileAvatar = page.locator(".profile-avatar-trigger .agent-avatar img");
+  await expect(profileAvatar).toBeVisible();
+  await expect
+    .poll(() => profileAvatar.evaluate((el: HTMLImageElement) => el.naturalWidth))
+    .toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "选择头像", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "选择头像", exact: true });
+  await expect(picker.getByRole("tab", { name: "图片", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    picker.getByRole("button", { name: /更换图片/ }),
+  ).toBeVisible();
+  await expect(
+    picker.getByRole("group", { name: "头像背景", exact: true }),
+  ).toHaveCount(0);
+
+  await page.screenshot({
+    path: testInfo.outputPath("lever-logo-picker-light.png"),
+    animations: "disabled",
+  });
+
+  // Check Dark theme rendering of starter logo & picker.
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await page.screenshot({
+    path: testInfo.outputPath("lever-logo-picker-dark.png"),
+    animations: "disabled",
+  });
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
+  await page.keyboard.press("Escape");
+
+  // Create a new Agent with a custom uploaded image avatar.
+  const pngA = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGN4GOb9nxLMMGrAqAGjBgwXAwAw2oEfMM9KGgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const pngB = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGMwKXvwnxLMMGrAqAGjBgwXAwAzu4kfmQACHQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  await page
+    .getByRole("button", { name: "创建 Agent", exact: true })
+    .first()
+    .click();
+  const dialog = page.getByRole("dialog", { name: "创建 Agent", exact: true });
+  const agentName = `Custom Avatar ${randomUUID().slice(0, 6)}`;
+  await dialog.getByLabel("名称", { exact: true }).fill(agentName);
+  await dialog.getByRole("button", { name: "选择头像", exact: true }).click();
+  const createPicker = page.getByRole("dialog", {
+    name: "选择头像",
+    exact: true,
+  });
+  await createPicker.getByRole("tab", { name: "图片", exact: true }).click();
+
+  // Reject a non-image file with an inline alert.
+  const createFileInput = createPicker.locator('input[type="file"]');
+  await createFileInput.setInputFiles({
+    name: "not-image.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("not an image"),
+  });
+  await expect(createPicker.getByRole("alert")).toContainText("有效的图片");
+
+  // Upload a valid PNG image during Agent creation.
+  const uploadResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/avatars") &&
+      response.request().method() === "POST",
+  );
+  await createFileInput.setInputFiles({
+    name: "red.png",
+    mimeType: "image/png",
+    buffer: pngA,
+  });
+  expect((await uploadResponse).ok()).toBeTruthy();
+  await expect(createPicker.getByRole("alert")).toHaveCount(0);
+  await expect(createPicker.locator(".avatar-upload-zone img")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/agents") &&
+      response.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "创建 Agent", exact: true }).click();
+  const created = (await (await createdResponse).json()) as Agent;
+  expect(created.avatar?.kind).toBe("image");
+  expect(created.avatar?.value).toMatch(/^[a-f0-9]{64}$/);
+  expect(created.avatar?.color ?? "").toBe("");
+
+  const customRow = sidebar.locator(`[data-agent-id="${created.id}"]`);
+  const customSidebarImg = customRow.locator(".agent-avatar img");
+  await expect(customSidebarImg).toHaveAttribute(
+    "src",
+    `/api/avatars/${created.avatar!.value}`,
+  );
+  await expect
+    .poll(() =>
+      customSidebarImg.evaluate((el: HTMLImageElement) => el.naturalWidth),
+    )
+    .toBe(16);
+
+  // Replace the custom image in Profile and verify persistence after reload.
+  await customRow
+    .getByRole("button", { name: `打开 ${agentName} 的配置`, exact: true })
+    .click();
+  await page.getByRole("button", { name: "选择头像", exact: true }).click();
+  const editPicker = page.getByRole("dialog", { name: "选择头像", exact: true });
+  await expect(
+    editPicker.getByRole("tab", { name: "图片", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  const savedEdit = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/agents/${created.id}`) &&
+      response.request().method() === "PUT",
+  );
+  await editPicker.locator('input[type="file"]').setInputFiles({
+    name: "blue.png",
+    mimeType: "image/png",
+    buffer: pngB,
+  });
+  const edited = (await (await savedEdit).json()) as Agent;
+  expect(edited.avatar?.kind).toBe("image");
+  expect(edited.avatar?.value).not.toBe(created.avatar?.value);
+
+  await page.reload();
+  const reloadedImg = sidebar.locator(
+    `[data-agent-id="${created.id}"] .agent-avatar img`,
+  );
+  await expect(reloadedImg).toHaveAttribute(
+    "src",
+    `/api/avatars/${edited.avatar!.value}`,
+  );
+  await expect
+    .poll(() => reloadedImg.evaluate((el: HTMLImageElement) => el.naturalWidth))
+    .toBe(16);
+
+  // Duplicating an Agent with a custom image avatar preserves its avatar.
+  await sidebar
+    .getByRole("button", { name: agentName, exact: true })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "复制 Agent…" }).click();
+  const copyDialog = page.getByRole("dialog", { name: "复制 Agent", exact: true });
+  const copiedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/agents") &&
+      response.request().method() === "POST",
+  );
+  await copyDialog.getByRole("button", { name: "创建副本", exact: true }).click();
+  const copied = (await (await copiedResponse).json()) as Agent;
+  expect(copied.avatar).toEqual(edited.avatar);
+
+  // Verify English tab labels fit inside the popover without horizontal overflow.
+  await page.evaluate(() => localStorage.setItem("lever:language", "en-US"));
+  await page.reload();
+  await sidebar
+    .locator(`[data-agent-id="${created.id}"] .agent-profile-trigger`)
+    .click();
+  await page.getByRole("button", { name: "Choose avatar", exact: true }).click();
+  const enPicker = page.getByRole("dialog", {
+    name: "Choose avatar",
+    exact: true,
+  });
+  await expect(
+    enPicker.getByRole("tab", { name: "Image", exact: true }),
+  ).toBeVisible();
+  expect(
+    await enPicker
+      .getByRole("tablist", { name: "Avatar type", exact: true })
+      .evaluate((el) => el.scrollWidth - el.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  await page.screenshot({
+    path: testInfo.outputPath("custom-avatar-picker-en.png"),
+    animations: "disabled",
+  });
+});

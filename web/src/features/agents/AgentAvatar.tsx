@@ -1,11 +1,23 @@
-import { lazy, Suspense, type CSSProperties } from "react";
-import type { Agent } from "@/api/types.gen";
+import { lazy, Suspense, useState, type CSSProperties } from "react";
+import { StarterAvatarPreset, type Agent, type Avatar } from "@/api/types.gen";
 import { initials } from "@/components/common";
+import leverIcon from "../../../../cmd/lever-desktop/icon.png";
 import { avatarColors } from "./avatarPalette";
 
 const AvatarIcon = lazy(() =>
   import("./avatarIcons").then((module) => ({ default: module.AvatarIcon })),
 );
+
+const avatarImageIdPattern = /^[a-f0-9]{64}$/;
+
+export function avatarImageSrc(avatar?: Avatar) {
+  if (!avatar) return undefined;
+  if (avatar.kind === "image" && avatarImageIdPattern.test(avatar.value))
+    return `/api/avatars/${avatar.value}`;
+  if (avatar.kind === "preset" && avatar.value === StarterAvatarPreset)
+    return leverIcon;
+  return undefined;
+}
 
 export function AgentAvatar({
   agent,
@@ -15,9 +27,16 @@ export function AgentAvatar({
   size?: "default" | "sm" | "xs";
 }) {
   const { avatar } = agent;
+  const imageSrc = avatarImageSrc(avatar);
+  const [failedSrc, setFailedSrc] = useState<string>();
+  const showImage = !!imageSrc && failedSrc !== imageSrc;
+  const isLeverLogo =
+    showImage &&
+    avatar?.kind === "preset" &&
+    avatar.value === StarterAvatarPreset;
   const color = avatar?.color;
   const preset =
-    color && Object.hasOwn(avatarColors, color)
+    !showImage && color && Object.hasOwn(avatarColors, color)
       ? avatarColors[color as keyof typeof avatarColors]
       : undefined;
   const style = preset ?? {
@@ -32,17 +51,29 @@ export function AgentAvatar({
     <span
       className="agent-avatar"
       data-size={size}
-      data-kind={avatar?.kind}
+      data-kind={showImage ? avatar?.kind : imageSrc ? undefined : avatar?.kind}
       data-avatar-color={preset ? color : undefined}
-      style={style as CSSProperties}
+      style={showImage ? undefined : (style as CSSProperties)}
       aria-hidden="true"
     >
-      {avatar?.kind === "lucide" ? (
+      {showImage ? (
+        <img
+          src={imageSrc}
+          alt=""
+          draggable={false}
+          className={
+            isLeverLogo
+              ? "agent-avatar-image agent-avatar-logo"
+              : "agent-avatar-image"
+          }
+          onError={() => setFailedSrc(imageSrc)}
+        />
+      ) : avatar?.kind === "lucide" ? (
         <Suspense fallback={fallback}>
           <AvatarIcon name={avatar.value} />
         </Suspense>
       ) : (
-        avatar?.value || fallback
+        (!imageSrc && avatar?.value) || fallback
       )}
     </span>
   );

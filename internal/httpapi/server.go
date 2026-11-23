@@ -383,6 +383,44 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/attachments/{id}", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"deleted": true}, a.DeleteAttachment(r.Context(), r.PathValue("id")))
 	})
+	mux.HandleFunc("POST /api/avatars", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, app.MaxAvatarBytes+(64<<10))
+		reader, err := r.MultipartReader()
+		if err != nil {
+			respond(w, nil, &app.Error{Status: 400, Message: "Expected a file upload"})
+			return
+		}
+		part, err := reader.NextPart()
+		if err != nil || part.FormName() != "file" || part.FileName() == "" {
+			respond(w, nil, &app.Error{Status: 400, Message: "Expected one image"})
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(part, app.MaxAvatarBytes+1))
+		if err != nil || len(data) > app.MaxAvatarBytes {
+			respond(w, nil, &app.Error{Status: 400, Message: "Avatar images are limited to 5 MiB"})
+			return
+		}
+		if _, err := reader.NextPart(); !errors.Is(err, io.EOF) {
+			respond(w, nil, &app.Error{Status: 400, Message: "Upload one image at a time"})
+			return
+		}
+		avatar, err := a.SaveAvatarImage(data)
+		respond(w, avatar, err)
+	})
+	mux.HandleFunc("GET /api/avatars/{id}", func(w http.ResponseWriter, r *http.Request) {
+		file, mediaType, err := a.OpenAvatarImage(r.PathValue("id"))
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", mediaType)
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		http.ServeContent(w, r, "", time.Time{}, file)
+	})
 	mux.HandleFunc("POST /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		var v model.Agent
 		if err := read(w, r, &v); err != nil {

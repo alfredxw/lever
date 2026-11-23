@@ -48,7 +48,8 @@ AND NOT EXISTS(SELECT 1 FROM agents)`, store.StarterAgentPending).Scan(&pending)
 		return nil
 	}
 	_, err = a.saveAgentLocked(ctx, model.Agent{
-		Name: "Lever",
+		Name:   "Lever",
+		Avatar: &model.Avatar{Kind: "preset", Value: model.StarterAvatarPreset},
 		Profile: model.Profile{
 			Scope:       model.Scope{Roots: []model.Root{{Path: "~"}}},
 			Provider:    providerID,

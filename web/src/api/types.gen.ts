@@ -697,6 +697,7 @@ export interface Profile extends Scope {
 export const DefaultAvatarColor = "gradient-prism";
 export const DefaultAvatarEmoji = "🤖";
 export type DefaultAvatar = typeof DefaultAvatarColor | typeof DefaultAvatarEmoji;
+export const StarterAvatarPreset = "lever";
 export interface Avatar {
   kind: string;
   value: string; // An empty monogram uses the Agent's current initials.

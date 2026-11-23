@@ -281,7 +281,7 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		if agent.Avatar == nil {
 			agent.Avatar = &model.Avatar{Kind: "emoji", Value: model.DefaultAvatarEmoji}
 		}
-		if agent.Avatar.Color == "" {
+		if agent.Avatar.Color == "" && avatarUsesColor(agent.Avatar.Kind) {
 			agent.Avatar.Color = model.DefaultAvatarColor
 		}
 	}
@@ -296,6 +296,16 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 			if avatar.Value == "" || len(avatar.Value) > 128 {
 				return agent, invalid("Select a valid avatar")
 			}
+		case "preset":
+			if avatar.Value != model.StarterAvatarPreset {
+				return agent, invalid("Select a valid avatar")
+			}
+			avatar.Color = ""
+		case "image":
+			if !isAvatarImageID(avatar.Value) {
+				return agent, invalid("Select a valid avatar")
+			}
+			avatar.Color = ""
 		default:
 			return agent, invalid("Select a valid avatar")
 		}
@@ -402,6 +412,7 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		p.Skills[i] = canonical
 	}
 	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
+		checkAvatarImage := agent.Avatar != nil && agent.Avatar.Kind == "image"
 		if !creating {
 			old, err := store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", agent.ID)
 			if err != nil {
@@ -413,6 +424,9 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 			if !available && old.Profile.Provider != p.Provider {
 				return invalid("Runtime is disabled")
 			}
+			if checkAvatarImage && old.Avatar != nil && old.Avatar.Kind == "image" && old.Avatar.Value == agent.Avatar.Value {
+				checkAvatarImage = false
+			}
 			agent.CreatedAt = old.CreatedAt
 			if agent.Archived {
 				var count int
@@ -423,6 +437,9 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 					return conflict("Stop or resolve active executions before archiving")
 				}
 			}
+		}
+		if checkAvatarImage && !a.hasAvatarImage(agent.Avatar.Value) {
+			return invalid("Select a valid avatar")
 		}
 		seen := map[string]bool{}
 		for _, rule := range p.Delegations {

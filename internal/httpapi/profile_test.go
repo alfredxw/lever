@@ -1,9 +1,18 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -41,6 +50,189 @@ func TestAgentAvatarDefaultsOnlyOnCreate(t *testing.T) {
 		if created.Avatar == nil || *created.Avatar != want {
 			t.Fatalf("creating with color %q got %+v, want %+v", color, created.Avatar, want)
 		}
+	}
+}
+
+func testPNGBytes(t *testing.T, c color.RGBA) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func uploadAvatarPart(t *testing.T, f *fixture, field, filename string, data []byte, extraPart bool) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile(field, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if extraPart {
+		second, err := writer.CreateFormFile("file", "second.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := second.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest("POST", f.s.URL+"/api/avatars", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+f.s.Token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestAgentAvatarImageUploadAndValidation(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	pngData := testPNGBytes(t, color.RGBA{R: 32, G: 120, B: 220, A: 255})
+
+	// Reject non-image, empty, oversized, and multi-file uploads.
+	for _, tc := range []struct {
+		name      string
+		filename  string
+		data      []byte
+		extraPart bool
+	}{
+		{name: "text", filename: "notes.txt", data: []byte("plain text")},
+		{name: "svg", filename: "icon.svg", data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)},
+		{name: "empty", filename: "empty.png", data: nil},
+		{name: "oversized", filename: "huge.png", data: append(append([]byte{}, pngData...), make([]byte, app.MaxAvatarBytes)...)},
+		{name: "multiple", filename: "a.png", data: pngData, extraPart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := uploadAvatarPart(t, f, "file", tc.filename, tc.data, tc.extraPart)
+			resp.Body.Close()
+			if resp.StatusCode != 400 {
+				t.Fatalf("upload %s status = %d, want 400", tc.name, resp.StatusCode)
+			}
+		})
+	}
+
+	// Upload a valid PNG and verify deduplication and secure serving headers.
+	resp := uploadAvatarPart(t, f, "file", "avatar.png", pngData, false)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("upload status = %d, want 200", resp.StatusCode)
+	}
+	var uploaded model.Avatar
+	if err := json.NewDecoder(resp.Body).Decode(&uploaded); err != nil {
+		t.Fatal(err)
+	}
+	if uploaded.Kind != "image" || len(uploaded.Value) != 64 || uploaded.Color != "" {
+		t.Fatalf("unexpected uploaded avatar: %+v", uploaded)
+	}
+
+	respDup := uploadAvatarPart(t, f, "file", "same.png", pngData, false)
+	defer respDup.Body.Close()
+	var dup model.Avatar
+	if respDup.StatusCode != 200 || json.NewDecoder(respDup.Body).Decode(&dup) != nil || dup != uploaded {
+		t.Fatalf("duplicate upload = (%d, %+v), want %+v", respDup.StatusCode, dup, uploaded)
+	}
+
+	getReq, err := http.NewRequest("GET", f.s.URL+"/api/avatars/"+uploaded.Value, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getReq.Header.Set("Authorization", "Bearer "+f.s.Token)
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getResp.Body.Close()
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getResp.StatusCode != 200 || !bytes.Equal(body, pngData) ||
+		getResp.Header.Get("Content-Type") != "image/png" ||
+		getResp.Header.Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.Contains(getResp.Header.Get("Content-Security-Policy"), "sandbox") ||
+		!strings.Contains(getResp.Header.Get("Cache-Control"), "immutable") {
+		t.Fatalf("unexpected GET /api/avatars response: status=%d headers=%v len=%d", getResp.StatusCode, getResp.Header, len(body))
+	}
+
+	// Reject unknown IDs and path-like IDs.
+	for _, bad := range []string{"not-a-hash", strings.Repeat("a", 64)} {
+		req, _ := http.NewRequest("GET", f.s.URL+"/api/avatars/"+bad, nil)
+		req.Header.Set("Authorization", "Bearer "+f.s.Token)
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != 404 {
+			t.Fatalf("GET /api/avatars/%s status = %d, want 404", bad, r.StatusCode)
+		}
+	}
+
+	// Creating with an uploaded image leaves Color empty and persists the image.
+	draft := model.Agent{
+		Name:    "Photo Agent",
+		Profile: agent.Profile,
+		Avatar:  &model.Avatar{Kind: "image", Value: uploaded.Value, Color: "black"},
+	}
+	var created model.Agent
+	f.request("POST", "/agents", draft, 200, &created)
+	if created.Avatar == nil || *created.Avatar != uploaded {
+		t.Fatalf("created image avatar = %+v, want %+v", created.Avatar, uploaded)
+	}
+
+	// Reject missing image hashes and unknown presets.
+	f.request("POST", "/agents", model.Agent{
+		Name:    "Missing Image",
+		Profile: agent.Profile,
+		Avatar:  &model.Avatar{Kind: "image", Value: strings.Repeat("b", 64)},
+	}, 400, nil)
+	f.request("POST", "/agents", model.Agent{
+		Name:    "Bad Preset",
+		Profile: agent.Profile,
+		Avatar:  &model.Avatar{Kind: "preset", Value: "unknown"},
+	}, 400, nil)
+
+	// Built-in Lever preset avatar is accepted and clears Color.
+	var presetAgent model.Agent
+	f.request("POST", "/agents", model.Agent{
+		Name:    "Lever Copy",
+		Profile: agent.Profile,
+		Avatar:  &model.Avatar{Kind: "preset", Value: model.StarterAvatarPreset, Color: "red"},
+	}, 200, &presetAgent)
+	wantPreset := model.Avatar{Kind: "preset", Value: model.StarterAvatarPreset}
+	if presetAgent.Avatar == nil || *presetAgent.Avatar != wantPreset {
+		t.Fatalf("preset avatar = %+v, want %+v", presetAgent.Avatar, wantPreset)
+	}
+
+	// Editing other fields still succeeds even if the image file was removed from disk.
+	if err := os.Remove(filepath.Join(f.a.Store.Dir, "avatars", uploaded.Value)); err != nil {
+		t.Fatal(err)
+	}
+	created.Name = "Renamed Photo Agent"
+	var renamed model.Agent
+	f.request("PUT", "/agents/"+created.ID, created, 200, &renamed)
+	if renamed.Name != "Renamed Photo Agent" || renamed.Avatar == nil || *renamed.Avatar != uploaded {
+		t.Fatalf("editing agent with unchanged missing image avatar failed: %+v", renamed)
 	}
 }
 

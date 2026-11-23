@@ -43,8 +43,10 @@ func TestStarterAgentKeepsUserChangesOnReopen(t *testing.T) {
 		}
 		agent := state.Agents[0]
 		p := agent.Profile
+		wantAvatar := model.Avatar{Kind: "preset", Value: model.StarterAvatarPreset}
 		if agent.Name != "Lever" || agent.Archived || p.Provider != "claude" ||
-			len(p.Roots) != 1 || p.Roots[0].ID != p.PrimaryRootID || p.Roots[0].Path != home {
+			len(p.Roots) != 1 || p.Roots[0].ID != p.PrimaryRootID || p.Roots[0].Path != home ||
+			agent.Avatar == nil || *agent.Avatar != wantAvatar {
 			t.Fatalf("unexpected starter Agent: %+v", agent)
 		}
 		agent.Name = "My Agent"

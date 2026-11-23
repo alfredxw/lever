@@ -1095,6 +1095,9 @@ export function Profile({
         className="max-h-(--radix-popover-content-available-height) w-[min(340px,calc(100vw-32px))] overflow-y-auto p-4"
         align="start"
         aria-label={t("agents.editAvatar")}
+        onFocusOutside={(event) => {
+          if (event.target === document.body) event.preventDefault();
+        }}
       >
         <Suspense fallback={<Loading />}>
           <AvatarPicker
