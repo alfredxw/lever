@@ -54,6 +54,7 @@ import { RunContent } from "./RunContent";
 import { Topic, type TopicConversationProps } from "./Topic";
 import { ChatTopicView } from "./ChatTopicView";
 import { useRevealEntry } from "./useRevealEntry";
+import { useUnreadStart } from "./useUnreadStart";
 import { useFocusComposer } from "./useFocusComposer";
 import { isWorking } from "./RunStatus";
 import {
@@ -82,6 +83,10 @@ type ChatProps = {
   enabled: boolean;
   focus: boolean;
   onFocused: () => void;
+  lastReadCursor?: number;
+  unreadSequence?: number;
+  expandedTopicReadCursor?: number;
+  expandedTopicUnreadSequence?: number;
   onRead: (sessionId: string, cursor: number) => void;
   expandedTopicId?: string;
   onSelectTopic: (agentId: string, chatId: string, sessionId?: string) => void;
@@ -134,6 +139,10 @@ function ChatContent(props: ChatProps) {
     enabled,
     focus,
     onFocused,
+    lastReadCursor = 0,
+    unreadSequence = 0,
+    expandedTopicReadCursor = 0,
+    expandedTopicUnreadSequence = 0,
     onRead,
     openTopics,
     onOpenTopic,
@@ -302,7 +311,25 @@ function ChatContent(props: ChatProps) {
     },
   );
   const topicToReveal = externalReveal ? revealTopic : returnToTopic;
+  const mainRuns = useMemo(
+    () =>
+      entries
+        .filter((entry) => entry.kind === "main")
+        .map((entry) => liveRuns.get(entry.runId) ?? runs.get(entry.runId))
+        .filter((run): run is Run => !!run),
+    [entries, liveRuns, runs],
+  );
   useFocusComposer(panel, focus && !inlineTopic && !!latestPage, onFocused);
+  useUnreadStart({
+    active: enabled && !inlineTopic,
+    ready: !!overview && !!latestPage,
+    suppressed: externalReveal || !!returnToTopic,
+    readCursor: lastReadCursor,
+    unreadSequence,
+    latestCursor: readCursor,
+    runs: mainRuns,
+    view,
+  });
   useRevealEntry(
     panel,
     revealComparison ||
@@ -318,6 +345,7 @@ function ChatContent(props: ChatProps) {
     externalReveal ? onRevealed : onReturned,
     externalReveal ? (visible ? focusRevealedEntry : false) : "expand",
     externalReveal ? revealKey : undefined,
+    revealRun && !revealComparison && !revealTopic ? "start" : "center",
   );
   if (!overview || !latestPage)
     return view.error ? (
@@ -375,6 +403,8 @@ function ChatContent(props: ChatProps) {
           <ChatTopicView
             {...props}
             sessionId={inlineTopic}
+            lastReadCursor={expandedTopicReadCursor}
+            unreadSequence={expandedTopicUnreadSequence}
             compactReply={writingChat}
             onReplyFocus={() => setWritingChat(false)}
             onSelect={onExpand}

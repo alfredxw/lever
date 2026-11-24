@@ -1094,6 +1094,7 @@ export interface Run {
   task?: RunTask;
   taskCompletionRequested?: boolean; // Explicit delivery requested by this execution.
   sequence: number /* int64 */; // Position in the conversation timeline.
+  unreadSequence?: number /* int64 */; // Event sequence when this turn last surfaced an unread result or pending request.
   input: string;
   channelPrompt?: string; // Additional instructions captured when a personal channel accepts this turn.
   channelContext?: string; // External conversation context attached by a personal channel; passed to the runtime without polluting visible titles.

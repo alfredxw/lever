@@ -93,9 +93,15 @@ func TestActivityTracksMessagesAcrossConcurrentSessions(t *testing.T) {
 	if err != nil || view.Cursor < finished.UnreadSequence {
 		t.Fatalf("view cannot acknowledge its result: %+v, %v", view, err)
 	}
+	if len(view.Runs) == 0 || view.Runs[0].UnreadSequence != finished.UnreadSequence {
+		t.Fatalf("finished run unreadSequence = %+v, want %d", view.Runs, finished.UnreadSequence)
+	}
 	save(&main)
 	if got := activity(t, s, "main"); got != finished {
 		t.Fatalf("repeated terminal snapshot generated new activity: %+v", got)
+	}
+	if savedRun, err := Get[model.Run](ctx, s.DB, "SELECT data FROM runs WHERE id=?", main.ID); err != nil || savedRun.UnreadSequence != finished.UnreadSequence {
+		t.Fatalf("repeated terminal snapshot lost run unreadSequence: %+v, %v", savedRun, err)
 	}
 	events, err := s.Events(ctx, before)
 	if err != nil || len(events) == 0 || events[0].Conversation == nil || *events[0].Conversation != finished {
@@ -105,6 +111,9 @@ func TestActivityTracksMessagesAcrossConcurrentSessions(t *testing.T) {
 	save(&topic)
 	if got := activity(t, s, "topic"); got.Preview != topic.Input || got.UnreadSequence <= view.Cursor || got.FinishedAt != topic.FinishedAt {
 		t.Fatalf("failure must notify without replacing the latest message: %+v", got)
+	}
+	if topicRuns, err := s.SessionRuns(ctx, "topic", 0); err != nil || len(topicRuns.Runs) != 1 || topicRuns.Runs[0].UnreadSequence != activity(t, s, "topic").UnreadSequence {
+		t.Fatalf("failed topic run unreadSequence = %+v, %v", topicRuns, err)
 	}
 }
 
@@ -154,6 +163,12 @@ func TestQuietActivityPreservesMixedSessionsAndSurfacesAttention(t *testing.T) {
 	v := activity(t, s, "topic")
 	if v.BackgroundOnly || v.Preview != request.Title || v.UnreadSequence == 0 {
 		t.Fatalf("pending action was hidden: %+v", v)
+	}
+	if savedAsking, err := Get[model.Run](t.Context(), s.DB, "SELECT data FROM runs WHERE id=?", asking.ID); err != nil || savedAsking.UnreadSequence != v.UnreadSequence {
+		t.Fatalf("waiting_user save lost pending request unreadSequence: %+v, %v", savedAsking, err)
+	}
+	if savedMixed, err := Get[model.Run](t.Context(), s.DB, "SELECT data FROM runs WHERE id=?", mixed.ID); err != nil || savedMixed.UnreadSequence != 0 {
+		t.Fatalf("quiet completed run should not record unreadSequence: %+v, %v", savedMixed, err)
 	}
 	failed := model.Run{ID: "failed", ChatID: "chat", SessionID: "main", AgentID: "agent", Input: "Check again", Quiet: true}
 	save(&failed, "running")

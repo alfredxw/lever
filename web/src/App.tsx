@@ -2396,67 +2396,138 @@ export default function App() {
                                     }
                                   />
                                 ) : t.kind === "chat" ? (
-                                  <Chat
-                                    {...chatNavigation}
-                                    positions={messagePositions}
-                                    chatId={t.id}
-                                    agent={tabAgents.get(t.id) ?? agent}
-                                    onLocateTask={showTasks}
-                                    onLocateChannel={showChannel}
-                                    onForward={setForward}
-                                    visible={readable}
-                                    enabled={active}
-                                    focus={focusComposer === t.id && active}
-                                    onFocused={onComposerFocused}
-                                    onRead={markRead}
-                                    expandedTopicId={t.expandedTopicId}
-                                    openTopics={visibleTopicIds}
-                                    pinnedTopicIds={recentState.pinnedIds}
-                                    onPinTopic={recentState.setPinned}
-                                    revealKey={reveal?.key}
-                                    revealTopic={reveal?.topicId}
-                                    revealRun={reveal?.runId}
-                                    revealComparison={reveal?.comparisonId}
-                                    focusRevealedEntry={reveal?.focusEntry}
-                                    onRevealed={onRevealed}
-                                  />
+                                  (() => {
+                                    const chatOwnerId = allChats.find(
+                                      (item) => item.id === t.id,
+                                    )?.agentId;
+                                    const chatAgent =
+                                      (chatOwnerId
+                                        ? agents.find(
+                                            (item) => item.id === chatOwnerId,
+                                          )
+                                        : undefined) ?? agent;
+                                    const mainConversation = active
+                                      ? overview.data?.conversations.find(
+                                          (item) =>
+                                            item.chatId === t.id &&
+                                            item.kind === "main",
+                                        )
+                                      : undefined;
+                                    const expandedTopicConversation =
+                                      active && t.expandedTopicId
+                                        ? overview.data?.conversations.find(
+                                            (item) =>
+                                              item.id === t.expandedTopicId,
+                                          )
+                                        : undefined;
+                                    return (
+                                      <Chat
+                                        {...chatNavigation}
+                                        positions={messagePositions}
+                                        chatId={t.id}
+                                        agent={chatAgent}
+                                        onLocateTask={showTasks}
+                                        onLocateChannel={showChannel}
+                                        onForward={setForward}
+                                        visible={readable}
+                                        enabled={active}
+                                        focus={focusComposer === t.id && active}
+                                        onFocused={onComposerFocused}
+                                        lastReadCursor={
+                                          mainConversation
+                                            ? (readCursors[
+                                                mainConversation.id
+                                              ] ?? 0)
+                                            : 0
+                                        }
+                                        unreadSequence={
+                                          mainConversation?.unreadSequence ?? 0
+                                        }
+                                        expandedTopicReadCursor={
+                                          active && t.expandedTopicId
+                                            ? (readCursors[t.expandedTopicId] ??
+                                              0)
+                                            : 0
+                                        }
+                                        expandedTopicUnreadSequence={
+                                          expandedTopicConversation?.unreadSequence ??
+                                          0
+                                        }
+                                        onRead={markRead}
+                                        expandedTopicId={t.expandedTopicId}
+                                        openTopics={visibleTopicIds}
+                                        pinnedTopicIds={recentState.pinnedIds}
+                                        onPinTopic={recentState.setPinned}
+                                        revealKey={reveal?.key}
+                                        revealTopic={reveal?.topicId}
+                                        revealRun={reveal?.runId}
+                                        revealComparison={reveal?.comparisonId}
+                                        focusRevealedEntry={reveal?.focusEntry}
+                                        onRevealed={onRevealed}
+                                      />
+                                    );
+                                  })()
                                 ) : t.kind === "topic" && t.topic ? (
-                                  <TopicConversation
-                                    positions={messagePositions}
-                                    onOpenFile={chatNavigation.onOpenFile}
-                                    onOpenTool={(kind) =>
-                                      openTab(
-                                        toolTab(kind, t.topic!.sessionId),
-                                        agent.id,
-                                        paneOf(t) === "side" ? "main" : "side",
-                                      )
-                                    }
-                                    sessionId={t.topic.sessionId}
-                                    onOpenRun={chatNavigation.onOpenRun}
-                                    onOpenAgent={chatNavigation.onOpenAgent}
-                                    agent={agent}
-                                    visible={readable}
-                                    enabled={active}
-                                    onRead={markRead}
-                                    onForward={setForward}
-                                    onLocate={(session) => {
-                                      if (session.taskId)
-                                        showTasks(session.taskId);
-                                      else if (session.comparison)
-                                        locateComparison(
-                                          session.comparison,
-                                          session.id,
-                                        );
-                                      else
-                                        locateTopic(session.chatId, session.id);
-                                    }}
-                                    onLocateChannel={showChannel}
-                                    focus={focusComposer === t.id && active}
-                                    onFocused={onComposerFocused}
-                                    revealKey={reveal?.key}
-                                    revealRun={reveal?.runId}
-                                    onRevealed={onRevealed}
-                                  />
+                                  (() => {
+                                    const topicConversation = active
+                                      ? overview.data?.conversations.find(
+                                          (item) =>
+                                            item.id === t.topic!.sessionId,
+                                        )
+                                      : undefined;
+                                    return (
+                                      <TopicConversation
+                                        positions={messagePositions}
+                                        onOpenFile={chatNavigation.onOpenFile}
+                                        onOpenTool={(kind) =>
+                                          openTab(
+                                            toolTab(kind, t.topic!.sessionId),
+                                            agent.id,
+                                            paneOf(t) === "side"
+                                              ? "main"
+                                              : "side",
+                                          )
+                                        }
+                                        sessionId={t.topic.sessionId}
+                                        onOpenRun={chatNavigation.onOpenRun}
+                                        onOpenAgent={chatNavigation.onOpenAgent}
+                                        agent={agent}
+                                        visible={readable}
+                                        enabled={active}
+                                        lastReadCursor={
+                                          active
+                                            ? (readCursors[t.topic.sessionId] ??
+                                              0)
+                                            : 0
+                                        }
+                                        unreadSequence={
+                                          topicConversation?.unreadSequence ?? 0
+                                        }
+                                        onRead={markRead}
+                                        onForward={setForward}
+                                        onLocate={(session) => {
+                                          if (session.taskId)
+                                            showTasks(session.taskId);
+                                          else if (session.comparison)
+                                            locateComparison(
+                                              session.comparison,
+                                              session.id,
+                                            );
+                                          else
+                                            locateTopic(
+                                              session.chatId,
+                                              session.id,
+                                            );
+                                        }}
+                                        onLocateChannel={showChannel}
+                                        focus={focusComposer === t.id && active}
+                                        onFocused={onComposerFocused}
+                                        revealKey={reveal?.key}
+                                        revealRun={reveal?.runId}
+                                        onRevealed={onRevealed}
+                                      />
+                                    );
+                                  })()
                                 ) : t.kind === "profile" ? (
                                   <div className="profile-scroll">
                                     <Profile

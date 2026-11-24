@@ -45,6 +45,7 @@ import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
 import { canEditSentMessage, RunContent } from "./RunContent";
 import { isWorking, RunStatus } from "./RunStatus";
 import { useRevealEntry } from "./useRevealEntry";
+import { useUnreadStart } from "./useUnreadStart";
 import type { OpenRun } from "./DelegatedTasks";
 import { useFocusComposer } from "./useFocusComposer";
 import { TopicSourceContent } from "./TopicSourceContent";
@@ -372,6 +373,8 @@ export type TopicConversationProps = {
   onRevealed: () => void;
   visible: boolean;
   enabled: boolean;
+  lastReadCursor?: number;
+  unreadSequence?: number;
   onRead: (sessionId: string, cursor: number) => void;
 };
 
@@ -419,6 +422,8 @@ function TopicConversationContent({
   onRevealed,
   visible,
   enabled,
+  lastReadCursor = 0,
+  unreadSequence = 0,
   onRead,
   ...props
 }: TopicConversationProps & SessionView) {
@@ -479,6 +484,16 @@ function TopicConversationContent({
     (run) => run.sessionId === session.id && active(run.status),
   );
   const panel = useRef<HTMLElement>(null);
+  useUnreadStart({
+    active: enabled,
+    ready: !!overview && !!query.data,
+    suppressed: !!revealRun,
+    readCursor: lastReadCursor,
+    unreadSequence,
+    latestCursor: readCursor,
+    runs,
+    view: query,
+  });
   useRevealEntry(
     panel,
     revealRun,
@@ -487,6 +502,7 @@ function TopicConversationContent({
     onRevealed,
     visible,
     revealKey,
+    "start",
   );
   useFocusComposer(panel, focus, onFocused);
   const channelOrigin =

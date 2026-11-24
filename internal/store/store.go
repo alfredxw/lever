@@ -475,6 +475,9 @@ func SaveRun(tx *sql.Tx, run model.Run) error {
 	if err != nil {
 		return err
 	}
+	if run.UnreadSequence == 0 {
+		run.UnreadSequence = previous.UnreadSequence
+	}
 	run.Channel, run.WaitingOn, run.ScopePaths = nil, nil, nil
 	if _, err := tx.Exec("UPDATE runs SET status=?,data=? WHERE id=?", run.Status, JSON(run), run.ID); err != nil {
 		return err

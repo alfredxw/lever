@@ -124,6 +124,9 @@ WHERE id=? AND activity IS NOT NULL AND NOT EXISTS (
 		if err := tx.QueryRow("SELECT MAX(sequence) FROM events").Scan(&activity.UnreadSequence); err != nil {
 			return err
 		}
+		if _, err := tx.Exec("UPDATE runs SET data=json_set(data,'$.unreadSequence',?) WHERE id=?", activity.UnreadSequence, run.ID); err != nil {
+			return err
+		}
 	}
 	return saveActivity(tx, activity)
 }
@@ -246,6 +249,9 @@ func requestActivity(tx *sql.Tx, request model.Request) error {
 	activity.BackgroundOnly = false
 	activity.MessageAt = time.Now().UTC().Format(activityTime)
 	if err := tx.QueryRow("SELECT MAX(sequence) FROM events").Scan(&activity.UnreadSequence); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE runs SET data=json_set(data,'$.unreadSequence',?) WHERE id=?", activity.UnreadSequence, request.RunID); err != nil {
 		return err
 	}
 	return saveActivity(tx, activity)

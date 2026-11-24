@@ -449,6 +449,7 @@ type Run struct {
 	Task                    *RunTask       `json:"task,omitempty"`
 	TaskCompletionRequested bool           `json:"taskCompletionRequested,omitempty"` // Explicit delivery requested by this execution.
 	Sequence                int64          `json:"sequence"`                          // Position in the conversation timeline.
+	UnreadSequence          int64          `json:"unreadSequence,omitempty"`          // Event sequence when this turn last surfaced an unread result or pending request.
 	Input                   string         `json:"input"`
 	ChannelPrompt           string         `json:"channelPrompt,omitempty"`  // Additional instructions captured when a personal channel accepts this turn.
 	ChannelContext          string         `json:"channelContext,omitempty"` // External conversation context attached by a personal channel; passed to the runtime without polluting visible titles.

@@ -1,6 +1,9 @@
 import { useEffect, type RefObject } from "react";
 import type { UseInfiniteQueryResult } from "@tanstack/react-query";
-import { useMessageScroller } from "@/components/ui/message-scroller";
+import {
+  type ScrollAlign,
+  useMessageScroller,
+} from "@/components/ui/message-scroller";
 
 export function useRevealEntry(
   panel: RefObject<HTMLElement | null>,
@@ -10,6 +13,7 @@ export function useRevealEntry(
   onRevealed: () => void,
   focusEntry: boolean | "expand" = true,
   requestKey?: number,
+  align: ScrollAlign = "center",
 ) {
   const scroller = useMessageScroller();
   const { data, isFetching, hasNextPage, isFetchNextPageError, fetchNextPage } =
@@ -18,7 +22,11 @@ export function useRevealEntry(
   useEffect(() => {
     if (!visible || !data || !scroller.current) return;
     const element = panel.current;
-    if (element && messageId && scroller.current.scrollToMessage(messageId)) {
+    if (
+      element &&
+      messageId &&
+      scroller.current.scrollToMessage(messageId, align)
+    ) {
       const selector = `[data-message-id="${CSS.escape(messageId)}"]`;
       const finish = () => {
         const entry = element.querySelector<HTMLElement>(selector);
@@ -56,6 +64,7 @@ export function useRevealEntry(
     onRevealed,
     panel,
     requestKey,
+    align,
     scroller,
     messageId,
     visible,

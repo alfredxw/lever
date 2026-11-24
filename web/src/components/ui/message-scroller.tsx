@@ -10,9 +10,11 @@ export type MessagePositions = Map<
   { item: VirtualItem; offset: number }
 >;
 
+export type ScrollAlign = "start" | "center";
+
 type ScrollControls = {
   scrollToEnd: () => void;
-  scrollToMessage: (id: string) => boolean;
+  scrollToMessage: (id: string, align?: ScrollAlign) => boolean;
 };
 
 const estimatedHeight = 260;
@@ -126,10 +128,12 @@ export function MessageTimeline<Item>({
   const pendingReveal = React.useRef<{
     id: string;
     index: number;
+    align: ScrollAlign;
     until: number;
   } | null>(null);
   const realignFrame = React.useRef<number | null>(null);
   const lastTotalSize = React.useRef(0);
+  const lastWrittenScrollTop = React.useRef<number | null>(null);
   const listRef = React.useRef<ReturnType<
     typeof useVirtualizer<HTMLDivElement, HTMLDivElement>
   > | null>(null);
@@ -138,8 +142,39 @@ export function MessageTimeline<Item>({
       itemsRef.current.findIndex((item) => itemKeyRef.current(item) === id),
     [],
   );
+  const syncScrollPosition = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      if (!activeRef.current || !element || !element.clientHeight) return;
+      const instance = listRef.current;
+      if (!instance) return;
+      const top = element.scrollTop;
+      const end = element.scrollHeight - element.clientHeight - top <= 2;
+      setAtEnd(end);
+      if (!historyId || !positions) return;
+      const item = instance.getVirtualItemForOffset(top);
+      if (end) positions.delete(historyId);
+      else if (item)
+        positions.set(historyId, { item, offset: top - item.start });
+    },
+    [historyId, positions],
+  );
+  const scrollToTarget = React.useCallback(
+    (index: number, align: ScrollAlign) => {
+      const instance = listRef.current;
+      if (!instance) return;
+      if (align === "start" && index === 0) {
+        instance.scrollToOffset(0, { behavior: "instant" });
+      } else {
+        instance.scrollToIndex(index, { align, behavior: "instant" });
+      }
+      lastWrittenScrollTop.current = viewport.current?.scrollTop ?? null;
+      syncScrollPosition(viewport.current);
+    },
+    [syncScrollPosition],
+  );
   const clearPendingReveal = React.useCallback(() => {
     pendingReveal.current = null;
+    lastWrittenScrollTop.current = null;
     if (realignFrame.current !== null) {
       cancelAnimationFrame(realignFrame.current);
       realignFrame.current = null;
@@ -161,12 +196,9 @@ export function MessageTimeline<Item>({
         return;
       }
       pending.index = index;
-      listRef.current?.scrollToIndex(index, {
-        align: "center",
-        behavior: "instant",
-      });
+      scrollToTarget(index, pending.align);
     });
-  }, [itemIndex]);
+  }, [itemIndex, scrollToTarget]);
   const getItemKey = React.useCallback(
     (index: number) => itemKey(items[index]),
     [items, itemKey],
@@ -178,6 +210,7 @@ export function MessageTimeline<Item>({
     estimateSize: () => estimatedHeight,
     paddingStart,
     paddingEnd: 24,
+    scrollPaddingStart: rowGap,
     gap: rowGap,
     overscan: 2,
     anchorTo: "end",
@@ -215,15 +248,17 @@ export function MessageTimeline<Item>({
       clearPendingReveal();
       list.scrollToEnd();
     },
-    scrollToMessage: (id) => {
+    scrollToMessage: (id, align = "center") => {
       const index = itemIndex(id);
       if (index < 0) return false;
       pendingReveal.current = {
         id,
         index,
+        align,
         until: performance.now() + revealSettleMs,
       };
-      list.scrollToIndex(index, { align: "center", behavior: "instant" });
+      lastTotalSize.current = list.getTotalSize();
+      scrollToTarget(index, align);
       return true;
     },
   }));
@@ -238,7 +273,7 @@ export function MessageTimeline<Item>({
       const index = itemIndex(pending.id);
       if (index >= 0) {
         pending.index = index;
-        list.scrollToIndex(index, { align: "center", behavior: "instant" });
+        scrollToTarget(index, pending.align);
         return;
       }
     }
@@ -249,7 +284,15 @@ export function MessageTimeline<Item>({
       list.measurementsCache.find((item) => item.key === saved.item.key);
     if (saved && anchor) list.scrollToOffset(anchor.start + saved.offset);
     else list.scrollToEnd();
-  }, [active, historyId, positions, list, itemIndex, clearPendingReveal]);
+  }, [
+    active,
+    historyId,
+    positions,
+    list,
+    itemIndex,
+    clearPendingReveal,
+    scrollToTarget,
+  ]);
 
   React.useLayoutEffect(() => {
     const pending = pendingReveal.current;
@@ -264,20 +307,23 @@ export function MessageTimeline<Item>({
     if (shifted && (now <= pending.until || requestedAtStart.current)) {
       pending.index = index;
       pending.until = Math.max(pending.until, now + revealSettleMs);
-      list.scrollToIndex(index, { align: "center", behavior: "instant" });
+      scrollToTarget(index, pending.align);
     } else if (now > pending.until && !requestedAtStart.current) {
       clearPendingReveal();
     }
-  }, [active, items, list, itemIndex, clearPendingReveal]);
+  }, [active, items, list, itemIndex, clearPendingReveal, scrollToTarget]);
 
   React.useEffect(() => {
     const node = viewport.current;
     if (!active || !node) return;
     let lastWidth = node.clientWidth;
+    let lastHeight = node.clientHeight;
     const observer = new ResizeObserver(() => {
       const width = node.clientWidth;
-      if (width === lastWidth) return;
+      const height = node.clientHeight;
+      if (width === lastWidth && height === lastHeight) return;
       lastWidth = width;
+      lastHeight = height;
       if (pendingReveal.current) scheduleRealign();
     });
     observer.observe(node);
@@ -325,16 +371,17 @@ export function MessageTimeline<Item>({
         onKeyDown={(event) => {
           if (scrollKeys.has(event.key)) clearPendingReveal();
         }}
-        onScroll={({ currentTarget: element }) => {
-          if (!active || !element.clientHeight) return;
-          const top = element.scrollTop;
-          const end = element.scrollHeight - element.clientHeight - top <= 2;
-          setAtEnd(end);
-          if (!historyId || !positions) return;
-          const item = list.getVirtualItemForOffset(top);
-          if (end) positions.delete(historyId);
-          else if (item)
-            positions.set(historyId, { item, offset: top - item.start });
+        onScroll={({ currentTarget }) => {
+          if (
+            pendingReveal.current &&
+            realignFrame.current === null &&
+            lastWrittenScrollTop.current !== null &&
+            list.getTotalSize() === lastTotalSize.current &&
+            Math.abs(currentTarget.scrollTop - lastWrittenScrollTop.current) > 4
+          ) {
+            clearPendingReveal();
+          }
+          syncScrollPosition(currentTarget);
         }}
       >
         <div
