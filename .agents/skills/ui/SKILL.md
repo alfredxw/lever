@@ -5,7 +5,7 @@ description: 设计、实现或评审 Lever Web UI 时，用工作台的字体�
 
 # Lever UI 设计与组件选型
 
-先确定用户进入面板要读什么、要对哪个对象操作。比如在 Changes，diff 正文占主要空间，比较范围与统计在工具栏左侧，操作靠右。改动现有页面时，先对照用途最接近的页面和共享组件。 [界面规范](../../../AGENTS.md) · [Changes 工具栏](../../../.interface-design/system.md) · [共享 UI 组件](../../../web/src/components/ui/)
+先确定用户进入面板要读什么、要对哪个对象操作。比如在 Changes，diff 正文占主要空间，比较范围与统计在工具栏左侧，操作靠右。改动现有页面时，先对照用途最接近的页面和共享组件。 [界面规范](../../../AGENTS.md) · [共享 UI 组件](../../../web/src/components/ui/)
 
 ## 字体与阅读层级
 
