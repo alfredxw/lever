@@ -47,8 +47,18 @@ test("quiet automations keep their history and surface requests under Agents", a
   const automations = nav.getByRole("button", { name: "自动化", exact: true });
   await automations.click();
   const planSidebar = page.locator("#automation-sidebar");
+  await expect(
+    planSidebar.locator(".automation-workbench-nav .automation-nav-timing"),
+  ).toHaveCount(0);
   await planSidebar.getByRole("button", { name: "新建自动化" }).click();
   const dialog = page.getByRole("dialog", { name: "新建自动化" });
+  await expect(dialog.locator(".automation-tpl-card")).toHaveCount(0);
+  await expect(dialog.getByLabel("名称", { exact: true })).toHaveValue("");
+  await expect(dialog.getByLabel("执行指令", { exact: true })).toHaveValue("");
+  await expect(
+    dialog.locator(".automation-advanced-details"),
+  ).toHaveAttribute("open", "");
+  await expect(dialog.getByRole("radio", { name: "定时触发" })).toBeVisible();
   await dialog
     .getByLabel("名称", { exact: true })
     .fill("Quiet history fixture");
@@ -63,7 +73,6 @@ test("quiet automations keep their history and surface requests under Agents", a
     await dialog.getByRole("button", { name: "归属 Agent", exact: true }).click();
     await page.getByRole("option", { name: agent.name, exact: true }).click();
   }
-  await dialog.locator(".automation-advanced-details > summary").click();
   await expect(dialog.getByRole("radio", { name: "正常显示" })).toBeChecked();
   await expect(
     dialog.getByRole("switch", { name: "每次运行加入看板" }),

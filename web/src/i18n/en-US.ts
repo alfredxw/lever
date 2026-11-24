@@ -310,27 +310,11 @@ export const enUS = {
   "automations.colActions": "Actions",
   "automations.inboxEmpty": "No run outputs to consume yet",
   "automations.attentionEmpty": "Nothing needs attention right now",
-  "automations.templatesLabel": "Quick templates (optional)",
-  "automations.tpl.issuePr": "Collect issues & open PR",
-  "automations.tpl.issuePrPrompt":
-    "Collect new or high-signal issues from the last 24h. For well-scoped bugs, fix them in an isolated working copy, verify tests pass, and open a PR with root-cause analysis and verification notes.",
-  "automations.tpl.techDebt": "Weekly tech-debt & regression check",
-  "automations.tpl.techDebtPrompt":
-    "Review commits from the last 7 days for complexity growth, oversized files, duplicated abstractions, and test gaps. List findings with exact files and line numbers, separating new regressions from existing debt.",
-  "automations.tpl.alertOps": "Silent alert & error log triage",
-  "automations.tpl.alertOpsPrompt":
-    "Investigate incoming alerts and error logs. Silently archive known transient noise; for deterministic regressions, isolate the root cause and propose a minimal fix or PR. Stay silent unless failing or critical.",
-  "automations.tpl.ideas": "Project evolution & idea discovery",
-  "automations.tpl.ideasPrompt":
-    "Combine current repository architecture with recent industry developments. Filter out marketing noise and propose 1–3 high-leverage ideas via work_item_create.",
   "automations.pendingApproval": "Waiting for approval or answer",
   "automations.you": "You",
   "automations.showSilentCount": "Silent ({{count}})",
   "automations.promoteHint": "Choose where to save this rule:",
   "automations.promoteDetected": "Save this preference for future runs",
-  "automations.inboxNavDesc": "PRs, audits & ideas in one feed",
-  "automations.attentionNavDesc": "Failures, approvals & pending items",
-  "automations.monitorNavDesc": "All pulses, including silent daemons",
   "automations.scopeFilterLabel": "Filter by scope:",
   "automations.dayRuns": "{{day}} · {{count}} runs",
   "automations.noExecutionSession": "No execution session available",

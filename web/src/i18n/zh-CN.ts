@@ -302,27 +302,11 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "automations.colActions": "操作",
   "automations.inboxEmpty": "暂无待消费的运行产物",
   "automations.attentionEmpty": "当前没有需要处理的异常或待确认项",
-  "automations.templatesLabel": "常见场景模板（可选）",
-  "automations.tpl.issuePr": "Issue 收集自动提 PR",
-  "automations.tpl.issuePrPrompt":
-    "收集仓库过去 24h 新建或高赞 Issue，筛选根因清晰、边界明确的缺陷：在隔离工作区完成修复并跑通测试后提交 PR，正文附上根因分析与验证方案；信息不足的仅留评追问。",
-  "automations.tpl.techDebt": "仓库技术债与劣化周检",
-  "automations.tpl.techDebtPrompt":
-    "对比最近 7 天提交，审计代码复杂度增长、超大文件膨胀、重复抽象与测试缺口。按严重度列出具体文件与行号，区分「新增劣化」与「存量债务」。",
-  "automations.tpl.alertOps": "告警与错误日志静默排障",
-  "automations.tpl.alertOpsPrompt":
-    "排查收到的告警与错误日志：已知偶发抖动直接静默归档；确定性代码异常定位提交并给出最小修复方案或热修 PR；非失败或高危不打扰。",
-  "automations.tpl.ideas": "项目演进想法挖掘",
-  "automations.tpl.ideasPrompt":
-    "结合当前仓库架构与近期行业技术进展，过滤纯资讯噪音，提炼 1–3 个高杠杆、可落地的产品或工程想法，并通过 work_item_create 提议到工作看板待审池。",
   "automations.pendingApproval": "等待审批或回答",
   "automations.you": "你",
   "automations.showSilentCount": "静默完成 ({{count}})",
   "automations.promoteHint": "选择规则沉淀范围：",
   "automations.promoteDetected": "可将这条偏好沉淀为长期规则",
-  "automations.inboxNavDesc": "PR、技术债、点子统一消费",
-  "automations.attentionNavDesc": "失败冒泡 / 待审 PR / 待确提案",
-  "automations.monitorNavDesc": "全量脉冲 · 含静默守护任务",
   "automations.scopeFilterLabel": "按范围筛选运行：",
   "automations.dayRuns": "{{day}} · {{count}} 次运行",
   "automations.noExecutionSession": "当前没有可用的执行会话",

@@ -1,15 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Bug,
-  Check,
-  ChevronDown,
-  GitPullRequest,
-  Layers,
-  Lightbulb,
-  Plus,
-  X,
-} from "lucide-react";
+import { Check, ChevronDown, Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api/client";
 import type {
@@ -61,44 +52,6 @@ import {
 export type { EventSourceOption };
 export { eventSourceKey };
 
-const templates = [
-  {
-    id: "issuePr",
-    schedule: { time: "03:00" },
-    icon: GitPullRequest,
-    trigger: "schedule" as const,
-    deliveryMode: "deliver" as DeliveryMode,
-    notifyPolicy: "actionable" as NotifyPolicy,
-    workItem: false,
-  },
-  {
-    id: "techDebt",
-    schedule: { time: "22:00", weekdays: [0] },
-    icon: Layers,
-    trigger: "schedule" as const,
-    deliveryMode: "audit" as DeliveryMode,
-    notifyPolicy: "always" as NotifyPolicy,
-    workItem: false,
-  },
-  {
-    id: "alertOps",
-    icon: Bug,
-    trigger: "event" as const,
-    deliveryMode: "deliver" as DeliveryMode,
-    notifyPolicy: "silent" as NotifyPolicy,
-    workItem: false,
-  },
-  {
-    id: "ideas",
-    schedule: { time: "08:30", weekdays: [1] },
-    icon: Lightbulb,
-    trigger: "schedule" as const,
-    deliveryMode: "propose" as DeliveryMode,
-    notifyPolicy: "actionable" as NotifyPolicy,
-    workItem: false,
-  },
-];
-
 export function AutomationEditor({
   plan,
   agents,
@@ -118,13 +71,8 @@ export function AutomationEditor({
 }) {
   const { t } = useTranslation();
   const initialSource = plan?.trigger.source;
-  const initialTemplate = templates[0];
-  const [name, setName] = useState(
-    plan?.name ?? t(`automations.tpl.${initialTemplate.id}`),
-  );
-  const [prompt, setPrompt] = useState(
-    plan?.prompt ?? t(`automations.tpl.${initialTemplate.id}Prompt`),
-  );
+  const [name, setName] = useState(plan?.name ?? "");
+  const [prompt, setPrompt] = useState(plan?.prompt ?? "");
   const [trigger, setTrigger] = useState<AutomationTrigger["kind"]>(
     plan?.trigger.kind ?? "schedule",
   );
@@ -134,7 +82,7 @@ export function AutomationEditor({
     String(plan?.trigger.batchSize ?? 1),
   );
   const [schedule, setSchedule] = useState(() =>
-    scheduleDraft(plan ? plan.trigger.schedule : initialTemplate.schedule),
+    scheduleDraft(plan?.trigger.schedule),
   );
   const scheduleValue = scheduleInput(schedule);
   const [mode, setMode] = useState<AutomationDestination["mode"]>(
@@ -162,14 +110,12 @@ export function AutomationEditor({
   );
   const [quiet, setQuiet] = useState(plan?.quiet ?? false);
   const [notifyPolicy, setNotifyPolicy] = useState<NotifyPolicy>(
-    plan ? notifyPolicyOf(plan) : initialTemplate.notifyPolicy,
+    plan ? notifyPolicyOf(plan) : "always",
   );
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>(
-    plan ? deliveryModeOf(plan) : initialTemplate.deliveryMode,
+    plan ? deliveryModeOf(plan) : "deliver",
   );
-  const [selectedTpl, setSelectedTpl] = useState(
-    plan ? undefined : initialTemplate.id,
-  );
+  const [advancedOpen, setAdvancedOpen] = useState(true);
 
   const agent = agents.find((item) => item.id === agentId);
   const ownedChats = chats.filter((item) => item.agentId === agentId);
@@ -263,20 +209,6 @@ export function AutomationEditor({
     );
   }
 
-  function applyTemplate(tpl: (typeof templates)[number]) {
-    setSelectedTpl(tpl.id);
-    setName(t(`automations.tpl.${tpl.id}`));
-    setPrompt(t(`automations.tpl.${tpl.id}Prompt`));
-    setTrigger(tpl.trigger);
-    if (tpl.trigger === "schedule") {
-      setSchedule(scheduleDraft({ ...tpl.schedule, timezone: schedule.zone }));
-    }
-    setDeliveryMode(tpl.deliveryMode);
-    setNotifyPolicy(tpl.notifyPolicy);
-    setQuiet(tpl.notifyPolicy === "silent");
-    setWorkItem(tpl.workItem);
-  }
-
   return (
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
       <DialogContent aria-describedby={undefined} className="automation-editor">
@@ -341,39 +273,6 @@ export function AutomationEditor({
               disabled={save.isPending}
               className="automation-editor-fields"
             >
-              {!plan && (
-                <div className="automation-editor-templates">
-                  <div
-                    className="automation-tpl-grid"
-                    role="group"
-                    aria-label={t("automations.templatesLabel")}
-                  >
-                    {templates.map((tpl) => {
-                      const Icon = tpl.icon;
-                      return (
-                        <button
-                          key={tpl.id}
-                          type="button"
-                          className="automation-tpl-card"
-                          data-selected={selectedTpl === tpl.id || undefined}
-                          aria-pressed={selectedTpl === tpl.id}
-                          onClick={() => applyTemplate(tpl)}
-                        >
-                          <span className="inline-flex items-center gap-1.5 font-medium">
-                            <Icon className="size-3.5 text-muted-foreground" />
-                            {t(`automations.tpl.${tpl.id}`)}
-                          </span>
-                          <span className="text-[11px] text-muted-foreground">
-                            {t(`automations.delivery.${tpl.deliveryMode}`)} ·{" "}
-                            {t(`automations.notify.${tpl.notifyPolicy}`)}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               <FieldGroup className="automation-form-group">
                 <FormRow id="automation-name" label={t("automations.name")}>
                   <Input
@@ -577,7 +476,8 @@ export function AutomationEditor({
 
               <details
                 className="automation-advanced-details"
-                open={plan ? true : undefined}
+                open={advancedOpen}
+                onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
               >
                 <summary>
                   <ChevronDown />

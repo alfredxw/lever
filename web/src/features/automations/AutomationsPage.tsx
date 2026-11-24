@@ -582,18 +582,11 @@ export default function AutomationsPage({
               onClick={() => selectWorkbench("inbox")}
             >
               <Inbox className="automation-wb-icon" aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="automation-nav-top">
-                  <span className="truncate font-medium">
-                    {t("automations.inbox")}
-                  </span>
-                  <span className="automation-nav-badge tabular-nums">
-                    {nonSilentRuns.length}
-                  </span>
-                </span>
-                <span className="automation-nav-timing truncate">
-                  {t("automations.inboxNavDesc")}
-                </span>
+              <span className="min-w-0 flex-1 truncate">
+                {t("automations.inbox")}
+              </span>
+              <span className="automation-nav-badge tabular-nums">
+                {nonSilentRuns.length}
               </span>
             </Button>
             <Button
@@ -608,24 +601,17 @@ export default function AutomationsPage({
                 className="automation-wb-icon automation-wb-bell"
                 aria-hidden="true"
               />
-              <span className="min-w-0 flex-1">
-                <span className="automation-nav-top">
-                  <span className="truncate font-medium">
-                    {t("automations.attention")}
-                  </span>
-                  {attentionRuns.length > 0 && (
-                    <span
-                      className="automation-nav-badge tabular-nums"
-                      data-tone="attention"
-                    >
-                      {attentionRuns.length}
-                    </span>
-                  )}
-                </span>
-                <span className="automation-nav-timing truncate">
-                  {t("automations.attentionNavDesc")}
-                </span>
+              <span className="min-w-0 flex-1 truncate">
+                {t("automations.attention")}
               </span>
+              {attentionRuns.length > 0 && (
+                <span
+                  className="automation-nav-badge tabular-nums"
+                  data-tone="attention"
+                >
+                  {attentionRuns.length}
+                </span>
+              )}
             </Button>
             <Button
               variant="ghost"
@@ -636,18 +622,11 @@ export default function AutomationsPage({
               onClick={() => selectWorkbench("monitor")}
             >
               <Activity className="automation-wb-icon" aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="automation-nav-top">
-                  <span className="truncate font-medium">
-                    {t("automations.monitor")}
-                  </span>
-                  <span className="automation-nav-badge tabular-nums">
-                    {rows.length}
-                  </span>
-                </span>
-                <span className="automation-nav-timing truncate">
-                  {t("automations.monitorNavDesc")}
-                </span>
+              <span className="min-w-0 flex-1 truncate">
+                {t("automations.monitor")}
+              </span>
+              <span className="automation-nav-badge tabular-nums">
+                {rows.length}
               </span>
             </Button>
           </div>
