@@ -575,6 +575,9 @@ export default function App() {
     agent || sharedWorkspace ? workspace : fallback,
     compactWorkbench,
   );
+  if (focusComposer && (page !== "agents" || focusComposer !== activeTab?.id)) {
+    setFocusComposer(undefined);
+  }
   useEffect(() => {
     const closing = focusAfterClose.current;
     if (

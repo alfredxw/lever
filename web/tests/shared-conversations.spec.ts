@@ -213,6 +213,7 @@ test("Recent opens a native conversation and both clients continue it", async ({
     const chat = page.getByRole("tabpanel", { name: title, exact: true });
     await expect(row).toContainText("We can continue here.");
     await expect(row).not.toContainText("Claude Code");
+    await row.scrollIntoViewIfNeeded();
     const icon = row.locator('.contact-name [data-icon="inline-start"]');
     await expect(icon).toHaveAttribute("width", "12");
     await expect(icon).toHaveAttribute("height", "12");

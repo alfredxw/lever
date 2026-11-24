@@ -9,7 +9,7 @@ import {
   LoaderCircle,
   Pin,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { active, api } from "@/api/client";
@@ -46,6 +46,8 @@ import {
 import { displayChatTitle } from "@/features/chat/conversationTitle";
 
 type RecentTarget = Extract<MenuTarget, { kind: "conversation" | "shared" }>;
+const sharedRefreshInterval = 3000;
+const eagerRows = 24;
 type RecentEntry = {
   source: Conversation | SharedConversation;
   id: string;
@@ -56,6 +58,27 @@ type RecentEntry = {
   sequence?: number;
   finishedAt?: string;
 };
+
+function createRowObserver() {
+  const pending = new WeakMap<Element, () => void>();
+  let observer: IntersectionObserver;
+  return (row: HTMLLIElement, reveal: () => void) => {
+    observer ??= new IntersectionObserver(
+      (entries) => {
+        for (const { isIntersecting, target } of entries) {
+          if (isIntersecting) pending.get(target)?.();
+        }
+      },
+      { root: row.closest(".agent-list"), rootMargin: "480px 0px" },
+    );
+    pending.set(row, reveal);
+    observer.observe(row);
+    return () => {
+      observer.unobserve(row);
+      pending.delete(row);
+    };
+  };
+}
 
 export function RecentConversations({
   overview,
@@ -77,6 +100,7 @@ export function RecentConversations({
   onShared: (conversation: SharedConversation) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const [observeRow] = useState(createRowObserver);
   const { pins, cleared, pinnedIds, setPinned, clearConversations } = recent;
   const [today, setToday] = useState(() => {
     const date = new Date();
@@ -106,36 +130,36 @@ export function RecentConversations({
         signal,
       ),
     enabled: visible,
+    subscribed: visible,
     refetchOnWindowFocus: true,
-    refetchInterval: visible ? 3000 : false,
-    staleTime: 0,
+    refetchInterval: visible ? sharedRefreshInterval : false,
+    staleTime: sharedRefreshInterval,
     retry: false,
   });
   const openEntry = useEventCallback((target: RecentTarget) => {
     if (target.kind === "shared") onShared(target.session);
     else onConversation(target.conversation);
   });
-  const { groups, priority } = useMemo(() => {
-    const agents = new Map(overview?.agents.map((agent) => [agent.id, agent]));
-    const chats = new Map(overview?.chats.map((chat) => [chat.id, chat]));
-    const pending = new Set(
-      overview?.requests.map((request) => request.sessionId),
-    );
-    const runs = new Map<string, string>();
-    for (const run of overview?.runs ?? []) {
+  const { agents, chats, conversations, runs, requests } = overview ?? {};
+  const { groups, priority, eagerIds } = useMemo(() => {
+    const agentsById = new Map(agents?.map((agent) => [agent.id, agent]));
+    const chatsById = new Map(chats?.map((chat) => [chat.id, chat]));
+    const pending = new Set(requests?.map((request) => request.sessionId));
+    const statusBySession = new Map<string, string>();
+    for (const run of runs ?? []) {
       if (active(run.status)) {
-        runs.set(run.sessionId, run.status);
-      } else if (run.waiting && !runs.has(run.sessionId)) {
-        runs.set(
+        statusBySession.set(run.sessionId, run.status);
+      } else if (run.waiting && !statusBySession.has(run.sessionId)) {
+        statusBySession.set(
           run.sessionId,
           run.waitingBlocked ? "waiting_blocked" : "waiting",
         );
       }
     }
-    const entries = (overview?.conversations ?? []).flatMap<RecentEntry>(
+    const entries = (conversations ?? []).flatMap<RecentEntry>(
       (conversation) => {
-        const agent = agents.get(conversation.agentId);
-        const chat = chats.get(conversation.chatId);
+        const agent = agentsById.get(conversation.agentId);
+        const chat = chatsById.get(conversation.chatId);
         if (!agent || agent.archived || !chat) return [];
         const topic = conversation.kind === "topic";
         const messageAt = conversation.messageAt || chat.updatedAt;
@@ -159,7 +183,7 @@ export function RecentConversations({
                 : messageAt,
             status: pending.has(conversation.id)
               ? "waiting_user"
-              : runs.get(conversation.id),
+              : statusBySession.get(conversation.id),
             sequence,
             finishedAt,
           },
@@ -242,9 +266,23 @@ export function RecentConversations({
       },
       ...Array.from(dates, ([id, group]) => ({ id, ...group })),
     ];
-    return { groups: groups.filter((group) => group.entries.length), priority };
+    const eagerIds = new Set<string>();
+    for (const { entries } of groups) {
+      for (const { id } of entries.slice(0, eagerRows - eagerIds.size))
+        eagerIds.add(id);
+      if (eagerIds.size === eagerRows) break;
+    }
+    return {
+      groups: groups.filter((group) => group.entries.length),
+      priority,
+      eagerIds,
+    };
   }, [
-    overview,
+    agents,
+    chats,
+    conversations,
+    runs,
+    requests,
     sources.data,
     pins,
     pinnedIds,
@@ -291,6 +329,7 @@ export function RecentConversations({
             {entries.map((entry) => (
               <RecentConversationRow
                 key={entry.id}
+                observe={eagerIds.has(entry.id) ? undefined : observeRow}
                 t={t}
                 id={entry.id}
                 source={entry.source}
@@ -329,6 +368,7 @@ export function RecentConversations({
 }
 
 const RecentConversationRow = memo(function RecentConversationRow({
+  observe,
   t,
   id,
   source,
@@ -342,6 +382,7 @@ const RecentConversationRow = memo(function RecentConversationRow({
   onOpen,
   onMenu,
 }: Pick<RecentEntry, "id" | "source" | "title" | "origin" | "status"> & {
+  observe?: ReturnType<typeof createRowObserver>;
   t: TFunction;
   selected: boolean;
   unread: boolean;
@@ -350,6 +391,15 @@ const RecentConversationRow = memo(function RecentConversationRow({
   onOpen: (target: RecentTarget) => void;
   onMenu: (anchor: MenuAnchor, target: MenuTarget) => void;
 }) {
+  const [revealed, setRevealed] = useState(false);
+  const detailed = !observe || revealed || selected;
+  const reveal = useCallback(() => setRevealed(true), []);
+  const rowRef = useCallback(
+    (row: HTMLLIElement | null) => {
+      if (row && !detailed) return observe?.(row, reveal);
+    },
+    [observe, detailed, reveal],
+  );
   const target: RecentTarget =
     "runtime" in source
       ? { kind: "shared", session: source }
@@ -387,7 +437,12 @@ const RecentConversationRow = memo(function RecentConversationRow({
         ? t(`status.${status}`)
         : "";
   return (
-    <li className="recent-row relative">
+    <li
+      ref={rowRef}
+      className="recent-row relative"
+      data-deferred={detailed ? undefined : ""}
+      onFocusCapture={detailed ? undefined : reveal}
+    >
       <button
         type="button"
         className={cn(
@@ -395,6 +450,19 @@ const RecentConversationRow = memo(function RecentConversationRow({
           selected && "selected",
         )}
         aria-current={selected ? "true" : undefined}
+        aria-label={
+          detailed
+            ? undefined
+            : [
+                title,
+                source.preview && origin,
+                unread && t("agents.unread"),
+                statusLabel,
+                summary,
+              ]
+                .filter(Boolean)
+                .join(" ")
+        }
         data-session-id={id}
         title={[
           title,
@@ -405,58 +473,70 @@ const RecentConversationRow = memo(function RecentConversationRow({
         {...rowMenuHandlers((anchor) => onMenu(anchor, target))}
         onClick={() => onOpen(target)}
       >
-        <span className="conversation-content">
-          <span className="contact-name">
-            <span aria-hidden="true" className="shrink-0 text-muted-foreground">
-              {target.kind === "shared" ? (
-                <RuntimeIcon provider={target.session.runtime} size={12} />
-              ) : (
-                <ConversationIcon size={12} />
-              )}
-            </span>
-            <span className="flex h-[1lh] min-w-0 flex-1 flex-wrap gap-x-1.5 overflow-hidden">
-              <span className="max-w-full truncate">{title}</span>
-              {source.preview && origin && (
-                <span className="max-w-full truncate font-normal text-muted-foreground">
-                  {origin}
-                </span>
-              )}
-            </span>
-            {unread && (
+        {detailed ? (
+          <span className="conversation-content">
+            <span className="contact-name">
               <span
-                className="agent-unread shrink-0"
-                role="img"
-                aria-label={t("agents.unread")}
-              />
-            )}
-            {StatusIcon && (
-              <StatusIcon
-                className={cn(
-                  "size-3.5 shrink-0",
-                  waitingBlocked
-                    ? "text-destructive"
-                    : "text-muted-foreground",
-                  StatusIcon === LoaderCircle &&
-                    "animate-spin motion-reduce:animate-none",
+                aria-hidden="true"
+                className="shrink-0 text-muted-foreground"
+              >
+                {target.kind === "shared" ? (
+                  <RuntimeIcon provider={target.session.runtime} size={12} />
+                ) : (
+                  <ConversationIcon size={12} />
                 )}
-                aria-label={statusLabel}
-                role="img"
-              />
+              </span>
+              <span className="flex h-[1lh] min-w-0 flex-1 flex-wrap gap-x-1.5 overflow-hidden">
+                <span className="max-w-full truncate">{title}</span>
+                {source.preview && origin && (
+                  <span className="max-w-full truncate font-normal text-muted-foreground">
+                    {origin}
+                  </span>
+                )}
+              </span>
+              {unread && (
+                <span
+                  className="agent-unread shrink-0"
+                  role="img"
+                  aria-label={t("agents.unread")}
+                />
+              )}
+              {StatusIcon && (
+                <StatusIcon
+                  className={cn(
+                    "size-3.5 shrink-0",
+                    waitingBlocked
+                      ? "text-destructive"
+                      : "text-muted-foreground",
+                    StatusIcon === LoaderCircle &&
+                      "animate-spin motion-reduce:animate-none",
+                  )}
+                  aria-label={statusLabel}
+                  role="img"
+                />
+              )}
+            </span>
+            {summary && (
+              <span className="conversation-origin">
+                <span
+                  className={cn(
+                    "min-w-0",
+                    source.preview ? "line-clamp-2 wrap-anywhere" : "truncate",
+                  )}
+                >
+                  {summary}
+                </span>
+              </span>
             )}
           </span>
-          {summary && (
-            <span className="conversation-origin">
-              <span
-                className={cn(
-                  "min-w-0",
-                  source.preview ? "line-clamp-2 wrap-anywhere" : "truncate",
-                )}
-              >
-                {summary}
-              </span>
-            </span>
-          )}
-        </span>
+        ) : (
+          <span className="conversation-content">
+            <span className="contact-name truncate">{title}</span>
+            {summary && (
+              <span className="conversation-origin truncate">{summary}</span>
+            )}
+          </span>
+        )}
       </button>
       <Toggle
         id={pinButtonId}
@@ -476,7 +556,7 @@ const RecentConversationRow = memo(function RecentConversationRow({
             );
         }}
       >
-        <Pin className={cn(isPinned && "fill-current")} />
+        {detailed && <Pin className={cn(isPinned && "fill-current")} />}
       </Toggle>
     </li>
   );

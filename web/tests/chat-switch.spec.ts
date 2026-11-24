@@ -665,6 +665,142 @@ test("reopens long histories beyond the retained tabs without rebuilding every r
   await expectReadingPosition();
 });
 
+test("Recent reuses its scan and refreshes after returning to stale data", async ({
+  page,
+}) => {
+  await page.clock.install();
+  let scans = 0;
+  await page.route("**/api/shared-conversations", (route) => {
+    scans++;
+    return route.fulfill({
+      json: {
+        conversations: [
+          {
+            id: "scan-result",
+            provider: "codex",
+            runtime: "codex",
+            title: "扫描结果",
+            cwd: "/example",
+            updatedAt: timestamp,
+          },
+        ],
+        unavailable: [],
+      },
+    });
+  });
+  await seedChats(page, 3, 1, { sidebar: "all" });
+  const views = page.locator("#agent-sidebar").getByRole("tablist");
+  const recent = views.getByRole("tab", { name: "最近", exact: true });
+  const all = views.getByRole("tab", { name: "全部", exact: true });
+  await expect(all).toHaveAttribute("aria-selected", "true");
+  expect(scans).toBe(0);
+  await recent.click();
+  await expect(
+    page.locator(
+      '#agent-sidebar button[data-session-id="shared:codex:scan-result"]',
+    ),
+  ).toBeVisible();
+  const initialScans = scans;
+  await all.click();
+  await recent.click();
+  expect(scans).toBe(initialScans);
+  await all.click();
+  await page.clock.fastForward(10_000);
+  expect(scans).toBe(initialScans);
+  await recent.click();
+  await expect.poll(() => scans).toBe(initialScans + 1);
+});
+
+test("switches populated sidebar views without losing the reading position", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const chats = await seedChats(page, 600, 12, { sidebar: "all" });
+  const sidebar = page.locator("#agent-sidebar");
+  const all = sidebar.getByRole("tab", { name: "全部", exact: true });
+  const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
+  const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
+  const list = sidebar.getByRole("tabpanel");
+  await expect(list.locator("[data-session-id]")).toHaveCount(600);
+  const position = await list.evaluate((panel) => {
+    panel.scrollTop = 450;
+    return panel.scrollTop;
+  });
+  expect(position).toBeGreaterThan(0);
+  await recent.click();
+  await expect(list.locator("[data-session-id]")).toHaveCount(600);
+  const timings: number[] = [];
+  for (let pass = 0; pass < 4; pass++) {
+    for (const tab of [archive, all, recent]) {
+      const measurement = await tab.evaluateHandle((button) => ({
+        duration: new Promise<number>((resolve, reject) => {
+          button.addEventListener(
+            "pointerdown",
+            () => {
+              const start = performance.now();
+              const ready = () => {
+                const panel = document.getElementById(
+                  button.getAttribute("aria-controls")!,
+                );
+                if (
+                  button.getAttribute("aria-selected") === "true" &&
+                  panel?.offsetHeight
+                ) {
+                  requestAnimationFrame(() =>
+                    resolve(performance.now() - start),
+                  );
+                } else if (performance.now() - start > 4_000) {
+                  reject(
+                    new Error(`Sidebar did not show ${button.textContent}`),
+                  );
+                } else requestAnimationFrame(ready);
+              };
+              requestAnimationFrame(ready);
+            },
+            { once: true },
+          );
+        }),
+      }));
+      try {
+        await tab.click();
+        timings.push(await measurement.evaluate(({ duration }) => duration));
+      } finally {
+        await measurement.dispose();
+      }
+      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await expect(list).toHaveAttribute(
+        "aria-labelledby",
+        (await tab.getAttribute("id"))!,
+      );
+    }
+  }
+  console.log(
+    `600-conversation sidebar view switch P90: ${p90(timings).toFixed(1)} ms`,
+  );
+  await testInfo.attach("sidebar-view-switch", {
+    body: JSON.stringify(timings),
+    contentType: "application/json",
+  });
+  await all.click();
+  await expect
+    .poll(() => list.evaluate((panel) => panel.scrollTop))
+    .toBe(position);
+  expect(p90(timings)).toBeLessThanOrEqual(browserName === "webkit" ? 130 : 85);
+  const toggle = list.locator(".agent-activity-toggle");
+  await toggle.click();
+  await recent.click();
+  await all.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await recent.click();
+  const oldest = list.locator(
+    `button[data-session-id="${chats.at(-1)!.id}-main"]`,
+  );
+  await expect(oldest).toHaveAccessibleName(/The workspace is ready/);
+  await list.evaluate((panel) => panel.scrollTo(0, panel.scrollHeight));
+  await expect(oldest.locator(".conversation-origin")).toBeInViewport();
+  await expect(oldest.locator(".contact-name svg")).toBeVisible();
+});
+
 for (const sidebar of ["all", "recent"] as const) {
   test(`switches long previews from a populated ${sidebar} sidebar`, async ({
     page,

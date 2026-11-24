@@ -577,8 +577,13 @@ button:focus-visible,
 }
 /* Leave every conversation addressable while laying out only nearby rows. */
 .recent-row {
+  --recent-row-estimate: 64px;
   content-visibility: auto;
-  contain-intrinsic-block-size: auto 64px;
+  contain-intrinsic-block-size: auto var(--recent-row-estimate);
+}
+.recent-row[data-deferred] {
+  content-visibility: visible;
+  block-size: var(--recent-row-estimate);
 }
 .agent-contact {
   display: flex;

@@ -2961,7 +2961,7 @@ test("Recent shows the generated conversation title when it arrives after the re
     const preview = await row.locator(".conversation-origin").innerText();
 
     rmSync(gate);
-    const updated = sidebar.locator(`[data-session-id="${id}"]`);
+    const updated = sidebar.getByRole("tabpanel").locator(`[data-session-id="${id}"]`);
     await expect(updated.getByText(title, { exact: true })).toBeVisible();
     await expect(updated.locator(".conversation-origin")).toHaveText(preview);
     await expect(row).toHaveCount(0);
@@ -3023,6 +3023,76 @@ test("switching Topics from the Agents sidebar keeps the side pane maximized", a
   ).toBeInViewport();
   await openTopic(first);
   await expect(layout).toHaveAttribute("data-view", "split");
+});
+
+test("a slow Topic cannot take selection back from a sidebar Chat", async ({
+  page,
+}) => {
+  await createAgent(page, "侧栏单击切换");
+  await send(page, "主会话");
+  const agentId = await page.evaluate(() =>
+    localStorage.getItem("lever:agent"),
+  );
+  const overview: Overview = await (
+    await page.request.get("/api/overview")
+  ).json();
+  const main = overview.conversations.find(
+    (item) => item.agentId === agentId && item.kind === "main",
+  )!;
+  const response = await page.request.post("/api/messages", {
+    data: {
+      chatId: main.chatId,
+      text: "慢速话题",
+      commandId: randomUUID(),
+      operation: "topic",
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const topic: Run = await response.json();
+  const requested = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await page.route(`**/api/sessions/${topic.sessionId}`, async (route) => {
+    requested.resolve();
+    await release.promise;
+    await route.continue();
+  });
+  const list = page.locator("#agent-sidebar").getByRole("tabpanel");
+  const row = (id: string) => list.locator(`button[data-session-id="${id}"]`);
+  try {
+    await row(topic.sessionId).click();
+    await requested.promise;
+    await expect(row(topic.sessionId)).toHaveAttribute("aria-current", "true");
+    await row(main.id).click();
+    await expect(row(main.id)).toHaveAttribute("aria-current", "true");
+  } finally {
+    release.resolve();
+  }
+  const editor = page.locator('.tab-panel[data-pane="side"] .prompt-editor');
+  await expect(editor).toBeVisible();
+  await editor.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(row(main.id)).toHaveAttribute("aria-current", "true");
+  await expect(editor).not.toBeFocused();
+});
+
+test("one click switches sidebar views while the sort menu is open", async ({
+  page,
+}) => {
+  await page.goto(context().url);
+  const sidebar = page.locator("#agent-sidebar");
+  const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
+  const box = (await recent.boundingBox())!;
+  await sidebar
+    .getByRole("button", { name: "Agent 排序", exact: true })
+    .click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(recent).toHaveAttribute("aria-selected", "true");
 });
 
 test("sidebar menus rename the clicked Chat and Topic without switching or reading them", async ({
@@ -3117,7 +3187,8 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
     () => localStorage.getItem("lever:agent")!,
   );
   const sidebar = page.locator("#agent-sidebar");
-  const agent = sidebar.locator(`[data-agent-id="${agentId}"] .agent-select`);
+  const list = sidebar.getByRole("tabpanel");
+  const agent = list.locator(`[data-agent-id="${agentId}"] .agent-select`);
   const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
   const all = sidebar.getByRole("tab", { name: "全部", exact: true });
   const item = (name: string) =>
@@ -3128,7 +3199,7 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
     });
     expect(response.ok()).toBeTruthy();
     const run: Run = await response.json();
-    return sidebar.locator(`[data-session-id="${run.sessionId}"]`);
+    return list.locator(`[data-session-id="${run.sessionId}"]`);
   };
   const done = await start("已完成的话题");
   await expect(done.locator(".agent-unread")).toBeVisible();
@@ -3191,6 +3262,7 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
 
 test("Recent clears read completed conversations and restores priority on a new run", async ({
   page,
+  browserName,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await createAgent(page, "最近分组");
@@ -3277,7 +3349,11 @@ test("Recent clears read completed conversations and restores priority on a new 
     await expect(pinned.locator(mainRow)).toBeVisible();
     const unpin = pinned.getByRole("button", { name: "取消置顶", exact: true });
     await expect(unpin).toHaveCSS("opacity", "0");
-    await pinned.locator(mainRow).press("Tab");
+    const nextControl =
+      browserName === "webkit" && process.platform === "darwin"
+        ? "Alt+Tab"
+        : "Tab";
+    await pinned.locator(mainRow).press(nextControl);
     await expect(unpin).toBeFocused();
     await expect(unpin).toHaveCSS("opacity", "1");
     await unpin.press("Enter");
@@ -3285,7 +3361,7 @@ test("Recent clears read completed conversations and restores priority on a new 
     await submit("这次执行重新进入优先", "main");
     await expect(priority.locator(mainRow)).toBeVisible();
     await sidebar.getByRole("tab", { name: "已归档", exact: true }).click();
-    await expect(sidebar.locator(mainRow)).toHaveCount(0);
+    await expect(sidebar.getByRole("tabpanel").locator(mainRow)).toHaveCount(0);
   } finally {
     await page.request.post(`/api/runs/${running.id}/stop`, { data: {} });
   }
@@ -3295,6 +3371,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   page,
 }) => {
   const sidebar = page.locator("#agent-sidebar");
+  const list = sidebar.getByRole("tabpanel");
   const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
   const all = sidebar.getByRole("tab", { name: "全部", exact: true });
   const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
@@ -3314,7 +3391,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   const firstAgentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
   );
-  const firstGroup = sidebar.locator(`[data-agent-id="${firstAgentId}"]`);
+  const firstGroup = list.locator(`[data-agent-id="${firstAgentId}"]`);
   const rows = firstGroup.locator("[data-session-id]");
   await expect(rows).toHaveCount(1);
   const mainSessionId = (await rows.first().getAttribute("data-session-id"))!;
@@ -3347,7 +3424,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   const secondAgentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
   );
-  const secondSessionId = await sidebar
+  const secondSessionId = await list
     .locator(`[data-agent-id="${secondAgentId}"] [data-session-id]`)
     .getAttribute("data-session-id");
   const secondSelector = `[data-session-id="${secondSessionId}"]`;
@@ -3367,7 +3444,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   await expect(today.locator(secondSelector)).toBeVisible();
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await all.click();
-  await expect(sidebar.locator(secondSelector)).toHaveCount(0);
+  await expect(list.locator(secondSelector)).toHaveCount(0);
   await recent.click();
 
   // Older versions can have a newer Clear cursor in the All view's storage.
@@ -3396,7 +3473,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   });
   await expect(secondAgent).toHaveAttribute("aria-expanded", "true");
   await expect(firstAgent).toHaveAttribute("aria-expanded", "false");
-  await expect(sidebar.locator("[data-session-id]")).toContainText(
+  await expect(list.locator("[data-session-id]")).toContainText(
     "第二个 Agent 的原始会话",
   );
   await firstAgent.press("Enter");
@@ -3417,7 +3494,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   await expect(showMore).toHaveCount(0);
   await expect(rows.nth(5)).toBeFocused();
   await secondAgent.press("Enter");
-  await expect(sidebar.locator("[data-session-id]")).toHaveCount(1);
+  await expect(list.locator("[data-session-id]")).toHaveCount(1);
   await firstAgent.press("Enter");
   await expect(rows).toHaveCount(7);
   await expect(conversation).toContainText("第一个 Agent 的原始会话");
