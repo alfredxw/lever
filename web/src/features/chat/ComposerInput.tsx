@@ -587,6 +587,22 @@ export function ComposerInput({
         "data-slot": "input-group-control",
       },
       handleKeyDown: (_view, event) => handleKeyDown(event),
+      handleClick: (view, _pos, event) => {
+        if (event.button !== 0 || event.altKey || !view.editable) return false;
+        const element =
+          event.target instanceof Element
+            ? event.target
+            : event.target instanceof globalThis.Node
+              ? event.target.parentElement
+              : null;
+        if (!element || element.closest("button, [data-reference]"))
+          return false;
+        const link = element.closest("a");
+        if (!link || !view.dom.contains(link)) return false;
+        if (!link.getAttribute("href")?.trim()) return false;
+        window.open(link.href, link.target || "_blank", "noopener,noreferrer");
+        return true;
+      },
       handleDOMEvents: compositionEvents,
       clipboardTextSerializer: (slice) =>
         serializePrompt({ type: "doc", content: slice.content.toJSON() }).text,

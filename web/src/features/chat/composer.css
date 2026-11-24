@@ -225,6 +225,9 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+.prompt-editor a[href]:not([href=""]) {
+  cursor: pointer;
+}
 .prompt-editor hr {
   margin: 0.7em 0;
   border-top: 1px solid var(--border);
