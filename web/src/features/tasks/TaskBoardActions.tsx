@@ -10,6 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -18,6 +19,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ToolbarButton } from "@/components/ui/toolbar-button";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TaskStatus } from "./taskDocument";
 import type { TaskTarget } from "./useTaskDispatch";
 import { useTaskWorkflowUpdate } from "./taskWorkflow";
@@ -26,28 +29,39 @@ export function TaskBoardActions({
   task,
   status,
   disabled,
-  align = "end",
-  side,
-  size = "icon-xs",
-  hideRestore = false,
+  inline = false,
   onDeleted,
 }: {
   task: TaskTarget & { title: string };
   status: TaskStatus;
   disabled?: boolean;
-  align?: "start" | "center" | "end";
-  side?: "top" | "right" | "bottom" | "left";
-  size?: "icon-xs" | "icon-sm";
-  hideRestore?: boolean;
+  inline?: boolean;
   onDeleted?: () => void;
 }) {
   const { t } = useTranslation();
   const [confirming, setConfirming] = useState(false);
   const update = useTaskWorkflowUpdate(task);
-  const showReturnTodo = status !== "todo" && status !== "unconfirmed";
-  const showArchive = status !== "closed";
-  const showRestore = status === "closed" && !hideRestore;
-  const hasSecondaryActions = showReturnTodo || showArchive || showRestore;
+  const busy = disabled || update.isPending;
+  const deleteLabel = t("tasks.removeItem");
+  const actions = [
+    status !== "todo" &&
+      status !== "unconfirmed" && {
+        action: "todo" as const,
+        icon: ListTodo,
+        label: t("tasks.returnTodo"),
+      },
+    status === "closed" &&
+      !inline && {
+        action: "reopen" as const,
+        icon: Undo2,
+        label: t("tasks.restoreItem"),
+      },
+    status !== "closed" && {
+      action: "close" as const,
+      icon: Archive,
+      label: t("tasks.archiveItem"),
+    },
+  ].filter((entry) => entry !== false);
   function change(action: "todo" | "close" | "reopen" | "delete") {
     update.mutate(action, {
       onSuccess: () => {
@@ -58,81 +72,91 @@ export function TaskBoardActions({
     });
   }
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            size={size}
-            variant="ghost"
-            aria-label={t("tasks.manageItem")}
-            aria-description={task.title}
-            disabled={disabled || update.isPending}
-          >
-            <Ellipsis />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align={align} side={side}>
-          {showReturnTodo && (
-            <DropdownMenuItem onSelect={() => change("todo")}>
-              <ListTodo />
-              {t("tasks.returnTodo")}
-            </DropdownMenuItem>
-          )}
-          {showRestore && (
-            <DropdownMenuItem onSelect={() => change("reopen")}>
-              <Undo2 />
-              {t("tasks.restoreItem")}
-            </DropdownMenuItem>
-          )}
-          {showArchive && (
-            <DropdownMenuItem onSelect={() => change("close")}>
-              <Archive />
-              {t("tasks.archiveItem")}
-            </DropdownMenuItem>
-          )}
-          {hasSecondaryActions && <DropdownMenuSeparator />}
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => setConfirming(true)}
-          >
-            <Trash2 />
-            {t("tasks.removeItem")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {confirming && (
-        <Dialog
-          open
-          onOpenChange={(open) => {
-            if (!update.isPending) setConfirming(open);
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("tasks.removeItem")}</DialogTitle>
-              <DialogDescription>
-                {t("tasks.removeItemConfirm", { title: task.title })}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                disabled={update.isPending}
-                onClick={() => setConfirming(false)}
+    <Dialog
+      open={confirming}
+      onOpenChange={(open) => {
+        if (!update.isPending) setConfirming(open);
+      }}
+    >
+      {inline ? (
+        <TooltipProvider delayDuration={350}>
+          <div className="flex shrink-0 items-center gap-1">
+            {actions.map(({ action, icon: Icon, label }) => (
+              <ToolbarButton
+                key={action}
+                label={label}
+                disabled={busy}
+                onClick={() => change(action)}
               >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={update.isPending}
-                onClick={() => change("delete")}
+                <Icon />
+              </ToolbarButton>
+            ))}
+            <DialogTrigger asChild>
+              <ToolbarButton
+                label={deleteLabel}
+                className="hover:text-destructive focus-visible:text-destructive"
+                disabled={busy}
               >
-                {t("tasks.removeItem")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+                <Trash2 />
+              </ToolbarButton>
+            </DialogTrigger>
+          </div>
+        </TooltipProvider>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={t("tasks.manageItem")}
+              aria-description={task.title}
+              disabled={busy}
+            >
+              <Ellipsis />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {actions.map(({ action, icon: Icon, label }) => (
+              <DropdownMenuItem key={action} onSelect={() => change(action)}>
+                <Icon />
+                {label}
+              </DropdownMenuItem>
+            ))}
+            {actions.length > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={() => setConfirming(true)}
+            >
+              <Trash2 />
+              {deleteLabel}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
-    </>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{deleteLabel}</DialogTitle>
+          <DialogDescription>
+            {t("tasks.removeItemConfirm", { title: task.title })}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={update.isPending}
+            onClick={() => setConfirming(false)}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={update.isPending}
+            onClick={() => change("delete")}
+          >
+            {deleteLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

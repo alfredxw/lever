@@ -224,12 +224,20 @@ export function TaskDetailActions({
           {t("tasks.assign")}
         </Button>
       )}
-      {onComplete && (task.status === "review" || task.status === "todo") && (
-        <Button size="sm" disabled={!task.title} onClick={onComplete}>
-          <Check data-icon="inline-start" />
-          {t("tasks.complete")}
-        </Button>
-      )}
+      {onComplete &&
+        (task.status === "review" ||
+          task.status === "todo" ||
+          task.status === "unconfirmed") && (
+          <Button
+            size="sm"
+            variant={onAccept ? "outline" : "default"}
+            disabled={!task.title}
+            onClick={onComplete}
+          >
+            <Check data-icon="inline-start" />
+            {t("tasks.complete")}
+          </Button>
+        )}
       {onAccept && (
         <Button
           size="sm"

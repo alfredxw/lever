@@ -73,6 +73,7 @@ import { TaskPriorityIcon, workItemPriorities } from "./TaskPriorityIcon";
 import {
   canHandOffTask,
   formatWaitDuration,
+  hasUnfinishedTaskRun,
   queueWaitState,
   setTaskDoneState,
   type AgentQueueMetrics,
@@ -1185,10 +1186,7 @@ export function BoardTaskDetail({
               task={{ ...target, title: task.title }}
               status={status}
               disabled={actionsDisabled}
-              size="icon-sm"
-              align="start"
-              side="top"
-              hideRestore
+              inline
               onDeleted={onClose}
             />
             <TaskDetailActions
@@ -1205,7 +1203,11 @@ export function BoardTaskDetail({
                   : undefined
               }
               onComplete={
-                actionsDisabled ? undefined : () => update.mutate(true)
+                !actionsDisabled &&
+                !workflow?.queue &&
+                !hasUnfinishedTaskRun(execution)
+                  ? () => update.mutate(true)
+                  : undefined
               }
               onReopen={
                 actionsDisabled
