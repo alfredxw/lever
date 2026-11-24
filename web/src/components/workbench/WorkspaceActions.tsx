@@ -62,12 +62,14 @@ export function WorkspaceActions({
   compact,
   selected,
   gitStatus,
+  history,
   onSearch,
   ...newTabActions
 }: {
   compact: boolean;
   selected?: WorkspaceTab;
   gitStatus?: ReactNode;
+  history?: ReactNode;
   onSearch?: MouseEventHandler<HTMLButtonElement>;
 } & NewTabActions) {
   const { t } = useTranslation();
@@ -86,6 +88,7 @@ export function WorkspaceActions({
           <Search aria-hidden="true" />
         </Button>
       )}
+      {history}
       {compact ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

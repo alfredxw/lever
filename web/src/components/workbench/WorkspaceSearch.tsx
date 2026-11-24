@@ -697,13 +697,27 @@ export function WorkspaceSearch({
         ];
       })
     : [];
-  const groups = [
-    { kind: "topic", entries: topicEntries },
-    { kind: "chat", entries: chatEntries },
-    { kind: "agent", entries: agentEntries },
-    { kind: "file", entries: fileEntries },
-    { kind: "message", entries: messageEntries },
-  ] as const;
+  const prioritizeChats = !term && scope.startsWith("agent:");
+  const groups = (
+    prioritizeChats
+      ? [
+          { kind: "chat", entries: chatEntries },
+          { kind: "topic", entries: topicEntries },
+          { kind: "agent", entries: agentEntries },
+          { kind: "file", entries: fileEntries },
+          { kind: "message", entries: messageEntries },
+        ]
+      : [
+          { kind: "topic", entries: topicEntries },
+          { kind: "chat", entries: chatEntries },
+          { kind: "agent", entries: agentEntries },
+          { kind: "file", entries: fileEntries },
+          { kind: "message", entries: messageEntries },
+        ]
+  ) as readonly {
+    kind: "topic" | "chat" | "agent" | "file" | "message";
+    entries: SearchEntry[];
+  }[];
   const showRecent = type === "all" && scope === "all" && !term;
   const showRecentMessages = type === "message" && !term;
   type VisibleGroup = {

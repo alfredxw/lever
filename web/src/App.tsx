@@ -38,6 +38,8 @@ import {
   WorkspaceActions,
   WorkspacePanelControls,
 } from "@/components/workbench/WorkspaceActions";
+import { ChatHistoryPopover } from "@/components/workbench/ChatHistoryPopover";
+import { preferredAgentChat } from "@/components/workbench/chatHistoryModel";
 import { WorkspaceDivider } from "@/components/workbench/WorkspaceDivider";
 import {
   selectAgentActivity,
@@ -481,7 +483,10 @@ export default function App() {
       agentActivity?.chats.filter((chat) => chat.agentId === selected) ?? [],
     [agentActivity?.chats, selected],
   );
-  const firstChat = activityChats[0];
+  const firstChat = useMemo(
+    () => preferredAgentChat(activityChats, selected),
+    [activityChats, selected],
+  );
   const fallback = useMemo<Workspace>(
     () => ({
       tabs: firstChat
@@ -818,7 +823,9 @@ export default function App() {
       if (mainTab && !maximized) prefetchConversation(mainTab);
       if (sideTab && split) prefetchConversation(sideTab);
     } else {
-      const chat = agentActivity?.chats.find((item) => item.agentId === id);
+      const chat = agentActivity
+        ? preferredAgentChat(agentActivity.chats, id)
+        : undefined;
       if (chat)
         prefetchConversation({ id: chat.id, kind: "chat", title: chat.title });
     }
@@ -1971,9 +1978,9 @@ export default function App() {
                         (chat) =>
                           chat.agentId === target.id && chat.id === remembered,
                       ) ??
-                      agentActivity?.chats.find(
-                        (chat) => chat.agentId === target.id,
-                      );
+                      (agentActivity
+                        ? preferredAgentChat(agentActivity.chats, target.id)
+                        : undefined);
                     const tabs = workspaceFor(target.id)?.tabs ?? [];
                     if (chat) {
                       openTab(
@@ -2064,6 +2071,44 @@ export default function App() {
                                             trigger: event.currentTarget,
                                           })
                                       : undefined
+                                  }
+                                  history={
+                                    pane === (maximized ? "side" : "main") ? (
+                                      <ChatHistoryPopover
+                                        agent={agent}
+                                        overview={overview.data}
+                                        readCursors={readCursors}
+                                        openTabs={workspace.tabs}
+                                        activeTabId={currentTab?.id}
+                                        canSplit={!compactWorkbench}
+                                        onSelectChat={(chatId, mode) => {
+                                          openConversation(
+                                            chatId,
+                                            undefined,
+                                            undefined,
+                                            { mode },
+                                          );
+                                          focusWorkspaceTab(chatId);
+                                        }}
+                                        onNewChat={() =>
+                                          newChat(agent.id, pane)
+                                        }
+                                        onSearchMessages={(trigger) =>
+                                          showWorkspaceSearch({
+                                            type: "message",
+                                            scope: `agent:${agent.id}`,
+                                            trigger,
+                                          })
+                                        }
+                                        onPrefetchChat={(chatId) =>
+                                          prefetchConversation({
+                                            id: chatId,
+                                            kind: "chat",
+                                            title: "",
+                                          })
+                                        }
+                                      />
+                                    ) : undefined
                                   }
                                   archived={agent.archived}
                                   canOpenDiff={canOpenDiff}

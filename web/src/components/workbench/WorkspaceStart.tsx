@@ -11,6 +11,11 @@ import {
   ImagePreviewProvider,
 } from "@/features/chat/ImagePreview";
 import { NewChatComposer } from "@/features/chat/NewChat";
+import {
+  ChatSourceIcon,
+  chatSourceBadgeLabel,
+} from "./ChatHistoryPopover";
+import { classifyChatSource, type ChatSourceBadge } from "./chatHistoryModel";
 import { toolTab } from "./WorkspaceActions";
 import { tabIcons } from "./WorkspaceTabs";
 import type { WorkspaceTab } from "./useWorkspaces";
@@ -22,6 +27,8 @@ type RecentConversation = {
   chatId: string;
   topicId?: string;
   title: string;
+  sourceBadge?: ChatSourceBadge;
+  sourceLabel?: string;
   lastActive: number;
 };
 
@@ -32,14 +39,19 @@ function recentConversations(
   t: TFunction,
 ): RecentConversation[] {
   const byChatId = new Map(
-    chats.map((chat) => [
-      chat.id,
-      {
-        chatId: chat.id,
-        title: displayChatTitle(chat, t),
-        lastActive: Date.parse(chat.updatedAt) || 0,
-      },
-    ]),
+    chats.map((chat) => {
+      const { badge } = classifyChatSource(chat);
+      return [
+        chat.id,
+        {
+          chatId: chat.id,
+          title: displayChatTitle(chat, t),
+          sourceBadge: badge,
+          sourceLabel: chatSourceBadgeLabel(badge, t),
+          lastActive: Date.parse(chat.updatedAt) || 0,
+        },
+      ];
+    }),
   );
   const topics: RecentConversation[] = [];
   for (const conversation of conversations) {
@@ -175,8 +187,8 @@ export function WorkspaceStart({
                   ref={list}
                   className="divide-y divide-(--surface-border) rounded-xl border border-(--surface-border) bg-(--panel-background)"
                 >
-                  {recent.slice(0, limit).map(({ chatId, topicId, title }) => {
-                    const Icon = tabIcons[topicId ? "topic" : "chat"];
+                  {recent.slice(0, limit).map(({ chatId, topicId, title, sourceBadge, sourceLabel }) => {
+                    const TopicIcon = tabIcons.topic;
                     const label = title || t("chat.topic");
                     return (
                       <li key={topicId ?? chatId} className="p-0.5">
@@ -187,15 +199,25 @@ export function WorkspaceStart({
                           title={label}
                           onClick={() => onConversation(chatId, topicId)}
                         >
-                          <Icon
-                            className="text-muted-foreground"
-                            aria-hidden="true"
-                          />
+                          {topicId ? (
+                            <TopicIcon
+                              className="text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <ChatSourceIcon
+                              badge={sourceBadge ?? "user"}
+                              size={16}
+                              className="text-muted-foreground"
+                            />
+                          )}
                           <span className="min-w-0 flex-1 truncate">
                             {label}
                           </span>
                           <span className="text-xs font-normal text-muted-foreground">
-                            {t(topicId ? "chat.topic" : "workspace.chat")}
+                            {topicId
+                              ? t("chat.topic")
+                              : sourceLabel || t("workspace.chat")}
                           </span>
                           <ArrowRight
                             className="size-3.5 text-muted-foreground"
