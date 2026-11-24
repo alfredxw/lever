@@ -395,7 +395,7 @@ func (turn *personalTurn) sourceLabel() string {
 }
 
 func (turn *personalTurn) topicTitle(includeSource bool) string {
-	if turn.conversation == "dm" {
+	if turn.conversation == "dm" || turn.conversation == "chat" {
 		return turn.sourceLabel()
 	}
 	body := clipPersonalRunes(turn.rawBody, 48)
@@ -432,31 +432,32 @@ WHERE p.binding=? AND p.agent_id=? AND p.scope=?`, turn.binding, agent, scope)
 }
 
 func (turn *personalTurn) resolve(ctx context.Context, tx *sql.Tx, agent string) (personalDestination, error) {
-	var sessionID, sessionKind, chatData string
-	err := tx.QueryRowContext(ctx, `SELECT s.id, s.kind, c.data FROM personal_channel_turns t
+	if turn.thread != "" || turn.parent != "" {
+		var sessionID, sessionKind, chatData string
+		err := tx.QueryRowContext(ctx, `SELECT s.id, s.kind, c.data FROM personal_channel_turns t
 JOIN runs r ON r.id=t.run_id JOIN sessions s ON s.id=r.session_id JOIN chats c ON c.id=r.chat_id
-WHERE t.binding=? AND t.chat=? AND c.agent_id=? AND (t.conversation=? OR (?<>'' AND t.answer_id=?))
-ORDER BY (t.conversation=?) DESC, t.rowid DESC LIMIT 1`,
-		turn.binding, turn.remoteChat, agent, turn.conversation, turn.parent, turn.parent, turn.conversation).Scan(&sessionID, &sessionKind, &chatData)
-	if err == nil {
-		var chat model.Chat
-		if err := json.Unmarshal([]byte(chatData), &chat); err != nil {
+WHERE t.binding=? AND t.chat=? AND c.agent_id=? AND ((?<>'' AND t.conversation=?) OR (?<>'' AND t.answer_id=?))
+ORDER BY (?<>'' AND t.conversation=?) DESC, t.rowid DESC LIMIT 1`,
+			turn.binding, turn.remoteChat, agent,
+			turn.thread, turn.thread,
+			turn.parent, turn.parent,
+			turn.thread, turn.thread,
+		).Scan(&sessionID, &sessionKind, &chatData)
+		if err == nil {
+			var chat model.Chat
+			if err := json.Unmarshal([]byte(chatData), &chat); err != nil {
+				return personalDestination{}, err
+			}
+			if sessionKind == "topic" {
+				return personalDestination{chat: chat, sessionID: sessionID, operation: "reply"}, nil
+			}
+			return personalDestination{chat: chat, operation: "main"}, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
 			return personalDestination{}, err
 		}
-		if sessionKind == "topic" {
-			return personalDestination{chat: chat, sessionID: sessionID, operation: "reply"}, nil
-		}
-		return personalDestination{chat: chat, operation: "main"}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return personalDestination{}, err
 	}
 	switch turn.chatMode {
-	case model.PersonalChannelChatNewChat:
-		return personalDestination{
-			operation: "main",
-			title:     turn.channelName + " · " + turn.sourceLabel(),
-		}, nil
 	case model.PersonalChannelChatByChat:
 		scope := "chat:" + turn.remoteChat
 		chat, err := turn.scopedChat(ctx, tx, agent, scope)
@@ -464,7 +465,7 @@ ORDER BY (t.conversation=?) DESC, t.rowid DESC LIMIT 1`,
 			return personalDestination{}, err
 		}
 		operation, sessionTitle := "topic", turn.topicTitle(false)
-		if turn.kind == "dm" && turn.thread == "" {
+		if turn.thread == "" {
 			operation, sessionTitle = "main", ""
 		}
 		registerScope := ""
@@ -483,6 +484,19 @@ ORDER BY (t.conversation=?) DESC, t.rowid DESC LIMIT 1`,
 		chat, err := turn.scopedChat(ctx, tx, agent, scope)
 		if err != nil {
 			return personalDestination{}, err
+		}
+		if chat.ID != "" && turn.thread == "" {
+			var sessionID string
+			err := tx.QueryRowContext(ctx, `SELECT s.id FROM personal_channel_turns t
+JOIN runs r ON r.id=t.run_id JOIN sessions s ON s.id=r.session_id
+WHERE t.binding=? AND t.chat=? AND r.chat_id=? AND s.kind='topic' AND t.conversation=?
+ORDER BY t.rowid DESC LIMIT 1`, turn.binding, turn.remoteChat, chat.ID, turn.conversation).Scan(&sessionID)
+			if err == nil {
+				return personalDestination{chat: chat, sessionID: sessionID, operation: "reply"}, nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return personalDestination{}, err
+			}
 		}
 		registerScope := ""
 		if chat.ID == "" {

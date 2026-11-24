@@ -55,13 +55,12 @@ type ChannelOrigin struct {
 type PersonalChannelChatMode string
 
 const (
-	PersonalChannelChatSingle  PersonalChannelChatMode = "single"
-	PersonalChannelChatByChat  PersonalChannelChatMode = "byChat"
-	PersonalChannelChatNewChat PersonalChannelChatMode = "newChat"
+	PersonalChannelChatSingle PersonalChannelChatMode = "single"
+	PersonalChannelChatByChat PersonalChannelChatMode = "byChat"
 )
 
 func (mode PersonalChannelChatMode) Valid() bool {
-	return mode == PersonalChannelChatSingle || mode == PersonalChannelChatByChat || mode == PersonalChannelChatNewChat
+	return mode == PersonalChannelChatSingle || mode == PersonalChannelChatByChat
 }
 
 type PersonalChannelRoute struct {

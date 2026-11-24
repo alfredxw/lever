@@ -437,22 +437,29 @@ done
 		return count
 	}
 
-	// 1. Default single mode: 2 independent group triggers + 1 DM share one Chat with 3 Topics.
+	// 1. Default single mode:
+	// - Group with ThreadReply=true: each group command opens its own Topic inside the Agent's shared Chat.
+	// - DM: consecutive messages continue in the same DM Topic inside the Agent's shared Chat.
+	// - Group with ThreadReply=false (direct reply): consecutive main-chat commands share one continuous Topic for that group.
 	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
 	write("inbox", strings.Join([]string{
 		event("201", "100", "300", "研发群", "/ai 排查构建失败", "group", ""),
 		event("202", "100", "300", "研发群", "/ai 看下发布计划", "group", ""),
 		event("203", "100", "400", "张三", "/ai 整理会议纪要", "dm", ""),
+		event("204", "100", "400", "张三", "/ai 补充行动项", "dm", ""),
 	}, "\n")+"\n", 0600)
 	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
-	waitUntil("single mode turns not delivered", func() bool { return deliveredCount() == 3 })
+	waitUntil("single mode turns not delivered", func() bool { return deliveredCount() == 4 })
 
-	r201, r202, r203 := runByMessage("201"), runByMessage("202"), runByMessage("203")
-	if r201.ChatID != r202.ChatID || r201.ChatID != r203.ChatID {
-		t.Fatalf("single mode should share one Chat per Agent: %s %s %s", r201.ChatID, r202.ChatID, r203.ChatID)
+	r201, r202, r203, r204 := runByMessage("201"), runByMessage("202"), runByMessage("203"), runByMessage("204")
+	if r201.ChatID != r202.ChatID || r201.ChatID != r203.ChatID || r203.ChatID != r204.ChatID {
+		t.Fatalf("single mode should share one Chat per Agent: %s %s %s %s", r201.ChatID, r202.ChatID, r203.ChatID, r204.ChatID)
 	}
 	if r201.SessionID == r202.SessionID || r201.SessionID == r203.SessionID || r202.SessionID == r203.SessionID {
-		t.Fatalf("single mode should isolate independent conversations as distinct Topics: %s %s %s", r201.SessionID, r202.SessionID, r203.SessionID)
+		t.Fatalf("single mode should isolate independent threads and DM as distinct Topics: %s %s %s", r201.SessionID, r202.SessionID, r203.SessionID)
+	}
+	if r203.SessionID != r204.SessionID {
+		t.Fatalf("DM messages should continue in the same Topic under single mode: %s vs %s", r203.SessionID, r204.SessionID)
 	}
 	var singleChat model.ChatView
 	f.request("GET", "/chats/"+r201.ChatID, nil, 200, &singleChat)
@@ -471,84 +478,122 @@ done
 		t.Fatalf("unexpected dm topic metadata: %+v", s203.Session)
 	}
 
-	// 2. Switch to byChat: existing single-mode Topic still continues in-place;
-	// new group triggers share one Chat per Feishu group; new DM uses main session in its own Chat.
+	// Direct reply in a normal group keeps one continuous Topic per group in single mode.
+	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
+	settings.ThreadReply = false
+	f.request("PUT", path, settings, 200, nil)
+	write("inbox", strings.Join([]string{
+		event("205", "100", "301", "值班群", "/ai 直接回复第一句", "group", ""),
+		event("206", "100", "301", "值班群", "/ai 直接回复第二句", "group", ""),
+	}, "\n")+"\n", 0600)
+	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
+	waitUntil("direct group continuous turns not delivered", func() bool { return deliveredCount() == 6 })
+
+	r205, r206 := runByMessage("205"), runByMessage("206")
+	if r205.ChatID != r201.ChatID || r205.SessionID != r206.SessionID {
+		t.Fatalf("direct group chat should continue in one Topic inside the shared Chat: r205=(%s,%s) r206=(%s,%s)", r205.ChatID, r205.SessionID, r206.ChatID, r206.SessionID)
+	}
+	var s205 model.SessionView
+	f.request("GET", "/sessions/"+r205.SessionID, nil, 200, &s205)
+	if s205.Session.Kind != "topic" || s205.Session.Title != "值班群" {
+		t.Fatalf("unexpected direct group topic metadata: %+v", s205.Session)
+	}
+
+	// 2. Switch to byChat:
+	// - Explicit Feishu thread reply still continues its original single-mode Topic.
+	// - New DM / direct group chat gets its own dedicated Chat (main session) immediately, even for existing DM 400!
+	// - Group threads under ThreadReply=true share one dedicated Chat per Feishu group with separate Topics.
 	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
 	settings.ChatMode = model.PersonalChannelChatByChat
+	settings.ThreadReply = true
 	f.request("PUT", path, settings, 200, nil)
 	write("inbox", strings.Join([]string{
-		event("204", "100", "300", "研发群", "/ai 继续追问", "group", "201"),
-		event("205", "100", "300", "研发群", "/ai 新群话题一", "group", ""),
-		event("206", "100", "300", "研发群", "/ai 新群话题二", "group", ""),
-		event("207", "100", "500", "李四", "/ai 私聊第一句", "dm", ""),
-		event("208", "100", "500", "李四", "/ai 私聊第二句", "dm", ""),
+		event("207", "100", "300", "研发群", "/ai 继续追问", "group", "201"),
+		event("208", "100", "300", "研发群", "/ai 新群话题一", "group", ""),
+		event("209", "100", "300", "研发群", "/ai 新群话题二", "group", ""),
+		event("210", "100", "400", "张三", "/ai 切到多Chat后的私聊第一句", "dm", ""),
+		event("211", "100", "400", "张三", "/ai 切到多Chat后的私聊第二句", "dm", ""),
 	}, "\n")+"\n", 0600)
 	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
-	waitUntil("byChat turns not delivered", func() bool { return deliveredCount() == 8 })
+	waitUntil("byChat turns not delivered", func() bool { return deliveredCount() == 11 })
 
-	r204, r205, r206, r207, r208 := runByMessage("204"), runByMessage("205"), runByMessage("206"), runByMessage("207"), runByMessage("208")
-	if r204.ChatID != r201.ChatID || r204.SessionID != r201.SessionID {
-		t.Fatalf("existing single-mode topic lost continuity after switching to byChat: got (%s,%s) want (%s,%s)", r204.ChatID, r204.SessionID, r201.ChatID, r201.SessionID)
+	r207, r208, r209, r210, r211 := runByMessage("207"), runByMessage("208"), runByMessage("209"), runByMessage("210"), runByMessage("211")
+	if r207.ChatID != r201.ChatID || r207.SessionID != r201.SessionID {
+		t.Fatalf("existing single-mode thread lost continuity after switching to byChat: got (%s,%s) want (%s,%s)", r207.ChatID, r207.SessionID, r201.ChatID, r201.SessionID)
 	}
-	if r205.ChatID == r201.ChatID || r205.ChatID != r206.ChatID || r205.SessionID == r206.SessionID {
-		t.Fatalf("byChat group should share one dedicated Chat with separate Topics: r205=(%s,%s) r206=(%s,%s)", r205.ChatID, r205.SessionID, r206.ChatID, r206.SessionID)
+	if r208.ChatID == r201.ChatID || r208.ChatID != r209.ChatID || r208.SessionID == r209.SessionID {
+		t.Fatalf("byChat group should share one dedicated Chat with separate Topics: r208=(%s,%s) r209=(%s,%s)", r208.ChatID, r208.SessionID, r209.ChatID, r209.SessionID)
 	}
 	var groupChat, dmChat model.ChatView
-	f.request("GET", "/chats/"+r205.ChatID, nil, 200, &groupChat)
-	f.request("GET", "/chats/"+r207.ChatID, nil, 200, &dmChat)
-	if groupChat.Chat.Title != "Larkx · 研发群" || dmChat.Chat.Title != "Larkx · 李四" {
+	f.request("GET", "/chats/"+r208.ChatID, nil, 200, &groupChat)
+	f.request("GET", "/chats/"+r210.ChatID, nil, 200, &dmChat)
+	if groupChat.Chat.Title != "Larkx · 研发群" || dmChat.Chat.Title != "Larkx · 张三" {
 		t.Fatalf("unexpected byChat titles: group=%q dm=%q", groupChat.Chat.Title, dmChat.Chat.Title)
 	}
-	if r207.ChatID == r205.ChatID || r207.ChatID != r208.ChatID || r207.SessionID != r208.SessionID {
-		t.Fatalf("byChat DM should continue in the same Chat and main session: r207=(%s,%s) r208=(%s,%s)", r207.ChatID, r207.SessionID, r208.ChatID, r208.SessionID)
-	}
-	var s207 model.SessionView
-	f.request("GET", "/sessions/"+r207.SessionID, nil, 200, &s207)
-	if s207.Session.Kind != "main" {
-		t.Fatalf("expected byChat DM to use main session, got %q", s207.Session.Kind)
-	}
-	f.request("GET", path, nil, 200, &view)
-	if view.Last == nil || view.Last.Topic || view.Last.ChatID != r208.ChatID || view.Last.ChatName != "李四" {
-		t.Fatalf("unexpected receipt for byChat DM: %+v", view.Last)
-	}
-
-	// 3. Switch to newChat: existing byChat Topic still continues in-place;
-	// new group triggers each create an independent Chat with a main session.
-	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
-	settings.ChatMode = model.PersonalChannelChatNewChat
-	f.request("PUT", path, settings, 200, nil)
-	write("inbox", strings.Join([]string{
-		event("209", "100", "300", "研发群", "/ai 续聊群话题一", "group", "205"),
-		event("210", "100", "300", "研发群", "/ai 独立对话一", "group", ""),
-		event("211", "100", "300", "研发群", "/ai 独立对话二", "group", ""),
-	}, "\n")+"\n", 0600)
-	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
-	waitUntil("newChat turns not delivered", func() bool { return deliveredCount() == 11 })
-
-	r209, r210, r211 := runByMessage("209"), runByMessage("210"), runByMessage("211")
-	if r209.ChatID != r205.ChatID || r209.SessionID != r205.SessionID {
-		t.Fatalf("existing byChat topic lost continuity after switching to newChat")
-	}
-	if r210.ChatID == r211.ChatID || r210.ChatID == r205.ChatID || r210.ChatID == r201.ChatID {
-		t.Fatalf("newChat mode must isolate each new conversation in its own Chat: r210=%s r211=%s", r210.ChatID, r211.ChatID)
+	if r210.ChatID == r201.ChatID || r210.ChatID == r208.ChatID || r210.ChatID != r211.ChatID || r210.SessionID != r211.SessionID {
+		t.Fatalf("byChat DM should use its own dedicated Chat and main session: r210=(%s,%s) r211=(%s,%s)", r210.ChatID, r210.SessionID, r211.ChatID, r211.SessionID)
 	}
 	var s210 model.SessionView
 	f.request("GET", "/sessions/"+r210.SessionID, nil, 200, &s210)
 	if s210.Session.Kind != "main" {
-		t.Fatalf("expected newChat to use main session, got %q", s210.Session.Kind)
+		t.Fatalf("expected byChat DM to use main session, got %q", s210.Session.Kind)
+	}
+	f.request("GET", path, nil, 200, &view)
+	if view.Last == nil || view.Last.Topic || view.Last.ChatID != r211.ChatID || view.Last.ChatName != "张三" {
+		t.Fatalf("unexpected receipt for byChat DM: %+v", view.Last)
+	}
+
+	// Direct-reply group under byChat uses main session in that group's dedicated Chat.
+	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
+	settings.ThreadReply = false
+	f.request("PUT", path, settings, 200, nil)
+	write("inbox", strings.Join([]string{
+		event("212", "100", "302", "前端群", "/ai 主聊天一", "group", ""),
+		event("213", "100", "302", "前端群", "/ai 主聊天二", "group", ""),
+	}, "\n")+"\n", 0600)
+	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
+	waitUntil("byChat direct group turns not delivered", func() bool { return deliveredCount() == 13 })
+
+	r212, r213 := runByMessage("212"), runByMessage("213")
+	if r212.ChatID != r213.ChatID || r212.SessionID != r213.SessionID || r212.ChatID == r201.ChatID {
+		t.Fatalf("byChat direct group should continue in one main session: r212=(%s,%s) r213=(%s,%s)", r212.ChatID, r212.SessionID, r213.ChatID, r213.SessionID)
+	}
+	var s212 model.SessionView
+	f.request("GET", "/sessions/"+r212.SessionID, nil, 200, &s212)
+	if s212.Session.Kind != "main" {
+		t.Fatalf("expected byChat direct group to use main session, got %q", s212.Session.Kind)
+	}
+
+	// 3. Switching back to single resumes the DM Topic inside the shared Chat,
+	// while explicit replies in a byChat thread still continue inside that byChat Topic.
+	f.request("POST", path+"/pause", map[string]string{}, 200, nil)
+	settings.ChatMode = model.PersonalChannelChatSingle
+	settings.ThreadReply = true
+	f.request("PUT", path, settings, 200, nil)
+	write("inbox", strings.Join([]string{
+		event("214", "100", "400", "张三", "/ai 回到单Chat继续私聊", "dm", ""),
+		event("215", "100", "300", "研发群", "/ai 续聊byChat群话题", "group", "208"),
+	}, "\n")+"\n", 0600)
+	f.request("POST", path+"/connect", map[string]string{}, 200, nil)
+	waitUntil("resumed turns not delivered", func() bool { return deliveredCount() == 15 })
+
+	r214, r215 := runByMessage("214"), runByMessage("215")
+	if r214.ChatID != r201.ChatID || r214.SessionID != r203.SessionID {
+		t.Fatalf("switching back to single should resume the shared Chat DM Topic: got (%s,%s) want (%s,%s)", r214.ChatID, r214.SessionID, r201.ChatID, r203.SessionID)
+	}
+	if r215.ChatID != r208.ChatID || r215.SessionID != r208.SessionID {
+		t.Fatalf("explicit reply in byChat thread should stay in that thread Topic: got (%s,%s) want (%s,%s)", r215.ChatID, r215.SessionID, r208.ChatID, r208.SessionID)
 	}
 
 	// 4. Switching accounts in single mode isolates the unified Chat by binding.
 	f.request("POST", path+"/logout", map[string]string{}, 200, nil)
-	settings.ChatMode = model.PersonalChannelChatSingle
-	f.request("PUT", path, settings, 200, nil)
 	write("account", "200", 0600)
-	write("inbox", event("212", "200", "300", "研发群", "/ai 另一个账号", "group", "")+"\n", 0600)
+	write("inbox", event("216", "200", "300", "研发群", "/ai 另一个账号", "group", "")+"\n", 0600)
 	f.request("POST", path+"/login", map[string]string{"region": "feishu"}, 200, nil)
-	waitUntil("second account turn not delivered", func() bool { return deliveredCount() == 12 })
+	waitUntil("second account turn not delivered", func() bool { return deliveredCount() == 16 })
 
-	r212 := runByMessage("212")
-	if r212.ChatID == r201.ChatID {
-		t.Fatalf("second account must not reuse first account's unified Chat: %s", r212.ChatID)
+	r216 := runByMessage("216")
+	if r216.ChatID == r201.ChatID {
+		t.Fatalf("second account must not reuse first account's unified Chat: %s", r216.ChatID)
 	}
 }

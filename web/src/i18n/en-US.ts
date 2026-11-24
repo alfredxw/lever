@@ -914,12 +914,13 @@ export const enUS = {
     "Separate commands and aliases with spaces, for example /review /ai.",
   "personal.remove": "Remove {{name}}’s route",
   "personal.noAgents": "No more available Agents",
-  "personal.chatMode": "Lever conversations",
-  "personal.chatModeHint":
-    "Choose how new commands are grouped in Lever. Existing conversations stay where they are.",
-  "personal.chatMode.single": "Single Chat",
-  "personal.chatMode.byChat": "By source chat",
-  "personal.chatMode.newChat": "New Chat each",
+  "personal.chatMode": "Chats in Lever",
+  "personal.chatMode.single": "Single Chat (Topics)",
+  "personal.chatMode.byChat": "One Chat per Feishu chat",
+  "personal.chatModeHint.single":
+    "Each Agent uses one shared Chat. Every Feishu DM, direct group chat, or thread continues as its own Topic inside it.",
+  "personal.chatModeHint.byChat":
+    "Each Feishu DM or group gets its own Chat; main messages continue in the Chat and threads become Topics.",
   "personal.sourceDm": "DM",
   "personal.sourceGroup": "Group",
   "personal.scope": "Invocation scope",
@@ -929,7 +930,8 @@ export const enUS = {
   "personal.chatIds": "Conversation IDs (space-separated)",
   "personal.reply": "Replies and context",
   "personal.where": "Group replies",
-  "personal.threadHint": "Messages already in a thread stay in that thread.",
+  "personal.threadHint":
+    "Thread starts a separate thread per group command; Main chat replies in the group and keeps one continuous conversation. Messages already in a thread stay in that thread.",
   "personal.thread": "Thread",
   "personal.direct": "Main chat",
   "personal.signature": "Signature · {agent} inserts the Agent name",

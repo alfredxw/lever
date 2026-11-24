@@ -254,11 +254,10 @@ func (a *App) receivePersonal(worker *personalWorker, message personalMessage) {
 	case thread != "":
 	case message.Kind == "dm":
 		conversation = "dm"
+	case config.ThreadReply:
+		thread, conversation = message.ID, message.ID
 	default:
-		conversation = message.ID
-		if config.ThreadReply {
-			thread = message.ID
-		}
+		conversation = "chat"
 	}
 	rawBody := body
 	if body == "" {

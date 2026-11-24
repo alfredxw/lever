@@ -162,7 +162,6 @@ export interface ChannelOrigin {
 export type PersonalChannelChatMode = string;
 export const PersonalChannelChatSingle: PersonalChannelChatMode = "single";
 export const PersonalChannelChatByChat: PersonalChannelChatMode = "byChat";
-export const PersonalChannelChatNewChat: PersonalChannelChatMode = "newChat";
 export interface PersonalChannelRoute {
   agentId: string;
   commands: string[];

@@ -46,7 +46,6 @@ const chatIdPattern = /^[1-9][0-9]{0,30}$/;
 const personalChatModes: readonly PersonalChannelChatMode[] = [
   "single",
   "byChat",
-  "newChat",
 ];
 
 function words(value: string) {
@@ -630,7 +629,7 @@ function PersonalSettings({
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      {!supportsChannelModel && (
+      {(!supportsChannelModel || !supportsChatMode) && (
         <p role="status" className="text-control text-muted-foreground">
           {t("personal.restartForModel")}
         </p>
@@ -748,8 +747,12 @@ function PersonalSettings({
         {supportsChatMode && (
           <SettingsChoiceRow
             title={t("personal.chatMode")}
-            description={t("personal.chatModeHint")}
-            value={settings.chatMode || "single"}
+            description={t(
+              settings.chatMode === "byChat"
+                ? "personal.chatModeHint.byChat"
+                : "personal.chatModeHint.single",
+            )}
+            value={settings.chatMode === "byChat" ? "byChat" : "single"}
             options={personalChatModes.map((value) => ({
               value,
               label: t(`personal.chatMode.${value}`),

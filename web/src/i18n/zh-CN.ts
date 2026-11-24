@@ -887,12 +887,13 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "personal.commandsHint": "主指令和别名用空格分隔，例如 /审查 /ai。",
   "personal.remove": "移除 {{name}} 的指令",
   "personal.noAgents": "没有可添加的 Agent",
-  "personal.chatMode": "Lever 对话组织",
-  "personal.chatModeHint":
-    "选择新指令在 Lever 中的归档方式。已有对话和话题保持不变。",
-  "personal.chatMode.single": "统一对话",
-  "personal.chatMode.byChat": "按飞书会话",
-  "personal.chatMode.newChat": "每段新对话",
+  "personal.chatMode": "Lever 中的对话形式",
+  "personal.chatMode.single": "单 Chat（话题分组）",
+  "personal.chatMode.byChat": "多 Chat（按飞书会话）",
+  "personal.chatModeHint.single":
+    "每个 Agent 共用 1 个主 Chat；飞书的每个私聊、群主聊天或话题都作为其中的独立 Topic 连续对话。",
+  "personal.chatModeHint.byChat":
+    "每个飞书私聊或群聊各自对应 1 个独立 Chat；主聊天直接续聊，群内话题作为该 Chat 下的 Topic。",
   "personal.sourceDm": "私聊",
   "personal.sourceGroup": "群聊",
   "personal.scope": "生效范围",
@@ -902,7 +903,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "personal.chatIds": "会话数字 ID（空格分隔）",
   "personal.reply": "回复与上下文",
   "personal.where": "普通群回复位置",
-  "personal.threadHint": "已在话题内的消息始终回原话题。",
+  "personal.threadHint":
+    "话题回复：每条群指令在飞书开独立话题并按话题续聊；直接回复：回复在群主聊天中，同一群连续续聊。已在话题内的消息始终回原话题。",
   "personal.thread": "话题回复",
   "personal.direct": "直接回复",
   "personal.signature": "署名 · {agent} 替换为 Agent 名",
