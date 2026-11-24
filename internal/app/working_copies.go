@@ -13,13 +13,19 @@ import (
 	"lever/internal/workspace"
 )
 
-func getGroup(ctx context.Context, q store.Queryer, agentID, id string) (model.DirectoryGroup, error) {
-	return store.Get[model.DirectoryGroup](ctx, q, "SELECT data FROM working_copies WHERE id=? AND agent_id=?", id, agentID)
+func getGroupForOwner(ctx context.Context, q store.Queryer, owner worktreeOwner, id string) (model.DirectoryGroup, error) {
+	return store.Get[model.DirectoryGroup](ctx, q, "SELECT data FROM "+owner.copyTable()+" WHERE id=? AND "+owner.ownerColumn()+"=?", id, owner.id)
 }
 
-func saveGroup(ctx context.Context, q worktreeStore, group model.DirectoryGroup) error {
-	result, err := q.ExecContext(ctx, `INSERT INTO working_copies(id,agent_id,data) VALUES(?,?,?)
-ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE working_copies.agent_id=excluded.agent_id`, group.ID, group.AgentID, store.JSON(group))
+func saveGroupForOwner(ctx context.Context, q worktreeStore, owner worktreeOwner, group model.DirectoryGroup) error {
+	if owner.project {
+		group.ProjectID, group.AgentID = owner.id, ""
+	} else {
+		group.AgentID, group.ProjectID = owner.id, ""
+	}
+	table, col := owner.copyTable(), owner.ownerColumn()
+	result, err := q.ExecContext(ctx, `INSERT INTO `+table+`(id,`+col+`,data) VALUES(?,?,?)
+ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE `+table+`.`+col+`=excluded.`+col, group.ID, owner.id, store.JSON(group))
 	if err != nil {
 		return err
 	}
@@ -32,8 +38,12 @@ ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE working_copies.agent_id=e
 	return nil
 }
 
+func saveGroup(ctx context.Context, q worktreeStore, group model.DirectoryGroup) error {
+	return saveGroupForOwner(ctx, q, worktreeOwner{id: group.AgentID}, group)
+}
+
 // Scope roots below the same Git checkout are replaced together, at the same
-// relative paths. Other Git and non-Git directories come from the Agent.
+// relative paths. Other Git and non-Git directories come from the owner Scope.
 func scopeRepositories(ctx context.Context, scope model.Scope) ([]model.CheckoutOptions, error) {
 	var repositories []model.CheckoutOptions
 	for _, root := range scope.Roots {
@@ -121,28 +131,24 @@ func groupCheckouts(group model.DirectoryGroup, catalogue map[string]model.CopyC
 	return checkouts
 }
 
-func (a *App) WorkingCopies(ctx context.Context, agentID string) ([]model.WorkingCopy, error) {
-	groups, err := store.List[model.DirectoryGroup](ctx, a.Store.DB, "SELECT data FROM working_copies WHERE agent_id=? ORDER BY rowid DESC", agentID)
+func (a *App) workingCopiesForOwner(ctx context.Context, owner worktreeOwner) ([]model.WorkingCopy, error) {
+	groups, err := store.List[model.DirectoryGroup](ctx, a.Store.DB, "SELECT data FROM "+owner.copyTable()+" WHERE "+owner.ownerColumn()+"=? ORDER BY rowid DESC", owner.id)
 	copies := make([]model.WorkingCopy, 0, len(groups))
 	if err != nil || len(groups) == 0 {
 		return copies, err
 	}
-	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", agentID)
+	repositories, err := scopeRepositories(ctx, owner.scope)
 	if err != nil {
 		return nil, err
 	}
-	repositories, err := scopeRepositories(ctx, agent.Profile.Scope)
-	if err != nil {
-		return nil, err
-	}
-	catalogue, err := worktreeCatalogue(ctx, a.Store.DB, agentID)
+	catalogue, err := worktreeCatalogueForOwner(ctx, a.Store.DB, owner)
 	if err != nil {
 		return nil, err
 	}
 	for _, group := range groups {
-		copy := projectGroup(group, agent.Profile.Scope, repositories, groupCheckouts(group, catalogue))
+		copy := projectGroup(group, owner.scope, repositories, groupCheckouts(group, catalogue))
 		copy.Topics, err = store.List[model.CopyTopic](ctx, a.Store.DB, `
-SELECT json_object('id',s.id,'chatId',s.chat_id,'title',
+SELECT json_object('id',s.id,'chatId',s.chat_id,'agentId',c.agent_id,'title',
   CASE WHEN s.kind='main' THEN json_extract(c.data,'$.title') ELSE json_extract(s.activity,'$.title') END,
   'busy',json(CASE WHEN EXISTS (SELECT 1 FROM runs r WHERE r.session_id=s.id AND r.status IN ('queued','starting','running','waiting_user','cancelling','unknown'))
   THEN 'true' ELSE 'false' END))
@@ -155,23 +161,31 @@ FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE json_extract(s.data,'$.work
 	return copies, nil
 }
 
-func (a *App) selectGroup(ctx context.Context, q store.Queryer, agent model.Agent, id string) (model.WorkingCopy, error) {
-	group, err := getGroup(ctx, q, agent.ID, id)
+func (a *App) WorkingCopies(ctx context.Context, agentID string) ([]model.WorkingCopy, error) {
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return a.workingCopiesForOwner(ctx, owner)
+}
+
+func (a *App) selectGroupForOwner(ctx context.Context, q store.Queryer, owner worktreeOwner, id string) (model.WorkingCopy, error) {
+	group, err := getGroupForOwner(ctx, q, owner, id)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
 	if group.Archived {
 		return model.WorkingCopy{}, conflict("The directory group is archived")
 	}
-	catalogue, err := worktreeCatalogue(ctx, q, agent.ID)
+	catalogue, err := worktreeCatalogueForOwner(ctx, q, owner)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
-	repositories, err := scopeRepositories(ctx, agent.Profile.Scope)
+	repositories, err := scopeRepositories(ctx, owner.scope)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
-	copy := projectGroup(group, agent.Profile.Scope, repositories, groupCheckouts(group, catalogue))
+	copy := projectGroup(group, owner.scope, repositories, groupCheckouts(group, catalogue))
 	if copy.Error != "" {
 		return copy, conflict(copy.Error)
 	}
@@ -186,11 +200,40 @@ func (a *App) selectGroup(ctx context.Context, q store.Queryer, agent model.Agen
 	return copy, nil
 }
 
+func (a *App) selectGroup(ctx context.Context, q store.Queryer, agent model.Agent, id string) (model.WorkingCopy, error) {
+	return a.selectGroupForTarget(ctx, q, agent, agent.Profile.ProjectID, id)
+}
+
+func (a *App) selectGroupForTarget(ctx context.Context, q store.Queryer, agent model.Agent, projectID, id string) (model.WorkingCopy, error) {
+	if projectID != "" {
+		owner, err := a.projectWorktreeOwner(ctx, q, projectID)
+		if err != nil {
+			return model.WorkingCopy{}, err
+		}
+		return a.selectGroupForOwner(ctx, q, owner, id)
+	}
+	return a.selectGroupForOwner(ctx, q, worktreeOwner{
+		project:       false,
+		id:            agent.ID,
+		scope:         agent.Profile.Scope,
+		worktreeSetup: agent.Profile.WorktreeSetup,
+		archived:      agent.Archived,
+	}, id)
+}
+
 // SaveWorkingCopy registers the selected checkouts and saves their references
 // in one transaction before touching Git. A partial preparation can be retried.
 func (a *App) SaveWorkingCopy(ctx context.Context, agentID, id string, in model.CreateWorkingCopy) (model.WorkingCopy, error) {
 	a.worktreeMu.Lock()
 	defer a.worktreeMu.Unlock()
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return model.WorkingCopy{}, err
+	}
+	return a.saveWorkingCopyForOwner(ctx, owner, id, in)
+}
+
+func (a *App) saveWorkingCopyForOwner(ctx context.Context, owner worktreeOwner, id string, in model.CreateWorkingCopy) (model.WorkingCopy, error) {
 	if !copyID.MatchString(in.ID) {
 		return model.WorkingCopy{}, invalid("A stable worktree request ID is required")
 	}
@@ -202,12 +245,12 @@ func (a *App) SaveWorkingCopy(ctx context.Context, agentID, id string, in model.
 	if !editing {
 		id = in.ID
 	}
-	existing, err := getGroup(ctx, a.Store.DB, agentID, id)
+	existing, err := getGroupForOwner(ctx, a.Store.DB, owner, id)
 	if err != nil && (editing || !errors.Is(err, sql.ErrNoRows)) {
 		return model.WorkingCopy{}, err
 	}
 	if existing.ID != "" {
-		catalogue, err := worktreeCatalogue(ctx, a.Store.DB, agentID)
+		catalogue, err := worktreeCatalogueForOwner(ctx, a.Store.DB, owner)
 		if err != nil {
 			return model.WorkingCopy{}, err
 		}
@@ -224,20 +267,25 @@ func (a *App) SaveWorkingCopy(ctx context.Context, agentID, id string, in model.
 			})
 		})
 		if matches {
-			return a.prepareGroup(ctx, existing)
+			return a.prepareGroupForOwner(ctx, owner, existing)
 		}
 		if !editing {
 			return model.WorkingCopy{}, conflict("This request ID already belongs to a different directory group")
 		}
 	}
-	options, err := a.WorkingCopyOptions(ctx, agentID, in.ID)
+	options, err := a.workingCopyOptionsForOwner(ctx, owner, in.ID)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
 	if options.PrimaryRootID != in.Scope.PrimaryRootID || !slices.Equal(options.Roots, in.Scope.Roots) {
 		return model.WorkingCopy{}, conflict("The Agent Scope changed; reopen the directory group editor")
 	}
-	group := model.DirectoryGroup{ID: id, AgentID: agentID, Name: name, Archived: existing.Archived}
+	group := model.DirectoryGroup{ID: id, Name: name, Archived: existing.Archived}
+	if owner.project {
+		group.ProjectID = owner.id
+	} else {
+		group.AgentID = owner.id
+	}
 	checkouts := make([]model.CopyCheckout, 0, len(in.Choices))
 	seen := map[string]bool{}
 	for _, choice := range in.Choices {
@@ -253,7 +301,7 @@ func (a *App) SaveWorkingCopy(ctx context.Context, agentID, id string, in model.
 	}
 	err = a.Store.Write(ctx, func(tx *sql.Tx) error {
 		for i, checkout := range checkouts {
-			saved, err := reserveCheckout(ctx, tx, agentID, checkout)
+			saved, err := reserveCheckoutForOwner(ctx, tx, owner, checkout)
 			if err != nil {
 				return err
 			}
@@ -263,42 +311,42 @@ func (a *App) SaveWorkingCopy(ctx context.Context, agentID, id string, in model.
 		if _, err := resolveGroupScope(options.Scope, options.Groups, checkouts); err != nil {
 			return err
 		}
-		return saveGroup(ctx, tx, group)
+		return saveGroupForOwner(ctx, tx, owner, group)
 	})
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
-	return a.prepareGroup(ctx, group)
+	return a.prepareGroupForOwner(ctx, owner, group)
 }
 
 func (a *App) PrepareWorkingCopy(ctx context.Context, agentID, id string) (model.WorkingCopy, error) {
 	a.worktreeMu.Lock()
 	defer a.worktreeMu.Unlock()
-	group, err := getGroup(ctx, a.Store.DB, agentID, id)
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
-	return a.prepareGroup(ctx, group)
+	group, err := getGroupForOwner(ctx, a.Store.DB, owner, id)
+	if err != nil {
+		return model.WorkingCopy{}, err
+	}
+	return a.prepareGroupForOwner(ctx, owner, group)
 }
 
-func (a *App) prepareGroup(ctx context.Context, group model.DirectoryGroup) (model.WorkingCopy, error) {
-	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", group.AgentID)
-	if err != nil {
-		return model.WorkingCopy{}, err
-	}
-	if agent.Archived {
+func (a *App) prepareGroupForOwner(ctx context.Context, owner worktreeOwner, group model.DirectoryGroup) (model.WorkingCopy, error) {
+	if owner.archived {
 		return model.WorkingCopy{}, conflict("Agent is archived")
 	}
-	catalogue, err := worktreeCatalogue(ctx, a.Store.DB, group.AgentID)
+	catalogue, err := worktreeCatalogueForOwner(ctx, a.Store.DB, owner)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
-	repositories, err := scopeRepositories(ctx, agent.Profile.Scope)
+	repositories, err := scopeRepositories(ctx, owner.scope)
 	if err != nil {
 		return model.WorkingCopy{}, err
 	}
 	checkouts := groupCheckouts(group, catalogue)
-	copy := projectGroup(group, agent.Profile.Scope, repositories, checkouts)
+	copy := projectGroup(group, owner.scope, repositories, checkouts)
 	if copy.State == "ready" {
 		return copy, nil
 	}
@@ -311,7 +359,7 @@ func (a *App) prepareGroup(ctx context.Context, group model.DirectoryGroup) (mod
 		}) {
 			break
 		}
-		saved, err := a.prepareCheckout(ctx, checkout)
+		saved, err := a.prepareCheckoutForOwner(ctx, owner, checkout)
 		if err != nil {
 			return copy, err
 		}
@@ -320,24 +368,32 @@ func (a *App) prepareGroup(ctx context.Context, group model.DirectoryGroup) (mod
 			break
 		}
 	}
-	return projectGroup(group, agent.Profile.Scope, repositories, checkouts), nil
+	return projectGroup(group, owner.scope, repositories, checkouts), nil
 }
 
 func (a *App) ArchiveWorkingCopy(ctx context.Context, agentID, id string, archived bool) (model.DirectoryGroup, error) {
 	a.worktreeMu.Lock()
 	defer a.worktreeMu.Unlock()
-	group, err := getGroup(ctx, a.Store.DB, agentID, id)
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return model.DirectoryGroup{}, err
+	}
+	group, err := getGroupForOwner(ctx, a.Store.DB, owner, id)
 	if err != nil {
 		return group, err
 	}
 	group.Archived = archived
-	return group, saveGroup(ctx, a.Store.DB, group)
+	return group, saveGroupForOwner(ctx, a.Store.DB, owner, group)
 }
 
 func (a *App) DeleteWorkingCopy(ctx context.Context, agentID, id string) error {
 	a.worktreeMu.Lock()
 	defer a.worktreeMu.Unlock()
-	_, err := a.Store.DB.ExecContext(ctx, "DELETE FROM working_copies WHERE id=? AND agent_id=?", id, agentID)
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return err
+	}
+	_, err = a.Store.DB.ExecContext(ctx, "DELETE FROM "+owner.copyTable()+" WHERE id=? AND "+owner.ownerColumn()+"=?", id, owner.id)
 	return err
 }
 
@@ -356,6 +412,7 @@ func (a *App) migrateWorkingCopies(ctx context.Context) error {
 			return err
 		}
 		for _, copy := range copies {
+			owner := worktreeOwner{id: copy.AgentID}
 			for _, checkout := range copy.Checkouts {
 				if copy.State == "removed" {
 					break
@@ -366,13 +423,13 @@ func (a *App) migrateWorkingCopies(ctx context.Context) error {
 				if !checkout.Ready {
 					checkout.Error = copy.Error
 				}
-				saved, err := registerCheckout(ctx, tx, copy.AgentID, checkout)
+				saved, err := registerCheckoutForOwner(ctx, tx, owner, checkout)
 				if err != nil {
 					return err
 				}
 				if checkout.Base != "" && saved.Base == "" {
 					checkout.ID = saved.ID
-					if err := updateCheckout(ctx, tx, checkout); err != nil {
+					if err := updateCheckoutForOwner(ctx, tx, owner, checkout); err != nil {
 						return err
 					}
 				}

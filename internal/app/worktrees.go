@@ -22,16 +22,16 @@ type worktreeStore interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func getCheckout(ctx context.Context, q store.Queryer, agentID, id string) (model.CopyCheckout, error) {
-	return store.Get[model.CopyCheckout](ctx, q, "SELECT data FROM worktrees WHERE agent_id=? AND id=?", agentID, id)
+func getCheckoutForOwner(ctx context.Context, q store.Queryer, owner worktreeOwner, id string) (model.CopyCheckout, error) {
+	return store.Get[model.CopyCheckout](ctx, q, "SELECT data FROM "+owner.worktreeTable()+" WHERE "+owner.ownerColumn()+"=? AND id=?", owner.id, id)
 }
 
-func listCheckouts(ctx context.Context, q store.Queryer, agentID string) ([]model.CopyCheckout, error) {
-	return store.List[model.CopyCheckout](ctx, q, "SELECT data FROM worktrees WHERE agent_id=? ORDER BY rowid DESC", agentID)
+func listCheckoutsForOwner(ctx context.Context, q store.Queryer, owner worktreeOwner) ([]model.CopyCheckout, error) {
+	return store.List[model.CopyCheckout](ctx, q, "SELECT data FROM "+owner.worktreeTable()+" WHERE "+owner.ownerColumn()+"=? ORDER BY rowid DESC", owner.id)
 }
 
-func worktreeCatalogue(ctx context.Context, q store.Queryer, agentID string) (map[string]model.CopyCheckout, error) {
-	checkouts, err := listCheckouts(ctx, q, agentID)
+func worktreeCatalogueForOwner(ctx context.Context, q store.Queryer, owner worktreeOwner) (map[string]model.CopyCheckout, error) {
+	checkouts, err := listCheckoutsForOwner(ctx, q, owner)
 	catalogue := make(map[string]model.CopyCheckout, len(checkouts))
 	for _, checkout := range checkouts {
 		catalogue[checkout.ID] = checkout
@@ -39,42 +39,52 @@ func worktreeCatalogue(ctx context.Context, q store.Queryer, agentID string) (ma
 	return catalogue, err
 }
 
-func registerCheckout(ctx context.Context, q worktreeStore, agentID string, checkout model.CopyCheckout) (model.CopyCheckout, error) {
-	existing, err := store.Get[model.CopyCheckout](ctx, q, "SELECT data FROM worktrees WHERE agent_id=? AND source=? AND path=?", agentID, checkout.Source, checkout.Path)
+func registerCheckoutForOwner(ctx context.Context, q worktreeStore, owner worktreeOwner, checkout model.CopyCheckout) (model.CopyCheckout, error) {
+	table, col := owner.worktreeTable(), owner.ownerColumn()
+	existing, err := store.Get[model.CopyCheckout](ctx, q, "SELECT data FROM "+table+" WHERE "+col+"=? AND source=? AND path=?", owner.id, checkout.Source, checkout.Path)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return existing, err
 	}
 	if checkout.ID == "" {
 		checkout.ID = ID()
 	}
-	_, err = q.ExecContext(ctx, "INSERT INTO worktrees(id,agent_id,source,path,data) VALUES(?,?,?,?,?)",
-		checkout.ID, agentID, checkout.Source, checkout.Path, store.JSON(checkout))
+	_, err = q.ExecContext(ctx, "INSERT INTO "+table+"(id,"+col+",source,path,data) VALUES(?,?,?,?,?)",
+		checkout.ID, owner.id, checkout.Source, checkout.Path, store.JSON(checkout))
 	return checkout, err
 }
 
-func updateCheckout(ctx context.Context, q worktreeStore, checkout model.CopyCheckout) error {
-	_, err := q.ExecContext(ctx, "UPDATE worktrees SET data=? WHERE id=?", store.JSON(checkout), checkout.ID)
+func updateCheckoutForOwner(ctx context.Context, q worktreeStore, owner worktreeOwner, checkout model.CopyCheckout) error {
+	_, err := q.ExecContext(ctx, "UPDATE "+owner.worktreeTable()+" SET data=? WHERE id=?", store.JSON(checkout), checkout.ID)
 	return err
 }
 
-func reserveCheckout(ctx context.Context, q worktreeStore, agentID string, checkout model.CopyCheckout) (model.CopyCheckout, error) {
+func reserveCheckoutForOwner(ctx context.Context, q worktreeStore, owner worktreeOwner, checkout model.CopyCheckout) (model.CopyCheckout, error) {
 	if checkout.Base != "" {
 		var reserved bool
-		err := q.QueryRowContext(ctx, `SELECT EXISTS(
+		if owner.project {
+			err := q.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM project_worktrees WHERE path=? AND (project_id!=? OR source!=? OR COALESCE(json_extract(data,'$.base'),'')!=?)
+) OR EXISTS(SELECT 1 FROM worktrees WHERE path=?)`, checkout.Path, owner.id, checkout.Source, checkout.Base, checkout.Path).Scan(&reserved)
+			if err != nil {
+				return checkout, err
+			}
+		} else {
+			err := q.QueryRowContext(ctx, `SELECT EXISTS(
 SELECT 1 FROM worktrees WHERE path=? AND (agent_id!=? OR source!=? OR COALESCE(json_extract(data,'$.base'),'')!=?)
-)`, checkout.Path, agentID, checkout.Source, checkout.Base).Scan(&reserved)
-		if err != nil {
-			return checkout, err
+) OR EXISTS(SELECT 1 FROM project_worktrees WHERE path=?)`, checkout.Path, owner.id, checkout.Source, checkout.Base, checkout.Path).Scan(&reserved)
+			if err != nil {
+				return checkout, err
+			}
 		}
 		if reserved {
 			return checkout, conflict("The planned worktree path is already registered")
 		}
 	}
-	return registerCheckout(ctx, q, agentID, checkout)
+	return registerCheckoutForOwner(ctx, q, owner, checkout)
 }
 
-func (a *App) Worktrees(ctx context.Context, agentID string) ([]model.CopyCheckout, error) {
-	checkouts, err := listCheckouts(ctx, a.Store.DB, agentID)
+func (a *App) worktreesForOwner(ctx context.Context, owner worktreeOwner) ([]model.CopyCheckout, error) {
+	checkouts, err := listCheckoutsForOwner(ctx, a.Store.DB, owner)
 	for i, checkout := range checkouts {
 		if checkout.Ready {
 			if path, err := workspace.Canonical(checkout.Path); err != nil || path != checkout.Path {
@@ -85,28 +95,32 @@ func (a *App) Worktrees(ctx context.Context, agentID string) ([]model.CopyChecko
 	return checkouts, err
 }
 
-func (a *App) WorkingCopyOptions(ctx context.Context, agentID, id string) (model.CopyOptions, error) {
+func (a *App) Worktrees(ctx context.Context, agentID string) ([]model.CopyCheckout, error) {
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return a.worktreesForOwner(ctx, owner)
+}
+
+func (a *App) workingCopyOptionsForOwner(ctx context.Context, owner worktreeOwner, id string) (model.CopyOptions, error) {
 	var options model.CopyOptions
 	if !copyID.MatchString(id) {
 		return options, invalid("A stable worktree request ID is required")
 	}
-	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", agentID)
-	if err != nil {
-		return options, err
-	}
-	if agent.Archived {
+	if owner.archived {
 		return options, conflict("Agent is archived")
 	}
 	dir, err := workspace.Canonical(a.Store.Dir)
 	if err != nil {
 		return options, err
 	}
-	options.Scope = agent.Profile.Scope
+	options.Scope = owner.scope
 	repositories, err := scopeRepositories(ctx, options.Scope)
 	if err != nil {
 		return options, err
 	}
-	catalogue, err := listCheckouts(ctx, a.Store.DB, agentID)
+	catalogue, err := listCheckoutsForOwner(ctx, a.Store.DB, owner)
 	if err != nil {
 		return options, err
 	}
@@ -126,12 +140,20 @@ func (a *App) WorkingCopyOptions(ctx context.Context, agentID, id string) (model
 		}
 		slot := fmt.Sprintf("%d", i+1)
 		repo.Head, repo.Bases, repo.Existing = head, bases, existing
-		repo.Setup = agent.Profile.WorktreeSetup[repo.GitDir]
+		repo.Setup = owner.worktreeSetup[repo.GitDir]
 		repo.NewPath = filepath.Join(dir, "worktrees", id, slot+"-"+filepath.Base(repo.Source))
 		repo.NewBranch = "lever/" + id + "-" + slot
 		options.Groups = append(options.Groups, repo)
 	}
 	return options, nil
+}
+
+func (a *App) WorkingCopyOptions(ctx context.Context, agentID, id string) (model.CopyOptions, error) {
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return model.CopyOptions{}, err
+	}
+	return a.workingCopyOptionsForOwner(ctx, owner, id)
 }
 
 func planCheckout(repositories []model.CheckoutOptions, choice model.CopyChoice, name string) (model.CopyCheckout, error) {
@@ -159,9 +181,7 @@ func planCheckout(repositories []model.CheckoutOptions, choice model.CopyChoice,
 	return checkout, nil
 }
 
-func (a *App) CreateWorktree(ctx context.Context, agentID string, in model.CreateWorktree) (model.CopyCheckout, error) {
-	a.worktreeMu.Lock()
-	defer a.worktreeMu.Unlock()
+func (a *App) createWorktreeForOwner(ctx context.Context, owner worktreeOwner, in model.CreateWorktree) (model.CopyCheckout, error) {
 	if !copyID.MatchString(in.ID) {
 		return model.CopyCheckout{}, invalid("A stable worktree request ID is required")
 	}
@@ -169,11 +189,11 @@ func (a *App) CreateWorktree(ctx context.Context, agentID string, in model.Creat
 	if len(name) > 100 || (in.Choice.Base != "" && name == "") {
 		return model.CopyCheckout{}, invalid("Enter a worktree name (up to 100 characters)")
 	}
-	options, err := a.WorkingCopyOptions(ctx, agentID, in.ID)
+	options, err := a.workingCopyOptionsForOwner(ctx, owner, in.ID)
 	if err != nil {
 		return model.CopyCheckout{}, err
 	}
-	existing, err := getCheckout(ctx, a.Store.DB, agentID, in.ID)
+	existing, err := getCheckoutForOwner(ctx, a.Store.DB, owner, in.ID)
 	if err == nil {
 		if existing.Source != in.Choice.Source || existing.Base != in.Choice.Base ||
 			(in.Choice.Base != "" && (in.Choice.Path != "" || existing.Name != name)) ||
@@ -185,7 +205,7 @@ func (a *App) CreateWorktree(ctx context.Context, agentID string, in model.Creat
 		}) {
 			return existing, conflict("The repository is no longer in the Agent Scope")
 		}
-		return a.prepareCheckout(ctx, existing)
+		return a.prepareCheckoutForOwner(ctx, owner, existing)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return existing, err
@@ -195,28 +215,32 @@ func (a *App) CreateWorktree(ctx context.Context, agentID string, in model.Creat
 		return checkout, err
 	}
 	checkout.ID = in.ID
-	checkout, err = reserveCheckout(ctx, a.Store.DB, agentID, checkout)
+	checkout, err = reserveCheckoutForOwner(ctx, a.Store.DB, owner, checkout)
 	if err != nil {
 		return checkout, err
 	}
-	return a.prepareCheckout(ctx, checkout)
+	return a.prepareCheckoutForOwner(ctx, owner, checkout)
 }
 
-func (a *App) PrepareWorktree(ctx context.Context, agentID, id string) (model.CopyCheckout, error) {
+func (a *App) CreateWorktree(ctx context.Context, agentID string, in model.CreateWorktree) (model.CopyCheckout, error) {
 	a.worktreeMu.Lock()
 	defer a.worktreeMu.Unlock()
-	checkout, err := getCheckout(ctx, a.Store.DB, agentID, id)
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return model.CopyCheckout{}, err
+	}
+	return a.createWorktreeForOwner(ctx, owner, in)
+}
+
+func (a *App) prepareWorktreeForOwner(ctx context.Context, owner worktreeOwner, id string) (model.CopyCheckout, error) {
+	checkout, err := getCheckoutForOwner(ctx, a.Store.DB, owner, id)
 	if err != nil {
 		return checkout, err
 	}
-	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", agentID)
-	if err != nil {
-		return checkout, err
-	}
-	if agent.Archived {
+	if owner.archived {
 		return checkout, conflict("Agent is archived")
 	}
-	repositories, err := scopeRepositories(ctx, agent.Profile.Scope)
+	repositories, err := scopeRepositories(ctx, owner.scope)
 	if err != nil {
 		return checkout, err
 	}
@@ -225,10 +249,20 @@ func (a *App) PrepareWorktree(ctx context.Context, agentID, id string) (model.Co
 	}) {
 		return checkout, conflict("The repository is no longer in the Agent Scope")
 	}
-	return a.prepareCheckout(ctx, checkout)
+	return a.prepareCheckoutForOwner(ctx, owner, checkout)
 }
 
-func (a *App) prepareCheckout(ctx context.Context, checkout model.CopyCheckout) (model.CopyCheckout, error) {
+func (a *App) PrepareWorktree(ctx context.Context, agentID, id string) (model.CopyCheckout, error) {
+	a.worktreeMu.Lock()
+	defer a.worktreeMu.Unlock()
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return model.CopyCheckout{}, err
+	}
+	return a.prepareWorktreeForOwner(ctx, owner, id)
+}
+
+func (a *App) prepareCheckoutForOwner(ctx context.Context, owner worktreeOwner, checkout model.CopyCheckout) (model.CopyCheckout, error) {
 	if checkout.Ready {
 		return checkout, nil
 	}
@@ -237,13 +271,11 @@ func (a *App) prepareCheckout(ctx context.Context, checkout model.CopyCheckout) 
 	} else {
 		checkout.Ready, checkout.Error = true, ""
 	}
-	return checkout, updateCheckout(context.WithoutCancel(ctx), a.Store.DB, checkout)
+	return checkout, updateCheckoutForOwner(context.WithoutCancel(ctx), a.Store.DB, owner, checkout)
 }
 
-func (a *App) DeleteWorktree(ctx context.Context, agentID, id string) error {
-	a.worktreeMu.Lock()
-	defer a.worktreeMu.Unlock()
-	checkout, err := getCheckout(ctx, a.Store.DB, agentID, id)
+func (a *App) deleteWorktreeForOwner(ctx context.Context, owner worktreeOwner, id string) error {
+	checkout, err := getCheckoutForOwner(ctx, a.Store.DB, owner, id)
 	if err != nil {
 		return err
 	}
@@ -261,8 +293,18 @@ func (a *App) DeleteWorktree(ctx context.Context, agentID, id string) error {
 			return conflict(err.Error())
 		}
 	}
-	_, err = a.Store.DB.ExecContext(context.WithoutCancel(ctx), "DELETE FROM worktrees WHERE id=?", id)
+	_, err = a.Store.DB.ExecContext(context.WithoutCancel(ctx), "DELETE FROM "+owner.worktreeTable()+" WHERE id=?", id)
 	return err
+}
+
+func (a *App) DeleteWorktree(ctx context.Context, agentID, id string) error {
+	a.worktreeMu.Lock()
+	defer a.worktreeMu.Unlock()
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, agentID)
+	if err != nil {
+		return err
+	}
+	return a.deleteWorktreeForOwner(ctx, owner, id)
 }
 
 func (a *App) reserveCheckoutRemoval(ctx context.Context, checkout model.CopyCheckout) error {
@@ -273,7 +315,13 @@ SELECT data FROM working_copies AS g WHERE EXISTS (
   SELECT 1 FROM json_each(g.data,'$.worktreeIds') AS choice
   JOIN worktrees AS w ON w.id=choice.value
   WHERE w.id=? OR (? AND w.path=?)
-)`, checkout.ID, checkout.Base != "", checkout.Path)
+)
+UNION ALL
+SELECT data FROM project_working_copies AS g WHERE EXISTS (
+  SELECT 1 FROM json_each(g.data,'$.worktreeIds') AS choice
+  JOIN project_worktrees AS w ON w.id=choice.value
+  WHERE w.id=? OR (? AND w.path=?)
+)`, checkout.ID, checkout.Base != "", checkout.Path, checkout.ID, checkout.Base != "", checkout.Path)
 	if err != nil {
 		return err
 	}
@@ -290,6 +338,15 @@ SELECT data FROM working_copies AS g WHERE EXISTS (
 	for _, agent := range agents {
 		if slices.ContainsFunc(agent.Profile.Roots, func(root model.Root) bool { return workspace.Contains(checkout.Path, root.Path) }) {
 			return conflict("An Agent Scope uses this worktree: " + agent.Name)
+		}
+	}
+	projects, err := store.List[model.Project](ctx, a.Store.DB, "SELECT data FROM projects")
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		if slices.ContainsFunc(project.Roots, func(root model.Root) bool { return workspace.Contains(checkout.Path, root.Path) }) {
+			return conflict("A Project Scope uses this worktree: " + project.Name)
 		}
 	}
 	if err := a.checkCheckoutActivity(ctx, checkout.Path); err != nil {

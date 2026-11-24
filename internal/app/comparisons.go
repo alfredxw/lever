@@ -169,11 +169,12 @@ func (a *App) addComparisonTopic(ctx context.Context, tx *sql.Tx, comparisonID s
 		return run, err
 	}
 	session := model.Session{
-		ID: ID(), ChatID: source.ID, AgentID: agent.ID, Kind: "topic", Scope: profile.Scope,
+		ID: ID(), ChatID: source.ID, AgentID: agent.ID, Kind: "topic", ProjectID: profile.ProjectID, Scope: profile.Scope,
 		Selection: selection, CreatedAt: source.UpdatedAt,
 		Comparison: &model.ComparisonOrigin{ID: comparisonID, ChatID: source.ID, ModelName: choice.ModelName},
 	}
 	if input.SharedScope {
+		session.ProjectID = sourceSession.ProjectID
 		session.Scope = sourceSession.Scope
 		session.WorkingCopyID = sourceSession.WorkingCopyID
 		session.WorkingCopyName = sourceSession.WorkingCopyName

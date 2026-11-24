@@ -82,6 +82,7 @@ import type {
   Conversation,
   MessageQuote,
   Overview,
+  Project,
   Reference,
   Run,
   Session,
@@ -200,6 +201,7 @@ const Terminal = lazy(() => import("@/features/terminal/Terminal"));
 const WorkspaceNotes = lazy(() => import("@/features/tasks/WorkspaceNotes"));
 const BrowserPanel = lazy(() => import("@/features/browser/BrowserPanel"));
 const noAgents: Agent[] = [];
+const noProjects: Project[] = [];
 const noChats: Overview["chats"] = [];
 const noRequests: Overview["requests"] = [];
 type WorkspaceTabTarget = { agentId: string; tab: WorkspaceTab };
@@ -457,6 +459,7 @@ export default function App() {
     localStorage.setItem("lever:agent", selected);
   }, [selected]);
   const agents = overview.data?.agents ?? noAgents;
+  const projects = overview.data?.projects ?? noProjects;
   const agent = agents.find((a) => a.id === selected);
   const sharedWorkspace = selected === sharedWorkspaceId;
   if (
@@ -1706,7 +1709,12 @@ export default function App() {
         const pane = companionPaneFor(owner.id, sessionId);
         const copies =
           !sessionId && workingCopyId
-            ? await queryClient.ensureQueryData(workingCopiesQuery(owner.id))
+            ? await queryClient.ensureQueryData(
+                workingCopiesQuery(
+                  owner.profile.projectId || owner.id,
+                  owner.profile.projectId ? "project" : "agent",
+                ),
+              )
             : undefined;
         const scope = session
           ? session
@@ -2374,6 +2382,7 @@ export default function App() {
                                       key={agent.id}
                                       agent={agent}
                                       agents={overview.data!.agents}
+                                      projects={projects}
                                       homeDir={overview.data?.homeDir ?? ""}
                                     />
                                   </div>
@@ -2576,6 +2585,7 @@ export default function App() {
                 <Profile
                   key={create.source?.id ?? "new"}
                   agents={overview.data?.agents ?? noAgents}
+                  projects={projects}
                   homeDir={overview.data?.homeDir ?? ""}
                   creation={{
                     ...create,
@@ -2727,7 +2737,12 @@ const ScopedTool = memo(function ScopedTool({
     ...sessionQuery(sessionId ?? ""),
     enabled: !!sessionId,
   });
-  const copies = useWorkingCopies(agent.id, !!workingCopyId);
+  const copies = useWorkingCopies(
+    agent.profile.projectId || agent.id,
+    !!workingCopyId,
+    false,
+    agent.profile.projectId ? "project" : "agent",
+  );
   if (sessionId && view.isPending) return <Loading />;
   if (view.error)
     return <ErrorNotice error={view.error} retry={() => void view.refetch()} />;

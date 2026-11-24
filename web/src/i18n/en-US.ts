@@ -2683,4 +2683,25 @@ export const enUS = {
   "skills.scopeChoiceAll": "Available to all Agents",
   "skills.scopeChoiceSelected": "Selected Agents ({{count}})",
   "skills.scopeChoiceNone": "Do not attach yet",
-} as const;
+  "projects.create": "New shared project",
+  "projects.createAction": "Create project",
+  "projects.createHint":
+    "Save directories and worktree pool as a reusable project scope shared across Agents.",
+  "projects.edit": "Edit shared project",
+  "projects.editAction": "Edit project",
+  "projects.editHint":
+    "Changes to directories and worktree setup sync automatically to all linked Agents.",
+  "projects.saveAsShared": "Save as shared project",
+  "projects.namePlaceholder": "e.g. lever-core",
+  "projects.linkedAgentsCount": "Linked Agents ({{count}})",
+  "projects.noLinkedAgents": "No Agents linked yet.",
+  "projects.delete": "Delete project",
+  "projects.deleteConfirmDescription":
+    "Linked Agents will unlink and keep their current directories.",
+  "projects.deleteConfirmAction": "Confirm delete",
+  "projects.deleted": "Project deleted",
+  "profile.project": "Shared project",
+  "profile.projectIndependent": "Independent directories",
+  "profile.projectManagedHint":
+    "Directories and worktrees are shared via project {{name}}.",
+};

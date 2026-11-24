@@ -3,39 +3,61 @@ import type { CopyCheckout, CopyOptions, WorkingCopy } from "@/api/types.gen";
 import { api } from "@/api/client";
 import { directoryName } from "@/lib/paths";
 
-export const copyPath = (agentId: string) =>
-  `/agents/${agentId}/working-copies`;
-export const copyKey = (agentId: string) =>
-  ["working-copies", agentId] as const;
-export const worktreePath = (agentId: string) => `/agents/${agentId}/worktrees`;
-export const worktreeKey = (agentId: string) => ["worktrees", agentId] as const;
-export const worktreeOptionsKey = (agentId: string) =>
-  ["worktree-options", agentId] as const;
+export type WorktreeOwner = "agent" | "project";
 
-export const workingCopiesQuery = (agentId: string) =>
+export const copyPath = (id: string, owner: WorktreeOwner = "agent") =>
+  `/${owner === "project" ? "projects" : "agents"}/${id}/working-copies`;
+export const copyKey = (id: string, owner: WorktreeOwner = "agent") =>
+  owner === "project"
+    ? (["working-copies", "project", id] as const)
+    : (["working-copies", id] as const);
+export const worktreePath = (id: string, owner: WorktreeOwner = "agent") =>
+  `/${owner === "project" ? "projects" : "agents"}/${id}/worktrees`;
+export const worktreeKey = (id: string, owner: WorktreeOwner = "agent") =>
+  owner === "project"
+    ? (["worktrees", "project", id] as const)
+    : (["worktrees", id] as const);
+export const worktreeOptionsKey = (
+  id: string,
+  owner: WorktreeOwner = "agent",
+) =>
+  owner === "project"
+    ? (["worktree-options", "project", id] as const)
+    : (["worktree-options", id] as const);
+
+export const workingCopiesQuery = (
+  id: string,
+  owner: WorktreeOwner = "agent",
+) =>
   queryOptions({
-    queryKey: copyKey(agentId),
-    queryFn: () => api<WorkingCopy[]>(copyPath(agentId)),
+    queryKey: copyKey(id, owner),
+    queryFn: () => api<WorkingCopy[]>(copyPath(id, owner)),
   });
 
 export function useWorkingCopies(
-  agentId: string,
+  id: string,
   enabled: boolean,
   refetchInterval: number | false = false,
+  owner: WorktreeOwner = "agent",
 ) {
   return useQuery({
-    ...workingCopiesQuery(agentId),
-    enabled,
+    ...workingCopiesQuery(id, owner),
+    enabled: enabled && !!id,
     refetchOnWindowFocus: true,
     refetchInterval,
   });
 }
 
-export function useWorkingCopyOptions(agentId: string, requestId: string) {
+export function useWorkingCopyOptions(
+  id: string,
+  requestId: string,
+  owner: WorktreeOwner = "agent",
+) {
   return useQuery({
-    queryKey: [...worktreeOptionsKey(agentId), requestId],
+    queryKey: [...worktreeOptionsKey(id, owner), requestId],
     queryFn: () =>
-      api<CopyOptions>(`${copyPath(agentId)}/options?requestId=${requestId}`),
+      api<CopyOptions>(`${copyPath(id, owner)}/options?requestId=${requestId}`),
+    enabled: !!id,
   });
 }
 

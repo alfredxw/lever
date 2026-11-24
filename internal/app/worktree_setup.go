@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"lever/internal/model"
-	"lever/internal/store"
 	"lever/internal/terminal"
 	"lever/internal/workspace"
 )
@@ -13,6 +12,14 @@ import (
 // StartWorktreeSetup starts the exact command the user saw in the creation
 // dialog. The setup terminal is keyed by a worktree rather than a Topic.
 func (a *App) StartWorktreeSetup(ctx context.Context, key terminal.Key, path, command string) error {
+	owner, err := a.agentWorktreeOwner(ctx, a.Store.DB, key.Agent)
+	if err != nil {
+		return err
+	}
+	return a.startWorktreeSetupForOwner(ctx, owner, key, path, command)
+}
+
+func (a *App) startWorktreeSetupForOwner(ctx context.Context, owner worktreeOwner, key terminal.Key, path, command string) error {
 	if !copyID.MatchString(key.Worktree) || !copyID.MatchString(key.ID) || command == "" {
 		return invalid("Invalid worktree setup request")
 	}
@@ -27,7 +34,7 @@ func (a *App) StartWorktreeSetup(ctx context.Context, key terminal.Key, path, co
 	if a.closed {
 		return conflict("Backend is shutting down")
 	}
-	checkout, err := getCheckout(ctx, a.Store.DB, key.Agent, key.Worktree)
+	checkout, err := getCheckoutForOwner(ctx, a.Store.DB, owner, key.Worktree)
 	if err != nil {
 		return err
 	}
@@ -40,14 +47,10 @@ func (a *App) StartWorktreeSetup(ctx context.Context, key terminal.Key, path, co
 	if a.Terminals.Knows(key) {
 		return nil
 	}
-	agent, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", key.Agent)
-	if err != nil {
-		return err
-	}
-	if agent.Archived || agent.Profile.WorktreeSetup[checkout.GitDir] != command {
+	if owner.archived || owner.worktreeSetup[checkout.GitDir] != command {
 		return conflict("The configured worktree setup command has changed")
 	}
-	if !slices.ContainsFunc(agent.Profile.Roots, func(root model.Root) bool {
+	if !slices.ContainsFunc(owner.scope.Roots, func(root model.Root) bool {
 		if !workspace.Contains(checkout.Source, root.Path) {
 			return false
 		}

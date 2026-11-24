@@ -49,7 +49,7 @@ WHERE r.id=? AND r.chat_id=? AND s.kind='main'`, sourceRunID, chatID)
 		topicID = ID()
 		session := model.Session{
 			ID: topicID, ChatID: chat.ID, AgentID: agent.ID, Kind: "topic", CreatedAt: now(),
-			Title: store.ChatTitle(source), SourceRunID: source.ID, Scope: main.Scope,
+			Title: store.ChatTitle(source), SourceRunID: source.ID, ProjectID: main.ProjectID, Scope: main.Scope,
 			WorkingCopyID: main.WorkingCopyID, WorkingCopyName: main.WorkingCopyName,
 			Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission},
 		}

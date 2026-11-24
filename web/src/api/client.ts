@@ -379,6 +379,7 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
     } else {
       if (
         event.type === "agents" ||
+        event.type === "projects" ||
         event.type === "providers" ||
         event.type === "skills"
       ) {
@@ -389,6 +390,11 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
         void queryClient.invalidateQueries({
           queryKey: ["skill-update-settings"],
         });
+      }
+      if (event.type === "projects") {
+        void queryClient.invalidateQueries({ queryKey: ["working-copies"] });
+        void queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+        void queryClient.invalidateQueries({ queryKey: ["worktree-options"] });
       }
       if (event.type === "providers" || event.type === "plugins") {
         void queryClient.invalidateQueries({ queryKey: ["plugins"] });

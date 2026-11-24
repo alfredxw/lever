@@ -28,9 +28,8 @@ import {
   copyPath,
   useWorkingCopies,
   useWorkingCopyOptions,
-  worktreeKey,
-  worktreeOptionsKey,
   worktreePath,
+  type WorktreeOwner,
 } from "./queries";
 import type { SetupSelection } from "./WorktreeSetup";
 
@@ -52,11 +51,12 @@ type Callbacks = {
 
 export function ScopeEditor({
   agentId,
+  owner = "agent",
   edit,
   ...callbacks
-}: { agentId: string; edit: ScopeEdit } & Callbacks) {
+}: { agentId: string; owner?: WorktreeOwner; edit: ScopeEdit } & Callbacks) {
   const { t } = useTranslation();
-  const options = useWorkingCopyOptions(agentId, edit.requestId);
+  const options = useWorkingCopyOptions(agentId, edit.requestId, owner);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     heading.current?.focus({ preventScroll: true });
@@ -78,6 +78,7 @@ export function ScopeEditor({
         <ScopeForm
           key={JSON.stringify(options.data.groups.map((repo) => repo.source))}
           agentId={agentId}
+          owner={owner}
           edit={edit}
           options={options.data}
           {...callbacks}
@@ -112,13 +113,19 @@ const normalize = (path: string) => path.replace(/\\/g, "/").replace(/\/$/, "");
 
 function ScopeForm({
   agentId,
+  owner,
   edit,
   options,
   submitDisabled,
   onReady,
   onBack,
   onBusy,
-}: { agentId: string; edit: ScopeEdit; options: CopyOptions } & Callbacks) {
+}: {
+  agentId: string;
+  owner: WorktreeOwner;
+  edit: ScopeEdit;
+  options: CopyOptions;
+} & Callbacks) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const creatingWorktree = edit.kind === "worktree";
@@ -222,12 +229,12 @@ function ScopeForm({
   const save = useMutation<WorkingCopy | CopyCheckout>({
     mutationFn: () => {
       if (creatingWorktree)
-        return api<CopyCheckout>(worktreePath(agentId), {
+        return api<CopyCheckout>(worktreePath(agentId, owner), {
           id: edit.requestId,
           name: name.trim(),
           choice: changed[0],
         });
-      const path = copyPath(agentId);
+      const path = copyPath(agentId, owner);
       return api<WorkingCopy>(
         editing ? `${path}/${editing.id}` : path,
         {
@@ -241,10 +248,13 @@ function ScopeForm({
     },
     onSuccess: (value) => {
       if ("checkouts" in value) {
-        client.setQueryData<WorkingCopy[]>(copyKey(agentId), (previous) => [
-          value,
-          ...(previous ?? []).filter((copy) => copy.id !== value.id),
-        ]);
+        client.setQueryData<WorkingCopy[]>(
+          copyKey(agentId, owner),
+          (previous) => [
+            value,
+            ...(previous ?? []).filter((copy) => copy.id !== value.id),
+          ],
+        );
         if (value.state === "ready" && !value.error)
           onReady(value.checkouts, setup);
       } else if (value.ready) onReady([value], setup);
@@ -252,15 +262,16 @@ function ScopeForm({
     onSettled: () => {
       submitting.current = false;
       onBusy(false);
-      void client.invalidateQueries({ queryKey: copyKey(agentId) });
-      void client.invalidateQueries({ queryKey: worktreeKey(agentId) });
-      void client.invalidateQueries({ queryKey: worktreeOptionsKey(agentId) });
+      void client.invalidateQueries({ queryKey: ["working-copies"] });
+      void client.invalidateQueries({ queryKey: ["worktrees"] });
+      void client.invalidateQueries({ queryKey: ["worktree-options"] });
     },
   });
   const progress = useWorkingCopies(
     agentId,
     !creatingWorktree && save.isPending,
     !creatingWorktree && save.isPending ? 750 : false,
+    owner,
   );
   const saved = save.data;
   const checkouts = saved

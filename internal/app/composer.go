@@ -36,8 +36,7 @@ func (a *App) Suggestions(ctx context.Context, chatID, agentID, sessionID, copyI
 			return nil, invalid("Session must belong to this Chat")
 		}
 		scope = session.Scope
-	}
-	if sessionID == "" && copyID != "" {
+	} else if copyID != "" {
 		copy, err := a.selectGroup(ctx, a.Store.DB, agent, copyID)
 		if err != nil {
 			return nil, err

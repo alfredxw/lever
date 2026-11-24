@@ -2557,4 +2557,24 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "skills.scopeChoiceAll": "全部 Agent 默认可用",
   "skills.scopeChoiceSelected": "仅指定 Agent（已选 {{count}}）",
   "skills.scopeChoiceNone": "暂不额外挂载",
+  "projects.create": "新建共享项目",
+  "projects.createAction": "创建项目",
+  "projects.createHint":
+    "将目录与 Worktree 池保存为可复用的共享项目作用域，供多个 Agent 共用。",
+  "projects.edit": "编辑共享项目",
+  "projects.editAction": "编辑项目",
+  "projects.editHint":
+    "修改目录与 Worktree 初始化配置后，将自动同步到所有已关联的 Agent。",
+  "projects.saveAsShared": "存为共享项目",
+  "projects.namePlaceholder": "例如：lever-core",
+  "projects.linkedAgentsCount": "已关联 Agent（{{count}}）",
+  "projects.noLinkedAgents": "暂未关联 Agent。",
+  "projects.delete": "删除项目",
+  "projects.deleteConfirmDescription":
+    "已关联的 Agent 将解除关联并保留当前目录快照。",
+  "projects.deleteConfirmAction": "确认删除",
+  "projects.deleted": "已删除项目",
+  "profile.project": "共享项目",
+  "profile.projectIndependent": "独立目录",
+  "profile.projectManagedHint": "目录与 Worktree 由项目「{{name}}」共享管理。",
 };

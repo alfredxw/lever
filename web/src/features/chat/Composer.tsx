@@ -229,8 +229,10 @@ export function Composer({
   const choosingDirectory = topicMode && !draft.editing && !comparisonAgents;
   const copyId = choosingDirectory ? draft.workingCopyId : undefined;
   const copies = useWorkingCopies(
-    agentId,
+    profile.projectId || agentId,
     choosingDirectory && !archived && visible !== false,
+    false,
+    profile.projectId ? "project" : "agent",
   );
   const copy = copies.data?.find((item) => item.id === copyId);
   const copyAvailable = availableGroup(copy);

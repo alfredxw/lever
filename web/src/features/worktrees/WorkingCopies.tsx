@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Folders, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api/client";
-import type { CopyCheckout, WorkingCopy } from "@/api/types.gen";
+import type { Agent, CopyCheckout, WorkingCopy } from "@/api/types.gen";
 import { ErrorNotice, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,16 +14,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TabsContent } from "@/components/ui/tabs";
+import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { directoryName } from "@/lib/paths";
 import {
   checkoutName,
-  copyKey,
   copyPath,
   groupSummary,
   useWorkingCopies,
   worktreeKey,
-  worktreeOptionsKey,
   worktreePath,
+  type WorktreeOwner,
 } from "./queries";
 import { ScopeEditor, type ScopeEdit } from "./ScopeEditor";
 import { WorktreeSetup, type useWorktreeSetup } from "./WorktreeSetup";
@@ -36,12 +36,16 @@ export type ScopeTab = "directories" | ScopeEdit["kind"];
 
 export function WorkingCopies({
   agentId,
+  owner = "agent",
+  agents,
   tab,
   canCreate,
   setup,
   setupFields,
 }: {
   agentId: string;
+  owner?: WorktreeOwner;
+  agents?: Agent[];
   tab: ScopeTab;
   canCreate: boolean;
   setup: ReturnType<typeof useWorktreeSetup>;
@@ -49,12 +53,15 @@ export function WorkingCopies({
 }) {
   const { t } = useTranslation();
   const client = useQueryClient();
-  const groups = useWorkingCopies(agentId, tab !== "directories");
+  const groups = useWorkingCopies(agentId, tab !== "directories", false, owner);
   const worktrees = useQuery({
-    queryKey: worktreeKey(agentId),
-    queryFn: () => api<CopyCheckout[]>(worktreePath(agentId)),
-    enabled: tab === "worktree",
+    queryKey: worktreeKey(agentId, owner),
+    queryFn: () => api<CopyCheckout[]>(worktreePath(agentId, owner)),
+    enabled: tab === "worktree" && !!agentId,
   });
+  const agentsById = agents
+    ? new Map(agents.map((item) => [item.id, item]))
+    : undefined;
   const [groupEdit, setGroupEdit] = useState<ScopeEdit>();
   const [worktreeEdit, setWorktreeEdit] = useState<ScopeEdit>();
   const [removing, setRemoving] = useState<CopyCheckout>();
@@ -62,13 +69,13 @@ export function WorkingCopies({
   const action = useMutation({
     mutationFn: async (action: Action) => {
       if ("group" in action) {
-        const path = `${copyPath(agentId)}/${action.group.id}`;
+        const path = `${copyPath(agentId, owner)}/${action.group.id}`;
         if (action.kind === "prepareGroup") await api(`${path}/prepare`, {});
         else if (action.kind === "archive")
           await api(path, { archived: !action.group.archived }, "PATCH");
         else await api(path, {}, "DELETE");
       } else {
-        const path = `${worktreePath(agentId)}/${action.checkout.id}`;
+        const path = `${worktreePath(agentId, owner)}/${action.checkout.id}`;
         if (action.kind === "prepareWorktree") await api(`${path}/prepare`, {});
         else await api(path, {}, "DELETE");
       }
@@ -78,9 +85,9 @@ export function WorkingCopies({
     },
     onSettled: () =>
       Promise.all([
-        client.invalidateQueries({ queryKey: copyKey(agentId) }),
-        client.invalidateQueries({ queryKey: worktreeKey(agentId) }),
-        client.invalidateQueries({ queryKey: worktreeOptionsKey(agentId) }),
+        client.invalidateQueries({ queryKey: ["working-copies"] }),
+        client.invalidateQueries({ queryKey: ["worktrees"] }),
+        client.invalidateQueries({ queryKey: ["worktree-options"] }),
       ]),
   });
   const mutating = busy || action.isPending || !!setup.batch;
@@ -103,6 +110,7 @@ export function WorkingCopies({
     <ScopeEditor
       key={edit.requestId}
       agentId={agentId}
+      owner={owner}
       edit={edit}
       submitDisabled={mutating || !canCreate}
       onBusy={setBusy}
@@ -231,12 +239,26 @@ export function WorkingCopies({
                           {t("worktrees.topics")} · {group.topics.length}
                         </summary>
                         <ul className="mt-1 space-y-1 pl-3">
-                          {group.topics.map((topic) => (
-                            <li key={topic.id} className="break-words">
-                              {topic.title || t("chat.topic")}
-                              {topic.busy && ` · ${t("worktrees.busy")}`}
-                            </li>
-                          ))}
+                          {group.topics.map((topic) => {
+                            const topicAgent = topic.agentId
+                              ? agentsById?.get(topic.agentId)
+                              : undefined;
+                            return (
+                              <li
+                                key={topic.id}
+                                className="flex items-center gap-1.5 break-words"
+                              >
+                                {topicAgent && (
+                                  <AgentAvatar agent={topicAgent} size="xs" />
+                                )}
+                                <span className="min-w-0 truncate">
+                                  {topicAgent ? `${topicAgent.name} · ` : ""}
+                                  {topic.title || t("chat.topic")}
+                                  {topic.busy && ` · ${t("worktrees.busy")}`}
+                                </span>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </details>
                     )}

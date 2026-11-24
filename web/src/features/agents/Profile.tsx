@@ -2,12 +2,12 @@ import {
   WorkingCopies,
   type ScopeTab,
 } from "@/features/worktrees/WorkingCopies";
-import { useWorktreeSetup } from "@/features/worktrees/WorktreeSetup";
 import {
-  copyKey,
-  useWorkingCopyOptions,
-  worktreeOptionsKey,
-} from "@/features/worktrees/queries";
+  useWorktreeSetup,
+  WorktreeSetupFields,
+} from "@/features/worktrees/WorktreeSetup";
+import { ProjectDialog } from "@/features/projects/ProjectDialog";
+import { copyKey, worktreeOptionsKey } from "@/features/worktrees/queries";
 import { useTranslation } from "react-i18next";
 import {
   lazy,
@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import { isMyGo, runtime } from "mygo-runtime";
 import { toast } from "sonner";
-import type { Agent, Overview } from "@/api/types.gen";
+import type { Agent, Overview, Project } from "@/api/types.gen";
 import { api, queryClient } from "@/api/client";
 import { Dialogs } from "@/api/desktop.gen";
 import { Button } from "@/components/ui/button";
@@ -113,7 +113,7 @@ import {
   useModels,
   useProviders,
 } from "@/features/runtime/queries";
-import { directoryName, displayPath } from "@/lib/paths";
+import { displayPath } from "@/lib/paths";
 import { RuntimeIcon } from "@/components/RuntimeIcon";
 import { connectionName } from "@/features/runtime/connections";
 import { ProfileSkills } from "@/features/skills/ProfileSkills";
@@ -159,72 +159,6 @@ function profileContentSignature(agent: Agent, homeDir: string) {
       worktreeSetup,
     },
   });
-}
-
-function WorktreeSetupFields({
-  agentId,
-  formId,
-  commands,
-  onChange,
-  onFlush,
-}: {
-  agentId: string;
-  formId: string;
-  commands: Record<string, string>;
-  onChange: (value: Record<string, string>) => void;
-  onFlush?: () => void;
-}) {
-  const { t } = useTranslation();
-  const [requestId] = useState(() => crypto.randomUUID());
-  const options = useWorkingCopyOptions(agentId, requestId);
-  if (options.isPending) return <Loading />;
-  if (options.error)
-    return (
-      <ErrorNotice error={options.error} retry={() => void options.refetch()} />
-    );
-  const repositories = [
-    ...new Map(
-      options.data.groups.map((group) => [group.gitDir, group]),
-    ).values(),
-  ];
-  if (!repositories.length)
-    return (
-      <p className="text-sm text-muted-foreground">
-        {t("worktrees.noRepository")}
-      </p>
-    );
-  return (
-    <FieldGroup className="mt-2 gap-3">
-      {repositories.map((repo) => (
-        <Field key={repo.gitDir}>
-          <label className="grid gap-2">
-            <span className="text-sm font-medium" title={repo.source}>
-              {directoryName(repo.source)}
-            </span>
-            <Input
-              form={formId}
-              aria-label={t("worktrees.setupFor", {
-                name: directoryName(repo.source),
-              })}
-              placeholder="pnpm install --frozen-lockfile"
-              value={commands[repo.gitDir] ?? ""}
-              maxLength={4096}
-              onChange={(event) =>
-                onChange({ ...commands, [repo.gitDir]: event.target.value })
-              }
-              onBlur={onFlush}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && onFlush) {
-                  event.preventDefault();
-                  onFlush();
-                }
-              }}
-            />
-          </label>
-        </Field>
-      ))}
-    </FieldGroup>
-  );
 }
 
 function newAgentDraft(
@@ -334,15 +268,20 @@ export function Profile({
   agent: existingAgent,
   creation,
   agents,
+  projects = [],
   homeDir,
 }: {
   agents: Agent[];
+  projects?: Project[];
   homeDir: string;
 } & (
   | { agent: Agent; creation?: never }
   | { agent?: never; creation: ProfileCreation }
 )) {
   const { t } = useTranslation();
+  const [projectDialog, setProjectDialog] = useState<"create" | "edit" | null>(
+    null,
+  );
   const scopeId = useId();
   const formId = `${scopeId}-profile`;
   const providers = useProviders();
@@ -381,13 +320,18 @@ export function Profile({
   // Keep optional fields mounted for form validation after their first use.
   const [moreOptions, setMoreOptions] = useState<boolean>();
   const showOptions = !creating || !!moreOptions;
-  const setup = useWorktreeSetup(agent.id);
-  const [scopeTab, setScopeTab] = useState<ScopeTab>(
-    setup.batch?.kind ?? "directories",
-  );
   const [baseDraft, setBaseDraft] = useState(savedProfile);
   const draft = (copyMode && copy?.draft) || baseDraft;
   const hasDraft = !copyMode || !!copy;
+  const linkedProject = draft.profile.projectId
+    ? projects.find((item) => item.id === draft.profile.projectId)
+    : undefined;
+  const worktreeOwner = linkedProject ? "project" : "agent";
+  const worktreeOwnerId = linkedProject ? linkedProject.id : agent.id;
+  const setup = useWorktreeSetup(worktreeOwnerId, worktreeOwner);
+  const [scopeTab, setScopeTab] = useState<ScopeTab>(
+    setup.batch?.kind ?? "directories",
+  );
   const pendingModeRef = useRef<AutoSaveMode>("immediate");
   const dirtyByUserRef = useRef(false);
   const seenUpdatedAts = useRef(
@@ -751,9 +695,10 @@ export function Profile({
       ? "profile.openInFinder"
       : "profile.openDirectory",
   );
+  const scopeLocked = !!linkedProject;
   const pathRows = p.roots.map((root) => {
     const rootInvalid = !creating && !root.path.trim();
-    const actions = (
+    const actions = !scopeLocked ? (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -798,13 +743,25 @@ export function Profile({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-    );
+    ) : desktop && root.path.trim() ? (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={openDirectoryLabel}
+        title={openDirectoryLabel}
+        disabled={openDirectory.isPending}
+        onClick={() => openDirectory.mutate(root.path)}
+      >
+        <ExternalLink />
+      </Button>
+    ) : null;
     return (
       <div key={root.id} className="grid gap-1">
         <Field
           orientation="horizontal"
           className="profile-path-row"
-          data-disabled={busy}
+          data-disabled={busy || scopeLocked}
         >
           {choosePrimary && (
             <RadioGroupItem
@@ -812,6 +769,7 @@ export function Profile({
                 path: displayPath(root.path, homeDir),
               })}
               value={root.id}
+              disabled={busy || scopeLocked}
             />
           )}
           <InputGroup>
@@ -834,7 +792,7 @@ export function Profile({
               placeholder="~/path/to/workspace"
               title={root.path}
               value={creating ? root.path : displayPath(root.path, homeDir)}
-              disabled={busy}
+              disabled={busy || scopeLocked}
               onFocus={creating ? () => setEditingRoot(root.id) : undefined}
               onBlur={() => {
                 if (creating) setEditingRoot(undefined);
@@ -845,7 +803,7 @@ export function Profile({
               required
               pattern=".*\S.*"
             />
-            {creating && (
+            {creating && !scopeLocked && (
               <InputGroupAddon align="inline-end">
                 {desktop && (
                   <InputGroupButton
@@ -944,8 +902,89 @@ export function Profile({
       )}
     </div>
   );
+  const projectSelector = (
+    projects.length > 0 ||
+    !!linkedProject ||
+    (!creating && !emptyScope && !hasEmptyRoot)
+  ) && (
+    <div className="flex flex-wrap items-center gap-2">
+      {(projects.length > 0 || !!linkedProject) && (
+        <Select
+          value={linkedProject?.id ?? "__independent__"}
+          disabled={busy}
+          onValueChange={(value) => {
+            if (value === "__independent__") {
+              change({ projectId: "" }, "immediate");
+              return;
+            }
+            const target = projects.find((item) => item.id === value);
+            if (!target) return;
+            change(
+              {
+                projectId: target.id,
+                roots: target.roots.map((root) => ({ ...root })),
+                primaryRootId: target.primaryRootId,
+                worktreeSetup: target.worktreeSetup
+                  ? { ...target.worktreeSetup }
+                  : undefined,
+              },
+              "immediate",
+            );
+          }}
+        >
+          <SelectTrigger
+            id={`${scopeId}-project`}
+            aria-label={t("profile.project")}
+            className="min-w-0 flex-1"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="__independent__">
+                {t("profile.projectIndependent")}
+              </SelectItem>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  <Folder />
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      )}
+      {linkedProject ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => setProjectDialog("edit")}
+        >
+          {t("projects.editAction")}
+        </Button>
+      ) : (
+        !creating &&
+        !emptyScope &&
+        !hasEmptyRoot && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => setProjectDialog("create")}
+          >
+            <FolderPlus data-icon="inline-start" />
+            {t("projects.saveAsShared")}
+          </Button>
+        )
+      )}
+    </div>
+  );
   const directories = (
     <div className="grid min-w-0 grid-cols-1 gap-3">
+      {projectSelector}
       {!creating && (
         <div
           className={
@@ -955,12 +994,14 @@ export function Profile({
           }
         >
           <p id={`${scopeId}-scope-hint`} className="profile-note">
-            {t(emptyScope ? "profile.emptyScopeHint" : "profile.scopeHint")}
+            {linkedProject
+              ? t("profile.projectManagedHint", { name: linkedProject.name })
+              : t(emptyScope ? "profile.emptyScopeHint" : "profile.scopeHint")}
           </p>
-          {directoryActions}
+          {!scopeLocked && directoryActions}
         </div>
       )}
-      {creating && p.roots.length > 1 && (
+      {creating && p.roots.length > 1 && !scopeLocked && (
         <p id={`${scopeId}-scope-hint`} className="profile-note">
           {t("profile.scopeHint")}
         </p>
@@ -971,7 +1012,7 @@ export function Profile({
           aria-describedby={`${scopeId}-scope-hint`}
           name={`${scopeId}-primary-root`}
           value={p.primaryRootId}
-          disabled={busy}
+          disabled={busy || scopeLocked}
           onValueChange={(primaryRootId) =>
             change({ primaryRootId }, "immediate")
           }
@@ -1037,13 +1078,32 @@ export function Profile({
               {directories}
             </TabsContent>
             <WorkingCopies
-              key={savedScope}
-              agentId={agent.id}
+              key={`${worktreeOwner}:${worktreeOwnerId}:${savedScope}`}
+              agentId={worktreeOwnerId}
+              owner={worktreeOwner}
+              agents={agents}
               tab={scopeTab}
               canCreate={!agent.archived}
               setup={setup}
               setupFields={
-                !draft.archived && (
+                !draft.archived &&
+                (linkedProject ? (
+                  <div className="flex items-center justify-between gap-2 border-t pt-2 text-xs text-muted-foreground">
+                    <span>
+                      {t("profile.projectManagedHint", {
+                        name: linkedProject.name,
+                      })}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setProjectDialog("edit")}
+                    >
+                      {t("projects.editAction")}
+                    </Button>
+                  </div>
+                ) : (
                   <Collapsible className="border-t pt-2">
                     <CollapsibleTrigger asChild>
                       <Button
@@ -1058,7 +1118,7 @@ export function Profile({
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-2">
                       <WorktreeSetupFields
-                        agentId={agent.id}
+                        ownerId={agent.id}
                         formId={formId}
                         commands={p.worktreeSetup ?? {}}
                         onChange={(worktreeSetup) =>
@@ -1068,7 +1128,7 @@ export function Profile({
                       />
                     </CollapsibleContent>
                   </Collapsible>
-                )
+                ))
               }
             />
           </Tabs>
@@ -1524,7 +1584,7 @@ export function Profile({
                         >
                           {t("profile.scope")}
                         </FieldLabel>
-                        {directoryActions}
+                        {!scopeLocked && directoryActions}
                       </div>
                       {directories}
                     </Field>
@@ -1656,6 +1716,38 @@ export function Profile({
           </>
         )}
       </footer>
+      <ProjectDialog
+        open={projectDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setProjectDialog(null);
+        }}
+        project={projectDialog === "edit" ? linkedProject : undefined}
+        initialScope={
+          projectDialog === "create"
+            ? { roots: p.roots, primaryRootId: p.primaryRootId }
+            : undefined
+        }
+        initialWorktreeSetup={
+          projectDialog === "create" ? p.worktreeSetup : undefined
+        }
+        agents={agents}
+        homeDir={homeDir}
+        onSaved={(saved) => {
+          if (projectDialog === "create") {
+            change(
+              {
+                projectId: saved.id,
+                roots: saved.roots.map((root) => ({ ...root })),
+                primaryRootId: saved.primaryRootId,
+                worktreeSetup: saved.worktreeSetup
+                  ? { ...saved.worktreeSetup }
+                  : undefined,
+              },
+              "immediate",
+            );
+          }
+        }}
+      />
     </div>
   );
 }

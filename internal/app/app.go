@@ -239,6 +239,10 @@ func (a *App) Overview(ctx context.Context) (model.Overview, error) {
 	if err != nil {
 		return o, err
 	}
+	o.Projects, err = store.List[model.Project](ctx, tx, "SELECT data FROM projects ORDER BY json_extract(data,'$.createdAt')")
+	if err != nil {
+		return o, err
+	}
 	o.Chats, err = store.List[model.Chat](ctx, tx, "SELECT "+store.ChatDisplayData+" FROM chats ORDER BY json_extract(data,'$.updatedAt') DESC")
 	if err != nil {
 		return o, err
@@ -348,51 +352,19 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 	if len(p.Skills) > 0 && !provider.ConfiguredCapabilities(config).Skills {
 		return agent, invalid("This runtime does not support Agent skill directories")
 	}
-	if len(p.Roots) == 0 {
-		return agent, invalid("At least one scope directory is required")
-	}
-	roots := map[string]bool{}
-	paths := map[string]bool{}
-	for i := range p.Roots {
-		r := &p.Roots[i]
-		if strings.TrimSpace(r.Path) == "" {
-			return agent, invalid("Scope path is required")
-		}
-		path, err := workspace.Canonical(r.Path)
+	if p.ProjectID != "" {
+		project, err := store.Get[model.Project](ctx, a.Store.DB, "SELECT data FROM projects WHERE id=?", p.ProjectID)
 		if err != nil {
-			return agent, invalid(err.Error())
+			if errors.Is(err, sql.ErrNoRows) {
+				return agent, invalid("Selected project does not exist")
+			}
+			return agent, err
 		}
-		r.Path = path
-		if r.ID == "" {
-			r.ID = ID()
-		}
-		if roots[r.ID] || paths[r.Path] {
-			return agent, invalid("Duplicate scope directory")
-		}
-		roots[r.ID] = true
-		paths[r.Path] = true
-	}
-	if p.PrimaryRootID == "" {
-		p.PrimaryRootID = p.Roots[0].ID
-	}
-	if !roots[p.PrimaryRootID] {
-		return agent, invalid("Default directory must belong to scope")
-	}
-	if err := a.checkRemoval(p.Scope); err != nil {
-		return agent, err
-	}
-	if len(p.WorktreeSetup) > 64 {
-		return agent, invalid("Too many worktree setup commands")
-	}
-	for repo, command := range p.WorktreeSetup {
-		command = strings.TrimSpace(command)
-		if !filepath.IsAbs(repo) || len(command) > 4096 || strings.ContainsRune(command, 0) {
-			return agent, invalid("Invalid worktree setup command")
-		}
-		if command == "" {
-			delete(p.WorktreeSetup, repo)
-		} else {
-			p.WorktreeSetup[repo] = command
+		p.Scope = cloneScope(project.Scope)
+		p.WorktreeSetup = cloneSetup(project.WorktreeSetup)
+	} else {
+		if err := a.normalizeScopeAndSetup(&p.Scope, p.WorktreeSetup); err != nil {
+			return agent, err
 		}
 	}
 	skills := map[string]bool{}
@@ -834,7 +806,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		}
 		if create {
 			kind := input.Operation
-			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
+			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
 			if origin.personal != nil {
 				session.Channel = origin.personal.channelOrigin()
 				if kind == "topic" && personalDest.sessionTitle != "" {
@@ -850,7 +822,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			if !create || origin.parentRunID != "" || (!newChat && input.Operation != "topic" && origin.task == nil && origin.automation == nil) {
 				return invalid("A directory group can only be selected for a new Chat, Topic or task")
 			}
-			copy, err := a.selectGroup(ctx, tx, agent, input.WorkingCopyID)
+			copy, err := a.selectGroupForTarget(ctx, tx, agent, session.ProjectID, input.WorkingCopyID)
 			if err != nil {
 				return err
 			}

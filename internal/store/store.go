@@ -76,15 +76,23 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT OR IGNORE INTO settings(key,value) SELECT '` + StarterAgentPending + `','1'
 WHERE NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agents');
 CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS skill_directories(path TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS removed_skill_directories(path TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS skill_subscriptions(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS working_copies(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS agent_working_copies ON working_copies(agent_id);
+CREATE TABLE IF NOT EXISTS project_working_copies(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS project_working_copies_project ON project_working_copies(project_id);
 CREATE TABLE IF NOT EXISTS worktrees(
   id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id),
   source TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL,
   UNIQUE(agent_id,source,path)
+);
+CREATE TABLE IF NOT EXISTS project_worktrees(
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL,
+  UNIQUE(project_id,source,path)
 );
 CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS provider_catalogs(

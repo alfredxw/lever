@@ -90,8 +90,20 @@ type Scope struct {
 	PrimaryRootID string `json:"primaryRootId"`
 }
 
+// Project is a named, shareable Scope (directories and worktree setup) that
+// multiple Agents and Sessions can reference.
+type Project struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Scope                           `tstype:",extends"`
+	WorktreeSetup map[string]string `json:"worktreeSetup,omitempty"` // Keyed by the Git common directory.
+	CreatedAt     string            `json:"createdAt"`
+	UpdatedAt     string            `json:"updatedAt"`
+}
+
 type Profile struct {
-	Scope                    `tstype:",extends"`
+	ProjectID                string `json:"projectId,omitempty"`
+	Scope                           `tstype:",extends"`
 	Instructions             string            `json:"instructions"`
 	Provider                 string            `json:"provider"`
 	Model                    string            `json:"model"`
@@ -349,6 +361,7 @@ func (ref Reference) MCPTool() string {
 
 type Session struct {
 	Runtime         *SessionRuntime `json:"runtime,omitempty"`
+	ProjectID       string          `json:"projectId,omitempty"`
 	WorkingCopyID   string          `json:"workingCopyId,omitempty"`
 	WorkingCopyName string          `json:"workingCopyName,omitempty"`
 	Title           string          `json:"title,omitempty"`
@@ -817,6 +830,7 @@ type ProviderContribution struct {
 type Overview struct {
 	Cursor        int64          `json:"cursor"`
 	Agents        []Agent        `json:"agents"`
+	Projects      []Project      `json:"projects"`
 	Chats         []Chat         `json:"chats"`
 	Conversations []Conversation `json:"conversations"`
 	Runs          []Run          `json:"runs"`

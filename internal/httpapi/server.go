@@ -642,6 +642,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 		respond(w, map[string]bool{"accepted": true}, a.Answer(r.Context(), r.PathValue("id"), v))
 	})
 	s.workingCopyRoutes(mux, a)
+	s.projectRoutes(mux, a)
 	fileRoutes(mux, "/api/agents/{id}", agentFileScope(a), "")
 	hostFileRoute(mux, a)
 	skillRoutes(mux, a)

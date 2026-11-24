@@ -681,7 +681,19 @@ export interface Scope {
   roots: Root[];
   primaryRootId: string;
 }
+/**
+ * Project is a named, shareable Scope (directories and worktree setup) that
+ * multiple Agents and Sessions can reference.
+ */
+export interface Project extends Scope {
+  id: string;
+  name: string;
+  worktreeSetup?: { [key: string]: string}; // Keyed by the Git common directory.
+  createdAt: string;
+  updatedAt: string;
+}
 export interface Profile extends Scope {
+  projectId?: string;
   instructions: string;
   provider: string;
   model: string;
@@ -916,6 +928,7 @@ export interface BrowserElement {
 }
 export interface Session extends Scope {
   runtime?: SessionRuntime;
+  projectId?: string;
   workingCopyId?: string;
   workingCopyName?: string;
   title?: string;
@@ -1350,6 +1363,7 @@ export interface ProviderContribution {
 export interface Overview {
   cursor: number /* int64 */;
   agents: Agent[];
+  projects: Project[];
   chats: Chat[];
   conversations: Conversation[];
   runs: Run[];
@@ -1434,11 +1448,12 @@ export interface ChatDelegations {
 // source: worktrees.go
 
 /**
- * A directory group replaces selected Git checkouts in the Agent's Scope.
+ * A directory group replaces selected Git checkouts in the Agent or Project Scope.
  */
 export interface DirectoryGroup {
   id: string;
-  agentId: string;
+  agentId?: string;
+  projectId?: string;
   name: string;
   archived: boolean;
   worktreeIds: string[];
@@ -1466,6 +1481,7 @@ export interface CopyCheckout {
 export interface CopyTopic {
   id: string;
   chatId: string;
+  agentId?: string;
   title: string;
   busy: boolean;
 }

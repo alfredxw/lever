@@ -4,9 +4,15 @@ import { api } from "@/api/client";
 import type { CopyCheckout } from "@/api/types.gen";
 import { ErrorNotice, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
+import { Field, FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import type { TerminalResult } from "@/features/terminal/TerminalPane";
 import { directoryName } from "@/lib/paths";
-import { worktreePath } from "./queries";
+import {
+  useWorkingCopyOptions,
+  worktreePath,
+  type WorktreeOwner,
+} from "./queries";
 
 const TerminalPane = lazy(() => import("@/features/terminal/TerminalPane"));
 
@@ -20,10 +26,13 @@ type Job = SetupTarget & {
 };
 type Batch = { kind: "group" | "worktree"; jobs: Job[] };
 
-const setupKey = (agentId: string) => `lever:worktree-setup:${agentId}`;
+const setupKey = (id: string, owner: WorktreeOwner = "agent") =>
+  owner === "project"
+    ? `lever:worktree-setup:project:${id}`
+    : `lever:worktree-setup:${id}`;
 
-export function useWorktreeSetup(agentId: string) {
-  const key = setupKey(agentId);
+export function useWorktreeSetup(id: string, owner: WorktreeOwner = "agent") {
+  const key = setupKey(id, owner);
   const [batch, setBatch] = useState<Batch | undefined>(() => {
     const value = sessionStorage.getItem(key);
     if (!value) return;
@@ -58,7 +67,7 @@ export function useWorktreeSetup(agentId: string) {
     setBatch(next);
   };
   const pathFor = (job: Job) =>
-    `${worktreePath(agentId)}/${job.worktreeId}/setup/${job.id}`;
+    `${worktreePath(id, owner)}/${job.worktreeId}/setup/${job.id}`;
   const change = (id: string, patch: Partial<Job>) => {
     const latest = current.current;
     if (mounted.current && latest?.jobs.some((job) => job.id === id)) {
@@ -165,10 +174,9 @@ export function useWorktreeSetup(agentId: string) {
 }
 
 export function WorktreeSetup({
-  agentId,
   setup,
 }: {
-  agentId: string;
+  agentId?: string;
   setup: ReturnType<typeof useWorktreeSetup>;
 }) {
   const { t } = useTranslation();
@@ -291,5 +299,73 @@ export function WorktreeSetup({
         )}
       </div>
     </div>
+  );
+}
+
+export function WorktreeSetupFields({
+  ownerId,
+  owner = "agent",
+  formId,
+  commands,
+  onChange,
+  onFlush,
+}: {
+  ownerId: string;
+  owner?: WorktreeOwner;
+  formId?: string;
+  commands: Record<string, string>;
+  onChange: (value: Record<string, string>) => void;
+  onFlush?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [requestId] = useState(() => crypto.randomUUID());
+  const options = useWorkingCopyOptions(ownerId, requestId, owner);
+  if (options.isPending) return <Loading />;
+  if (options.error)
+    return (
+      <ErrorNotice error={options.error} retry={() => void options.refetch()} />
+    );
+  const repositories = [
+    ...new Map(
+      options.data.groups.map((group) => [group.gitDir, group]),
+    ).values(),
+  ];
+  if (!repositories.length)
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("worktrees.noRepository")}
+      </p>
+    );
+  return (
+    <FieldGroup className="mt-2 gap-3">
+      {repositories.map((repo) => (
+        <Field key={repo.gitDir}>
+          <label className="grid gap-2">
+            <span className="text-sm font-medium" title={repo.source}>
+              {directoryName(repo.source)}
+            </span>
+            <Input
+              form={formId}
+              aria-label={t("worktrees.setupFor", {
+                name: directoryName(repo.source),
+              })}
+              placeholder="pnpm install --frozen-lockfile"
+              value={commands[repo.gitDir] ?? ""}
+              maxLength={4096}
+              onChange={(event) =>
+                onChange({ ...commands, [repo.gitDir]: event.target.value })
+              }
+              onBlur={onFlush}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && onFlush) {
+                  event.preventDefault();
+                  onFlush();
+                }
+              }}
+            />
+          </label>
+        </Field>
+      ))}
+    </FieldGroup>
   );
 }
