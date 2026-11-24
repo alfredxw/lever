@@ -31,6 +31,7 @@ type acpRuntime struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	mu            sync.Mutex
+	provider      model.Provider
 	cwd           string
 	antigravity   bool
 	session       acp.SessionId
@@ -96,6 +97,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 		ctx:           ctx,
 		cancel:        cancel,
 		sink:          sink,
+		provider:      config,
 		cwd:           cwd,
 		antigravity:   config.Type == "antigravity",
 		agyCLI:        IsAntigravityCLI(config, path) && (config.Type == "antigravity" || slices.Contains(config.Args, "acp")),
@@ -164,7 +166,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 	if err != nil {
 		c.close()
 		retryWithoutPPS := processPerSession && c.output != nil && c.output.failure(nil) == nil && c.output.processPerSessionUnsupported()
-		return nil, retryWithoutPPS, c.failure(err)
+		return nil, retryWithoutPPS, c.setupFailure(ctx, initCtx, timeout, "starting the runtime", err)
 	}
 	return c, false, nil
 }
@@ -192,6 +194,48 @@ func (c *acpRuntime) close() {
 func (c *acpRuntime) failure(err error) error {
 	if c.output != nil {
 		return c.output.failure(err)
+	}
+	return err
+}
+
+func isACPDeadlineError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var request *acp.RequestError
+	if errors.As(err, &request) && request.Code == -32603 {
+		if data, ok := request.Data.(map[string]any); ok {
+			text, _ := data["error"].(string)
+			return text == context.DeadlineExceeded.Error()
+		}
+	}
+	return false
+}
+
+func (c *acpRuntime) setupFailure(parent, setup context.Context, timeout time.Duration, action string, err error) error {
+	err = c.failure(err)
+	if err == nil || parent.Err() != nil || !isACPDeadlineError(err) {
+		return err
+	}
+	if errors.Is(setup.Err(), context.DeadlineExceeded) {
+		return formatTimeoutError(c.provider, timeout, action)
+	}
+	return formatTimeoutError(c.provider, 0, action)
+}
+
+func normalizeACPDeadline(ctx context.Context, config model.Provider, action string, err error) error {
+	if err == nil || !isACPDeadlineError(err) {
+		return err
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	var timedOut setupTimeoutErr
+	if errors.As(err, &timedOut) {
+		return err
+	}
+	if ctx.Err() == nil {
+		return formatTimeoutError(config, 0, action)
 	}
 	return err
 }
@@ -291,7 +335,8 @@ func (state acpState) catalog() model.Catalog {
 	return catalog
 }
 
-func discoverACP(ctx context.Context, config model.Provider, cwd string) (model.Catalog, error) {
+func discoverACP(ctx context.Context, config model.Provider, cwd string) (_ model.Catalog, err error) {
+	defer func() { err = normalizeACPDeadline(ctx, config, "loading models", err) }()
 	if config.Type == "antigravity" {
 		// Catalog access is account-scoped. Do not run project hooks or create
 		// native skill placeholders in the user's workspace while probing.
@@ -344,7 +389,7 @@ func discoverACP(ctx context.Context, config model.Provider, cwd string) (model.
 		for i := range catalog.Models {
 			entry := &catalog.Models[i]
 			if err := c.applySelection(ctx, &state, model.Selection{Model: entry.ID}); err != nil {
-				return model.Catalog{}, err
+				return model.Catalog{}, c.failure(err)
 			}
 			current := state.catalog()
 			for _, m := range current.Models {
@@ -355,7 +400,7 @@ func discoverACP(ctx context.Context, config model.Provider, cwd string) (model.
 		}
 		if original.Model != "" {
 			if err := c.applySelection(ctx, &state, original); err != nil {
-				return model.Catalog{}, err
+				return model.Catalog{}, c.failure(err)
 			}
 		}
 	}
@@ -446,8 +491,13 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	if isTraeCLI(in.Provider) {
 		in.Provider.Args = traeSkillArguments(in.Provider.Args, in.Skills)
 	}
+	setupAction := sessionSetupAction(in.Session.NativeID != "")
 	c, err := openACP(ctx, in.Provider, cwd, sink, in.Selection.Permission)
 	if err != nil {
+		var timedOut setupTimeoutErr
+		if ctx.Err() == nil && errors.As(err, &timedOut) {
+			return formatTimeoutError(in.Provider, timedOut.timeout, setupAction)
+		}
 		return err
 	}
 	defer c.close()
@@ -495,11 +545,12 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	} else if in.RequireMCP {
 		return errors.New("This ACP runtime does not support the MCP connection required by this message")
 	}
-	setup, stop := context.WithTimeout(c.ctx, setupTimeout(in.Provider))
+	timeout := setupTimeout(in.Provider)
+	setup, stop := context.WithTimeout(c.ctx, timeout)
 	defer stop()
 	state, err := c.sessionState(setup, cwd, in.Session.NativeID, directories, servers)
 	if err != nil {
-		return c.failure(err)
+		return c.setupFailure(c.ctx, setup, timeout, setupAction, err)
 	}
 	native := in.Session.NativeID
 	if native == "" {
@@ -523,7 +574,7 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 		selection.Permission = c.preset.nativeMode
 	}
 	if err = c.applySelection(setup, &state, selection); err != nil {
-		return err
+		return c.setupFailure(c.ctx, setup, timeout, setupAction, err)
 	}
 	name, argument := in.command()
 	var advertised []model.NativeCommand
@@ -634,6 +685,9 @@ func (c *acpRuntime) prompt(ctx context.Context, prompt []acp.ContentBlock, outc
 		case <-c.conn.Done():
 			return errors.Join(ErrUnconfirmed, err)
 		default:
+			if isACPDeadlineError(err) {
+				return formatTimeoutError(c.provider, 0, "waiting for a response")
+			}
 			return err
 		}
 	}

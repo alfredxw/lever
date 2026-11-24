@@ -307,9 +307,10 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	p.Watch(ctx, func() { _ = p.Send(object{"type": "abort"}) })
 	setup, stop := context.WithTimeout(ctx, piSetupTimeout)
 	defer stop()
+	setupAction := sessionSetupAction(in.Session.NativeID != "")
 	state, err := piRequest(setup, p, "get_state")
 	if err != nil {
-		return err
+		return setupTimeoutError(ctx, setup, in.Provider, piSetupTimeout, setupAction, err)
 	}
 	if filepath.Clean(str(state["sessionFile"])) != filepath.Clean(native) {
 		return errors.New("Pi did not open the intended native session")
@@ -342,7 +343,7 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	if len(in.Skills.Disabled) > 0 {
 		refs, err := piCommandReferences(setup, p, in.Provider.ID)
 		if err != nil {
-			return err
+			return setupTimeoutError(ctx, setup, in.Provider, piSetupTimeout, setupAction, err)
 		}
 		if err = verifySkillPolicy(in.Skills, refs); err != nil {
 			return err
@@ -351,7 +352,7 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	if name == "goal" || name == "loop" {
 		commands, err := piCommands(setup, p)
 		if err != nil {
-			return err
+			return setupTimeoutError(ctx, setup, in.Provider, piSetupTimeout, setupAction, err)
 		}
 		if !hasCommand(commands, name) {
 			return fmt.Errorf("This Pi runtime does not provide /%s", name)

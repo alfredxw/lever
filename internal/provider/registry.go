@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"lever/internal/model"
 )
@@ -64,11 +66,86 @@ func Discover(ctx context.Context, config model.Provider, cwd string) (model.Cat
 	if !ok {
 		return model.Catalog{}, errors.New("unsupported provider type")
 	}
-	ctx, cancel := context.WithTimeout(ctx, setupTimeout(config))
+	timeout := setupTimeout(config)
+	discoverCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	catalog, err := d.discover(ctx, config, cwd)
+	catalog, err := d.discover(discoverCtx, config, cwd)
 	catalog.Provider = config.ID
-	return NormalizeCatalog(config, catalog), err
+	return NormalizeCatalog(config, catalog), setupTimeoutError(ctx, discoverCtx, config, timeout, "loading models", err)
+}
+
+type setupTimeoutErr struct {
+	timeout time.Duration
+	message string
+}
+
+func (e setupTimeoutErr) Error() string { return e.message }
+func (e setupTimeoutErr) Unwrap() error { return context.DeadlineExceeded }
+
+func providerDisplayName(config model.Provider) string {
+	if name := strings.TrimSpace(config.Name); name != "" {
+		return name
+	}
+	switch config.Type {
+	case "antigravity":
+		return "Antigravity"
+	case "acp":
+		return "ACP runtime"
+	case "codex":
+		return "Codex"
+	case "claude":
+		return "Claude Code"
+	case "pi":
+		return "Pi"
+	default:
+		return "Runtime"
+	}
+}
+
+func formatSetupDuration(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	if d >= time.Second {
+		return fmt.Sprintf("%ds", d/time.Second)
+	}
+	return d.Round(time.Millisecond).String()
+}
+
+func formatTimeoutError(config model.Provider, timeout time.Duration, action string) error {
+	name := providerDisplayName(config)
+	if timeout > 0 {
+		return setupTimeoutErr{
+			timeout: timeout,
+			message: fmt.Sprintf("%s timed out after %s while %s. Check your network or proxy connection and try again.",
+				name, formatSetupDuration(timeout), action),
+		}
+	}
+	return setupTimeoutErr{
+		message: fmt.Sprintf("%s timed out while %s. Check your network or proxy connection and try again.",
+			name, action),
+	}
+}
+
+func sessionSetupAction(resuming bool) string {
+	if resuming {
+		return "resuming the session; no message was sent"
+	}
+	return "starting the session; no message was sent"
+}
+
+func setupTimeoutError(parent, setup context.Context, config model.Provider, timeout time.Duration, action string, err error) error {
+	if err == nil || parent.Err() != nil {
+		return err
+	}
+	var timedOut setupTimeoutErr
+	if errors.As(err, &timedOut) {
+		return formatTimeoutError(config, timedOut.timeout, action)
+	}
+	if errors.Is(setup.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded) {
+		return formatTimeoutError(config, timeout, action)
+	}
+	return err
 }
 
 func Skills(ctx context.Context, config model.Provider, scope model.Scope, plan SkillPlan) ([]model.Reference, error) {
