@@ -103,6 +103,7 @@ type Project struct {
 
 type Profile struct {
 	ProjectID                string `json:"projectId,omitempty"`
+	Description              string `json:"description,omitempty"`
 	Scope                           `tstype:",extends"`
 	Instructions             string            `json:"instructions"`
 	Provider                 string            `json:"provider"`
@@ -481,9 +482,10 @@ type Run struct {
 	AfterRunIDs         []string        `json:"afterRunIds,omitempty"`
 	WaitingOn           []RunDependency `json:"waitingOn,omitempty"`
 	ScopePaths          []string        `json:"scopePaths,omitempty"`
-	TurnDiff            *TurnPatch      `json:"turnDiff,omitempty"`
-	Changes             []RunChanges    `json:"changes,omitempty"`
-	Channel             *ChannelTurn    `json:"channel,omitempty"`
+	TurnDiff           *TurnPatch          `json:"turnDiff,omitempty"`
+	Changes            []RunChanges        `json:"changes,omitempty"`
+	Channel            *ChannelTurn        `json:"channel,omitempty"`
+	DelegationReceipts []DelegationReceipt `json:"delegationReceipts,omitempty"`
 }
 
 // RunDependency is the live status projection of an upstream run this turn waits on.
@@ -900,11 +902,18 @@ type DiffResult struct {
 }
 
 type Delegation struct {
-	ID          string `json:"id"`
-	ParentRunID string `json:"parentRunId"`
-	SessionID   string `json:"sessionId"`
-	ChatID      string `json:"chatId"`
-	RunID       string `json:"runId"`
+	ID              string   `json:"id"`
+	ParentSessionID string   `json:"parentSessionId,omitempty"`
+	ParentRunID     string   `json:"parentRunId"`
+	AgentID         string   `json:"agentId,omitempty"`
+	SessionID       string   `json:"sessionId"`
+	ChatID          string   `json:"chatId"`
+	RunID           string   `json:"runId"`
+	RunIDs          []string `json:"runIds,omitempty"`
+	Turn            int      `json:"turn,omitempty"`
+	Workspace       string   `json:"workspace,omitempty"`
+	WorkingCopyName string   `json:"workingCopyName,omitempty"`
+	AutoWake        bool     `json:"autoWake,omitempty"`
 }
 
 const DelegationCommandPrefix = "delegate:"
@@ -917,7 +926,29 @@ type DelegationTarget struct {
 
 type DelegatedRun struct {
 	DelegationTarget `tstype:",extends"`
+	DelegationID     string `json:"delegationId,omitempty"`
 	Status           string `json:"status"`
+	Turn             int    `json:"turn,omitempty"`
+	Turns            int    `json:"turns,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Workspace        string `json:"workspace,omitempty"`
+	WorkingCopyName  string `json:"workingCopyName,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+}
+
+type DelegationReceipt struct {
+	DelegationID string `json:"delegationId"`
+	AgentID      string `json:"agentId"`
+	AgentName    string `json:"agentName"`
+	ChatID       string `json:"chatId"`
+	SessionID    string `json:"sessionId"`
+	RunID        string `json:"runId"`
+	Turn         int    `json:"turn,omitempty"`
+	Status       string `json:"status"`
+	Title        string `json:"title,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 type ChatDelegations struct {

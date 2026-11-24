@@ -47,7 +47,7 @@ func preparePiMCP(in Input) (dir string, env []string, err error) {
 	}
 	var required []string
 	if in.Session.ParentRunID == "" && len(in.Profile.Delegations) > 0 {
-		required = []string{"delegate_start", "delegate_wait", "delegate_cancel"}
+		required = []string{"delegate_start", "delegate_reply", "delegate_wait", "delegate_list", "delegate_cancel"}
 	}
 	for _, ref := range in.References {
 		if tool := ref.MCPTool(); tool != "" && !slices.Contains(required, tool) {

@@ -694,6 +694,7 @@ export interface Project extends Scope {
 }
 export interface Profile extends Scope {
   projectId?: string;
+  description?: string;
   instructions: string;
   provider: string;
   model: string;
@@ -1048,6 +1049,7 @@ export interface Run {
   turnDiff?: TurnPatch;
   changes?: RunChanges[];
   channel?: ChannelTurn;
+  delegationReceipts?: DelegationReceipt[];
 }
 /**
  * RunDependency is the live status projection of an upstream run this turn waits on.
@@ -1426,10 +1428,17 @@ export interface DiffResult {
 }
 export interface Delegation {
   id: string;
+  parentSessionId?: string;
   parentRunId: string;
+  agentId?: string;
   sessionId: string;
   chatId: string;
   runId: string;
+  runIds?: string[];
+  turn?: number /* int */;
+  workspace?: string;
+  workingCopyName?: string;
+  autoWake?: boolean;
 }
 export const DelegationCommandPrefix = "delegate:";
 export interface DelegationTarget extends RunLocation {
@@ -1437,7 +1446,28 @@ export interface DelegationTarget extends RunLocation {
   title: string;
 }
 export interface DelegatedRun extends DelegationTarget {
+  delegationId?: string;
   status: string;
+  turn?: number /* int */;
+  turns?: number /* int */;
+  provider?: string;
+  model?: string;
+  workspace?: string;
+  workingCopyName?: string;
+  summary?: string;
+}
+export interface DelegationReceipt {
+  delegationId: string;
+  agentId: string;
+  agentName: string;
+  chatId: string;
+  sessionId: string;
+  runId: string;
+  turn?: number /* int */;
+  status: string;
+  title?: string;
+  summary?: string;
+  error?: string;
 }
 export interface ChatDelegations {
   outgoing: { [key: string]: DelegatedRun[]};

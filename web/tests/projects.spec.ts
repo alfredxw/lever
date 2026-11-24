@@ -198,3 +198,120 @@ test("Shared Project scope is managed inside Agent Profile without Projects tab 
     expect(ag.profile.roots).toHaveLength(2);
   }
 });
+
+test("Delegation 2.0: role description, inline child approval, async receipt banner, and side-by-side view", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto(context().url);
+
+  // Create Lead and Collaborator Agents via API for a fast, deterministic setup.
+  const overviewBefore = (await (
+    await page.request.get("/api/overview")
+  ).json()) as Overview;
+  const baseProfile = overviewBefore.agents[0]?.profile ?? {
+    provider: "codex",
+    model: "",
+    permission: "auto_review",
+    instructions: "",
+    roots: [{ id: "root", path: context().scope }],
+    primaryRootId: "root",
+    skills: [],
+    delegations: [],
+  };
+
+  const backendRes = await page.request.post("/api/agents", {
+    data: {
+      name: "后端专家",
+      profile: {
+        ...baseProfile,
+        description: "负责后端鉴权接口与集成测试",
+        delegations: [],
+      },
+    },
+  });
+  expect(backendRes.ok()).toBe(true);
+  const backend = (await backendRes.json()) as Agent;
+
+  const leadRes = await page.request.post("/api/agents", {
+    data: {
+      name: "主控调度",
+      profile: {
+        ...baseProfile,
+        delegations: [{ agentId: backend.id, confirm: false }],
+      },
+    },
+  });
+  expect(leadRes.ok()).toBe(true);
+  const lead = (await leadRes.json()) as Agent;
+
+  await page.goto(context().url);
+  const sidebar = page.locator("#agent-sidebar");
+  await sidebar.getByRole("button", { name: "主控调度", exact: true }).click();
+
+  // Verify collaborator description is visible in Lead's Profile Delegations card.
+  await sidebar
+    .getByRole("button", { name: "打开 主控调度 的配置", exact: true })
+    .click();
+  await expect(
+    page.getByText("负责后端鉴权接口与集成测试", { exact: true }),
+  ).toBeVisible();
+
+  // Start a chat on 主控调度 via API (avoids Markdown underscore escaping in JSON payload)
+  // and open it to verify inline approval penetration, async receipt banner, and side-by-side view.
+  const payload = JSON.stringify([
+    {
+      name: "delegate_start",
+      arguments: {
+        agentId: backend.id,
+        requestKey: "backend-api",
+        task: "[approval] 实现后端鉴权接口",
+      },
+    },
+  ]);
+  const sentRes = await page.request.post("/api/messages", {
+    data: {
+      commandId: crypto.randomUUID(),
+      agentId: lead.id,
+      operation: "main",
+      text: `[chat-context] ${payload}`,
+    },
+  });
+  expect(sentRes.ok()).toBe(true);
+  const sentRun = (await sentRes.json()) as { chatId: string };
+  await sidebar
+    .getByRole("button", { name: "打开 主控调度 的对话", exact: true })
+    .click();
+  // Select the newly created chat if needed (or reload opens it automatically).
+  await page.reload();
+  await sidebar.getByRole("button", { name: "主控调度", exact: true }).click();
+  expect(sentRun.chatId).toBeTruthy();
+
+  // Inline approval penetration: approve 后端专家 directly inside 主控调度's timeline!
+  const childApproval = page.getByRole("group", {
+    name: /来自协作者 · 后端专家/,
+  });
+  await expect(childApproval).toBeVisible();
+  await childApproval.getByRole("button", { name: "仅允许此操作" }).click();
+
+  // Async receipt auto-wakeup renders a clean receipt banner and wakes 主控调度.
+  const receiptGroup = page.getByRole("group", { name: "协作者回执" });
+  await expect(receiptGroup).toBeVisible();
+  await expect(receiptGroup).toContainText("后端专家");
+  await expect(receiptGroup).toContainText("回执");
+  await expect(receiptGroup).toContainText("已完成");
+
+  // Clicking "打开会话" opens 后端专家's delegated chat side-by-side without leaving 主控调度!
+  await receiptGroup
+    .getByRole("button", { name: /后端专家.*打开会话/ })
+    .click();
+
+  // Both panes are visible simultaneously: 主控调度 on left, 后端专家 on right!
+  await expect(page.locator(".chat-panel:visible")).toHaveCount(2);
+  await expect(
+    page.getByRole("button", { name: "返回 主控调度 的委派消息" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("[approval] 实现后端鉴权接口").first(),
+  ).toBeVisible();
+});

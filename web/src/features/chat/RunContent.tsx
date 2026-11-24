@@ -44,7 +44,11 @@ import { isWorking, RunStatus } from "./RunStatus";
 import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { subagentTitle } from "./RunWork";
 import { formatChannelOrigin } from "./conversationTitle";
-import { DelegatedTasks, type OpenRun } from "./DelegatedTasks";
+import {
+  DelegatedTasks,
+  DelegationReceiptsBanner,
+  type OpenRun,
+} from "./DelegatedTasks";
 import { WaitingDependencies } from "./WaitingDependencies";
 import { TurnChanges } from "@/features/diff/TurnChanges";
 import { UserMessage } from "./UserMessage";
@@ -55,6 +59,7 @@ export function canEditSentMessage(run: Run) {
     !run.channel &&
     !run.superseded &&
     !run.comparisonId &&
+    !run.delegationReceipts?.length &&
     ["completed", "failed", "interrupted", "paused"].includes(run.status)
   );
 }
@@ -205,26 +210,40 @@ export function RunMessages({
     <>
       {!hideUserMessage && (
         <>
-          {run.channel && (
-            <p className="text-right text-xs text-muted-foreground">
-              {formatChannelOrigin(session.channel, t) ||
-                t("channels.fromChannel")}
-            </p>
+          {run.delegationReceipts?.length ? (
+            <DelegationReceiptsBanner
+              receipts={run.delegationReceipts}
+              agents={agents}
+              sourceSessionId={session.kind === "topic" ? session.id : undefined}
+              onOpenRun={onOpenRun}
+            />
+          ) : (
+            <>
+              {run.channel && (
+                <p className="text-right text-xs text-muted-foreground">
+                  {formatChannelOrigin(session.channel, t) ||
+                    t("channels.fromChannel")}
+                </p>
+              )}
+              <UserMessage
+                chatId={run.chatId}
+                sessionId={run.sessionId}
+                message={run}
+                archived={agent.archived}
+                onQuote={onQuote}
+                onForward={onForward}
+                footerActions={createTopicAction}
+                onEdit={
+                  onEdit &&
+                  !agent.archived &&
+                  !sessionBusy &&
+                  canEditSentMessage(run)
+                    ? () => onEdit(run)
+                    : undefined
+                }
+              />
+            </>
           )}
-          <UserMessage
-            chatId={run.chatId}
-            sessionId={run.sessionId}
-            message={run}
-            archived={agent.archived}
-            onQuote={onQuote}
-            onForward={onForward}
-            footerActions={createTopicAction}
-            onEdit={
-              onEdit && !agent.archived && !sessionBusy && canEditSentMessage(run)
-                ? () => onEdit(run)
-                : undefined
-            }
-          />
           {afterUserMessage}
         </>
       )}
@@ -277,7 +296,9 @@ export function RunMessages({
           <DelegatedTasks
             runs={delegatedRuns}
             approvals={delegateApprovals}
+            requests={requests}
             agents={agents}
+            sourceSessionId={session.kind === "topic" ? session.id : undefined}
             onOpenRun={onOpenRun}
           />
           {hasCollaboration && work}

@@ -111,7 +111,7 @@ func (in Input) Message() string {
 		case "chat", "topic":
 			text += fmt.Sprintf("\n\n[Referenced %s %q: use read_chat_context with target %q for dialogue.]", ref.Kind, ref.Name, ref.ID)
 		case "agent":
-			text += fmt.Sprintf("\n\n[Collaborate with Agent %q using delegate_start with agentId %q. Give it the relevant task and use delegate_wait to collect its result.]", ref.Name, ref.ID)
+			text += fmt.Sprintf("\n\n[Collaborate with Agent %q using delegate_start with agentId %q (or delegate_reply to continue an existing delegation). Use delegate_wait to collect results or end your turn to receive an automatic receipt.]", ref.Name, ref.ID)
 		case "note", "workItem", "noteTask", "externalTask", "automationTask":
 			text += fmt.Sprintf("\n\n[Referenced %s %q: use read_reference with kind %q and id %q for its current content.]", ref.Kind, ref.Name, ref.Kind, ref.ID)
 		}

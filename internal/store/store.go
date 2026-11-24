@@ -253,6 +253,23 @@ CREATE TABLE IF NOT EXISTS draft_attachments(id TEXT PRIMARY KEY, agent_id TEXT 
 CREATE TABLE IF NOT EXISTS run_attachments(run_id TEXT NOT NULL REFERENCES runs(id), attachment_id TEXT NOT NULL REFERENCES attachments(id), PRIMARY KEY(run_id, attachment_id));
 CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), chat_id TEXT NOT NULL REFERENCES chats(id), status TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS delegations(id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL REFERENCES runs(id), request_key TEXT NOT NULL, input_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(parent_run_id, request_key));
+CREATE TABLE IF NOT EXISTS delegation_runs(
+  id TEXT PRIMARY KEY,
+  delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE,
+  parent_session_id TEXT NOT NULL,
+  parent_run_id TEXT NOT NULL REFERENCES runs(id),
+  child_run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+  request_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  turn INTEGER NOT NULL,
+  auto_wake INTEGER NOT NULL DEFAULT 1,
+  receipt_consumed INTEGER NOT NULL DEFAULT 0,
+  wake_run_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(parent_run_id, request_key)
+);
+CREATE INDEX IF NOT EXISTS delegation_runs_parent_session ON delegation_runs(parent_session_id, created_at);
+CREATE INDEX IF NOT EXISTS delegation_runs_delegation ON delegation_runs(delegation_id, turn);
 CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
 UPDATE agents SET data = CASE
   WHEN json_extract(data, '$.avatar') = '' THEN json_remove(data, '$.avatar')

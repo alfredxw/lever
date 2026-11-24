@@ -2577,4 +2577,12 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "profile.project": "共享项目",
   "profile.projectIndependent": "独立目录",
   "profile.projectManagedHint": "目录与 Worktree 由项目「{{name}}」共享管理。",
+  "profile.description": "职责简介",
+  "profile.descriptionPlaceholder":
+    "可选：一句话说明擅长方向，供主控 Agent 委派协作时参考（如：负责 Go 后端实现与单测）",
+  "chat.delegationRound": "第 {{turn}}/{{turns}} 轮",
+  "chat.delegationTurnNumber": "第 {{turn}} 轮",
+  "chat.requestFromCollaborator": "来自协作者 · {{agent}}",
+  "chat.delegationReceiptGroup": "协作者回执",
+  "chat.delegationReceiptLabel": "回执",
 };

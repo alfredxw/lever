@@ -512,11 +512,12 @@ export default function App() {
     toggleSideMaximized,
     resizePanes,
   } = useWorkspaces(selected, fallback);
+  const allChats = overview.data?.chats ?? noChats;
   const tabStrips = useMemo(() => {
     const strips: Record<Pane, WorkspaceTab[]> = { main: [], side: [] };
     if (!agent && !sharedWorkspace) return strips;
     const chatTitles = new Map(
-      chats.map((chat) => [chat.id, displayChatTitle(chat, t)]),
+      allChats.map((chat) => [chat.id, displayChatTitle(chat, t)]),
     );
     const topicTitles = new Map(
       overview.data?.conversations.map((item) => [item.id, item.title]),
@@ -536,11 +537,26 @@ export default function App() {
   }, [
     agent,
     sharedWorkspace,
-    chats,
+    allChats,
     overview.data?.conversations,
     workspace.tabs,
     t,
   ]);
+  const tabAgents = useMemo(() => {
+    const map = new Map<string, Agent>();
+    if (!agent) return map;
+    const chatsById = new Map(allChats.map((chat) => [chat.id, chat]));
+    const agentsById = new Map(agents.map((item) => [item.id, item]));
+    for (const tab of workspace.tabs) {
+      if (tab.kind !== "chat") continue;
+      const chat = chatsById.get(tab.id);
+      if (chat && chat.agentId !== agent.id) {
+        const owner = agentsById.get(chat.agentId);
+        if (owner) map.set(tab.id, owner);
+      }
+    }
+    return map;
+  }, [agent, allChats, agents, workspace.tabs]);
   const {
     mainTab,
     sideTab,
@@ -864,7 +880,23 @@ export default function App() {
     prefetchPrimaryPage("automations");
     setPage("automations");
   }
-  function openRun(run: RunLocation & { agentId: string }, title: string) {
+  function openRun(
+    run: RunLocation & { agentId: string },
+    title: string,
+    options?: { sideBySide?: boolean; sourceSessionId?: string },
+  ) {
+    if (options?.sideBySide && !run.topic && page === "agents" && agent) {
+      const chat = overview.data?.chats.find((item) => item.id === run.chatId);
+      const pane = companionPaneFor(agent.id, options.sourceSessionId);
+      openTab(
+        { id: run.chatId, kind: "chat", title: chat?.title ?? title },
+        agent.id,
+        pane,
+      );
+      setFocusComposer(undefined);
+      requestReveal({ tabId: run.chatId, runId: run.runId });
+      return;
+    }
     if (run.topic) {
       const topic = overview.data?.conversations.find(
         ({ id }) => id === run.sessionId,
@@ -1995,6 +2027,7 @@ export default function App() {
                             key={`${selected}:${pane}`}
                             pane={pane}
                             tabs={tabStrips[pane]}
+                            tabAgents={tabAgents}
                             selected={currentTab?.id}
                             previewId={workspace.previews?.[pane]}
                             visible={pane === "main" ? !maximized : split}
@@ -2319,7 +2352,7 @@ export default function App() {
                                     {...chatNavigation}
                                     positions={messagePositions}
                                     chatId={t.id}
-                                    agent={agent}
+                                    agent={tabAgents.get(t.id) ?? agent}
                                     onLocateTask={showTasks}
                                     onLocateChannel={showChannel}
                                     onForward={setForward}

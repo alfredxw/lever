@@ -146,6 +146,7 @@ function profileContentSignature(agent: Agent, homeDir: string) {
     name: rest.name.trim(),
     profile: {
       ...rest.profile,
+      description: (rest.profile.description ?? "").trim(),
       roots: rest.profile.roots.map((root) => ({
         id: root.id,
         path: displayPath(root.path.trim(), homeDir),
@@ -1493,6 +1494,14 @@ export function Profile({
                   {target.archived && ` (${t("common.archived")})`}
                 </span>
               </FieldLabel>
+              {target.profile.description && (
+                <span
+                  className="max-w-64 truncate text-xs text-muted-foreground"
+                  title={target.profile.description}
+                >
+                  {target.profile.description}
+                </span>
+              )}
               {rule && (
                 <label className="profile-confirm">
                   <Switch
@@ -1631,7 +1640,28 @@ export function Profile({
           <Card className="profile-card">
             <CardContent className="profile-identity">
               {avatarPicker}
-              {nameField}
+              <div className="grid min-w-0 flex-1 max-w-md gap-2">
+                {nameField}
+                <Field>
+                  <FieldLabel
+                    htmlFor={`${scopeId}-description`}
+                    className="sr-only"
+                  >
+                    {t("profile.description")}
+                  </FieldLabel>
+                  <Input
+                    id={`${scopeId}-description`}
+                    placeholder={t("profile.descriptionPlaceholder")}
+                    maxLength={240}
+                    value={p.description ?? ""}
+                    onChange={(e) =>
+                      change({ description: e.target.value }, "debounced")
+                    }
+                    onBlur={() => autoSave.flush()}
+                    onKeyDown={flushOnEnter}
+                  />
+                </Field>
+              </div>
             </CardContent>
           </Card>
           <div className="profile-grid">

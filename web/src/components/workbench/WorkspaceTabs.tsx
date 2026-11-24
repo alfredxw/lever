@@ -41,6 +41,8 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { Agent } from "@/api/types.gen";
+import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import {
   ActionContextMenu,
   rowMenuHandlers,
@@ -160,6 +162,7 @@ export function WorkspaceDrag({
 
 export function WorkspaceTabs({
   tabs,
+  tabAgents,
   selected,
   previewId,
   onSelect,
@@ -175,6 +178,7 @@ export function WorkspaceTabs({
   actions,
 }: {
   tabs: WorkspaceTab[];
+  tabAgents?: ReadonlyMap<string, Agent>;
   selected?: string;
   previewId?: string;
   onSelect: (id: string) => void;
@@ -291,6 +295,7 @@ export function WorkspaceTabs({
             <SortableTab
               key={tab.id}
               tab={tab}
+              tabAgent={tabAgents?.get(tab.id)}
               active={tab.id === selected}
               preview={tab.id === previewId}
               onSelect={onSelect}
@@ -311,6 +316,7 @@ export function WorkspaceTabs({
 
 const SortableTab = memo(function SortableTab({
   tab,
+  tabAgent,
   active,
   preview,
   onSelect,
@@ -322,6 +328,7 @@ const SortableTab = memo(function SortableTab({
   onKeyDown,
 }: {
   tab: WorkspaceTab;
+  tabAgent?: Agent;
   active: boolean;
   preview: boolean;
   onSelect: (id: string) => void;
@@ -457,7 +464,11 @@ const SortableTab = memo(function SortableTab({
           tabIndex={active ? 0 : -1}
           aria-description={preview ? t("workspace.previewTab") : undefined}
           title={
-            preview ? `${tab.title} · ${t("workspace.previewTab")}` : tab.title
+            tabAgent
+              ? `${tabAgent.name} · ${tab.title}${preview ? ` · ${t("workspace.previewTab")}` : ""}`
+              : preview
+                ? `${tab.title} · ${t("workspace.previewTab")}`
+                : tab.title
           }
           onClick={() => onSelect(tab.id)}
           onDoubleClick={preview ? () => onKeep(tab.id) : undefined}
@@ -474,7 +485,7 @@ const SortableTab = memo(function SortableTab({
             }
           }}
         >
-          <Icon size={14} />
+          {tabAgent ? <AgentAvatar agent={tabAgent} size="xs" /> : <Icon size={14} />}
           <span className={preview ? "italic" : undefined}>{tab.title}</span>
         </button>
         {menu && (

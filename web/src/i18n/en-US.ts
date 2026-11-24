@@ -2704,4 +2704,12 @@ export const enUS = {
   "profile.projectIndependent": "Independent directories",
   "profile.projectManagedHint":
     "Directories and worktrees are shared via project {{name}}.",
-};
+  "profile.description": "Role summary",
+  "profile.descriptionPlaceholder":
+    "Optional one-line specialty shown to collaborating Agents (e.g. Go backend & tests)",
+  "chat.delegationRound": "Round {{turn}}/{{turns}}",
+  "chat.delegationTurnNumber": "Round {{turn}}",
+  "chat.requestFromCollaborator": "From collaborator · {{agent}}",
+  "chat.delegationReceiptGroup": "Collaborator receipt",
+  "chat.delegationReceiptLabel": "reported back",
+} as const;

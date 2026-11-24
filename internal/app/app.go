@@ -325,6 +325,10 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		}
 	}
 	p := &agent.Profile
+	p.Description = strings.TrimSpace(p.Description)
+	if len([]rune(p.Description)) > 240 {
+		return agent, invalid("Agent description must be at most 240 characters")
+	}
 	if p.TaskConcurrency < 0 || p.TaskStartIntervalMinutes < 0 ||
 		int64(p.TaskStartIntervalMinutes) > math.MaxInt64/int64(time.Minute) {
 		return agent, invalid("Choose a positive task concurrency and a valid start interval")
@@ -510,16 +514,18 @@ func (a *App) Send(ctx context.Context, input model.SendInput) (model.Run, error
 }
 
 type sendOrigin struct {
-	remote         *remoteOrigin
-	idleCompaction bool
-	parentRunID    string
-	task           *model.TaskDispatch
-	taskRecord     model.TaskRecord
-	taskQueue      *queuedTask
-	retry          *model.Run
-	channel        *channelInput
-	personal       *personalTurn
-	automation     *automationFire
+	remote          *remoteOrigin
+	idleCompaction  bool
+	parentRunID     string
+	delegationScope *delegationWorkspace
+	delegationWake  *delegationReceiptWake
+	task            *model.TaskDispatch
+	taskRecord      model.TaskRecord
+	taskQueue       *queuedTask
+	retry           *model.Run
+	channel         *channelInput
+	personal        *personalTurn
+	automation      *automationFire
 }
 
 var errCommandConflict = conflict("commandId already belongs to a different message")
@@ -807,6 +813,12 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if create {
 			kind := input.Operation
 			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
+			if origin.delegationScope != nil {
+				session.ProjectID = origin.delegationScope.projectID
+				session.Scope = cloneScope(origin.delegationScope.scope)
+				session.WorkingCopyID = origin.delegationScope.workingCopyID
+				session.WorkingCopyName = origin.delegationScope.workingCopyName
+			}
 			if origin.personal != nil {
 				session.Channel = origin.personal.channelOrigin()
 				if kind == "topic" && personalDest.sessionTitle != "" {
@@ -950,6 +962,9 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 		}
 		run = model.Run{ID: ID(), SessionID: session.ID, ChatID: chat.ID, AgentID: agent.ID, Input: input.Text, Selection: selection, Attachments: files, References: input.References, Quote: quote, Status: "queued", Items: []model.Item{}, CreatedAt: now(), Delivery: input.Delivery, Operation: input.Operation, AfterRunIDs: afterRunIDs}
 		run.Quiet = origin.idleCompaction
+		if origin.delegationWake != nil {
+			run.DelegationReceipts = origin.delegationWake.receipts
+		}
 		if turn := origin.personal; turn != nil {
 			run.ChannelPrompt = turn.prompt
 		}
@@ -1191,6 +1206,13 @@ func (a *App) trackLocked(e *execution, run func() error) {
 			slog.Error("advance message queue", "session", sessionID, "error", err)
 		}
 		a.advanceDependentRunsLocked(id)
+		if !errors.Is(err, errHostDetached) && !(a.closed && e.hosted) {
+			if e.session.ParentRunID != "" {
+				a.onDelegatedChildFinishedLocked(e.run)
+			} else if e.run.Status == "completed" {
+				a.deliverPendingDelegationReceiptsLocked(sessionID)
+			}
+		}
 	}()
 }
 
@@ -1227,8 +1249,12 @@ func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 	if err := e.stop(ctx, pause); err != nil {
 		return err
 	}
+	if !pause {
+		a.cancelParentDelegationWakesLocked(ctx, runID)
+	}
+	childRunIDs := a.delegationChildRunsForParent(ctx, runID)
 	for id, child := range a.active {
-		if child.session.ParentRunID == runID {
+		if child.session.ParentRunID == runID || childRunIDs[id] {
 			if err := a.stopLocked(ctx, id, false); err != nil {
 				return err
 			}
