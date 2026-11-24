@@ -99,6 +99,92 @@ func (s *Server) channelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/channels/feishu/test", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"sent": true}, a.TestFeishu(r.Context()))
 	})
+	// Multi-bot Feishu routes
+	mux.HandleFunc("POST /api/channels/feishu/bots", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuBotCreateInput
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.CreateFeishuBot(r.Context(), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/registration", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuRegistrationInput
+		if r.ContentLength != 0 {
+			if err := read(w, r, &in); err != nil {
+				respond(w, nil, err)
+				return
+			}
+		}
+		v, err := a.RegisterFeishuBot(r.Context(), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/channels/feishu/bots/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuBotSettings
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.UpdateFeishuBotSettings(r.Context(), r.PathValue("id"), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/channels/feishu/bots/{id}/credentials", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuBotCredentialsInput
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.UpdateFeishuBotCredentials(r.Context(), r.PathValue("id"), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/channels/feishu/bots/{id}/enabled", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SetFeishuBotEnabled(r.Context(), r.PathValue("id"), in.Enabled)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("DELETE /api/channels/feishu/bots/{id}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.DeleteFeishuBot(r.Context(), r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/reconnect", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.ReconnectFeishuBot(r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/test", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"sent": true}, a.TestFeishuBot(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/pair", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.PairFeishuBot(r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/binding", func(w http.ResponseWriter, r *http.Request) {
+		var in model.ChannelPairInput
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.ConfirmFeishuBotPair(r.Context(), r.PathValue("id"), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("DELETE /api/channels/feishu/bots/{id}/binding", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.UnbindFeishuBotDM(r.Context(), r.PathValue("id"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("GET /api/channels/feishu/bots/{id}/chats", func(w http.ResponseWriter, r *http.Request) {
+		chats, err := a.ListFeishuBotChats(r.Context(), r.PathValue("id"))
+		respond(w, chats, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/check-scopes", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.CheckFeishuBotScopes(r.Context(), r.PathValue("id"))
+		respond(w, v, err)
+	})
 	mux.HandleFunc("POST /api/runs/{id}/channel-reply/retry", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"queued": true}, a.RetryChannelReply(r.Context(), r.PathValue("id")))
 	})

@@ -132,6 +132,90 @@ export interface ChannelView {
   pairLocked?: boolean;
   lastMessageAt?: string;
   registration?: ChannelRegistration;
+  bots?: FeishuBotView[];
+}
+export interface FeishuBotView {
+  id: string;
+  appId: string;
+  brand: string;
+  botName?: string;
+  enabled: boolean;
+  connection: string;
+  ownerName?: string;
+  chatId?: string;
+  paired: boolean;
+  pairCode?: string;
+  pairCandidate?: string;
+  pairLocked?: boolean;
+  lastMessageAt?: string;
+  missingScopes?: string[];
+  settings: FeishuBotSettings;
+}
+export interface FeishuBotSettings {
+  displayName?: string;
+  agentId?: string;
+  selection?: Selection;
+  dmMode?: string; // "continuous" | "topic"
+  replyStyle?: string; // "card" | "text"
+  groupEnabled: boolean;
+  groupMention?: string; // "at_only" | "thread_free" | "yield" | "free"
+  groupReplyTarget?: string; // "topic" | "main" | "quote"
+  dmAccess?: string; // "admin" | "whitelist" | "all"
+  dmWhitelist?: string[];
+  groupAccess?: string; // "whitelist" | "any"
+  replyMention?: string; // "none" | "requester" | "members"
+  admins?: string[];
+  defaultPrompt?: string;
+  chatOverrides?: FeishuChatOverride[];
+  advanced: FeishuBotAdvanced;
+}
+export interface FeishuChatOverride {
+  id: string;
+  chatId: string;
+  chatName?: string;
+  enabled: boolean;
+  promptMode?: string; // "append" | "replace"
+  prompt?: string;
+  selection?: Selection;
+  groupMention?: string; // "" (inherit) | "at_only" | "thread_free" | "yield" | "free"
+  groupReplyTarget?: string; // "" (inherit) | "topic" | "main" | "quote" | "dm_first"
+  replyStyle?: string; // "" (inherit) | "card" | "text"
+}
+export interface FeishuBotAdvanced {
+  reactionAck: boolean;
+  senderTag: boolean;
+  hideLocalAddresses: boolean;
+  historyLimit: number /* int */;
+  trustSameOwnerBots: boolean;
+  sessionMapping?: string; // "single_chat_topics" | "per_feishu_chat"
+  approvalMode?: string; // "lever" | "feishu_card"
+  blockedUsers?: string[];
+}
+export interface FeishuKnownChat {
+  chatId: string;
+  name: string;
+  members?: number /* int */;
+}
+export interface FeishuBotCreateInput {
+  appId: string;
+  appSecret: string;
+  brand?: string;
+  displayName?: string;
+  agentId?: string;
+  preset?: string; // "personal" | "dev" | "oncall"
+  settings?: FeishuBotSettings;
+}
+export interface FeishuBotCredentialsInput {
+  displayName?: string;
+  appId: string;
+  appSecret?: string;
+  brand?: string;
+}
+export interface FeishuRegistrationInput {
+  displayName?: string;
+  agentId?: string;
+  preset?: string;
+  brand?: string;
 }
 export interface ChannelRegistration {
   phase: string;

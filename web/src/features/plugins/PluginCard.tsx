@@ -173,9 +173,21 @@ export function PluginCard({
   const { t } = useTranslation();
   const description = pluginDescription(plugin, t);
   const name = pluginName(plugin, t);
+  const botCount = channel?.bots?.length ?? 0;
   const route =
-    channel?.ownerName &&
-    [channel.ownerName, channelAgentName].filter(Boolean).join(" → ");
+    botCount > 1
+      ? t("channels.bot.count", { count: botCount })
+      : channel?.ownerName
+        ? [channel.ownerName, channelAgentName].filter(Boolean).join(" → ")
+        : botCount === 1
+          ? [
+              channel?.bots?.[0]?.settings.displayName ||
+                channel?.bots?.[0]?.botName,
+              channelAgentName,
+            ]
+              .filter(Boolean)
+              .join(" → ")
+          : undefined;
   const connections = providers?.filter((p) => p.pluginId === plugin.id);
   const signedOut = connections?.filter(
     (p) => p.enabled && p.loginStatus === "signedOut",

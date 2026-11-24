@@ -29,7 +29,10 @@ func Register(ctx context.Context, showURL func(string)) (Registration, error) {
 			Preset: &minimal,
 			Scopes: registration.AppAddonsScopes{Tenant: []string{
 				"im:message.p2p_msg:readonly",
+				"im:message.group_at_msg:readonly",
 				"im:message:send_as_bot",
+				"im:chat:readonly",
+				"im:message.reactions:write_only",
 			}},
 			Events: registration.AppAddonsEvents{Items: registration.AppAddonsEventItems{
 				Tenant: []string{"im.message.receive_v1"},
@@ -57,6 +60,9 @@ func Register(ctx context.Context, showURL func(string)) (Registration, error) {
 			return Registration{}, ErrRegistrationDenied
 		}
 		return Registration{}, err
+	}
+	if result.UserInfo != nil && result.UserInfo.TenantBrand == Lark {
+		brand = Lark
 	}
 	return Registration{AppID: result.ClientID, Secret: result.ClientSecret, Brand: brand}, nil
 }

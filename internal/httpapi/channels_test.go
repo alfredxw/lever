@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,7 +23,8 @@ import (
 )
 
 type feishuPost struct {
-	parent, uuid, text, host string
+	parent, uuid, text, host, msgType, receiveType string
+	inThread                                       bool
 }
 
 func TestFeishuChannelPrivateChatDelivery(t *testing.T) {
@@ -308,23 +310,61 @@ func newFeishuFixture(t *testing.T, register http.HandlerFunc) *feishuFixture {
 			if err == nil {
 				f.sockets <- conn
 			}
+		case "/open-apis/im/v1/chats":
+			write(`{"code":0,"data":{"items":[{"chat_id":"oc_dev_group","name":"Lever 研发群"},{"chat_id":"oc_oncall","name":"Oncall 值班群"}]}}`)
 		default:
+			if strings.Contains(r.URL.Path, "/reactions") {
+				write(`{"code":0,"data":{"reaction_id":"react_1"}}`)
+				return
+			}
 			if !strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/messages") {
 				http.NotFound(w, r)
 				return
 			}
-			var body map[string]string
+			if r.Method == http.MethodGet {
+				write(`{"code":0,"data":{"items":[]}}`)
+				return
+			}
+			var body map[string]any
 			if json.NewDecoder(r.Body).Decode(&body) != nil || r.Header.Get("Authorization") != "Bearer tenant-fixture" {
 				http.Error(w, "invalid Feishu request", http.StatusBadRequest)
 				return
 			}
-			var content map[string]string
-			_ = json.Unmarshal([]byte(body["content"]), &content)
-			parent := body["receive_id"]
+			str := func(k string) string { s, _ := body[k].(string); return s }
+			inThread, _ := body["reply_in_thread"].(bool)
+			msgType := str("msg_type")
+			rawContent := str("content")
+			text := ""
+			if msgType == "interactive" {
+				var card struct {
+					Body struct {
+						Elements []struct {
+							Content string `json:"content"`
+						} `json:"elements"`
+					} `json:"body"`
+				}
+				_ = json.Unmarshal([]byte(rawContent), &card)
+				if len(card.Body.Elements) > 0 {
+					text = card.Body.Elements[0].Content
+				}
+			} else {
+				var content map[string]string
+				_ = json.Unmarshal([]byte(rawContent), &content)
+				text = content["text"]
+			}
+			parent := str("receive_id")
 			if parent == "" {
 				parent = strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/messages/"), "/reply")
 			}
-			f.posts <- feishuPost{parent: parent, uuid: body["uuid"], text: content["text"], host: r.Header.Get("X-Fixture-Host")}
+			f.posts <- feishuPost{
+				parent:      parent,
+				uuid:        str("uuid"),
+				text:        text,
+				host:        r.Header.Get("X-Fixture-Host"),
+				msgType:     msgType,
+				receiveType: r.URL.Query().Get("receive_id_type"),
+				inThread:    inThread,
+			}
 			switch parent {
 			case "reject-once":
 				if _, retry := rejected.LoadOrStore(parent, true); !retry {
@@ -440,4 +480,231 @@ func (f *feishuFixture) waitReply(lever *fixture, chat, input, state string) mod
 	}
 	f.t.Fatalf("channel reply for %q did not reach %s", input, state)
 	return model.Run{}
+}
+
+func (f *feishuFixture) groupEvent(conn *websocket.Conn, appID, id, chat, user, rootID, text string, mentions []map[string]any) {
+	f.t.Helper()
+	content, _ := json.Marshal(map[string]string{"text": text})
+	msg := map[string]any{
+		"message_id":   id,
+		"chat_id":      chat,
+		"chat_type":    "group",
+		"message_type": "text",
+		"content":      string(content),
+	}
+	if rootID != "" {
+		msg["root_id"] = rootID
+	}
+	if len(mentions) > 0 {
+		msg["mentions"] = mentions
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"schema": "2.0",
+		"header": map[string]string{"event_id": id, "event_type": "im.message.receive_v1", "app_id": appID, "tenant_key": "tenant"},
+		"event": map[string]any{
+			"message": msg,
+			"sender":  map[string]any{"sender_type": "user", "sender_id": map[string]string{"open_id": user}},
+		},
+	})
+	frame := larkws.Frame{Method: 1, Service: 17, Payload: payload, Headers: []larkws.Header{
+		{Key: "type", Value: "event"}, {Key: "message_id", Value: id}, {Key: "sum", Value: "1"}, {Key: "seq", Value: "0"},
+	}}
+	raw, _ := frame.Marshal()
+	if err := conn.WriteMessage(websocket.BinaryMessage, raw); err != nil {
+		f.t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		var ack larkws.Frame
+		if err := ack.Unmarshal(raw); err != nil {
+			f.t.Fatal(err)
+		}
+		if ack.Method == 0 {
+			continue
+		}
+		return
+	}
+}
+
+func TestFeishuMultiBotConfigAndGroupOverrides(t *testing.T) {
+	feishu := newFeishuFixture(t, nil)
+	f := newFixture(t)
+	agentDev := f.agent("codex")
+	agentOps := f.agent("codex")
+
+	// 1. Bind two independent bots to two different Agents using presets.
+	var view model.ChannelView
+	f.request("POST", "/channels/feishu/bots", model.FeishuBotCreateInput{
+		AppID:       "cli_dev_bot",
+		AppSecret:   "secret-dev-bot",
+		Brand:       "feishu",
+		DisplayName: "代码评审助手",
+		AgentID:     agentDev.ID,
+		Preset:      "dev",
+	}, 200, &view)
+	sockDev := feishu.nextSocket()
+
+	f.request("POST", "/channels/feishu/bots", model.FeishuBotCreateInput{
+		AppID:       "cli_ops_bot",
+		AppSecret:   "secret-ops-bot",
+		Brand:       "lark",
+		DisplayName: "Oncall 助手",
+		AgentID:     agentOps.ID,
+		Preset:      "oncall",
+	}, 200, &view)
+	sockOps := feishu.nextSocket()
+
+	// Duplicate AppID+Brand must be rejected.
+	f.request("POST", "/channels/feishu/bots", model.FeishuBotCreateInput{
+		AppID:     "cli_dev_bot",
+		AppSecret: "secret-dev-bot",
+		Brand:     "feishu",
+	}, 409, nil)
+
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return len(c.Bots) == 2 && c.Bots[0].Connection == "online" && c.Bots[1].Connection == "online"
+	})
+	botDev, botOps := view.Bots[0], view.Bots[1]
+	if botDev.Settings.AgentID != agentDev.ID || botOps.Settings.AgentID != agentOps.ID {
+		t.Fatalf("unexpected agent bindings: %+v %+v", botDev.Settings, botOps.Settings)
+	}
+
+	// Ensure secrets are never exposed in GET /channels/feishu.
+	var rawView json.RawMessage
+	f.request("GET", "/channels/feishu", nil, 200, &rawView)
+	if bytes.Contains(rawView, []byte("secret-dev-bot")) || bytes.Contains(rawView, []byte("secret-ops-bot")) {
+		t.Fatal("channel view exposed bot secrets")
+	}
+
+	// 2. Fetch joined chats list for group rule picker.
+	var chats []model.FeishuKnownChat
+	f.request("GET", "/channels/feishu/bots/"+botDev.ID+"/chats", nil, 200, &chats)
+	if len(chats) != 2 || chats[0].ChatID != "oc_dev_group" {
+		t.Fatalf("unexpected joined chats: %+v", chats)
+	}
+
+	// 3. Configure per-group override (identity prompt + model override + dm_first + text + hideLocalAddresses).
+	devSettings := botDev.Settings
+	devSettings.DefaultPrompt = "默认飞书助手提示"
+	devSettings.Admins = []string{"ou_admin"}
+	devSettings.Advanced.BlockedUsers = []string{"ou_blocked"}
+	devSettings.Advanced.HideLocalAddresses = true
+	devSettings.ChatOverrides = []model.FeishuChatOverride{
+		{
+			ID:               "rule-dev",
+			ChatID:           "oc_dev_group",
+			ChatName:         "Lever 研发群",
+			Enabled:          true,
+			PromptMode:       "append",
+			Prompt:           "专注 PR 审查",
+			Selection:        &model.Selection{Provider: "codex", Model: "override-model"},
+			GroupMention:     "at_only",
+			GroupReplyTarget: "topic",
+			ReplyStyle:       "card",
+		},
+		{
+			ID:               "rule-dmfirst",
+			ChatID:           "oc_quiet_group",
+			ChatName:         "静默群",
+			Enabled:          true,
+			PromptMode:       "replace",
+			Prompt:           "只私聊回复",
+			GroupMention:     "yield",
+			GroupReplyTarget: "dm_first",
+			ReplyStyle:       "text",
+		},
+	}
+	f.request("PUT", "/channels/feishu/bots/"+botDev.ID+"/settings", devSettings, 200, &view)
+
+	// Blocked user is ignored in DM even when dmAccess == "all".
+	feishu.event(sockDev, "cli_dev_bot", "blocked-dm", "oc_dm_blocked", "ou_blocked", "p2p", "user", "should ignore")
+
+	// Unlisted group is ignored because groupAccess == "whitelist".
+	feishu.groupEvent(sockDev, "cli_dev_bot", "unlisted-grp", "oc_unknown", "ou_alice", "", "@_user_1 hello", []map[string]any{
+		{"key": "@_user_1", "name": "Fixture Bot", "id": map[string]string{"open_id": "ou_bot"}},
+	})
+
+	// Mentioning dev bot in oc_dev_group triggers card reply in thread with model override and prompt.
+	fixtureHome := path.Join("/Users", "fixture-user")
+	feishu.groupEvent(sockDev, "cli_dev_bot", "grp-at-1", "oc_dev_group", "ou_alice", "", "@_user_1 review "+fixtureHome+"/app http://127.0.0.1:8080", []map[string]any{
+		{"key": "@_user_1", "name": "Fixture Bot", "id": map[string]string{"open_id": "ou_bot"}},
+	})
+	post := feishu.nextPost()
+	if post.parent != "grp-at-1" || !post.inThread || post.msgType != "interactive" {
+		t.Fatalf("expected interactive thread reply, got %+v", post)
+	}
+	if strings.Contains(post.text, fixtureHome) || strings.Contains(post.text, "127.0.0.1") {
+		t.Fatalf("expected local paths and addresses redacted, got %q", post.text)
+	}
+	if !strings.Contains(post.text, "<at id=ou_alice></at>") {
+		t.Fatalf("expected requester mention in group card reply, got %q", post.text)
+	}
+
+	// Verify run persisted model override + composed identity prompt.
+	var storedModel, storedPrompt string
+	if err := f.a.Store.DB.QueryRow(`SELECT json_extract(r.data,'$.selection.model'), COALESCE(json_extract(r.data,'$.channelPrompt'),'')
+FROM runs r JOIN channel_deliveries d ON d.run_id=r.id WHERE d.message_id='grp-at-1' AND d.part='answer'`).Scan(&storedModel, &storedPrompt); err != nil {
+		t.Fatal(err)
+	}
+	if storedModel != "override-model" || !strings.Contains(storedPrompt, "默认飞书助手提示") || !strings.Contains(storedPrompt, "专注 PR 审查") {
+		t.Fatalf("unexpected model/prompt: model=%q prompt=%q", storedModel, storedPrompt)
+	}
+
+	// Yield mode in oc_quiet_group: message @mentioning someone else is ignored; unmentioned message replies via dm_first!
+	feishu.groupEvent(sockDev, "cli_dev_bot", "grp-yield-skip", "oc_quiet_group", "ou_alice", "", "@_user_1 ask bob", []map[string]any{
+		{"key": "@_user_1", "name": "Bob", "id": map[string]string{"open_id": "ou_bob"}},
+	})
+	feishu.groupEvent(sockDev, "cli_dev_bot", "grp-yield-hit", "oc_quiet_group", "ou_alice", "", "quiet check", nil)
+	dmPost := feishu.nextPost()
+	if dmPost.receiveType != "open_id" || dmPost.parent != "ou_alice" || dmPost.msgType != "text" {
+		t.Fatalf("expected dm_first text reply to ou_alice, got %+v", dmPost)
+	}
+
+	// Second bot routes independently to agentOps over Lark domain!
+	opsSettings := botOps.Settings
+	opsSettings.DMAccess = "whitelist"
+	opsSettings.DMWhitelist = []string{"ou_sre"}
+	f.request("PUT", "/channels/feishu/bots/"+botOps.ID+"/settings", opsSettings, 200, &view)
+	feishu.event(sockOps, "cli_ops_bot", "ops-denied", "oc_ops_dm", "ou_stranger", "p2p", "user", "denied dm")
+	feishu.event(sockOps, "cli_ops_bot", "ops-ok", "oc_ops_dm", "ou_sre", "p2p", "user", "check alert")
+	opsPost := feishu.nextPost()
+	if opsPost.parent != "ops-ok" || opsPost.host != "open.larksuite.com" || !strings.Contains(opsPost.text, "check alert") {
+		t.Fatalf("unexpected second bot reply: %+v", opsPost)
+	}
+
+	// 4. Pause / enable, check-scopes, update credentials, persist across restart, and delete bot.
+	f.request("PUT", "/channels/feishu/bots/"+botOps.ID+"/enabled", map[string]bool{"enabled": false}, 200, &view)
+	if view.Bots[1].Enabled {
+		t.Fatal("expected botOps to be paused")
+	}
+	f.request("POST", "/channels/feishu/bots/"+botDev.ID+"/check-scopes", nil, 200, &view)
+	f.request("PUT", "/channels/feishu/bots/"+botDev.ID+"/credentials", model.FeishuBotCredentialsInput{
+		DisplayName: "研发审查 Bot",
+		AppID:       "cli_dev_bot",
+		Brand:       "feishu",
+	}, 200, &view)
+	if view.Bots[0].Settings.DisplayName != "研发审查 Bot" {
+		t.Fatalf("displayName not updated: %+v", view.Bots[0].Settings)
+	}
+
+	// Persistence across backend restart!
+	restartProviderFixture(t, f)
+	_ = feishu.nextSocket()
+	_ = feishu.nextSocket()
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return len(c.Bots) == 2 && c.Bots[0].Connection == "online" && c.Bots[1].Connection == "online"
+	})
+	if view.Bots[0].Settings.DisplayName != "研发审查 Bot" || len(view.Bots[0].Settings.ChatOverrides) != 2 || view.Bots[1].Enabled {
+		t.Fatalf("multi-bot config did not survive restart: %+v", view.Bots)
+	}
+
+	// Delete second bot cleanly.
+	f.request("DELETE", "/channels/feishu/bots/"+botOps.ID, nil, 200, &view)
+	if len(view.Bots) != 1 || view.Bots[0].ID != botDev.ID {
+		t.Fatalf("expected 1 remaining bot after delete, got %+v", view.Bots)
+	}
 }

@@ -232,10 +232,10 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 		if id == larkbot.PluginID {
 			a.feishu.enabled = enabled
 			if !enabled {
-				a.feishu.pair = channelPair{}
+				a.feishu.pairs = nil
 				a.cancelFeishuRegistrationLocked()
 			}
-			a.startFeishuLocked()
+			a.syncFeishuRuntimesLocked()
 		}
 	}
 	a.mu.Unlock()

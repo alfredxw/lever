@@ -226,6 +226,17 @@ function ChatContent(props: ChatProps) {
   const channel = latestPage?.chat.channel;
   const botChat = channel === "feishu";
   const { data: feishu } = useFeishuChannel(visible && botChat);
+  const activeFeishuBot = feishu?.bots?.find((b) => b.chatId === chatId);
+  const feishuActiveHere = feishu
+    ? activeFeishuBot
+      ? feishu.enabled && activeFeishuBot.enabled
+      : feishu.chatId === chatId && feishu.enabled && !feishu.paused
+    : false;
+  const feishuHistoryChat = feishu
+    ? feishu.bots?.length
+      ? !activeFeishuBot && feishu.bots.every((b) => !b.enabled)
+      : feishu.chatId !== chatId
+    : false;
   const stop = useMutation({
     mutationFn: (runId: string) => api(`/runs/${runId}/stop`, {}),
     onError: (error) => toast.error(error.message),
@@ -458,7 +469,7 @@ function ChatContent(props: ChatProps) {
                     <EmptyTitle>
                       {channel
                         ? t(
-                            feishu && feishu.chatId !== chatId
+                            feishuHistoryChat
                               ? "channels.history"
                               : botChat
                                 ? "channels.firstMessage"
@@ -589,7 +600,7 @@ function ChatContent(props: ChatProps) {
           />
           <div className="flex flex-wrap items-center justify-center gap-2">
             {topicLauncher?.backButton}
-            {feishu?.chatId === chatId && feishu.enabled && !feishu.paused && (
+            {feishuActiveHere && (
               <p className="text-xs text-muted-foreground">
                 {t("channels.continueInFeishu")}
               </p>

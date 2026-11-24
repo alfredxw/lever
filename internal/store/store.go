@@ -232,6 +232,10 @@ CREATE TABLE IF NOT EXISTS channel_deliveries(
   PRIMARY KEY(run_id, part)
 );
 CREATE INDEX IF NOT EXISTS pending_channel_deliveries ON channel_deliveries(binding_id, part) WHERE status='pending';
+CREATE TABLE IF NOT EXISTS feishu_delivery_meta(
+  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+  data TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS personal_channel_turns(
   run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, binding TEXT NOT NULL, chat TEXT NOT NULL,
   conversation TEXT NOT NULL, thread TEXT NOT NULL, command TEXT NOT NULL, signature TEXT NOT NULL,

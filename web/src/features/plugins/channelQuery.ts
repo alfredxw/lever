@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { ChannelRegistration, ChannelView } from "@/api/types.gen";
+import type {
+  ChannelRegistration,
+  ChannelView,
+  FeishuBotView,
+  FeishuKnownChat,
+} from "@/api/types.gen";
 
 export const feishuPath = "/channels/feishu";
 export const feishuQueryKey = ["channel", "feishu"] as const;
@@ -12,13 +17,61 @@ export function registrationInProgress(registration?: ChannelRegistration) {
   );
 }
 
+export function feishuBotStatus(
+  bot: FeishuBotView,
+  pluginEnabled: boolean,
+):
+  | "offline"
+  | "connecting"
+  | "error"
+  | "credentials_missing"
+  | "paused"
+  | "unpaired"
+  | "online"
+  | undefined {
+  if (!pluginEnabled) return;
+  if (!bot.enabled) return "paused";
+  if (bot.connection !== "online") {
+    return bot.connection as
+      | "offline"
+      | "connecting"
+      | "error"
+      | "credentials_missing";
+  }
+  if (!bot.settings.agentId && !bot.paired) return "unpaired";
+  return "online";
+}
+
 export function feishuStatus(channel: ChannelView) {
   if (!channel.enabled) return;
-  if (!channel.configured) return "notConfigured";
-  if (channel.connection !== "online") return channel.connection;
-  if (!channel.agentId) return "unpaired";
-  if (channel.paused) return "paused";
-  return "online";
+  const bots = channel.bots ?? [];
+  if (bots.length === 0) {
+    if (!channel.configured) return "notConfigured";
+    if (channel.connection !== "online") return channel.connection;
+    if (!channel.agentId) return "unpaired";
+    if (channel.paused) return "paused";
+    return "online";
+  }
+  const statuses = bots.map((b) => feishuBotStatus(b, channel.enabled));
+  if (statuses.includes("online")) return "online";
+  if (statuses.includes("connecting")) return "connecting";
+  if (statuses.includes("credentials_missing")) return "credentials_missing";
+  if (statuses.includes("error")) return "error";
+  if (statuses.includes("unpaired")) return "unpaired";
+  if (statuses.includes("paused")) return "paused";
+  return "offline";
+}
+
+export function feishuBotForChat(
+  channel: ChannelView | undefined,
+  chatId: string,
+) {
+  if (!channel) return undefined;
+  const bots = channel.bots ?? [];
+  if (bots.length > 0) {
+    return bots.find((b) => b.chatId === chatId);
+  }
+  return channel.chatId === chatId ? channel : undefined;
 }
 
 export function useFeishuChannel(enabled: boolean, poll = false) {
@@ -31,8 +84,27 @@ export function useFeishuChannel(enabled: boolean, poll = false) {
       const channel = query.state.data;
       if (!poll || !channel?.enabled) return false;
       if (registrationInProgress(channel.registration)) return 1000;
-      if (!channel.configured) return false;
-      return channel.agentId ? 5000 : 1500;
+      const bots = channel.bots ?? [];
+      if (bots.length === 0 && !channel.configured) return false;
+      const pairing =
+        bots.some((b) => !!b.pairCode || !!b.pairCandidate) ||
+        (!bots.length && !channel.agentId);
+      return pairing ? 1500 : 5000;
     },
+  });
+}
+
+export function useFeishuBotChats(botId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["channel", "feishu", "chats", botId],
+    enabled: !!botId && enabled,
+    queryFn: ({ signal }) =>
+      api<FeishuKnownChat[]>(
+        `${feishuPath}/bots/${botId}/chats`,
+        undefined,
+        "GET",
+        signal,
+      ),
+    staleTime: 30_000,
   });
 }

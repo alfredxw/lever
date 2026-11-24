@@ -1085,6 +1085,256 @@ export const enUS = {
     "Delivery unconfirmed. Check the original conversation.",
   "channels.reply.cancelled": "Reply cancelled",
   "channels.retryReply": "Retry reply",
+  "channels.bot.count": "{{count}} bots",
+  "channels.bot.bind": "Bind bot",
+  "channels.bot.bindFirst": "Bind your first bot",
+  "channels.bot.emptyTitle": "No Feishu bots bound yet",
+  "channels.bot.emptyDesc":
+    "Scan to create a new bot or bind existing Feishu / Lark apps to different Agents with independent models, permissions, and group rules.",
+  "channels.bot.groupRulesCount": "{{count}} group rules",
+  "channels.bot.dmOnly": "DM only",
+  "channels.bot.applyPreset": "Apply preset",
+  "channels.bot.presetApplied": 'Applied "{{preset}}" preset to "{{name}}"',
+  "channels.bot.preset.personal": "Personal assistant",
+  "channels.bot.preset.personalDesc":
+    "Admins-only DM, continuous context, group chats off",
+  "channels.bot.preset.dev": "Engineering team bot",
+  "channels.bot.preset.devDesc":
+    "Thread-free @ + topics, all-user DM, progress cards",
+  "channels.bot.preset.oncall": "Oncall responder",
+  "channels.bot.preset.oncallDesc":
+    "Allowlisted groups, yield-free @, main timeline, mention members",
+  "channels.bot.testBtn": "Test",
+  "channels.bot.testPaused": "Bot is paused. Enable it before sending a test.",
+  "channels.bot.enableAria": "Enable this bot",
+  "channels.bot.enabledToast": 'Enabled "{{name}}"',
+  "channels.bot.pausedToast": 'Paused "{{name}}"',
+  "channels.bot.editCreds": "Edit name & credentials",
+  "channels.bot.viewScopes": "Check Feishu scopes",
+  "channels.bot.pairDm": "Pair owner DM",
+  "channels.bot.unbindBot": "Unbind this bot",
+  "channels.bot.unbindBotTitle": 'Unbind "{{name}}"?',
+  "channels.bot.unbindBotDesc":
+    "This disconnects the bot and removes its Feishu credentials. The bound Agent and past Chats are kept.",
+  "channels.bot.unbindBotConfirm": "Unbind bot",
+  "channels.bot.unboundToast": 'Unbound "{{name}}"',
+  "channels.bot.scopeWarning":
+    "Current settings require Feishu scope(s) {{scopes}}. Without them, non-mention group messages or history may not arrive.",
+  "channels.bot.checkScopes": "View scopes",
+  "channels.bot.missingScopesBadge": "Missing scopes",
+  "channels.bot.sectionBinding": "Binding & Model",
+  "channels.bot.sectionBindingSub":
+    "Workspace, Skills, and base instructions inherit from the target Agent",
+  "channels.bot.agentLabel": "Target Agent",
+  "channels.bot.agentDesc": "Workspace {{workspace}} · Default model {{model}}",
+  "channels.bot.agentUnbound": "No receiving Agent selected yet",
+  "channels.bot.modelLabel": "Model selection",
+  "channels.bot.modelInheritDesc": "Following Agent default: {{model}}",
+  "channels.bot.modelOverrideDesc": "Overridden: {{model}}",
+  "channels.bot.modelFollow": "Follow Agent",
+  "channels.bot.modelOverride": "Override",
+  "channels.bot.sectionReply": "Reply Mode",
+  "channels.bot.sectionReplySub":
+    "Control how the bot is triggered and where replies land",
+  "channels.bot.dmMode": "Direct message style",
+  "channels.bot.dmMode.continuous": "Continuous DM",
+  "channels.bot.dmMode.continuousDesc":
+    "Keep a single ongoing conversation, ideal for a daily assistant.",
+  "channels.bot.dmMode.topic": "Topic per message",
+  "channels.bot.dmMode.topicDesc":
+    "Start an isolated thread for each new DM to keep parallel tasks separate.",
+  "channels.bot.replyStyle": "Reply format",
+  "channels.bot.replyStyle.card": "Markdown card",
+  "channels.bot.replyStyle.cardDesc":
+    "Structured interactive card for cleaner code blocks and lists.",
+  "channels.bot.replyStyle.text": "Plain text",
+  "channels.bot.replyStyle.textDesc":
+    "Compact lightweight text messages for busy channels.",
+  "channels.bot.groupEnabled": "Allow in group chats",
+  "channels.bot.groupEnabledOn":
+    "Group access is on. Configure default triggers and per-group rules below.",
+  "channels.bot.groupEnabledOff":
+    "Off: responds only in direct messages and hides group settings.",
+  "channels.bot.groupMention": "Default group trigger",
+  "channels.bot.groupMention.at_only": "Require @",
+  "channels.bot.groupMention.at_onlyDesc":
+    "Respond only when explicitly @mentioned.",
+  "channels.bot.groupMention.thread_free": "Thread free",
+  "channels.bot.groupMention.thread_freeDesc":
+    "Require @ to start a thread; follow-ups inside the thread need no @.",
+  "channels.bot.groupMention.yield": "Yield free",
+  "channels.bot.groupMention.yieldDesc":
+    "Respond when no one is @mentioned; stay quiet when others are @mentioned.",
+  "channels.bot.groupMention.free": "Always reply",
+  "channels.bot.groupMention.freeDesc":
+    "Respond to all group messages (requires im:message.group_msg scope).",
+  "channels.bot.groupReplyTarget": "Group reply placement",
+  "channels.bot.groupReplyTarget.topic": "New thread",
+  "channels.bot.groupReplyTarget.topicDesc":
+    "Keep replies inside a thread to avoid flooding the main group chat.",
+  "channels.bot.groupReplyTarget.main": "Main chat",
+  "channels.bot.groupReplyTarget.mainDesc":
+    "Post directly into the main group timeline.",
+  "channels.bot.groupReplyTarget.quote": "Quote reply",
+  "channels.bot.groupReplyTarget.quoteDesc":
+    "Reply in the main timeline while quoting the trigger message.",
+  "channels.bot.groupReplyTarget.dm_first": "DM requester",
+  "channels.bot.groupReplyTarget.dm_firstDesc":
+    "Send the full answer directly to the requester via DM to keep groups quiet.",
+  "channels.bot.sectionPermissions": "Access & Feishu Reply Permissions",
+  "channels.bot.sectionPermissionsSub":
+    "Control who can invoke the bot and its outbound reply boundaries",
+  "channels.bot.dmAccess": "DM access",
+  "channels.bot.dmAccess.admin": "Admins only",
+  "channels.bot.dmAccess.adminDesc":
+    "Only admins and the paired DM owner can message the bot.",
+  "channels.bot.dmAccess.whitelist": "Allowlist",
+  "channels.bot.dmAccess.whitelistDesc":
+    "Admins and the allowlisted members below can DM the bot.",
+  "channels.bot.dmAccess.all": "All app users",
+  "channels.bot.dmAccess.allDesc":
+    "Anyone within the Feishu app's visibility scope can DM the bot.",
+  "channels.bot.whitelistLabel": "Allowed DM users (Open ID)",
+  "channels.bot.whitelistPlaceholder": "Enter ou_... and press Enter",
+  "channels.bot.groupAccess": "Group admission",
+  "channels.bot.groupAccess.whitelist": "Allowlisted groups",
+  "channels.bot.groupAccess.whitelistDesc":
+    "Only active in groups enabled under Group Rules below.",
+  "channels.bot.groupAccess.any": "Any joined group",
+  "channels.bot.groupAccess.anyDesc":
+    "Works in any group the bot joins; override specific groups below.",
+  "channels.bot.replyMention": "Reply @ permission",
+  "channels.bot.replyMention.none": "No @",
+  "channels.bot.replyMention.noneDesc":
+    "Never trigger @ notifications in bot replies.",
+  "channels.bot.replyMention.requester": "@ requester only",
+  "channels.bot.replyMention.requesterDesc":
+    "Allow @mentioning the person who triggered the turn.",
+  "channels.bot.replyMention.members": "Allow @ members",
+  "channels.bot.replyMention.membersDesc":
+    "Allow @mentioning relevant group members (e.g. oncall owners).",
+  "channels.bot.admins": "Bot admins",
+  "channels.bot.adminsDesc":
+    "Bypass allowlists and run admin commands like /reset in Feishu.",
+  "channels.bot.adminsPlaceholder": "+ Add Open ID",
+  "channels.bot.pairedOwnerChip": "Paired: {{name}}",
+  "channels.bot.sectionIdentity": "Identity Prompt & Group Rules",
+  "channels.bot.sectionIdentityOffSub":
+    "Enable group chats to configure per-group prompts, models, and reply rules",
+  "channels.bot.addGroupRule": "Add group rule",
+  "channels.bot.defaultPrompt": "Default bot identity prompt",
+  "channels.bot.defaultPromptDesc":
+    'Appended after Agent "{{agent}}" base instructions. Leave empty to use Agent instructions as-is.',
+  "channels.bot.defaultPromptPlaceholder":
+    "e.g. Keep Feishu replies concise, lead with conclusions and commands, and flag production risks first…",
+  "channels.bot.groupEmptyWhitelist":
+    "No group rules yet. Add at least one group while Group Admission is set to Allowlisted groups.",
+  "channels.bot.groupEmptyAny":
+    "No per-group overrides yet. All joined groups inherit the bot defaults above.",
+  "channels.bot.addFirstGroupRule": "Add first group rule",
+  "channels.bot.rulePromptAppend": "Prompt: append",
+  "channels.bot.rulePromptReplace": "Prompt: replace",
+  "channels.bot.ruleModelChip": "Model: {{model}}",
+  "channels.bot.ruleTriggerChip": "Trigger: {{value}}",
+  "channels.bot.ruleTargetChip": "Target: {{value}}",
+  "channels.bot.ruleStyleChip": "Style: {{value}}",
+  "channels.bot.ruleAllInherit": "Inherits all bot defaults",
+  "channels.bot.advancedTitle": "Advanced & Safety",
+  "channels.bot.advancedSub":
+    "Reactions, sender tags, local path redaction, group history, chat archiving, blocklist",
+  "channels.bot.reactionAck": "Reaction acknowledgements",
+  "channels.bot.reactionAckDesc":
+    "Add an OnIt reaction when received and switch to DONE on completion.",
+  "channels.bot.senderTag": "Attach sender tag in groups",
+  "channels.bot.senderTagDesc":
+    "Include the sender Open ID in model context to distinguish participants.",
+  "channels.bot.hideLocalAddresses": "Redact local paths & addresses",
+  "channels.bot.hideLocalAddressesDesc":
+    "Mask absolute home directories, localhost, and private IPs before sending to Feishu.",
+  "channels.bot.historyLimit": "Recent group history",
+  "channels.bot.historyLimitDesc":
+    "Attach the last N group messages when starting a new conversation.",
+  "channels.bot.historyLimitOff": "Off",
+  "channels.bot.historyLimitCount": "{{count}} msgs",
+  "channels.bot.trustSameOwnerBots": "Trust sibling bots",
+  "channels.bot.trustSameOwnerBotsDesc":
+    "Allow other Feishu bots in this Lever instance to trigger this bot.",
+  "channels.bot.sessionMapping": "Lever chat archiving",
+  "channels.bot.sessionMappingDesc":
+    "Choose how Feishu conversations map into Lever Chats.",
+  "channels.bot.sessionMapping.single_chat_topics": "One Chat with Topics",
+  "channels.bot.sessionMapping.per_feishu_chat": "One Chat per Feishu chat",
+  "channels.bot.approvalMode": "Approval prompts",
+  "channels.bot.approvalModeDesc":
+    "How approval requests are surfaced when an Agent needs confirmation.",
+  "channels.bot.approvalMode.lever": "Confirm in Lever",
+  "channels.bot.approvalMode.feishu_card": "Feishu prompt",
+  "channels.bot.blockedUsers": "Blocked users",
+  "channels.bot.blockedUsersDesc":
+    "Messages from these Open IDs are ignored in all DMs and groups.",
+  "channels.bot.blockedPlaceholder": "+ Block Open ID",
+  "channels.bot.addDialogTitle": "Bind Feishu bot",
+  "channels.bot.addDialogDesc":
+    "Bind separate bots to different Agents and start from a scene preset.",
+  "channels.bot.modeExisting": "Existing bot credentials",
+  "channels.bot.modeQr": "Scan QR to create / import",
+  "channels.bot.displayName": "Display name",
+  "channels.bot.displayNamePlaceholder": "e.g. Code Review Bot",
+  "channels.bot.displayNameOptional": "Display name (optional)",
+  "channels.bot.initialPreset": "Starting preset",
+  "channels.bot.initialPresetHint": "Every option remains editable afterward",
+  "channels.bot.verifyAndBind": "Verify & bind",
+  "channels.bot.addedToast": 'Bound bot "{{name}}"',
+  "channels.bot.credsDialogTitle": "Edit bot credentials",
+  "channels.bot.credsDialogDesc":
+    "Leave App Secret blank to keep the existing secret. Updating credentials reconnects the bot.",
+  "channels.bot.keepSecretPlaceholder": "Leave blank to keep existing secret",
+  "channels.bot.credsSavedToast": "Updated bot credentials",
+  "channels.bot.ruleDialogAddTitle": "Add group rule",
+  "channels.bot.ruleDialogEditTitle": "Edit group rule",
+  "channels.bot.ruleDialogDesc":
+    'Unchanged fields inherit defaults from "{{bot}}".',
+  "channels.bot.ruleSelectChat": "Feishu group",
+  "channels.bot.ruleSelectChatHint":
+    "Choose from joined groups or paste an oc_... chat ID",
+  "channels.bot.ruleManualChat": "Enter chat ID manually below",
+  "channels.bot.ruleChatNamePlaceholder": "Group label",
+  "channels.bot.ruleChatIdPlaceholder": "Feishu chat_id (oc_...)",
+  "channels.bot.rulePrompt": "Group identity prompt",
+  "channels.bot.rulePromptModeAppend": "Append to default",
+  "channels.bot.rulePromptModeReplace": "Replace default",
+  "channels.bot.rulePromptPlaceholder":
+    "e.g. Act as PR reviewer in this group and focus on concurrency and regression risks.",
+  "channels.bot.ruleOverrides": "Optional behavior overrides",
+  "channels.bot.ruleOverrideCount": "{{count}} overridden",
+  "channels.bot.ruleGroupModel": "Group model",
+  "channels.bot.ruleFollowDefault": "Follow default",
+  "channels.bot.ruleFollowDefaultModel": "Follow default ({{model}})",
+  "channels.bot.ruleDelete": "Delete rule",
+  "channels.bot.ruleSave": "Save rule",
+  "channels.bot.ruleSavedToast": 'Saved group rule "{{name}}"',
+  "channels.bot.ruleDeletedToast": "Removed group rule",
+  "channels.bot.scopesDialogTitle": "Feishu Open Platform Scopes",
+  "channels.bot.scopesDialogDesc":
+    'Permissions checked for "{{bot}}" based on its current configuration.',
+  "channels.bot.scopeReady": "Ready",
+  "channels.bot.scopeMissing": "Missing",
+  "channels.bot.scopeRecheck": "Re-check scopes",
+  "channels.bot.scopeRechecked": "Scope check complete",
+  "channels.bot.scope.sendAsBot": "Send messages and interactive cards as bot",
+  "channels.bot.scope.p2p": "Receive direct messages from users",
+  "channels.bot.scope.groupAt": "Receive @mention messages in groups",
+  "channels.bot.scope.groupMsg":
+    "Read all group messages (mention-free / yield / history)",
+  "channels.bot.scope.chatRead": "List groups the bot has joined",
+  "channels.bot.scope.reactions": "Add OnIt / DONE message reactions",
+  "channels.bot.removeItem": "Remove {{item}}",
+  "channels.bot.dmPairTitle": "Pair owner direct message",
+  "channels.bot.dmPairDesc":
+    "Pair your own Feishu DM to send test messages directly and jump to the Lever Chat.",
+  "channels.bot.edit": "Edit",
+  "channels.bot.copy": "Copy",
+  "channels.bot.copied": "Copied",
   "plugins.local": "Local",
   "plugins.filterOrigin": "Origin",
   "plugins.refresh": "Refresh status",

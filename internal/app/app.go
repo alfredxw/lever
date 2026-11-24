@@ -24,6 +24,7 @@ import (
 	"lever/internal/model"
 	"lever/internal/plugin"
 	"lever/internal/plugin/builtin"
+	larkbot "lever/internal/plugin/builtin/lark-bot"
 	"lever/internal/provider"
 	"lever/internal/runhost"
 	"lever/internal/store"
@@ -38,6 +39,7 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 func invalid(s string) error   { return &Error{400, s} }
+func notFound(s string) error  { return &Error{404, s} }
 func conflict(s string) error  { return &Error{409, s} }
 func ID() string               { return uuid.NewString() }
 func now() string              { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -120,7 +122,7 @@ func open(dir string, independent bool) (*App, error) {
 		s.Close()
 		return nil, err
 	}
-	if a.feishu.config, err = a.loadChannel(ctx); err != nil {
+	if a.feishu.bots, err = a.loadFeishuBots(ctx); err != nil {
 		cancel()
 		s.Close()
 		return nil, err
@@ -524,6 +526,7 @@ type sendOrigin struct {
 	taskQueue       *queuedTask
 	retry           *model.Run
 	channel         *channelInput
+	feishu          *feishuTurn
 	personal        *personalTurn
 	automation      *automationFire
 }
@@ -641,6 +644,16 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			newChat = chat.ID == ""
 		} else if !newChat {
 			chat, err = store.Get[model.Chat](ctx, tx, "SELECT data FROM chats WHERE id=?", input.ChatID)
+			if errors.Is(err, sql.ErrNoRows) && origin.feishu != nil {
+				err = nil
+				newChat = true
+				input.AgentID = origin.feishu.agentID
+				input.ChatID = ""
+				if input.Operation == "reply" {
+					input.Operation = "topic"
+					input.SessionID = ""
+				}
+			}
 		}
 		if err != nil {
 			return err
@@ -649,6 +662,12 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			chat = model.Chat{ID: ID(), AgentID: input.AgentID, Title: "New chat", Source: "user", CreatedAt: now(), UpdatedAt: now()}
 			if turn := origin.personal; turn != nil {
 				chat.Source, chat.Channel, chat.Title = "channel", turn.install, personalDest.title
+			} else if turn := origin.feishu; turn != nil {
+				title := turn.chatTitle
+				if title == "" {
+					title = "Feishu"
+				}
+				chat.Source, chat.Channel, chat.Title = "channel", larkbot.ChannelID, title
 			}
 			if task != nil {
 				chat.Title, chat.Source = destination.title, destination.source
@@ -801,10 +820,14 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 		case input.Operation == "reply":
 			session, err = store.Get[model.Session](ctx, tx, "SELECT data FROM sessions WHERE id=?", input.SessionID)
-			if err != nil {
+			if errors.Is(err, sql.ErrNoRows) && origin.feishu != nil {
+				err = nil
+				input.Operation = "topic"
+				input.SessionID = ""
+				create = true
+			} else if err != nil {
 				return err
-			}
-			if session.ChatID != chat.ID || session.Kind != "topic" {
+			} else if session.ChatID != chat.ID || session.Kind != "topic" {
 				return invalid("Reply must target a topic in this Chat")
 			}
 		default:
@@ -823,6 +846,11 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				session.Channel = origin.personal.channelOrigin()
 				if kind == "topic" && personalDest.sessionTitle != "" {
 					session.Title = personalDest.sessionTitle
+				}
+			} else if origin.feishu != nil {
+				session.Channel = origin.feishu.origin
+				if kind == "topic" && origin.feishu.sessionTitle != "" {
+					session.Title = origin.feishu.sessionTitle
 				}
 			} else if task != nil && kind == "topic" {
 				session.Title, session.TaskID = task.Title, task.TaskID
@@ -971,6 +999,9 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 		}
 		if turn := origin.personal; turn != nil {
 			run.ChannelPrompt = turn.prompt
+		} else if turn := origin.feishu; turn != nil {
+			run.ChannelPrompt = turn.prompt
+			run.ChannelContext = turn.context
 		}
 		if origin.retry != nil {
 			run.ComparisonID = origin.retry.ComparisonID
@@ -1097,7 +1128,7 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 				if origin.personal != nil {
 					err = origin.personal.record(ctx, tx, run.ID)
 				} else {
-					err = recordFeishuMessage(ctx, tx, origin.channel.BindingID, run.CreatedAt)
+					err = recordFeishuMessage(ctx, tx, origin.channel.BindingID, run.CreatedAt, origin.feishu, run)
 				}
 				if err != nil {
 					return err

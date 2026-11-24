@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,12 @@ type channelDelivery struct {
 	part      string
 	messageID string
 }
+
+var (
+	localHomePathRe = regexp.MustCompile(`(/(?:Users|home)/[^/\s"'` + "`" + `<>]+|[A-Za-z]:\\Users\\[^\\\s"'` + "`" + `<>]+)`)
+	localAddrRe     = regexp.MustCompile(`https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?::\d+)?`)
+	feishuAtTagRe   = regexp.MustCompile(`<at\b[^>]*>.*?</at>`)
+)
 
 func requireLocalTurn(ctx context.Context, tx *sql.Tx, runID, reason string) error {
 	var fromChannel bool
@@ -37,14 +44,19 @@ func (a *App) runChannelDeliveries(runtime *channelRuntime) {
 	defer tick.Stop()
 	for runtime.ctx.Err() == nil {
 		a.mu.Lock()
-		if a.feishu.runtime != runtime {
+		if a.feishu.runtimes[runtime.botID] != runtime {
 			a.mu.Unlock()
 			return
 		}
-		delivery, err := a.claimChannelDeliveryLocked(runtime.ctx, a.feishu.config.Binding.ID)
+		_, cfg := a.findFeishuBotLocked(runtime.botID)
+		bindingID := ""
+		if cfg != nil {
+			bindingID = cfg.deliveryBindingID()
+		}
+		delivery, err := a.claimChannelDeliveryLocked(runtime.ctx, bindingID)
 		a.mu.Unlock()
 		if err != nil && runtime.ctx.Err() == nil {
-			slog.Error("claim channel reply", "error", err)
+			slog.Error("claim channel reply", "bot", runtime.botID, "error", err)
 		}
 		if delivery.run.ID != "" {
 			a.deliverChannelReply(runtime, delivery)
@@ -100,9 +112,61 @@ ORDER BY r.sequence LIMIT 1`, bindingID).Scan(&runID, &d.part, &d.messageID)
 }
 
 func (a *App) deliverChannelReply(runtime *channelRuntime, d channelDelivery) {
+	var meta feishuDeliveryMeta
+	hasMeta := false
+	if loaded, err := store.Get[feishuDeliveryMeta](runtime.ctx, a.Store.DB, "SELECT data FROM feishu_delivery_meta WHERE run_id=?", d.run.ID); err == nil {
+		meta = loaded
+		hasMeta = true
+	}
+
+	replyText := feishuReplyText(d, meta)
+	if meta.HideLocal {
+		replyText = redactLocalAddresses(replyText)
+	}
+	if d.part == "answer" {
+		replyText = applyReplyMentionPolicy(replyText, meta)
+	}
+
+	opts := plugin.ChannelSendOptions{
+		MessageID:  d.messageID,
+		DeliveryID: d.run.ID + "-" + d.part,
+		Text:       replyText,
+		Card:       meta.ReplyStyle == "card",
+	}
+	if hasMeta {
+		switch meta.ReplyTarget {
+		case "topic":
+			opts.MessageID = d.messageID
+			opts.ReplyInThread = true
+		case "main":
+			if meta.RemoteChatID != "" {
+				opts.MessageID = ""
+				opts.ChatID = meta.RemoteChatID
+			}
+		case "dm_first":
+			if meta.RemoteUserID != "" {
+				opts.MessageID = ""
+				opts.OpenID = meta.RemoteUserID
+			}
+		default: // "quote"
+			opts.MessageID = d.messageID
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(runtime.ctx, 12*time.Second)
-	err := runtime.bot.Reply(ctx, d.messageID, d.run.ID+"-"+d.part, channelReply(d))
+	err := runtime.bot.Deliver(ctx, opts)
 	cancel()
+
+	// Swap reaction OnIt -> DONE best-effort when answer delivery finishes.
+	if err == nil && d.part == "answer" && meta.ReactionAck && runtime.bot != nil {
+		rctx, rcancel := context.WithTimeout(runtime.ctx, 6*time.Second)
+		if meta.ReactionID != "" {
+			_ = runtime.bot.DeleteReaction(rctx, d.messageID, meta.ReactionID)
+		}
+		_, _ = runtime.bot.AddReaction(rctx, d.messageID, "DONE")
+		rcancel()
+	}
+
 	status := "sent"
 	if errors.Is(err, plugin.ChannelDeliveryUnknown) {
 		status = "unknown"
@@ -113,11 +177,15 @@ func (a *App) deliverChannelReply(runtime *channelRuntime, d channelDelivery) {
 	defer cancel()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	bindingID := ""
+	if _, cfg := a.findFeishuBotLocked(runtime.botID); cfg != nil {
+		bindingID = cfg.deliveryBindingID()
+	}
 	saveErr := a.Store.Write(ctx, func(tx *sql.Tx) error {
 		if err != nil && status == "failed" {
 			var stillBound bool
 			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM channel_deliveries WHERE run_id=? AND part=? AND binding_id=?)",
-				d.run.ID, d.part, a.feishu.config.Binding.ID).Scan(&stillBound); err != nil {
+				d.run.ID, d.part, bindingID).Scan(&stillBound); err != nil {
 				return err
 			}
 			if !stillBound {
@@ -129,6 +197,34 @@ func (a *App) deliverChannelReply(runtime *channelRuntime, d channelDelivery) {
 	if saveErr != nil {
 		slog.Error("save channel reply receipt", "run", d.run.ID, "error", saveErr)
 	}
+}
+
+func redactLocalAddresses(text string) string {
+	text = localAddrRe.ReplaceAllString(text, "[local-address]")
+	text = localHomePathRe.ReplaceAllString(text, "~")
+	return text
+}
+
+func applyReplyMentionPolicy(text string, meta feishuDeliveryMeta) string {
+	if meta.ReplyMention == "none" {
+		return strings.TrimSpace(feishuAtTagRe.ReplaceAllString(text, ""))
+	}
+	if meta.ChatType == "group" && meta.ReplyMention == "requester" && meta.RemoteUserID != "" && meta.ReplyTarget != "dm_first" {
+		if !strings.Contains(text, "<at id="+meta.RemoteUserID) && !strings.Contains(text, "user_id=\""+meta.RemoteUserID+"\"") {
+			if meta.ReplyStyle == "card" {
+				return "<at id=" + meta.RemoteUserID + "></at> " + text
+			}
+			return "<at user_id=\"" + meta.RemoteUserID + "\"></at> " + text
+		}
+	}
+	return text
+}
+
+func feishuReplyText(d channelDelivery, meta feishuDeliveryMeta) string {
+	if d.part == "request" && meta.ApprovalMode == "feishu_card" {
+		return "⚠️ 当前操作需要人工确认，请在 Lever 中批准或拒绝。\nApproval required — open Lever to allow or deny."
+	}
+	return channelReply(d)
 }
 
 func channelReply(d channelDelivery) string {
@@ -182,15 +278,32 @@ func (a *App) RetryChannelReply(ctx context.Context, runID string) error {
 	if err := a.Store.DB.QueryRowContext(ctx, "SELECT COALESCE(json_extract(c.data,'$.channel'),'') FROM chats c JOIN runs r ON r.chat_id=c.id WHERE r.id=?", runID).Scan(&channel); err != nil {
 		return err
 	}
-	binding := a.feishu.config.Binding.ID
+	var binding string
 	if channel != "feishu" {
 		p, config, err := a.personalConfig(ctx, channel)
 		if err != nil || !p.Enabled || !config.Listening || config.Account == "" {
 			return conflict("The channel is no longer active")
 		}
 		binding = personalBinding(channel, config)
-	} else if !a.feishu.enabled || binding == "" {
-		return conflict("The channel is no longer active")
+	} else {
+		if !a.feishu.enabled {
+			return conflict("The channel is no longer active")
+		}
+		var deliveryBinding string
+		if err := a.Store.DB.QueryRowContext(ctx, "SELECT binding_id FROM channel_deliveries WHERE run_id=? AND part='answer'", runID).Scan(&deliveryBinding); err != nil {
+			return conflict("This channel reply is no longer retryable")
+		}
+		matched := false
+		for _, bot := range a.feishu.bots {
+			if bot.deliveryBindingID() == deliveryBinding {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return conflict("The channel is no longer active")
+		}
+		binding = deliveryBinding
 	}
 	return a.Store.Write(ctx, func(tx *sql.Tx) error {
 		run, err := store.Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE id=?", runID)
