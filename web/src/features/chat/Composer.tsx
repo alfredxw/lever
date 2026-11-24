@@ -827,11 +827,6 @@ export function Composer({
   useEffect(() => {
     if (hasInput) keepOpen?.();
   }, [hasInput, keepOpen]);
-  const incompatibleSkills =
-    !comparisonAgents &&
-    prompt.references.some(
-      (ref) => ref.kind === "skill" && ref.provider !== selection.provider,
-    );
   const modelError = runtimeUnavailable
     ? t("composer.runtimeDisabled")
     : modelUnavailable && !replaySelection
@@ -912,7 +907,6 @@ export function Composer({
       (catalog.isError && !hasModel));
   const canSend =
     hasContent &&
-    !incompatibleSkills &&
     !unsupported &&
     !directoryError &&
     !afterError &&
@@ -1185,7 +1179,6 @@ export function Composer({
         {(draft.files.length > 0 ||
           draft.editing ||
           send.error ||
-          incompatibleSkills ||
           unsupported ||
           needsRuntimeSetup ||
           directoryError ||
@@ -1255,9 +1248,9 @@ export function Composer({
                 {afterError}
               </p>
             )}
-            {(incompatibleSkills || unsupported) && (
+            {unsupported && (
               <p className="reference-error" role="alert">
-                {unsupported || t("composer.runtimeChanged")}
+                {unsupported}
               </p>
             )}
             {needsRuntimeSetup && (

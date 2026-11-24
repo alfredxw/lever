@@ -101,11 +101,15 @@ func TestComparisonSharesSelectedSkillAcrossRuntimes(t *testing.T) {
 			if runtime == "claude" && !strings.Contains(wire.Input, "/"+ref.Name) {
 				t.Fatalf("Claude did not receive the native Skill: %+v", wire)
 			}
-			// An ordinary reply still requires references selected for that runtime.
+			var reply model.Run
 			f.request("POST", "/messages", model.SendInput{
 				CommandID: app.ID(), ChatID: foreign.ChatID, SessionID: foreign.SessionID, Operation: "reply",
-				Text: input.Text, References: input.References,
-			}, 400, nil)
+				Text: input.Text, References: foreign.References,
+			}, 200, &reply)
+			reply = f.wait(reply.ID, "completed")
+			if reply.References[0].Path != entry || !strings.HasPrefix(acpReceipt(t, reply)["input"].(string), "/check-ideas-") {
+				t.Fatal("the reply lost the selected package")
+			}
 		})
 	}
 }

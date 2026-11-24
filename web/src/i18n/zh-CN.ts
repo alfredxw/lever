@@ -1328,7 +1328,6 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "composer.select": "选择",
   "composer.dismiss": "关闭",
   "composer.loadFailed": "无法加载候选项。",
-  "composer.runtimeChanged": "请移除旧技能，并为当前运行时重新选择。",
   "composer.command.chat": "继续对话",
   "composer.command.topic": "开启话题",
   "composer.command.model": "选择模型",

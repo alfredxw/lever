@@ -1396,7 +1396,6 @@ export const enUS = {
   "composer.select": "Select",
   "composer.dismiss": "Close",
   "composer.loadFailed": "Could not load suggestions.",
-  "composer.runtimeChanged": "Reselect skills for the current runtime.",
   "composer.command.chat": "Continue in Chat",
   "composer.command.topic": "Start a Topic",
   "composer.command.model": "Choose a model",

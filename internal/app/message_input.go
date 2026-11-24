@@ -30,7 +30,12 @@ func validateSkillReferences(references []model.Reference, disabled []string) er
 		if ref.Kind != "skill" {
 			continue
 		}
-		if skillReferenceDisabled(ref, disabled) {
+		blocked := skillReferenceDisabled(ref, disabled)
+		if !blocked && filepath.Base(ref.Path) == model.SkillEntry && skillDirectoryAvailable(filepath.Dir(ref.Path)) {
+			name, _, _ := skillMetadata(filepath.Dir(ref.Path))
+			blocked = model.SkillDisabled(disabled, name)
+		}
+		if blocked {
 			return invalid(fmt.Sprintf("Skill %q is disabled for this Agent. Remove its reference or enable it in Profile.", ref.Name))
 		}
 	}
@@ -62,8 +67,70 @@ func (a *App) supportsMCP(session model.Session, config model.Provider) bool {
 	return supported
 }
 
-func (a *App) validateReferences(ctx context.Context, q store.Queryer, references []model.Reference, session model.Session, agent model.Agent, config model.Provider, shareSkills bool) error {
-	var skillPaths map[string]bool
+func (a *App) prepareSkillReferences(ctx context.Context, q store.Queryer, references []model.Reference, profile model.Profile, scope model.Scope, target model.Provider, shared bool) ([]model.Reference, error) {
+	bound := slices.Clone(references)
+	pathsByProvider := map[string]map[string]bool{}
+	for i, ref := range bound {
+		if ref.Kind != "skill" {
+			continue
+		}
+		if ref.Provider == "" {
+			return nil, invalid("A Skill reference requires its source runtime")
+		}
+		foreign := ref.Provider != target.ID
+		switch {
+		case foreign && ref.Path == "":
+			skill, err := a.resolveNamedSkill(ctx, q, profile, scope, ref)
+			if errors.Is(err, errSkillUnavailable) {
+				return nil, invalid(fmt.Sprintf("Cannot find SKILL.md for %q in the source Agent's skills", ref.Name))
+			}
+			if err != nil {
+				return nil, err
+			}
+			bound[i].Path = filepath.Join(skill.Path, model.SkillEntry)
+		case shared && (foreign || !provider.Capabilities(target.Type).Skills):
+			entry, err := os.Lstat(ref.Path)
+			if !filepath.IsAbs(ref.Path) || filepath.Base(ref.Path) != model.SkillEntry || err != nil || !entry.Mode().IsRegular() {
+				return nil, invalid(fmt.Sprintf("Skill %q needs an available SKILL.md to be shared across runtimes", ref.Name))
+			}
+		case !foreign && target.Type == "codex":
+			if !filepath.IsAbs(ref.Path) {
+				return nil, invalid("A Codex skill requires its absolute path")
+			}
+		case !foreign && target.Type == "claude":
+			continue
+		default:
+			paths := pathsByProvider[ref.Provider]
+			if paths == nil {
+				source := target
+				var err error
+				if foreign {
+					source, _, err = lookupProvider(ctx, q, ref.Provider)
+					if err != nil {
+						return nil, err
+					}
+				}
+				paths, err = a.skillReferencePaths(ctx, q, scope, source)
+				if err != nil {
+					return nil, err
+				}
+				pathsByProvider[ref.Provider] = paths
+			}
+			dir := filepath.Dir(ref.Path)
+			if (paths[dir] || slices.Contains(profile.Skills, dir)) && ref.Path == filepath.Join(dir, model.SkillEntry) && skillDirectoryAvailable(dir) {
+				name := withSkillMetadata(skillAt(dir, false)).Name
+				label := strings.TrimPrefix(ref.Name, skillBundlePluginName+":")
+				if name == ref.Name || foreign && (name == label || filepath.Base(dir) == label) {
+					continue
+				}
+			}
+			return nil, invalid(fmt.Sprintf("Skill %q is no longer available in this session's skill sources", ref.Name))
+		}
+	}
+	return bound, nil
+}
+
+func (a *App) validateReferences(ctx context.Context, q store.Queryer, references []model.Reference, session model.Session, agent model.Agent, config model.Provider) error {
 	if slices.ContainsFunc(references, model.Reference.RequiresMCP) && !a.supportsMCP(session, config) {
 		return invalid("This runtime cannot use Lever references. Choose a runtime with MCP support.")
 	}
@@ -94,34 +161,7 @@ func (a *App) validateReferences(ctx context.Context, q store.Queryer, reference
 				return invalid("Referenced file is outside this session's scope")
 			}
 		case "skill":
-			if ref.Provider != config.ID && (!shareSkills || ref.Provider == "") {
-				return invalid("Reselect skills for the current runtime")
-			}
-			native := provider.Capabilities(config.Type).Skills
-			switch {
-			case shareSkills && (ref.Provider != config.ID || !native):
-				entry, err := os.Lstat(ref.Path)
-				if !filepath.IsAbs(ref.Path) || filepath.Base(ref.Path) != model.SkillEntry || err != nil || !entry.Mode().IsRegular() {
-					return invalid(fmt.Sprintf("Skill %q needs an available SKILL.md to be shared across runtimes", ref.Name))
-				}
-			case !native || config.Type == "pi":
-				if skillPaths == nil {
-					var err error
-					skillPaths, err = a.skillReferencePaths(ctx, q, session.Scope, config)
-					if err != nil {
-						return err
-					}
-				}
-				dir := filepath.Dir(ref.Path)
-				if (skillPaths[dir] || slices.Contains(agent.Profile.Skills, dir)) && ref.Path == filepath.Join(dir, model.SkillEntry) {
-					if skill := describeSkill(skillAt(dir, false)); skill.Available && skill.Name == ref.Name {
-						break
-					}
-				}
-				return invalid(fmt.Sprintf("Skill %q is no longer available in this session's skill sources", ref.Name))
-			case config.Type == "codex" && !filepath.IsAbs(ref.Path):
-				return invalid("A Codex skill requires its absolute path")
-			}
+			continue
 		default:
 			if !ref.RequiresMCP() || !notes.IDPattern.MatchString(ref.ID) {
 				return invalid("Invalid Lever reference")

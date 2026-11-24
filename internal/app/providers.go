@@ -17,20 +17,21 @@ import (
 	"lever/internal/store"
 )
 
-func configuredProvider(ctx context.Context, q store.Queryer, id string) (model.Provider, error) {
+func lookupProvider(ctx context.Context, q store.Queryer, id string) (model.Provider, bool, error) {
 	config, err := store.Get[model.Provider](ctx, q, "SELECT data FROM providers WHERE id=?", id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return config, invalid("Runtime is no longer configured")
+		return config, false, invalid("Runtime is no longer configured")
 	}
-	if err == nil {
-		resolved, available, availabilityErr := runtimeProvider(ctx, q, config)
-		if availabilityErr != nil {
-			return config, availabilityErr
-		}
-		if !available {
-			return config, invalid("Runtime or its plugin is disabled or uninstalled")
-		}
-		config = resolved
+	if err != nil {
+		return config, false, err
+	}
+	return runtimeProvider(ctx, q, config)
+}
+
+func configuredProvider(ctx context.Context, q store.Queryer, id string) (model.Provider, error) {
+	config, available, err := lookupProvider(ctx, q, id)
+	if err == nil && !available {
+		return config, invalid("Runtime or its plugin is disabled or uninstalled")
 	}
 	return config, err
 }

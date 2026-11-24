@@ -223,14 +223,14 @@ func (a *App) skillReferencePaths(ctx context.Context, q store.Queryer, scope mo
 }
 
 func (a *App) SkillSources(ctx context.Context, scope model.Scope, runtime string) ([]model.SkillSource, error) {
-	return a.skillSources(ctx, a.Store.DB, scope, runtime)
-}
-
-func (a *App) skillSources(ctx context.Context, q store.Queryer, scope model.Scope, runtime string) ([]model.SkillSource, error) {
-	config, err := configuredProvider(ctx, q, runtime)
+	config, err := configuredProvider(ctx, a.Store.DB, runtime)
 	if err != nil {
 		return nil, err
 	}
+	return a.skillSources(ctx, a.Store.DB, scope, config)
+}
+
+func (a *App) skillSources(ctx context.Context, q store.Queryer, scope model.Scope, config model.Provider) ([]model.SkillSource, error) {
 	results := []model.SkillSource{}
 	if !provider.ConfiguredCapabilities(config).Skills {
 		return results, nil

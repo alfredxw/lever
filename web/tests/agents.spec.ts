@@ -8156,14 +8156,21 @@ test("skills refresh between turns and respect runtime changes in both Chat and 
     .click();
   await page.getByRole("radio", { name: "Claude Code", exact: true }).click();
   await page.keyboard.press("Escape");
-  await expect(composer.getByRole("alert")).toContainText("当前运行时");
-  await expect(
-    composer.getByRole("button", { name: "发送", exact: true }),
-  ).toBeDisabled();
-  // Clear the atomic skill token through the editor's real keyboard path.
-  await input.press("ControlOrMeta+A");
-  await input.press("Backspace");
   await expect(composer.getByRole("alert")).toHaveCount(0);
+  await expect(
+    input.getByRole("button", { name: "pinned-review" }),
+  ).toBeVisible();
+  const reviewURL = "https://example.test/review/42?file=main.go";
+  await input.pressSequentially(`[wire] ${reviewURL}`);
+  await send(page);
+  const receipt = page
+    .locator(".chat-panel .conversation > .run-content")
+    .last()
+    .locator(".message-body")
+    .last();
+  await expect(receipt).toContainText(reviewURL);
+  await expect(receipt).toContainText("Read and follow the");
+  await expect(receipt).toContainText("pinned-review/SKILL.md");
   await composer.getByRole("button", { name: "话题", exact: true }).click();
   await input.fill("/fixture-claude");
   await page.getByRole("option", { name: /\/fixture-claude/ }).click();

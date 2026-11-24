@@ -556,7 +556,11 @@ func (a *App) resolveNamedSkill(ctx context.Context, q store.Queryer, profile mo
 			match(name, describeSkill(skillAt(path, false)))
 		}
 	} else {
-		sources, err := a.skillSources(ctx, q, scope, ref.Provider)
+		config, _, err := lookupProvider(ctx, q, ref.Provider)
+		if err != nil {
+			return model.Skill{}, err
+		}
+		sources, err := a.skillSources(ctx, q, scope, config)
 		if err != nil {
 			return model.Skill{}, err
 		}
@@ -567,7 +571,7 @@ func (a *App) resolveNamedSkill(ctx context.Context, q store.Queryer, profile mo
 		}
 	}
 	if len(matches) > 1 {
-		return model.Skill{}, &Error{409, "More than one Skill matches this reference"}
+		return model.Skill{}, conflict(fmt.Sprintf("More than one Skill matches %q in the source directories. Select the intended package.", ref.Name))
 	}
 	for _, skill := range matches {
 		return skill, nil

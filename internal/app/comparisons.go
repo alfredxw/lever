@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
-	"slices"
 
 	"lever/internal/model"
 	"lever/internal/store"
@@ -182,22 +180,11 @@ func (a *App) addComparisonTopic(ctx context.Context, tx *sql.Tx, comparisonID s
 	if err := a.checkSessionScope(session); err != nil {
 		return run, err
 	}
-	refs := slices.Clone(input.References)
-	for i, ref := range refs {
-		if ref.Kind == "skill" && ref.Provider != config.ID && ref.Path == "" {
-			// Resolve name-only suggestions where the user picked them. A recipient
-			// can have a different package under the same name.
-			skill, err := a.resolveNamedSkill(ctx, tx, ownerProfile, sourceSession.Scope, ref)
-			if errors.Is(err, errSkillUnavailable) {
-				return run, invalid(fmt.Sprintf("Cannot find SKILL.md for %q in the source Agent's skills", ref.Name))
-			}
-			if err != nil {
-				return run, err
-			}
-			refs[i].Path = filepath.Join(skill.Path, model.SkillEntry)
-		}
+	if err := a.validateReferences(ctx, tx, input.References, session, agent, config); err != nil {
+		return run, err
 	}
-	if err := a.validateReferences(ctx, tx, refs, session, agent, config, true); err != nil {
+	refs, err := a.prepareSkillReferences(ctx, tx, input.References, ownerProfile, sourceSession.Scope, config, true)
+	if err != nil {
 		return run, err
 	}
 	if err := validateSkillReferences(refs, profile.DisabledSkills); err != nil {

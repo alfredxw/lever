@@ -135,7 +135,7 @@ Scope 是工作目录和文件浏览边界，**不等于 runtime 的完整安全
 
 **Skills** 由 Codex 和 Claude Code 从 Lever 托管目录、`~/.agents/skills`、两个运行时的用户配置目录和会话的每个 Scope 目录加载。运行时的用户 Skills 位于配置目录下的 `skills`。Lever 优先使用当前运行时实例配置的目录，其次使用 `CODEX_HOME` 或 `CLAUDE_CONFIG_DIR`，最后使用 `~/.codex` 或 `~/.claude`。每个 Scope 目录提供 `.agents/skills`、`.codex/skills`、`.claude/skills` 和 `skills`。Profile 的 Scope 展示新会话的目录来源，已有会话使用各自保存的 Scope。
 
-输入框的 `/` 可在正文中引用 Skill，不要求运行时支持自动加载 Agent 的 Skill 目录。Codex 和 Claude Code 使用各自的原生引用；Antigravity、Pi 和其他 ACP 运行时按选中的 `SKILL.md` 路径引用。Antigravity 优先调用当前会话已确认的对应 Skill，未确认时保留文件路径。普通运行时命令仍只在消息开头提供。
+输入框的 `/` 可在正文中引用 Skill，不要求运行时支持自动加载 Agent 的 Skill 目录。切换运行时不会丢弃已选 Skill：保留原 `SKILL.md`，只有名称时从来源运行时和会话目录中查找唯一匹配，不用目标运行时的同名包替换。Codex 和 Claude Code 保留本运行时的原生引用；跨运行时按已选文件传递。Antigravity 优先调用当前会话已确认的对应 Skill，未确认时保留文件路径。普通运行时命令仍只在消息开头提供。
 
 **Skills** 一级菜单默认打开卡片总览，按用户目录和 Agent 已保存的 Scope 目录展示自动发现的 Skills。总览支持搜索、按来源和启用状态筛选。选中 Agent 后，卡片开关保存到该 Agent 的 Profile，并在下一轮执行生效。同名条目显示来源路径并共享启停设置。侧栏可展开各个目录。打开 Skill 后，Files 展示 `SKILL.md` 和配套文件。Lever 托管的 Skills 可以在 Files 中编辑，其他来源以只读方式打开。
 

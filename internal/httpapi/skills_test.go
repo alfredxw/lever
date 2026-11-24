@@ -201,6 +201,110 @@ func TestComposerInlineSkillReferences(t *testing.T) {
 	}
 }
 
+func TestMessageAdaptsDraftSkillToSelectedRuntime(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("claude")
+	var skill model.Skill
+	f.request("POST", "/skills", map[string]string{"name": "draft-review"}, 200, &skill)
+	entry := filepath.Join(skill.Path, model.SkillEntry)
+	for _, target := range []string{"codex", "claude", "pi", f.acpProvider("draft-acp").ID, "dsh", "antigravity"} {
+		t.Run(target, func(t *testing.T) {
+			ref := model.Reference{Kind: "skill", Provider: "claude", Name: skill.Name}
+			if target == "claude" {
+				ref.Provider, ref.Path = "codex", entry
+			}
+			input := model.SendInput{
+				CommandID: app.ID(), AgentID: agent.ID, Operation: "main", Text: "[wire] $draft-review https://example.test/review",
+				Selection: &model.Selection{Provider: target}, References: []model.Reference{ref},
+			}
+			var run model.Run
+			f.request("POST", "/messages", input, 200, &run)
+			run = f.wait(run.ID, "completed")
+			if len(run.References) != 1 || run.References[0].Provider != ref.Provider || run.References[0].Path != entry || run.Input != input.Text {
+				t.Fatalf("lost the selected Skill or rewrote the draft: %+v", run)
+			}
+			var prompt string
+			switch target {
+			case "codex", "claude":
+				var wire struct{ Input string }
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(run.Items[0].Text, "wire:")), &wire); err != nil {
+					t.Fatal(err)
+				}
+				prompt = wire.Input
+			case "pi":
+				var history []string
+				if err := json.Unmarshal([]byte(run.Items[len(run.Items)-1].Text), &history); err != nil {
+					t.Fatal(err)
+				}
+				prompt = history[len(history)-1]
+			default:
+				prompt = acpReceipt(t, run)["input"].(string)
+			}
+			if !strings.Contains(prompt, input.Text) || (target == "antigravity" && !strings.HasPrefix(prompt, "/draft-review-")) || (target != "antigravity" && !strings.Contains(prompt, entry)) {
+				t.Fatalf("wrong Skill or message at %s: %s", target, prompt)
+			}
+		})
+	}
+}
+
+func TestMessageDoesNotSubstituteAnUnverifiedDraftSkill(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	const name = "draft-review"
+	var skill model.Skill
+	f.request("POST", "/skills", map[string]string{"name": name}, 200, &skill)
+	source := filepath.Join(agent.Profile.Roots[0].Path, ".pi", "skills", name)
+	entry := filepath.Join(source, model.SkillEntry)
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("# Source package"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.request("PUT", "/plugins/lever.pi", map[string]bool{"enabled": false}, 200, nil)
+	input := model.SendInput{
+		AgentID: agent.ID, Operation: "main", Text: "[wire] $draft-review",
+		References: []model.Reference{{Kind: "skill", Provider: "pi", Name: name, Path: entry}},
+	}
+	send := func(status int, out any) {
+		t.Helper()
+		input.CommandID = app.ID()
+		f.request("POST", "/messages", input, status, out)
+	}
+	var run model.Run
+	send(200, &run)
+	run = f.wait(run.ID, "completed")
+	if !strings.Contains(run.Items[0].Text, entry) || strings.Contains(run.Items[0].Text, filepath.Join(skill.Path, model.SkillEntry)) {
+		t.Fatal("a target namesake replaced the source-only Pi package")
+	}
+	input.References[0].Path = ""
+	send(409, nil)
+	input.References[0].Name = "no-such-skill"
+	send(400, nil)
+	input.References[0].Name, input.References[0].Path = name, entry
+	agent.Profile.DisabledSkills = []string{name}
+	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+	send(400, nil)
+	if err := os.WriteFile(entry, []byte("---\nname: guarded-review\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	agent.Profile.DisabledSkills = []string{"guarded-review"}
+	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+	send(400, nil)
+	agent.Profile.DisabledSkills = nil
+	f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+	if err := os.Remove(entry); err != nil {
+		t.Fatal(err)
+	}
+	send(400, nil)
+	outside := filepath.Join(t.TempDir(), model.SkillEntry)
+	if err := os.WriteFile(outside, []byte("# Unlisted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input.References[0].Path = outside
+	send(400, nil)
+}
+
 func TestAntigravitySkillManifestReferences(t *testing.T) {
 	f := newFixture(t)
 	userHome, external := t.TempDir(), t.TempDir()

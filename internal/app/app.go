@@ -894,7 +894,11 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 		}
 		retryComparison := origin.retry != nil && origin.retry.ComparisonID != ""
-		if err := a.validateReferences(ctx, tx, input.References, session, agent, config, retryComparison); err != nil {
+		if err := a.validateReferences(ctx, tx, input.References, session, agent, config); err != nil {
+			return err
+		}
+		input.References, err = a.prepareSkillReferences(ctx, tx, input.References, agent.Profile, session.Scope, config, retryComparison)
+		if err != nil {
 			return err
 		}
 		disabledSkills := agent.Profile.DisabledSkills
