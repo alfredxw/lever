@@ -30,6 +30,8 @@ type desktopPairing struct {
 // ServeDesktop runs the local backend independently of the desktop process.
 // ready reports startup to the launcher. Pairing stays on the private IPC server.
 func ServeDesktop(ctx context.Context, dir, address, devOrigin string, ready io.Writer) error {
+	ready, closeReady := detachReadyWriter(ready)
+	defer closeReady()
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	control := &desktopControl{ctx: ctx, stop: stop, address: address, attachBy: time.Now().Add(desktopStartupTimeout)}
@@ -48,6 +50,7 @@ func ServeDesktop(ctx context.Context, dir, address, devOrigin string, ready io.
 		result.Error = err.Error()
 	}
 	_ = json.NewEncoder(ready).Encode(result)
+	closeReady()
 	if err != nil {
 		return err
 	}
