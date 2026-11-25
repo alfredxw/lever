@@ -13,21 +13,21 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
-  Archive,
   ArrowDownWideNarrow,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
   CircleHelp,
   CirclePause,
   Clock,
   Eraser,
+  EyeOff,
   Folders,
+  History,
   LoaderCircle,
   MessageCircle,
   Pin,
   Plus,
+  RotateCcw,
   Search,
 } from "lucide-react";
 import {
@@ -49,8 +49,8 @@ import { CSS } from "@dnd-kit/utilities";
 import type { Agent, Conversation } from "@/api/types.gen";
 import { ErrorNotice, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Toggle } from "@/components/ui/toggle";
 import {
   Collapsible,
   CollapsibleContent,
@@ -79,7 +79,6 @@ import { isWorking } from "@/features/chat/RunStatus";
 import { useEventCallback } from "@/hooks/useEventCallback";
 import { cn } from "@/lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
-import { ClearedConversations } from "./ClearedConversations";
 import { RecentConversations } from "./RecentConversations";
 import { useProviders } from "@/features/runtime/queries";
 import { usePreferences } from "@/features/settings/Preferences";
@@ -89,7 +88,26 @@ import {
   formatShortcut,
 } from "@/features/settings/shortcuts";
 
-type AgentView = "all" | "recent" | "archived";
+type AgentView = "all" | "recent";
+const clearedPageSize = 5;
+
+function formatClearedTime(timestamp: number, locale: string) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString(locale, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return date.toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() !== now.getFullYear() && { year: "numeric" }),
+  });
+}
 
 const SidebarListPanel = memo(
   function SidebarListPanel({
@@ -159,7 +177,7 @@ export function AgentSidebar({
   onChoose: (id: string) => void;
   onPreview: (id: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { onShared, onOpen, onChat } = navigation;
   const onConversation = useEventCallback(navigation.onConversation);
   const [menu, setMenu] = useState<{
@@ -176,9 +194,16 @@ export function AgentSidebar({
   const [filter, setFilter] = useState<AgentView>(() =>
     localStorage.getItem("lever:agent-view") === "recent" ? "recent" : "all",
   );
-  const [showArchivedAgents, setShowArchivedAgents] = useState(false);
-  const archiveTab = useRef<HTMLButtonElement>(null);
-  const expandedArchiveTrigger = useRef<HTMLButtonElement>(null);
+  const [showCleared, setShowCleared] = useState(false);
+  const [clearedLimits, setClearedLimits] = useState<Record<string, number>>(
+    {},
+  );
+  const [mutedCleared, setMutedCleared] = useState<Record<string, boolean>>({});
+  const [lensCollapsed, setLensCollapsed] = useState<Record<string, boolean>>(
+    {},
+  );
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const clearedToggleRef = useRef<HTMLButtonElement>(null);
   const { chats, runs, conversations, requests } = activity ?? {};
 
   const sidebarItems = useMemo(() => {
@@ -201,7 +226,7 @@ export function AgentSidebar({
     const conversationItems = (conversations ?? []).flatMap((conversation) => {
       const agent = agentsById.get(conversation.agentId);
       const chat = chatsById.get(conversation.chatId);
-      if (!agent || !chat) return [];
+      if (!agent || agent.archived || !chat) return [];
       const title =
         conversation.kind === "main"
           ? displayChatTitle(chat, t)
@@ -237,14 +262,13 @@ export function AgentSidebar({
     // Show pinned topics first and keep the order of the other activity rows.
     const activityItems = conversationItems
       .filter(
-        ({ agent, conversation, unread, run, pending, pinIndex }) =>
-          !agent.archived &&
-          (pinIndex !== undefined ||
-            unread ||
-            run ||
-            pending ||
-            conversation.unreadSequence >
-              (recent.cleared[conversation.id] ?? 0)),
+        ({ conversation, unread, run, pending, pinIndex }) =>
+          pinIndex !== undefined ||
+          unread ||
+          run ||
+          pending ||
+          conversation.unreadSequence >
+            (recent.cleared[conversation.id] ?? 0),
       )
       .sort(
         (a, b) => (a.pinIndex ?? unpinnedIndex) - (b.pinIndex ?? unpinnedIndex),
@@ -264,43 +288,43 @@ export function AgentSidebar({
         ),
       }))
       .sort((a, b) => b.lastActivity - a.lastActivity);
-    const sorted = agents.map((agent) => {
-      const chats = chatsByAgent.get(agent.id) ?? [];
-      const runs = runsByAgent.get(agent.id) ?? [];
-      const activity = activityByAgent.get(agent.id) ?? [];
-      const conversations = itemsByAgent.get(agent.id) ?? [];
-      return {
-        agent,
-        chats,
-        conversations,
-        clearable: conversations
-          .filter(({ canClear }) => canClear)
-          .map(({ conversation }) => conversation),
-        activity: activity.reduce<Conversation | undefined>(
-          (latest, item) =>
-            item.messageAt > (latest?.messageAt ?? "") ? item : latest,
-          undefined,
-        ),
-        unread: activity.some(
-          (item) => item.unreadSequence > (readCursors[item.id] ?? 0),
-        ),
-        waiting: runs.filter(
-          (run) =>
-            run.status === "waiting_user" ||
-            run.status === "unknown" ||
-            run.waitingBlocked,
-        ).length,
-        working: runs.filter(
-          (run) =>
-            isWorking(run.status) || (run.waiting && !run.waitingBlocked),
-        ).length,
-      };
-    });
-    return {
-      all: sorted.filter(({ agent }) => !agent.archived),
-      archived: sorted.filter(({ agent }) => agent.archived),
-      clearedGroups: groupBy(cleared, ({ agent }) => agent.id),
-    };
+    const clearedByAgent = groupBy(cleared, ({ agent }) => agent.id);
+    const all = agents
+      .filter((agent) => !agent.archived)
+      .map((agent) => {
+        const agentChats = chatsByAgent.get(agent.id) ?? [];
+        const agentRuns = runsByAgent.get(agent.id) ?? [];
+        const agentActivity = activityByAgent.get(agent.id) ?? [];
+        const agentConversations = itemsByAgent.get(agent.id) ?? [];
+        return {
+          agent,
+          chats: agentChats,
+          conversations: agentConversations,
+          cleared: clearedByAgent.get(agent.id) ?? [],
+          clearable: agentConversations
+            .filter(({ canClear }) => canClear)
+            .map(({ conversation }) => conversation),
+          activity: agentActivity.reduce<Conversation | undefined>(
+            (latest, item) =>
+              item.messageAt > (latest?.messageAt ?? "") ? item : latest,
+            undefined,
+          ),
+          unread: agentActivity.some(
+            (item) => item.unreadSequence > (readCursors[item.id] ?? 0),
+          ),
+          waiting: agentRuns.filter(
+            (run) =>
+              run.status === "waiting_user" ||
+              run.status === "unknown" ||
+              run.waitingBlocked,
+          ).length,
+          working: agentRuns.filter(
+            (run) =>
+              isWorking(run.status) || (run.waiting && !run.waitingBlocked),
+          ).length,
+        };
+      });
+    return { all, totalCleared: cleared.length };
   }, [
     agents,
     chats,
@@ -313,19 +337,118 @@ export function AgentSidebar({
     t,
   ]);
 
+  const showingCleared =
+    filter === "all" && showCleared && sidebarItems.totalCleared > 0;
+
+  const revealedCleared = useMemo(() => {
+    if (!showingCleared) return 0;
+    return sidebarItems.all.reduce((total, { agent, cleared }) => {
+      if (!cleared.length || mutedCleared[agent.id] || lensCollapsed[agent.id])
+        return total;
+      const limit = clearedLimits[agent.id] ?? clearedPageSize;
+      return total + Math.min(limit, cleared.length);
+    }, 0);
+  }, [
+    showingCleared,
+    sidebarItems.all,
+    clearedLimits,
+    mutedCleared,
+    lensCollapsed,
+  ]);
+
+  const closeClearedLens = useCallback((restoreFocus = false) => {
+    setShowCleared(false);
+    setClearedLimits({});
+    setMutedCleared({});
+    setLensCollapsed({});
+    if (restoreFocus) {
+      requestAnimationFrame(() =>
+        clearedToggleRef.current?.focus({ preventScroll: true }),
+      );
+    }
+  }, []);
+
+  const toggleClearedLens = useCallback(
+    (next: boolean) => {
+      if (next) setShowCleared(true);
+      else closeClearedLens();
+    },
+    [closeClearedLens],
+  );
+
+  const revealAgentCleared = useCallback((agentId: string) => {
+    setFilter("all");
+    setShowCleared(true);
+    setMutedCleared((current) =>
+      current[agentId] ? { ...current, [agentId]: false } : current,
+    );
+    setLensCollapsed((current) =>
+      current[agentId] ? { ...current, [agentId]: false } : current,
+    );
+  }, []);
+
   function selectView(view: AgentView) {
     if (view === filter) return;
     setFilter(view);
-    setShowArchivedAgents(false);
+    if (view !== "all" && showCleared) closeClearedLens();
   }
   useEffect(() => localStorage.setItem("lever:agent-view", filter), [filter]);
 
-  function restoreConversation(id: string) {
-    recent.restoreConversation(id);
-    requestAnimationFrame(() =>
-      (expandedArchiveTrigger.current ?? archiveTab.current)?.focus(),
-    );
-  }
+  useEffect(() => {
+    if (!visible || !showingCleared) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        menu ||
+        document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')
+      ) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          'input, textarea, [contenteditable="true"], [role="textbox"]',
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const focusInsideSidebar =
+        sidebarRef.current?.contains(document.activeElement) ?? false;
+      closeClearedLens(focusInsideSidebar);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [visible, showingCleared, menu, closeClearedLens]);
+
+  const restoreConversation = useEventCallback(
+    (id: string, agentId?: string) => {
+      const fromClearedBlock =
+        document.activeElement?.closest(".agent-cleared-block") !== null;
+      const lastCleared = sidebarItems.totalCleared <= 1;
+      recent.restoreConversation(id);
+      if (lastCleared) {
+        closeClearedLens(fromClearedBlock);
+        return;
+      }
+      if (fromClearedBlock) {
+        requestAnimationFrame(() => {
+          const target =
+            sidebarRef.current?.querySelector<HTMLButtonElement>(
+              `[data-session-id="${globalThis.CSS.escape(id)}"]`,
+            ) ??
+            (agentId
+              ? sidebarRef.current?.querySelector<HTMLButtonElement>(
+                  `[data-agent-id="${globalThis.CSS.escape(agentId)}"] .agent-select`,
+                )
+              : null) ??
+            clearedToggleRef.current;
+          target?.focus({ preventScroll: true });
+        });
+      }
+    },
+  );
 
   function unpinConversation(id: string, trigger: HTMLButtonElement) {
     if (trigger.matches(":focus-visible")) {
@@ -365,6 +488,7 @@ export function AgentSidebar({
 
   return (
     <Tabs
+      ref={sidebarRef}
       className="agent-sidebar-content gap-0"
       value={filter}
       onValueChange={(value) => selectView(value as AgentView)}
@@ -403,52 +527,79 @@ export function AgentSidebar({
       </Button>
       <div className="sidebar-filters">
         <TabsList variant="line" aria-label={t("agents.views")}>
-          <div className="flex gap-0.5">
-            <TabsTrigger value="all">{t("agents.all")}</TabsTrigger>
-            <TabsTrigger value="recent">{t("agents.recent")}</TabsTrigger>
-          </div>
-          <TabsTrigger
-            ref={archiveTab}
-            value="archived"
-            title={t("common.archived")}
-            className="agent-archive-tab"
-          >
-            <Archive aria-hidden="true" />
-            <span className="sr-only">{t("common.archived")}</span>
-          </TabsTrigger>
+          <TabsTrigger value="all">{t("agents.all")}</TabsTrigger>
+          <TabsTrigger value="recent">{t("agents.recent")}</TabsTrigger>
         </TabsList>
         {filter === "all" && (
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="col-start-2 row-start-1"
-                aria-label={t("agents.sort")}
-                title={t("agents.sort")}
-              >
-                <ArrowDownWideNarrow />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuRadioGroup
-                value={sort}
-                onValueChange={(value) => setSort(value as AgentSort)}
-              >
-                <DropdownMenuRadioItem value="recent">
-                  {t("agents.sortRecent")}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="name">
-                  {t("agents.sortName")}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="manual">
-                  {t("agents.sortManual")}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="sidebar-filter-actions">
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("agents.sort")}
+                  title={t("agents.sort")}
+                >
+                  <ArrowDownWideNarrow />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-40">
+                <DropdownMenuRadioGroup
+                  value={sort}
+                  onValueChange={(value) => setSort(value as AgentSort)}
+                >
+                  <DropdownMenuRadioItem value="recent">
+                    {t("agents.sortRecent")}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="name">
+                    {t("agents.sortName")}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="manual">
+                    {t("agents.sortManual")}
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Toggle
+              ref={clearedToggleRef}
+              size="sm"
+              className="size-7 min-w-0 p-0 text-muted-foreground data-[state=on]:text-foreground"
+              pressed={showingCleared}
+              disabled={!sidebarItems.totalCleared && !showingCleared}
+              aria-label={t("agents.showClearedConversations")}
+              title={t(
+                showingCleared
+                  ? "agents.hideClearedConversations"
+                  : "agents.showClearedConversations",
+              )}
+              onPressedChange={toggleClearedLens}
+            >
+              <History className="size-4" aria-hidden="true" />
+            </Toggle>
+          </div>
         )}
       </div>
+      {showingCleared && (
+        <div className="agent-cleared-strip" role="status" aria-live="polite">
+          <span className="agent-cleared-strip-dot" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate tabular-nums">
+            {t("agents.clearedSummary", {
+              shown: revealedCleared,
+              total: sidebarItems.totalCleared,
+            })}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="agent-cleared-dismiss"
+            onClick={() => closeClearedLens(true)}
+          >
+            <span>{t("agents.hideCleared")}</span>
+            <kbd aria-hidden="true">Esc</kbd>
+          </Button>
+        </div>
+      )}
       <SidebarListPanel value="recent" active={filter === "recent"}>
         {() => (
           <RecentConversations
@@ -464,36 +615,8 @@ export function AgentSidebar({
         )}
       </SidebarListPanel>
       <SidebarListPanel value="all" active={filter === "all"}>
-        {() => renderDirectory("all")}
+        {() => renderDirectory()}
       </SidebarListPanel>
-      <SidebarListPanel value="archived" active={filter === "archived"}>
-        {() => renderDirectory("archived")}
-      </SidebarListPanel>
-      {filter === "archived" && (
-        <div className="shrink-0 px-(--sidebar-gutter)">
-          <Separator />
-          <Button
-            variant="ghost"
-            className="my-1 w-full justify-start"
-            onClick={() => setShowArchivedAgents((shown) => !shown)}
-          >
-            {showArchivedAgents ? (
-              <>
-                <ChevronLeft data-icon="inline-start" />
-                {t("agents.backToArchivedConversations")}
-              </>
-            ) : (
-              <>
-                {t("agents.archivedAgents")}
-                <ChevronRight
-                  className="ms-auto text-muted-foreground"
-                  data-icon="inline-end"
-                />
-              </>
-            )}
-          </Button>
-        </div>
-      )}
       <AgentSidebarMenus
         menu={menu}
         close={() => setMenu(undefined)}
@@ -504,14 +627,13 @@ export function AgentSidebar({
         markRead={markRead}
         clear={recent.clearConversations}
         restore={restoreConversation}
+        revealCleared={revealAgentCleared}
       />
     </Tabs>
   );
 
-  function renderDirectory(view: "all" | "archived") {
-    const sorted = sidebarItems[view];
-    const canReorder = view === "all";
-    const showingCleared = view === "archived" && !showArchivedAgents;
+  function renderDirectory() {
+    const sorted = sidebarItems.all;
     return (
       <>
         {overview.isPending && <Loading />}
@@ -521,58 +643,60 @@ export function AgentSidebar({
             retry={() => void overview.refetch()}
           />
         )}
-        {showingCleared ? (
-          overview.data && (
-            <ClearedConversations
-              groups={sidebarItems.clearedGroups}
-              selectedAgent={selected}
-              selectedSession={selectedSessionId}
-              expandedTrigger={expandedArchiveTrigger}
-              onConversation={onConversation}
-              onRestore={restoreConversation}
-              onMenu={(anchor, conversation) =>
-                openMenu(anchor, {
-                  kind: "conversation",
-                  conversation,
-                  restorable: true,
-                })
-              }
-            />
-          )
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            accessibility={{
-              screenReaderInstructions: {
-                draggable: t("agents.dragInstructions"),
-              },
-            }}
-            onDragEnd={({ active, over }) => {
-              if (canReorder && over)
-                moveAgent(String(active.id), String(over.id));
-            }}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          accessibility={{
+            screenReaderInstructions: {
+              draggable: t("agents.dragInstructions"),
+            },
+          }}
+          onDragEnd={({ active, over }) => {
+            if (over) moveAgent(String(active.id), String(over.id));
+          }}
+        >
+          <SortableContext
+            items={sorted.map(({ agent }) => agent.id)}
+            strategy={verticalListSortingStrategy}
           >
-            <SortableContext
-              items={sorted.map(({ agent }) => agent.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {sorted.map(
-                ({
-                  agent,
-                  chats,
-                  activity,
-                  unread,
-                  waiting,
-                  working,
-                  conversations,
-                  clearable: agentClearable,
-                }) => (
+            {sorted.map(
+              ({
+                agent,
+                chats,
+                activity,
+                unread,
+                waiting,
+                working,
+                conversations,
+                cleared,
+                clearable: agentClearable,
+              }) => {
+                const lensActive = showingCleared && cleared.length > 0;
+                const muted = !!mutedCleared[agent.id];
+                const limit = clearedLimits[agent.id] ?? clearedPageSize;
+                const visibleCleared =
+                  lensActive && !muted ? cleared.slice(0, limit) : [];
+                const remainingCleared = Math.max(
+                  0,
+                  cleared.length - visibleCleared.length,
+                );
+                const hasChildren = conversations.length > 0 || lensActive;
+                return (
                   <AgentRow
                     key={agent.id}
                     agent={agent}
                     selected={selected === agent.id}
-                    canReorder={canReorder}
+                    open={lensActive ? !lensCollapsed[agent.id] : undefined}
+                    onOpenChange={
+                      lensActive
+                        ? (expanded) =>
+                            setLensCollapsed((current) => ({
+                              ...current,
+                              [agent.id]: !expanded,
+                            }))
+                        : undefined
+                    }
+                    clearedOnly={conversations.length === 0 && lensActive}
                     onMenu={(anchor) =>
                       openMenu(anchor, {
                         kind: "agent",
@@ -582,6 +706,7 @@ export function AgentSidebar({
                           .filter((item) => item.unread)
                           .map((item) => item.conversation),
                         clearable: agentClearable,
+                        clearedCount: cleared.length,
                       })
                     }
                     onChoose={() => onChoose(agent.id)}
@@ -656,7 +781,6 @@ export function AgentSidebar({
                             name: agent.name,
                           })}
                           title={t("agents.openChat", { name: agent.name })}
-                          disabled={!chats.length && agent.archived}
                           onClick={() => onChat(agent)}
                         >
                           <MessageCircle />
@@ -664,57 +788,263 @@ export function AgentSidebar({
                       </>
                     }
                   >
-                    {conversations.length > 0 &&
-                      conversations.map(
-                        ({
-                          conversation,
-                          chat,
-                          title,
-                          unread,
-                          run,
-                          pending,
-                          pinIndex,
-                          canClear,
-                        }) => (
-                          <AgentActivityRow
-                            key={conversation.id}
-                            t={t}
-                            conversation={conversation}
-                            chatTitle={chat.title}
-                            title={title}
-                            unread={unread}
-                            runStatus={
-                              run?.waiting
-                                ? run.waitingBlocked
-                                  ? "waiting_blocked"
-                                  : "waiting"
-                                : run?.status
-                            }
-                            pending={pending}
-                            pinned={pinIndex !== undefined}
-                            canClear={canClear}
-                            selected={selectedSessionId === conversation.id}
-                            onConversation={onConversation}
-                            openMenu={openMenu}
-                            onAction={handleActivityAction}
-                          />
-                        ),
-                      )}
+                    {hasChildren && (
+                      <>
+                        {conversations.map(
+                          ({
+                            conversation,
+                            chat,
+                            title,
+                            unread,
+                            run,
+                            pending,
+                            pinIndex,
+                            canClear,
+                          }) => (
+                            <AgentActivityRow
+                              key={conversation.id}
+                              t={t}
+                              conversation={conversation}
+                              chatTitle={chat.title}
+                              title={title}
+                              unread={unread}
+                              runStatus={
+                                run?.waiting
+                                  ? run.waitingBlocked
+                                    ? "waiting_blocked"
+                                    : "waiting"
+                                  : run?.status
+                              }
+                              pending={pending}
+                              pinned={pinIndex !== undefined}
+                              canClear={canClear}
+                              selected={selectedSessionId === conversation.id}
+                              onConversation={onConversation}
+                              openMenu={openMenu}
+                              onAction={handleActivityAction}
+                            />
+                          ),
+                        )}
+                        {lensActive &&
+                          (muted ? (
+                            <li>
+                              <button
+                                type="button"
+                                className="agent-cleared-muted-bar"
+                                onClick={() =>
+                                  setMutedCleared((current) => ({
+                                    ...current,
+                                    [agent.id]: false,
+                                  }))
+                                }
+                              >
+                                <span className="truncate tabular-nums">
+                                  {t("agents.clearedHiddenCount", {
+                                    count: cleared.length,
+                                  })}
+                                </span>
+                                <span className="shrink-0">
+                                  {t("settings.expanded")}
+                                </span>
+                              </button>
+                            </li>
+                          ) : (
+                            <li
+                              className={cn(
+                                "agent-cleared-block",
+                                !conversations.length && "no-active-above",
+                              )}
+                            >
+                              <div className="agent-cleared-header">
+                                <span className="truncate tabular-nums">
+                                  {t("agents.clearedGroupCount", {
+                                    shown: visibleCleared.length,
+                                    total: cleared.length,
+                                  })}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="agent-cleared-mute"
+                                  aria-label={t("agents.hideAgentCleared", {
+                                    name: agent.name,
+                                  })}
+                                  title={t("agents.hideAgentCleared", {
+                                    name: agent.name,
+                                  })}
+                                  onClick={() =>
+                                    setMutedCleared((current) => ({
+                                      ...current,
+                                      [agent.id]: true,
+                                    }))
+                                  }
+                                >
+                                  <EyeOff aria-hidden="true" />
+                                  <span>{t("agents.hideCleared")}</span>
+                                </button>
+                              </div>
+                              <ul className="agent-cleared-list">
+                                {visibleCleared.map(
+                                  ({
+                                    conversation,
+                                    chat,
+                                    title,
+                                    lastActivity,
+                                  }) => (
+                                    <AgentClearedRow
+                                      key={conversation.id}
+                                      t={t}
+                                      locale={i18n.language}
+                                      conversation={conversation}
+                                      chatTitle={displayChatTitle(chat, t)}
+                                      title={title}
+                                      lastActivity={lastActivity}
+                                      selected={
+                                        selectedSessionId === conversation.id
+                                      }
+                                      onConversation={onConversation}
+                                      openMenu={openMenu}
+                                      onRestore={restoreConversation}
+                                    />
+                                  ),
+                                )}
+                              </ul>
+                              {remainingCleared > 0 && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  className="agent-cleared-more"
+                                  aria-label={t(
+                                    "agents.showMoreClearedConversations",
+                                  )}
+                                  onClick={(event) => {
+                                    const list = event.currentTarget
+                                      .closest(".agent-cleared-block")
+                                      ?.querySelector(".agent-cleared-list");
+                                    setClearedLimits((current) => ({
+                                      ...current,
+                                      [agent.id]: limit + clearedPageSize,
+                                    }));
+                                    requestAnimationFrame(() =>
+                                      list?.children
+                                        .item(limit)
+                                        ?.querySelector<HTMLButtonElement>(
+                                          "button",
+                                        )
+                                        ?.focus({ preventScroll: true }),
+                                    );
+                                  }}
+                                >
+                                  <Plus
+                                    className="size-3 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                  <span>
+                                    {t("agents.showMoreClearedConversations")}
+                                  </span>
+                                  <span
+                                    aria-hidden="true"
+                                    className="ms-auto tabular-nums text-[11px] opacity-75"
+                                  >
+                                    {t("agents.clearedRemaining", {
+                                      count: remainingCleared,
+                                    })}
+                                  </span>
+                                </Button>
+                              )}
+                            </li>
+                          ))}
+                      </>
+                    )}
                   </AgentRow>
-                ),
-              )}
-            </SortableContext>
-          </DndContext>
-        )}
-        {!showingCleared && !overview.isPending && !sorted.length && (
-          <p className="sidebar-empty">
-            {t(view === "archived" ? "agents.noArchived" : "agents.first")}
-          </p>
+                );
+              },
+            )}
+          </SortableContext>
+        </DndContext>
+        {!overview.isPending && !sorted.length && (
+          <p className="sidebar-empty">{t("agents.first")}</p>
         )}
       </>
     );
   }
 }
+
+const AgentClearedRow = memo(function AgentClearedRow({
+  t,
+  locale,
+  conversation,
+  chatTitle,
+  title,
+  lastActivity,
+  selected,
+  onConversation,
+  openMenu,
+  onRestore,
+}: {
+  t: TFunction;
+  locale: string;
+  conversation: Conversation;
+  chatTitle: string;
+  title: string;
+  lastActivity: number;
+  selected: boolean;
+  onConversation: SidebarNavigation["onConversation"];
+  openMenu: (anchor: MenuAnchor, target: MenuTarget) => void;
+  onRestore: (id: string, agentId: string) => void;
+}) {
+  const label = title || t("chat.topic");
+  const restoreLabel = t("agents.restoreConversation");
+  const time = formatClearedTime(lastActivity, locale);
+  return (
+    <li className="agent-activity-row">
+      <button
+        type="button"
+        className={cn(
+          "agent-activity-item agent-cleared-item",
+          selected && "selected",
+        )}
+        data-session-id={conversation.id}
+        data-cleared="true"
+        aria-current={selected ? "true" : undefined}
+        aria-label={label}
+        title={[
+          label,
+          conversation.kind === "topic" ? chatTitle : "",
+          conversation.preview !== label ? conversation.preview : "",
+        ]
+          .filter(Boolean)
+          .join("\n")}
+        onClick={() => onConversation(conversation)}
+        {...rowMenuHandlers((anchor) =>
+          openMenu(anchor, {
+            kind: "conversation",
+            conversation,
+            restorable: true,
+          }),
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {time && (
+          <span className="agent-cleared-time tabular-nums" aria-hidden="true">
+            {time}
+          </span>
+        )}
+      </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="agent-activity-action text-muted-foreground"
+        aria-label={restoreLabel}
+        title={restoreLabel}
+        onClick={() => onRestore(conversation.id, conversation.agentId)}
+      >
+        <RotateCcw aria-hidden="true" />
+      </Button>
+    </li>
+  );
+});
 
 const AgentActivityRow = memo(function AgentActivityRow({
   t,
@@ -848,7 +1178,9 @@ const AgentActivityRow = memo(function AgentActivityRow({
 function AgentRow({
   agent,
   selected,
-  canReorder,
+  open: controlledOpen,
+  onOpenChange: controlledOpenChange,
+  clearedOnly,
   preview,
   unread,
   waiting,
@@ -863,7 +1195,9 @@ function AgentRow({
 }: {
   agent: Agent;
   selected: boolean;
-  canReorder: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  clearedOnly?: boolean;
   preview: string;
   unread: boolean;
   waiting: number;
@@ -878,6 +1212,14 @@ function AgentRow({
 }) {
   const { t } = useTranslation();
   const workingLabel = t("agents.workingCount", { count: working });
+  const [localOpen, setLocalOpen] = useState(defaultExpanded);
+  const [trackedDefault, setTrackedDefault] = useState(defaultExpanded);
+  if (trackedDefault !== defaultExpanded) {
+    setTrackedDefault(defaultExpanded);
+    setLocalOpen(defaultExpanded);
+  }
+  const open = controlledOpen ?? localOpen;
+  const onOpenChange = controlledOpenChange ?? setLocalOpen;
   const {
     attributes,
     listeners,
@@ -886,15 +1228,15 @@ function AgentRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: agent.id, disabled: !canReorder });
+  } = useSortable({ id: agent.id });
   return (
     <Collapsible
-      key={String(defaultExpanded)}
-      defaultOpen={defaultExpanded}
+      open={open}
+      onOpenChange={onOpenChange}
       ref={setNodeRef}
       className={cn("agent-group", isDragging && "dragging")}
       data-agent-id={agent.id}
-      data-sortable={canReorder}
+      data-sortable="true"
       style={{
         transform: CSS.Translate.toString(transform && { ...transform, x: 0 }),
         transition,
@@ -930,7 +1272,7 @@ function AgentRow({
             className="agent-select"
             data-menu-focus
             ref={setActivatorNodeRef}
-            {...(canReorder ? attributes : {})}
+            {...attributes}
             aria-label={agent.name}
             aria-current={selected ? "true" : undefined}
             onFocus={onPreview}
@@ -1008,7 +1350,14 @@ function AgentRow({
       </div>
       {!!children && (
         <CollapsibleContent>
-          <ul className="agent-activity-list">{children}</ul>
+          <ul
+            className={cn(
+              "agent-activity-list",
+              clearedOnly && "cleared-only-rail",
+            )}
+          >
+            {children}
+          </ul>
         </CollapsibleContent>
       )}
     </Collapsible>

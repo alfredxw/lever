@@ -2021,8 +2021,8 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   await page.keyboard.press("Escape");
   await expect(sidebarSearch).toBeFocused();
 
-  await expect(sidebar.getByRole("tab")).toHaveCount(3);
-  for (const name of ["最近", "已归档", "全部"]) {
+  await expect(sidebar.getByRole("tab")).toHaveCount(2);
+  for (const name of ["最近", "全部"]) {
     await sidebar.getByRole("tab", { name, exact: true }).click();
     await sidebarSearch.click();
     await expect(query).toBeFocused();
@@ -3189,8 +3189,10 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
   const sidebar = page.locator("#agent-sidebar");
   const list = sidebar.getByRole("tabpanel");
   const agent = list.locator(`[data-agent-id="${agentId}"] .agent-select`);
-  const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
-  const all = sidebar.getByRole("tab", { name: "全部", exact: true });
+  const showCleared = sidebar.getByRole("button", {
+    name: "显示已清理会话",
+    exact: true,
+  });
   const item = (name: string) =>
     page.getByRole("menuitem", { name, exact: true });
   const start = async (text: string) => {
@@ -3214,14 +3216,18 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
   await expect(done).toHaveCount(0);
   await expect(busy).toBeVisible();
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
-  await archive.click();
-  await expect(archive).toHaveAttribute("aria-selected", "true");
-  await expect(busy).toHaveCount(0);
+  await showCleared.click();
+  await expect(showCleared).toHaveAttribute("aria-pressed", "true");
+  await expect(busy).toBeVisible();
+  await expect(done).toHaveAttribute("data-cleared", "true");
   await done.click();
   const topic = page.locator(".topic-conversation:visible");
   await expect(topic).toContainText("已完成的话题");
   await expect(done).toBeVisible();
-  await all.click();
+  await sidebar.getByRole("button", { name: "收起", exact: true }).click();
+  await expect(showCleared).toHaveAttribute("aria-pressed", "false");
+  await expect(done).toHaveCount(0);
+  await expect(topic).toContainText("已完成的话题");
   await busy.click({ button: "right" });
   await item("暂停回复").click();
   await expect(busy.locator(".agent-unread")).toBeVisible();
@@ -3240,24 +3246,35 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
   await agent.click({ button: "right" });
   await item("归档 Agent").click();
   await expect(agent).toHaveCount(0);
-  await archive.click();
-  await expect(done).toBeVisible();
-  await done.click();
-  await expect(topic).toContainText("已完成的话题");
-  await expect(
-    topic.getByRole("button", { name: "添加附件、命令或引用" }),
-  ).toBeDisabled();
-  await sidebar
-    .getByRole("button", { name: "已归档 Agent", exact: true })
+
+  // Archived Agents are recovered or inspected from Settings -> Archived Agents.
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const settings = page.locator(".settings-page");
+  await settings
+    .getByRole("button", { name: /已归档 Agent/ })
     .click();
-  await agent.click({ button: "right" });
-  await expect(item("打开历史对话")).toBeVisible();
-  await item("恢复 Agent").click();
-  await expect(agent).toHaveCount(0);
-  await sidebar.getByRole("button", { name: "返回会话", exact: true }).click();
-  await expect(done).toBeVisible();
-  await all.click();
+  const archivedRow = settings
+    .locator(".settings-row")
+    .filter({ hasText: "活动菜单" });
+  await expect(archivedRow).toBeVisible();
+  await archivedRow
+    .getByRole("button", { name: "打开历史对话", exact: true })
+    .click();
+  await expect(
+    page
+      .locator(".chat-panel:visible")
+      .getByRole("button", { name: "添加附件、命令或引用" }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await archivedRow
+    .getByRole("button", { name: "恢复 Agent", exact: true })
+    .click();
+  await expect(archivedRow).toHaveCount(0);
+  await page.getByRole("button", { name: "Agents", exact: true }).click();
   await expect(agent).toBeVisible();
+  await showCleared.click();
+  await expect(done).toBeVisible();
 });
 
 test("Recent clears read completed conversations and restores priority on a new run", async ({
@@ -3360,19 +3377,25 @@ test("Recent clears read completed conversations and restores priority on a new 
     await expect(today.locator(mainRow)).toBeVisible();
     await submit("这次执行重新进入优先", "main");
     await expect(priority.locator(mainRow)).toBeVisible();
-    await sidebar.getByRole("tab", { name: "已归档", exact: true }).click();
-    await expect(sidebar.getByRole("tabpanel").locator(mainRow)).toHaveCount(0);
+    await sidebar.getByRole("tab", { name: "全部", exact: true }).click();
+    await expect(sidebar.getByRole("tabpanel").locator(mainRow)).toBeVisible();
+    await expect(
+      sidebar.getByRole("tabpanel").locator(`${mainRow}[data-cleared="true"]`),
+    ).toHaveCount(0);
   } finally {
     await page.request.post(`/api/runs/${running.id}/stop`, { data: {} });
   }
 });
 
-test("All and Recent share cleared sessions and Archive restores them", async ({
+test("All and Recent share cleared sessions and the cleared lens restores them", async ({
   page,
 }) => {
   const sidebar = page.locator("#agent-sidebar");
   const list = sidebar.getByRole("tabpanel");
-  const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
+  const showCleared = sidebar.getByRole("button", {
+    name: "显示已清理会话",
+    exact: true,
+  });
   const all = sidebar.getByRole("tab", { name: "全部", exact: true });
   const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
   const priority = sidebar.getByRole("region", { name: "优先", exact: true });
@@ -3382,11 +3405,7 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
     exact: true,
   });
   await createAgent(page, "会话归档甲");
-  await archive.click();
-  await expect(
-    sidebar.getByText("暂无收起的会话", { exact: true }),
-  ).toBeVisible();
-  await all.click();
+  await expect(showCleared).toBeDisabled();
   await send(page, "第一个 Agent 的原始会话");
   const firstAgentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
@@ -3424,8 +3443,9 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   const secondAgentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
   );
-  const secondSessionId = await list
-    .locator(`[data-agent-id="${secondAgentId}"] [data-session-id]`)
+  const secondGroup = list.locator(`[data-agent-id="${secondAgentId}"]`);
+  const secondSessionId = await secondGroup
+    .locator("[data-session-id]")
     .getAttribute("data-session-id");
   const secondSelector = `[data-session-id="${secondSessionId}"]`;
   await recent.click();
@@ -3461,30 +3481,25 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   await page.reload();
   await expect(today.locator(mainRow)).toBeVisible();
   await expect(today.locator(secondSelector)).toBeVisible();
-  await archive.click();
 
-  const firstAgent = sidebar.getByRole("button", {
-    name: "会话归档甲",
-    exact: true,
-  });
-  const secondAgent = sidebar.getByRole("button", {
-    name: "会话归档乙",
-    exact: true,
-  });
-  await expect(secondAgent).toHaveAttribute("aria-expanded", "true");
-  await expect(firstAgent).toHaveAttribute("aria-expanded", "false");
-  await expect(list.locator("[data-session-id]")).toContainText(
+  await all.click();
+  await expect(showCleared).toBeEnabled();
+  await showCleared.click();
+  await expect(showCleared).toHaveAttribute("aria-pressed", "true");
+  await expect(sidebar.locator(".agent-cleared-strip")).toContainText("6 / 8");
+
+  // Zero-active agents reveal their recent 5 cleared conversations in place.
+  await expect(secondGroup.locator(secondSelector)).toContainText(
     "第二个 Agent 的原始会话",
   );
-  await firstAgent.press("Enter");
-  await expect(secondAgent).toHaveAttribute("aria-expanded", "false");
   await expect(rows).toHaveCount(5);
   const [firstRowTop, secondRowTop] = await rows.evaluateAll((items) =>
     items.slice(0, 2).map((item) => item.getBoundingClientRect().top),
   );
-  expect(secondRowTop - firstRowTop).toBeLessThan(52);
+  expect(secondRowTop - firstRowTop).toBeLessThan(36);
   const conversation = firstGroup.locator(mainRow);
   await expect(conversation).toHaveCount(0);
+
   const showMore = firstGroup.getByRole("button", {
     name: "显示更多",
     exact: true,
@@ -3493,10 +3508,17 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   await expect(rows).toHaveCount(7);
   await expect(showMore).toHaveCount(0);
   await expect(rows.nth(5)).toBeFocused();
-  await secondAgent.press("Enter");
-  await expect(list.locator("[data-session-id]")).toHaveCount(1);
-  await firstAgent.press("Enter");
+  await expect(sidebar.locator(".agent-cleared-strip")).toContainText("8 / 8");
+
+  // Individual agents can hide their cleared block while keeping the lens active.
+  await secondGroup
+    .getByRole("button", { name: "隐藏 会话归档乙 的已清理会话", exact: true })
+    .click();
+  await expect(secondGroup.locator(secondSelector)).toHaveCount(0);
   await expect(rows).toHaveCount(7);
+  await secondGroup.getByRole("button", { name: /已隐藏 1 条已清理/ }).click();
+  await expect(secondGroup.locator(secondSelector)).toBeVisible();
+
   await expect(conversation).toContainText("第一个 Agent 的原始会话");
   await conversation.click();
   await expect(page.locator(".chat-panel:visible")).toContainText(
@@ -3511,10 +3533,15 @@ test("All and Recent share cleared sessions and Archive restores them", async ({
   await conversation.hover();
   await expect(restore).toHaveCSS("opacity", "1");
   await restore.click();
-  await expect(conversation).toHaveCount(0);
-  await expect(firstAgent).toBeFocused();
-  await all.click();
+  await expect(conversation).not.toHaveAttribute("data-cleared", "true");
+  await expect(firstGroup.locator('[data-cleared="true"]')).toHaveCount(6);
+
+  // Escape dismisses the cleared lens globally while keeping restored items active.
+  await page.keyboard.press("Escape");
+  await expect(showCleared).toHaveAttribute("aria-pressed", "false");
+  await expect(list.locator('[data-cleared="true"]')).toHaveCount(0);
   await expect(conversation).toBeVisible();
+
   await recent.click();
   await expect(priority.locator(mainRow)).toBeVisible();
   await page.reload();

@@ -45,6 +45,7 @@ export type MenuTarget =
       hasChats: boolean;
       unread: Conversation[];
       clearable: Conversation[];
+      clearedCount: number;
     }
   | {
       kind: "conversation";
@@ -64,6 +65,7 @@ export function AgentSidebarMenus({
   markRead,
   clear,
   restore,
+  revealCleared,
 }: {
   menu?: { anchor: MenuAnchor; target: MenuTarget };
   close: () => void;
@@ -73,7 +75,8 @@ export function AgentSidebarMenus({
   readCursors: Record<string, number>;
   markRead: (items: Conversation[]) => void;
   clear: (conversations: Conversation[]) => void;
-  restore: (id: string) => void;
+  restore: (id: string, agentId?: string) => void;
+  revealCleared: (agentId: string) => void;
 }) {
   const { t } = useTranslation();
   const [renaming, setRenaming] = useState<RenameTarget>();
@@ -104,40 +107,34 @@ export function AgentSidebarMenus({
     };
   }
   if (target.kind === "agent") {
-    const { agent, hasChats, unread, clearable } = target;
+    const { agent, hasChats, unread, clearable, clearedCount } = target;
     label = agent.name;
     const archive: MenuAction = {
-      id: agent.archived ? "restore" : "archive",
-      label: t(agent.archived ? "profile.restore" : "profile.archive"),
-      disabled:
-        !agent.archived &&
-        overview.runs.some(
-          (run) =>
-            run.agentId === agent.id &&
-            (active(run.status) || (run.waiting && !run.waitingBlocked)),
-        ),
+      id: "archive",
+      label: t("profile.archive"),
+      disabled: overview.runs.some(
+        (run) =>
+          run.agentId === agent.id &&
+          (active(run.status) || (run.waiting && !run.waitingBlocked)),
+      ),
       run: async () => {
         await api(
           "/agents/" + agent.id,
-          { ...agent, archived: !agent.archived },
+          { ...agent, archived: true },
           "PUT",
         );
         await queryClient.invalidateQueries({ queryKey: ["overview"] });
       },
     };
     group(
-      agent.archived
-        ? archive
-        : {
-            id: "new-chat",
-            label: t("agents.newChat"),
-            run: () => navigation.onNewChat(agent.id),
-          },
+      {
+        id: "new-chat",
+        label: t("agents.newChat"),
+        run: () => navigation.onNewChat(agent.id),
+      },
       hasChats && {
         id: "last-chat",
-        label: t(
-          agent.archived ? "agents.openHistoryChat" : "agents.continueLastChat",
-        ),
+        label: t("agents.continueLastChat"),
         run: () => navigation.onChat(agent),
       },
     );
@@ -147,7 +144,7 @@ export function AgentSidebarMenus({
         label: t("agents.workspaceFiles"),
         run: () => navigation.onOpen(toolTab("files"), agent.id),
       },
-      !agent.archived && {
+      {
         id: "terminal",
         label: t("agents.workspaceTerminal"),
         run: () => navigation.onOpen(toolTab("terminal"), agent.id),
@@ -174,8 +171,13 @@ export function AgentSidebarMenus({
         label: t("agents.clearReadActivity"),
         run: () => clear(clearable),
       },
+      clearedCount > 0 && {
+        id: "reveal-cleared",
+        label: t("agents.showClearedConversations"),
+        run: () => revealCleared(agent.id),
+      },
     );
-    group(!agent.archived && archive);
+    group(archive);
   } else if (target.kind === "shared") {
     label = target.session.title || t("shared.untitled");
     group({
@@ -257,7 +259,7 @@ export function AgentSidebarMenus({
         id: "restore",
         label: t("agents.restoreConversation"),
         restoreFocus: false,
-        run: () => restore(conversation.id),
+        run: () => restore(conversation.id, conversation.agentId),
       },
     );
     group(

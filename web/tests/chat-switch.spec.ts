@@ -719,7 +719,6 @@ test("switches populated sidebar views without losing the reading position", asy
   const sidebar = page.locator("#agent-sidebar");
   const all = sidebar.getByRole("tab", { name: "全部", exact: true });
   const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
-  const archive = sidebar.getByRole("tab", { name: "已归档", exact: true });
   const list = sidebar.getByRole("tabpanel");
   await expect(list.locator("[data-session-id]")).toHaveCount(600);
   const position = await list.evaluate((panel) => {
@@ -731,7 +730,7 @@ test("switches populated sidebar views without losing the reading position", asy
   await expect(list.locator("[data-session-id]")).toHaveCount(600);
   const timings: number[] = [];
   for (let pass = 0; pass < 4; pass++) {
-    for (const tab of [archive, all, recent]) {
+    for (const tab of [all, recent]) {
       const measurement = await tab.evaluateHandle((button) => ({
         duration: new Promise<number>((resolve, reject) => {
           button.addEventListener(

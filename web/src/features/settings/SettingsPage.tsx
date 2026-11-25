@@ -7,6 +7,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { isMyGo } from "mygo-runtime";
 import {
+  Archive,
   ArrowRight,
   Copy,
   FolderOpen,
@@ -15,18 +16,20 @@ import {
   Monitor,
   Moon,
   Plug,
+  RotateCcw,
   Search,
   Settings2,
   Sun,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Overview } from "@/api/types.gen";
+import { api, queryClient } from "@/api/client";
+import type { Agent, Overview } from "@/api/types.gen";
 import { Dialogs, Notifications } from "@/api/desktop.gen";
 import { ErrorNotice, Loading } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FieldError } from "@/components/ui/field";
+import { FieldError, FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -61,7 +64,9 @@ import {
 import { ShortcutSettings, shortcutGroups } from "./ShortcutSettings";
 import { isMac } from "./shortcuts";
 import { SecondarySidebar } from "@/components/workbench/SecondarySidebar";
+import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { hasDesktopNotifications } from "@/features/agents/desktopNotifications";
+import { useProviders } from "@/features/runtime/queries";
 import { AutomationTimePicker } from "@/features/automations/AutomationTimePicker";
 import {
   defaultReminderChoiceOffsets,
@@ -165,6 +170,11 @@ const sectionGroups = [
           "localPreferencesDescription",
         ],
       },
+      {
+        id: "archivedAgents",
+        icon: Archive,
+        fields: ["archivedAgentsDescription"],
+      },
     ],
   },
 ] as const;
@@ -250,6 +260,7 @@ export function SettingsPage({
   overview,
   providerTarget,
   onOpenPlugin,
+  onOpenArchivedAgent,
 }: {
   visible: boolean;
   theme: Theme;
@@ -257,8 +268,10 @@ export function SettingsPage({
   overview: UseQueryResult<Pick<Overview, "dataDir" | "agents" | "chats">, Error>;
   providerTarget?: { id?: string; pluginId?: string };
   onOpenPlugin: (id?: string) => void;
+  onOpenArchivedAgent?: (agent: Agent) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const providers = useProviders();
   const { preferences, updatePreferences } = usePreferences();
   const shortcuts = useComposerShortcuts();
   const keybindingGroups = shortcutGroups(preferences.shortcutOverrides);
@@ -287,6 +300,16 @@ export function SettingsPage({
   });
   const openDirectory = useMutation({
     mutationFn: (path: string) => Dialogs.openDirectory(path),
+  });
+  const archivedAgents = (overview.data?.agents ?? []).filter(
+    (agent) => agent.archived,
+  );
+  const restoreAgent = useMutation({
+    mutationFn: async (agent: Agent) => {
+      await api("/agents/" + agent.id, { ...agent, archived: false }, "PUT");
+      await queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+    onError: (error) => toast.error(error.message),
   });
   const notificationSupport = useQuery({
     queryKey: ["desktop-notification-support"],
@@ -318,6 +341,13 @@ export function SettingsPage({
                 t(title),
                 ...rows.flatMap(({ label, keys }) => [t(label), keys]),
               ])
+            : []),
+          ...(item.id === "archivedAgents"
+            ? [
+                t("profile.restore"),
+                t("agents.noArchived"),
+                ...archivedAgents.map((agent) => agent.name),
+              ]
             : []),
         ].some((text) => text.toLocaleLowerCase().includes(query)),
       ),
@@ -720,6 +750,87 @@ export function SettingsPage({
             </SettingsGroup>
           </>
         );
+      case "archivedAgents":
+        return (
+          <>
+            {overview.isPending && <Loading />}
+            {overview.error && (
+              <ErrorNotice
+                error={overview.error}
+                retry={() => void overview.refetch()}
+              />
+            )}
+            <p className="settings-note">
+              {t("settings.archivedAgentsDescription")}
+            </p>
+            {overview.data &&
+              (archivedAgents.length === 0 ? (
+                <Empty className="panel-surface py-10">
+                  <EmptyHeader>
+                    <EmptyTitle>{t("agents.noArchived")}</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <FieldGroup className="settings-group panel-surface">
+                  {archivedAgents.map((agent) => {
+                    const providerName =
+                      providers.data?.find(
+                        (provider) => provider.id === agent.profile.provider,
+                      )?.name ?? agent.profile.provider;
+                    const chatCount = (overview.data?.chats ?? []).filter(
+                      (chat) => chat.agentId === agent.id,
+                    ).length;
+                    const description = [
+                      providerName,
+                      chatCount > 0
+                        ? t("settings.archivedAgentsChatCount", {
+                            count: chatCount,
+                          })
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+                    return (
+                      <SettingsRow
+                        key={agent.id}
+                        title={
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <AgentAvatar agent={agent} size="sm" />
+                            <span className="truncate">{agent.name}</span>
+                          </span>
+                        }
+                        description={description}
+                      >
+                        <div className="settings-inline-actions">
+                          {chatCount > 0 && onOpenArchivedAgent && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => onOpenArchivedAgent(agent)}
+                            >
+                              {t("agents.openHistoryChat")}
+                            </Button>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={
+                              restoreAgent.isPending &&
+                              restoreAgent.variables?.id === agent.id
+                            }
+                            onClick={() => restoreAgent.mutate(agent)}
+                          >
+                            <RotateCcw data-icon="inline-start" />
+                            {t("profile.restore")}
+                          </Button>
+                        </div>
+                      </SettingsRow>
+                    );
+                  })}
+                </FieldGroup>
+              ))}
+          </>
+        );
     }
   }
 
@@ -789,7 +900,12 @@ export function SettingsPage({
                   }}
                 >
                   <Icon data-icon="inline-start" />
-                  {t(`settings.${id}`)}
+                  <span className="truncate">{t(`settings.${id}`)}</span>
+                  {id === "archivedAgents" && archivedAgents.length > 0 && (
+                    <span className="ms-auto text-xs tabular-nums text-muted-foreground">
+                      {archivedAgents.length}
+                    </span>
+                  )}
                 </Button>
               ))}
             </section>

@@ -1885,6 +1885,28 @@ export default function App() {
       />
     ) : undefined;
 
+  function openAgentChat(target: Agent) {
+    const remembered = workspaces[target.id]?.lastChatId;
+    const chat =
+      overview.data?.chats.find(
+        (chat) => chat.agentId === target.id && chat.id === remembered,
+      ) ??
+      (agentActivity
+        ? preferredAgentChat(agentActivity.chats, target.id)
+        : undefined);
+    const tabs = workspaceFor(target.id)?.tabs ?? [];
+    if (chat) {
+      openTab(
+        { id: chat.id, kind: "chat", title: chat.title },
+        target.id,
+        primaryTabPane(tabs, chat.id),
+      );
+      choose(target.id);
+    } else if (!target.archived) {
+      newChat(target.id, primaryTabPane(tabs, draftChatId(target.id)));
+    }
+  }
+
   const workbenchContent = (
     <ComposerContext.Provider value={composer}>
       <DiffNavigation.Provider value={openTurnChanges}>
@@ -1974,31 +1996,7 @@ export default function App() {
                   }
                   onChoose={switchAgent}
                   onPreview={prefetchAgent}
-                  onChat={(target) => {
-                    const remembered = workspaces[target.id]?.lastChatId;
-                    const chat =
-                      overview.data?.chats.find(
-                        (chat) =>
-                          chat.agentId === target.id && chat.id === remembered,
-                      ) ??
-                      (agentActivity
-                        ? preferredAgentChat(agentActivity.chats, target.id)
-                        : undefined);
-                    const tabs = workspaceFor(target.id)?.tabs ?? [];
-                    if (chat) {
-                      openTab(
-                        { id: chat.id, kind: "chat", title: chat.title },
-                        target.id,
-                        primaryTabPane(tabs, chat.id),
-                      );
-                      choose(target.id);
-                    } else if (!target.archived) {
-                      newChat(
-                        target.id,
-                        primaryTabPane(tabs, draftChatId(target.id)),
-                      );
-                    }
-                  }}
+                  onChat={openAgentChat}
                   onOpen={(tab, agentId) => {
                     openTab(tab, agentId);
                     choose(agentId);
@@ -2840,6 +2838,10 @@ export default function App() {
               overview={overview}
               providerTarget={providerTarget}
               onOpenPlugin={showPlugin}
+              onOpenArchivedAgent={(target) => {
+                openAgentChat(target);
+                setPage("agents");
+              }}
             />
           </MountOnVisit>
         </WorkbenchShell>

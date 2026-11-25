@@ -78,7 +78,7 @@ test("Shared Project scope is managed inside Agent Profile without Projects tab 
   await page.goto(context().url);
   const sidebar = page.locator("#agent-sidebar");
 
-  // 1. Sidebar stays clean: All | Recent | Archived, with NO Projects tab.
+  // 1. Sidebar stays clean: All | Recent + cleared lens toggle, with NO Archived or Projects tab.
   await expect(
     sidebar.getByRole("tab", { name: "全部", exact: true }),
   ).toBeVisible();
@@ -87,6 +87,9 @@ test("Shared Project scope is managed inside Agent Profile without Projects tab 
   ).toBeVisible();
   await expect(
     sidebar.getByRole("tab", { name: "已归档", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    sidebar.getByRole("button", { name: "显示已清理会话", exact: true }),
   ).toBeVisible();
   await expect(
     sidebar.getByRole("tab", { name: "项目", exact: true }),
