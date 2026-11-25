@@ -64,6 +64,7 @@ type App struct {
 	initializing         map[string]bool // Physical checkouts leased for setup.
 	catalogs             map[catalogKey]*catalogEntry
 	setups               map[string]*providerSetup
+	agyLogin             terminal.Key
 	sharedSending        sync.Map
 	notesMu              sync.Mutex
 	notesDir             string

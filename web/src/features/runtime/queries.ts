@@ -92,6 +92,12 @@ export async function setModelVisibility(
 
 const catalogRetryMs = 30_000;
 
+export function isAntigravityCLIAuthRequired(error: unknown) {
+  return (
+    error instanceof APIError && error.code === "antigravity_cli_auth_required"
+  );
+}
+
 export function modelsQuery(provider: string, cwd = "") {
   return queryOptions({
     queryKey: ["models", provider, cwd],

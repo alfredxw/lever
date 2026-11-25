@@ -1526,6 +1526,15 @@ export const enUS = {
     "Each runtime keeps its own Google sign-in, separate from the Antigravity IDE.",
   "antigravity.cliHint":
     "Detects the local agy CLI and reuses its sign-in and settings. No runtime setup or separate Lever login is needed. If you are not signed in, run this command in a terminal.",
+  "antigravity.cliLoginHint":
+    "Open the Google link from the terminal in your browser, then paste the authorization code into this terminal.",
+  "antigravity.cliLoginVerifying": "Checking sign-in and model access…",
+  "antigravity.cliLoginFailed":
+    "agy sign-in did not finish. Check the terminal output and try again.",
+  "antigravity.cliLoginNotPersisted":
+    "The new agy process still cannot read your sign-in credentials. Check the terminal output and try again.",
+  "antigravity.cliLoginVerificationFailed":
+    "Could not verify model access. Refresh the model list to check again.",
   "antigravity.install": "Install Antigravity",
   "antigravity.signin": "Sign in with Google",
   "antigravity.openSignin": "Open Google sign-in",

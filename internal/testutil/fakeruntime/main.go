@@ -121,6 +121,14 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if nativeAGY && slices.Equal(os.Args[1:], []string{"acp", "--login"}) {
+		fmt.Println("Paste the fixture agy login code:")
+		var code string
+		if _, err := fmt.Scanln(&code); err != nil || code != "fixture" {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "acp" {
 		acpFixture()
 		return

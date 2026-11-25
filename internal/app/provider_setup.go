@@ -32,20 +32,34 @@ func (a *App) StartProviderLogin(ctx context.Context, key terminal.Key) error {
 	if err != nil {
 		return invalid(err.Error())
 	}
+	agy := config.Type == "antigravity"
+	if agy && a.agyLogin != (terminal.Key{}) {
+		if a.agyLogin == key {
+			return nil
+		}
+		return conflict("A local agy sign-in is already in progress")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	_, err = a.Terminals.StartProcess(key, cmd, home, func() {
-		if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
+	started, err := a.Terminals.StartProcess(key, cmd, home, func() {
+		success := cmd.ProcessState != nil && cmd.ProcessState.Success()
+		if !agy && !success {
 			return
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if !a.closed {
+		if agy {
+			a.agyLogin = terminal.Key{}
+		}
+		if success && !a.closed {
 			a.invalidateProviderCatalogsLocked(config.ID, true)
 		}
 	})
+	if started && agy {
+		a.agyLogin = key
+	}
 	return err
 }
 

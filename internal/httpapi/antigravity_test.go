@@ -82,6 +82,24 @@ func TestAntigravityTokenRecovery(t *testing.T) {
 	}
 }
 
+func TestAntigravityCatalogRequiresLocalCLICredentials(t *testing.T) {
+	f := newFixture(t)
+	const models = "/providers/antigravity/models"
+	var catalog model.Catalog
+	f.request("GET", models, nil, http.StatusOK, &catalog)
+	if catalog.Provisional || len(catalog.Models) == 0 {
+		t.Fatal("fixture did not cache the authenticated model catalog", catalog)
+	}
+	t.Setenv("LEVER_FIXTURE_AGY_AUTH_REQUIRED", "1")
+	var failure map[string]string
+	f.request("GET", models+"?refresh=true", nil, http.StatusConflict, &failure)
+	if failure["code"] != "antigravity_cli_auth_required" || failure["error"] != provider.ErrAntigravityCLIAuthRequired.Error() {
+		t.Fatal("expected an actionable authentication error", failure)
+	}
+	// A later read must not reuse models from the previously signed-in account.
+	f.request("GET", models, nil, http.StatusConflict, &failure)
+}
+
 func TestAntigravityAutomaticallyDetectsAndReusesNativeCLI(t *testing.T) {
 	f := newFixture(t)
 	nativeConfig := t.TempDir()

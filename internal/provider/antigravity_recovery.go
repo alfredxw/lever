@@ -97,7 +97,7 @@ func runAntigravity(ctx context.Context, in Input, sink Sink) error {
 	switch {
 	case errors.Is(err, errAntigravityUnauthenticated):
 		err = errAntigravityUnauthenticated
-	case errors.As(err, &request) && request.Code == -32000:
+	case errors.Is(err, ErrAntigravityCLIAuthRequired), errors.As(err, &request) && request.Code == -32000:
 		err = errors.New("Antigravity requires authentication.")
 		if checkpoint != nil {
 			err = errAntigravityUnauthenticated
@@ -107,7 +107,7 @@ func runAntigravity(ctx context.Context, in Input, sink Sink) error {
 	}
 	hint := errAntigravitySignIn.Error()
 	if path, pathErr := Executable(ctx, in.Provider); pathErr == nil && IsAntigravityCLI(in.Provider, path) {
-		hint = errAntigravityCLISignIn.Error()
+		hint = ErrAntigravityCLIAuthRequired.Error()
 	} else if in.Provider.AuthMethod == "gemini-api-key" || in.Provider.AuthMethod == "agent-platform" {
 		hint = "Check the credentials for this runtime in Settings → Providers"
 	}

@@ -1462,6 +1462,14 @@ export const zhCN: Record<keyof typeof enUS, string> = {
     "每个运行时单独保存 Google 登录，与 Antigravity IDE 的登录独立。",
   "antigravity.cliHint":
     "自动检测本机 agy，并沿用 CLI 已有的登录和设置。无需手动添加运行时或在 Lever 重新登录。尚未登录时，请在终端执行右侧命令。",
+  "antigravity.cliLoginHint":
+    "在浏览器中打开终端里的 Google 登录链接，再把授权码粘贴回此终端。",
+  "antigravity.cliLoginVerifying": "正在验证登录和模型访问…",
+  "antigravity.cliLoginFailed": "agy 登录未完成。请检查终端输出后重试。",
+  "antigravity.cliLoginNotPersisted":
+    "新的 agy 进程仍未读到登录凭据。请检查终端输出后重试。",
+  "antigravity.cliLoginVerificationFailed":
+    "无法验证模型访问。请刷新模型列表后再检查。",
   "antigravity.install": "安装 Antigravity",
   "antigravity.signin": "使用 Google 登录",
   "antigravity.openSignin": "打开 Google 登录",

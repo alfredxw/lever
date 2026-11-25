@@ -220,6 +220,10 @@ func acpFixture() {
 			authenticated = true
 			respond(object{})
 		case "session/new", "session/load", "session/resume":
+			if nativeCLI && os.Getenv("LEVER_FIXTURE_AGY_AUTH_REQUIRED") == "1" {
+				send(object{"jsonrpc": "2.0", "id": frame["id"], "error": object{"code": -32000, "message": "Authentication required", "data": "private-fixture-detail"}})
+				continue
+			}
 			if antigravity && !authenticated {
 				os.Exit(2)
 			}

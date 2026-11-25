@@ -208,6 +208,9 @@ func respond(w http.ResponseWriter, v any, err error) {
 		} else if errors.As(err, &sourceError) {
 			status = sourceError.Status
 			body["code"] = "task_source_" + sourceError.Code
+		} else if errors.Is(err, provider.ErrAntigravityCLIAuthRequired) {
+			status = http.StatusConflict
+			body["code"] = "antigravity_cli_auth_required"
 		} else if errors.Is(err, app.ErrTaskNoteVersion) {
 			status = http.StatusConflict
 			body["code"] = "task_note_version"

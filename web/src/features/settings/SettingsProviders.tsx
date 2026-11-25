@@ -675,7 +675,7 @@ export function SettingsProviders({
             const status = providerStatus(
               p,
               model,
-              p.id === selected?.id && catalog.isError,
+              p.id === selected?.id ? catalog.error : undefined,
             );
             const name = connectionName(p, rows, t);
             return (
@@ -807,7 +807,7 @@ export function SettingsProviders({
                     const status = providerStatus(
                       p,
                       model,
-                      p.id === selected?.id && catalog.isError,
+                      p.id === selected?.id ? catalog.error : undefined,
                     );
                     const name = connectionName(p, rows, t);
                     const count =

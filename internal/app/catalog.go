@@ -121,6 +121,10 @@ func (a *App) discoverCatalog(config model.Provider, key catalogKey, entry *cata
 	if a.closed || a.catalogs[key] != entry {
 		return nil, context.Canceled
 	}
+	if errors.Is(err, provider.ErrAntigravityCLIAuthRequired) {
+		a.invalidateProviderCatalogsLocked(key.id, true)
+		return nil, err
+	}
 	if err != nil {
 		if entry.value == nil {
 			delete(a.catalogs, key)

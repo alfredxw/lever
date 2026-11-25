@@ -109,12 +109,12 @@ func TestACPSetupFailurePreservesNonTimeoutErrors(t *testing.T) {
 	t.Run("auth output error wins over timeout", func(t *testing.T) {
 		runtime, _ := newTestACPRuntime("", true)
 		runtime.provider = provider
-		runtime.output = &antigravityOutput{err: errAntigravityCLISignIn}
+		runtime.output = &antigravityOutput{err: ErrAntigravityCLIAuthRequired}
 		setup, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 		defer stop()
 		got := runtime.setupFailure(t.Context(), setup, 90*time.Second, sessionSetupAction(false), deadlineReq)
-		if !errors.Is(got, errAntigravityCLISignIn) {
-			t.Fatalf("got %v, want %v", got, errAntigravityCLISignIn)
+		if !errors.Is(got, ErrAntigravityCLIAuthRequired) {
+			t.Fatalf("got %v, want %v", got, ErrAntigravityCLIAuthRequired)
 		}
 	})
 

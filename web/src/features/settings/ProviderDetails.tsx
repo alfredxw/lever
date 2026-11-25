@@ -10,7 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { AntigravitySetup } from "@/features/plugins/AntigravitySetup";
 import { providerConfiguration } from "@/features/runtime/connections";
-import { providersQuery } from "@/features/runtime/queries";
+import {
+  isAntigravityCLIAuthRequired,
+  providersQuery,
+} from "@/features/runtime/queries";
 import { ProviderModels } from "./ProviderModels";
 import { ProviderForm } from "./ProviderForm";
 import { SettingsGroup, SettingsRow } from "./SettingsControls";
@@ -124,16 +127,19 @@ export function InstallGuide({ url }: { url: string }) {
 export function providerStatus(
   provider: ProviderInfo,
   catalog?: Catalog | null,
-  catalogFailed = false,
+  catalogError?: unknown,
 ): ProviderStatus {
   if (!provider.available) return { label: "plugins.off", tone: "muted" };
   if (!provider.installed)
     return { label: "settings.notInstalled", tone: "muted" };
   if (provider.error)
     return { label: "plugins.status.detectionFailed", tone: "error" };
-  if (provider.loginStatus === "signedOut")
+  if (
+    provider.loginStatus === "signedOut" ||
+    isAntigravityCLIAuthRequired(catalogError)
+  )
     return { label: "connections.signedOut", tone: "warning" };
-  if (catalogFailed)
+  if (catalogError)
     return { label: "plugins.status.needsSetup", tone: "warning" };
   if (
     provider.loginStatus === "signedIn" ||
@@ -196,8 +202,8 @@ export function ProviderDetails({
   );
   const install = installationGuides[provider.pluginId];
   const managed = provider.type === "antigravity" && provider.auth !== "cli";
-  const status = providerStatus(provider, catalog.data, catalog.isError);
-  const signedOut = provider.loginStatus === "signedOut";
+  const status = providerStatus(provider, catalog.data, catalog.error);
+  const signedOut = status.label === "connections.signedOut";
   const toggle = useMutation({
     mutationFn: (enabled: boolean) =>
       api<Provider>("/providers", {

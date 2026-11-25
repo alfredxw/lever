@@ -15,6 +15,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  isAntigravityCLIAuthRequired,
+  modelsQuery,
+  refreshModels,
+} from "@/features/runtime/queries";
 
 const TerminalPane = lazy(() => import("@/features/terminal/TerminalPane"));
 
@@ -36,6 +41,25 @@ export function useProviderLogin(visible: boolean) {
       if (active.current !== path) await closeTerminal(path);
     },
   });
+  const verify = useMutation({
+    mutationFn: async ({ id, code }: { id: string; code: number }) => {
+      if (code !== 0) throw new Error(t("antigravity.cliLoginFailed"));
+      // The host clears its catalog before reporting exit 0. Drop any web
+      // request that started before then so verification uses that fresh catalog.
+      await queryClient.cancelQueries({
+        queryKey: modelsQuery(id).queryKey,
+        exact: true,
+      });
+      const catalog = await refreshModels(id);
+      if (
+        !catalog ||
+        catalog.provisional ||
+        !catalog.models.some(({ id }) => id)
+      )
+        throw new Error(t("antigravity.cliLoginVerificationFailed"));
+    },
+    onSuccess: (_, { id }) => refresh(id),
+  });
   useEffect(
     () => () => {
       const path = active.current;
@@ -46,6 +70,8 @@ export function useProviderLogin(visible: boolean) {
   );
 
   function open(provider: Provider) {
+    if (active.current) return;
+    verify.reset();
     const id = crypto.randomUUID();
     const path = `/providers/${encodeURIComponent(provider.id)}/terminal/${id}`;
     active.current = path;
@@ -64,7 +90,10 @@ export function useProviderLogin(visible: boolean) {
     setTerminal(undefined);
     if (path) {
       void closeTerminal(path).then(
-        () => terminal && refresh(terminal.provider.id),
+        () => {
+          if (terminal && terminal.provider.type !== "antigravity")
+            refresh(terminal.provider.id);
+        },
         (error: Error) => {
           toast.error(error.message);
         },
@@ -81,6 +110,7 @@ export function useProviderLogin(visible: boolean) {
     }
   }, [visible]);
 
+  const agy = terminal?.provider.type === "antigravity";
   return {
     open,
     dialog: terminal && visible && (
@@ -92,9 +122,11 @@ export function useProviderLogin(visible: boolean) {
             </DialogTitle>
             <DialogDescription>
               {t(
-                terminal.provider.type === "pi"
-                  ? "providers.piLoginHint"
-                  : "providers.loginHint",
+                agy
+                  ? "antigravity.cliLoginHint"
+                  : terminal.provider.type === "pi"
+                    ? "providers.piLoginHint"
+                    : "providers.loginHint",
               )}
             </DialogDescription>
           </DialogHeader>
@@ -114,13 +146,40 @@ export function useProviderLogin(visible: boolean) {
                     closing={false}
                     selected={false}
                     onResult={(result) => {
-                      if (result.type === "exited" && result.code === 0)
-                        refresh(terminal.provider.id);
+                      if (
+                        result.type !== "exited" ||
+                        active.current !== terminal.path
+                      )
+                        return;
+                      if (agy)
+                        verify.mutate({
+                          id: terminal.provider.id,
+                          code: result.code,
+                        });
+                      else if (result.code === 0) refresh(terminal.provider.id);
                     }}
                   />
                 </Suspense>
               )}
             </div>
+          )}
+          {agy && (verify.isPending || verify.isSuccess) && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t(
+                verify.isPending
+                  ? "antigravity.cliLoginVerifying"
+                  : "antigravity.phase.authenticated",
+              )}
+            </p>
+          )}
+          {agy && verify.error && (
+            <ErrorNotice
+              error={
+                isAntigravityCLIAuthRequired(verify.error)
+                  ? t("antigravity.cliLoginNotPersisted")
+                  : verify.error
+              }
+            />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={close}>

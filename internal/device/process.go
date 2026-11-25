@@ -27,7 +27,7 @@ func Environment() []string {
 			env = append(env, v)
 		}
 	}
-	return append(env, "PATH="+strings.Join(paths, string(os.PathListSeparator)))
+	return append(env, "PATH="+joinSearchPath(paths))
 }
 
 func Executable(name string) (string, error) {

@@ -273,6 +273,87 @@ test("runtime settings show detected instances, explicit types, and compact back
   await expect(pi).toBeFocused();
 });
 
+test("local agy confirms a fresh model probe after the login terminal exits", async ({
+  page,
+}) => {
+  const probe = Promise.withResolvers<void>();
+  let refreshes = 0;
+  await page.route("**/api/providers/antigravity/models?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("refresh") !== "true" || ++refreshes > 1) {
+      await route.continue();
+      return;
+    }
+    await probe.promise;
+    await route.fulfill({
+      status: 409,
+      json: {
+        code: "antigravity_cli_auth_required",
+        error: "Authentication required",
+      },
+    });
+  });
+  const plugins = await openPlugins(page);
+  await plugins
+    .getByRole("group", { name: "Antigravity", exact: true })
+    .getByRole("button")
+    .click();
+  await plugins.getByRole("button", { name: "管理连接" }).click();
+  const details = page.getByRole("region", { name: "运行时详情" });
+  const login = page.getByRole("dialog", { name: "登录 Antigravity" });
+  async function openLogin() {
+    await details
+      .getByRole("button", { name: /^(打开登录终端|登录)$/ })
+      .click();
+    await expect(login.locator(".xterm-rows")).toContainText(
+      "Paste the fixture agy login code:",
+    );
+  }
+  async function submit(code: string) {
+    await login.getByRole("textbox", { name: "终端输入" }).focus();
+    await page.keyboard.type(code);
+    await page.keyboard.press("Enter");
+  }
+  async function closeLogin() {
+    await login.getByRole("button", { name: "关闭" }).click();
+    await expect(login).toBeHidden();
+  }
+
+  await openLogin();
+  const concurrent = await page.request.post(
+    "/api/providers/antigravity/terminal/duplicate-login",
+    { data: {} },
+  );
+  expect(concurrent.status()).toBe(409);
+  await submit("invalid");
+  await expect(login.getByRole("alert")).toContainText("agy 登录未完成");
+  expect(refreshes).toBe(0);
+  await closeLogin();
+
+  await openLogin();
+  await submit("fixture");
+  try {
+    await expect(login.getByText("正在验证登录和模型访问…")).toBeVisible();
+    await expect(login.getByText("Google 登录和模型访问已验证。")).toHaveCount(
+      0,
+    );
+  } finally {
+    probe.resolve();
+  }
+  await expect(login.getByRole("alert")).toContainText(
+    "新的 agy 进程仍未读到登录凭据",
+  );
+  await closeLogin();
+  await expect(details.getByText("待登录", { exact: true })).toBeVisible();
+
+  await openLogin();
+  await submit("fixture");
+  await expect(login.getByText("Google 登录和模型访问已验证。")).toBeVisible();
+  expect(refreshes).toBe(2);
+  await closeLogin();
+  await expect(details.getByText("已就绪", { exact: true })).toBeVisible();
+});
+
 test("a managed Antigravity account takes its initial API key in the inline form", async ({
   page,
 }) => {

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
 	"lever/internal/device"
 	"lever/internal/model"
 )
@@ -107,7 +108,9 @@ const antigravityAuthPrefix = "Open the following link to authenticate the ACP s
 const antigravityBrowserMarker = "__LEVER_ANTIGRAVITY_AUTH_URL__"
 
 var errAntigravitySignIn = errors.New("Sign in to Antigravity in Settings → Providers before continuing")
-var errAntigravityCLISignIn = errors.New("For Google sign-in, run agy acp --login in a local terminal")
+
+// ErrAntigravityCLIAuthRequired indicates that a local agy process needs usable credentials.
+var ErrAntigravityCLIAuthRequired = errors.New("Sign in to local agy in Settings → Runtimes or run agy acp --login in a local terminal")
 
 // AntigravityBrowserHelper handles Python's BROWSER callback without opening a
 // browser during catalog reads or background turns. Only setup exposes the URL.
@@ -286,7 +289,7 @@ func (o *antigravityOutput) authorization(raw string) {
 	if err == nil && o.onURL == nil {
 		err = errAntigravitySignIn
 		if o.nativeCLI {
-			err = errAntigravityCLISignIn
+			err = ErrAntigravityCLIAuthRequired
 		}
 	}
 	if err != nil {
@@ -304,6 +307,10 @@ func (o *antigravityOutput) failure(err error) error {
 	defer o.mu.Unlock()
 	if o.err != nil {
 		return o.err
+	}
+	var request *acp.RequestError
+	if o.nativeCLI && errors.As(err, &request) && request.Code == -32000 {
+		return ErrAntigravityCLIAuthRequired
 	}
 	return err
 }
@@ -375,7 +382,7 @@ func SignInAntigravity(ctx context.Context, config model.Provider, onURL func(st
 		return err
 	}
 	if IsAntigravityCLI(config, path) {
-		return errAntigravityCLISignIn
+		return ErrAntigravityCLIAuthRequired
 	}
 	dir, err := antigravityProbeDir(ctx)
 	if err != nil {
