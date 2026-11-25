@@ -1761,7 +1761,6 @@ export const enUS = {
   "agents.restoreConversation": "Restore conversation",
   "agents.showClearedConversations": "Show cleared conversations",
   "agents.hideClearedConversations": "Hide cleared conversations",
-  "agents.clearedSummary": "Cleared {{shown}} / {{total}}",
   "agents.clearedGroupCount": "Cleared · {{shown}}/{{total}}",
   "agents.clearedHiddenCount": "{{count}} cleared hidden",
   "agents.clearedRemaining": "{{count}} left",

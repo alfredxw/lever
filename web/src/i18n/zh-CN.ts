@@ -1682,7 +1682,6 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "agents.restoreConversation": "恢复会话",
   "agents.showClearedConversations": "显示已清理会话",
   "agents.hideClearedConversations": "隐藏已清理会话",
-  "agents.clearedSummary": "已清理 {{shown}} / {{total}}",
   "agents.clearedGroupCount": "已清理 · {{shown}}/{{total}}",
   "agents.clearedHiddenCount": "已隐藏 {{count}} 条已清理",
   "agents.clearedRemaining": "剩 {{count}}",

@@ -3,11 +3,13 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type MouseEventHandler,
   type ReactNode,
+  type RefObject,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
@@ -113,16 +115,19 @@ const SidebarListPanel = memo(
   function SidebarListPanel({
     value,
     active,
+    panelRef,
     children,
   }: {
     value: AgentView;
     active: boolean;
+    panelRef?: RefObject<HTMLDivElement | null>;
     children: () => ReactNode;
   }) {
     const [visited, setVisited] = useState(active);
     if (active && !visited) setVisited(true);
     return (
       <TabsContent
+        ref={panelRef}
         value={value}
         forceMount
         hidden={!active}
@@ -203,7 +208,13 @@ export function AgentSidebar({
     {},
   );
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const allPanelRef = useRef<HTMLDivElement>(null);
   const clearedToggleRef = useRef<HTMLButtonElement>(null);
+  const pendingScrollAnchorRef = useRef<{
+    agentId: string;
+    offset: number | null;
+    revealGroup: boolean;
+  } | null>(null);
   const { chats, runs, conversations, requests } = activity ?? {};
 
   const sidebarItems = useMemo(() => {
@@ -340,52 +351,100 @@ export function AgentSidebar({
   const showingCleared =
     filter === "all" && showCleared && sidebarItems.totalCleared > 0;
 
-  const revealedCleared = useMemo(() => {
-    if (!showingCleared) return 0;
-    return sidebarItems.all.reduce((total, { agent, cleared }) => {
-      if (!cleared.length || mutedCleared[agent.id] || lensCollapsed[agent.id])
-        return total;
-      const limit = clearedLimits[agent.id] ?? clearedPageSize;
-      return total + Math.min(limit, cleared.length);
-    }, 0);
-  }, [
-    showingCleared,
-    sidebarItems.all,
-    clearedLimits,
-    mutedCleared,
-    lensCollapsed,
-  ]);
-
-  const closeClearedLens = useCallback((restoreFocus = false) => {
-    setShowCleared(false);
-    setClearedLimits({});
-    setMutedCleared({});
-    setLensCollapsed({});
-    if (restoreFocus) {
-      requestAnimationFrame(() =>
-        clearedToggleRef.current?.focus({ preventScroll: true }),
+  const captureScrollAnchor = useCallback(
+    (agentId: string | undefined, revealGroup: boolean) => {
+      if (!agentId) return;
+      const panel = allPanelRef.current;
+      if (!panel) return;
+      const header = panel.querySelector<HTMLElement>(
+        `[data-agent-id="${globalThis.CSS.escape(agentId)}"] > .agent-contact`,
       );
+      if (!header) return;
+      const panelRect = panel.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const visibleInPanel =
+        headerRect.bottom > panelRect.top && headerRect.top < panelRect.bottom;
+      pendingScrollAnchorRef.current = {
+        agentId,
+        offset: visibleInPanel ? headerRect.top - panelRect.top : null,
+        revealGroup,
+      };
+    },
+    [],
+  );
+
+  useLayoutEffect(() => {
+    const anchor = pendingScrollAnchorRef.current;
+    if (!anchor) return;
+    pendingScrollAnchorRef.current = null;
+    const panel = allPanelRef.current;
+    if (!panel || panel.hidden) return;
+    const group = panel.querySelector<HTMLElement>(
+      `[data-agent-id="${globalThis.CSS.escape(anchor.agentId)}"]`,
+    );
+    const header = group?.querySelector<HTMLElement>(":scope > .agent-contact");
+    if (!group || !header) return;
+    const panelRect = panel.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const padding = 8;
+    if (anchor.offset !== null) {
+      panel.scrollTop += headerRect.top - panelRect.top - anchor.offset;
+    } else {
+      panel.scrollTop += headerRect.top - panelRect.top - padding;
     }
-  }, []);
+    if (anchor.revealGroup) {
+      const nextHeaderRect = header.getBoundingClientRect();
+      const groupRect = group.getBoundingClientRect();
+      const overflowBottom = groupRect.bottom - (panelRect.bottom - padding);
+      const headroomTop = nextHeaderRect.top - (panelRect.top + padding);
+      if (overflowBottom > 0 && headroomTop > 0) {
+        panel.scrollTop += Math.min(overflowBottom, headroomTop);
+      }
+    }
+  }, [showingCleared, mutedCleared, lensCollapsed]);
+
+  const closeClearedLens = useCallback(
+    (restoreFocus = false, anchorAgentId?: string) => {
+      captureScrollAnchor(anchorAgentId ?? selected, false);
+      setShowCleared(false);
+      setClearedLimits({});
+      setMutedCleared({});
+      setLensCollapsed({});
+      if (restoreFocus) {
+        requestAnimationFrame(() =>
+          clearedToggleRef.current?.focus({ preventScroll: true }),
+        );
+      }
+    },
+    [captureScrollAnchor, selected],
+  );
 
   const toggleClearedLens = useCallback(
     (next: boolean) => {
-      if (next) setShowCleared(true);
-      else closeClearedLens();
+      if (next) {
+        captureScrollAnchor(selected, true);
+        setShowCleared(true);
+      } else {
+        closeClearedLens();
+      }
     },
-    [closeClearedLens],
+    [captureScrollAnchor, closeClearedLens, selected],
   );
 
-  const revealAgentCleared = useCallback((agentId: string) => {
-    setFilter("all");
-    setShowCleared(true);
-    setMutedCleared((current) =>
-      current[agentId] ? { ...current, [agentId]: false } : current,
-    );
-    setLensCollapsed((current) =>
-      current[agentId] ? { ...current, [agentId]: false } : current,
-    );
-  }, []);
+  const revealAgentCleared = useCallback(
+    (agentId: string) => {
+      captureScrollAnchor(agentId, true);
+      setFilter("all");
+      setShowCleared(true);
+      setMutedCleared((current) =>
+        current[agentId] ? { ...current, [agentId]: false } : current,
+      );
+      setLensCollapsed((current) =>
+        current[agentId] ? { ...current, [agentId]: false } : current,
+      );
+    },
+    [captureScrollAnchor],
+  );
 
   function selectView(view: AgentView) {
     if (view === filter) return;
@@ -429,7 +488,7 @@ export function AgentSidebar({
       const lastCleared = sidebarItems.totalCleared <= 1;
       recent.restoreConversation(id);
       if (lastCleared) {
-        closeClearedLens(fromClearedBlock);
+        closeClearedLens(fromClearedBlock, agentId);
         return;
       }
       if (fromClearedBlock) {
@@ -579,27 +638,6 @@ export function AgentSidebar({
           </div>
         )}
       </div>
-      {showingCleared && (
-        <div className="agent-cleared-strip" role="status" aria-live="polite">
-          <span className="agent-cleared-strip-dot" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate tabular-nums">
-            {t("agents.clearedSummary", {
-              shown: revealedCleared,
-              total: sidebarItems.totalCleared,
-            })}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="agent-cleared-dismiss"
-            onClick={() => closeClearedLens(true)}
-          >
-            <span>{t("agents.hideCleared")}</span>
-            <kbd aria-hidden="true">Esc</kbd>
-          </Button>
-        </div>
-      )}
       <SidebarListPanel value="recent" active={filter === "recent"}>
         {() => (
           <RecentConversations
@@ -614,7 +652,11 @@ export function AgentSidebar({
           />
         )}
       </SidebarListPanel>
-      <SidebarListPanel value="all" active={filter === "all"}>
+      <SidebarListPanel
+        value="all"
+        active={filter === "all"}
+        panelRef={allPanelRef}
+      >
         {() => renderDirectory()}
       </SidebarListPanel>
       <AgentSidebarMenus

@@ -3218,13 +3218,14 @@ test("Agent menu clears only read activity and can archive after a sidebar pause
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await showCleared.click();
   await expect(showCleared).toHaveAttribute("aria-pressed", "true");
+  await expect(sidebar.locator(".agent-cleared-strip")).toHaveCount(0);
   await expect(busy).toBeVisible();
   await expect(done).toHaveAttribute("data-cleared", "true");
   await done.click();
   const topic = page.locator(".topic-conversation:visible");
   await expect(topic).toContainText("已完成的话题");
   await expect(done).toBeVisible();
-  await sidebar.getByRole("button", { name: "收起", exact: true }).click();
+  await showCleared.click();
   await expect(showCleared).toHaveAttribute("aria-pressed", "false");
   await expect(done).toHaveCount(0);
   await expect(topic).toContainText("已完成的话题");
@@ -3484,9 +3485,30 @@ test("All and Recent share cleared sessions and the cleared lens restores them",
 
   await all.click();
   await expect(showCleared).toBeEnabled();
+
+  // Keep a lower-ranked selected Agent visible when earlier Agents expand cleared history.
+  await page.setViewportSize({ width: 1360, height: 390 });
+  await firstGroup.locator(".agent-select").click();
+  await expect(firstGroup.locator("> .agent-contact")).toHaveClass(/selected/);
   await showCleared.click();
   await expect(showCleared).toHaveAttribute("aria-pressed", "true");
-  await expect(sidebar.locator(".agent-cleared-strip")).toContainText("6 / 8");
+  await expect(sidebar.locator(".agent-cleared-strip")).toHaveCount(0);
+  const [panelBox, selectedHeaderBox, firstClearedBox] = await Promise.all([
+    list.boundingBox(),
+    firstGroup.locator("> .agent-contact").boundingBox(),
+    rows.first().boundingBox(),
+  ]);
+  expect(panelBox).toBeTruthy();
+  expect(selectedHeaderBox).toBeTruthy();
+  expect(firstClearedBox).toBeTruthy();
+  expect(selectedHeaderBox!.y).toBeGreaterThanOrEqual(panelBox!.y - 1);
+  expect(selectedHeaderBox!.y + selectedHeaderBox!.height).toBeLessThanOrEqual(
+    panelBox!.y + panelBox!.height + 1,
+  );
+  expect(firstClearedBox!.y + firstClearedBox!.height).toBeLessThanOrEqual(
+    panelBox!.y + panelBox!.height + 1,
+  );
+  await page.setViewportSize({ width: 1360, height: 900 });
 
   // Zero-active agents reveal their recent 5 cleared conversations in place.
   await expect(secondGroup.locator(secondSelector)).toContainText(
@@ -3508,7 +3530,6 @@ test("All and Recent share cleared sessions and the cleared lens restores them",
   await expect(rows).toHaveCount(7);
   await expect(showMore).toHaveCount(0);
   await expect(rows.nth(5)).toBeFocused();
-  await expect(sidebar.locator(".agent-cleared-strip")).toContainText("8 / 8");
 
   // Individual agents can hide their cleared block while keeping the lens active.
   await secondGroup
