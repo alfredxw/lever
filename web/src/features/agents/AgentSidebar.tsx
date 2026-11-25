@@ -82,6 +82,7 @@ import { useEventCallback } from "@/hooks/useEventCallback";
 import { cn } from "@/lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { RecentConversations } from "./RecentConversations";
+import { usePressStableList } from "./usePressStableList";
 import { useProviders } from "@/features/runtime/queries";
 import { usePreferences } from "@/features/settings/Preferences";
 import {
@@ -217,7 +218,7 @@ export function AgentSidebar({
   } | null>(null);
   const { chats, runs, conversations, requests } = activity ?? {};
 
-  const sidebarItems = useMemo(() => {
+  const liveItems = useMemo(() => {
     const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
     const chatsById = new Map(chats?.map((chat) => [chat.id, chat]));
     const chatsByAgent = groupBy(chats ?? [], (chat) => chat.agentId);
@@ -348,6 +349,7 @@ export function AgentSidebar({
     t,
   ]);
 
+  const [sidebarItems, holdDirectory] = usePressStableList(liveItems);
   const showingCleared =
     filter === "all" && showCleared && sidebarItems.totalCleared > 0;
 
@@ -548,6 +550,7 @@ export function AgentSidebar({
   return (
     <Tabs
       ref={sidebarRef}
+      onPointerDownCapture={filter === "all" ? holdDirectory : undefined}
       className="agent-sidebar-content gap-0"
       value={filter}
       onValueChange={(value) => selectView(value as AgentView)}

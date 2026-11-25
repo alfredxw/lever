@@ -3025,6 +3025,72 @@ test("switching Topics from the Agents sidebar keeps the side pane maximized", a
   await expect(layout).toHaveAttribute("data-view", "split");
 });
 
+for (const view of ["全部", "最近"]) {
+  test(`one press opens the intended sidebar Topic across live reordering in ${view}`, async ({ page }) => {
+    await page.goto(context().url);
+    const overview: Overview = await (await page.request.get("/api/overview")).json();
+    const seedTopic = async (name: string): Promise<Run> => {
+      const agent = await page.request.post("/api/agents", {
+        data: { name, profile: { ...overview.agents[0].profile, provider: "codex" } },
+      });
+      expect(agent.ok()).toBe(true);
+      const chat = await page.request.post("/api/chats", {
+        data: { agentId: (await agent.json()).id, title: name },
+      });
+      expect(chat.ok()).toBe(true);
+      const response = await page.request.post("/api/messages", {
+        data: { chatId: (await chat.json()).id, text: name, commandId: randomUUID(), operation: "topic" },
+      });
+      expect(response.ok()).toBe(true);
+      const topic: Run = await response.json();
+      await expect.poll(async () => {
+        const history = await (await page.request.get(`/api/sessions/${topic.sessionId}/runs`)).json();
+        return history.runs.find((run: Run) => run.id === topic.id)?.status;
+      }).toBe("completed");
+      return topic;
+    };
+    const target = await seedTopic("按下时的话题");
+    const previous = await seedTopic("切换前的话题");
+    const sidebar = page.locator("#agent-sidebar");
+    await sidebar.getByRole("tab", { name: view, exact: true }).click();
+    const list = sidebar.getByRole("tabpanel");
+    const row = (topic: Run) => list.locator(`button[data-session-id="${topic.sessionId}"]`);
+    await row(previous).click();
+    await expect(row(previous)).toHaveAttribute("aria-current", "true");
+    await row(target).scrollIntoViewIfNeeded();
+    const box = (await row(target).boundingBox())!;
+    expect(box.y).toBeGreaterThan((await row(previous).boundingBox())!.y);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    try {
+      const update = page.waitForResponse(async (response) => {
+        if (new URL(response.url()).pathname !== "/api/overview" || !response.ok()) return false;
+        const data: Overview | undefined = await response.json().catch(() => undefined);
+        return !!data?.conversations.some((item) => item.id === target.sessionId && item.preview?.includes("按住鼠标时的新回复"));
+      });
+      const reply = await page.request.post("/api/messages", {
+        data: { chatId: target.chatId, sessionId: target.sessionId, text: "按住鼠标时的新回复", commandId: randomUUID(), operation: "reply" },
+      });
+      expect(reply.ok()).toBe(true);
+      await update;
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    } finally {
+      await page.mouse.up();
+    }
+    await expect(row(target)).toHaveAttribute("aria-current", "true");
+    await expect(page.locator(`[id="panel-topic%3A${target.sessionId}"][data-visible=true] .topic-conversation`)).toContainText(target.input);
+    await expect.poll(async () => (await row(target).boundingBox())!.y < (await row(previous).boundingBox())!.y).toBe(true);
+    const other = (await row(previous).boundingBox())!;
+    await page.mouse.move(other.x + other.width / 2, other.y + other.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(0, 0);
+    await page.mouse.up();
+    await expect(row(target)).toHaveAttribute("aria-current", "true");
+    await row(previous).press("Enter");
+    await expect(row(previous)).toHaveAttribute("aria-current", "true");
+  });
+}
+
 test("a slow Topic cannot take selection back from a sidebar Chat", async ({
   page,
 }) => {
