@@ -1,4 +1,5 @@
 import type { Overview } from "@/api/types.gen";
+import { conversationDraftKey } from "@/features/chat/composerDraft";
 import { isRunWaiting, isRunWaitingBlocked } from "@/features/chat/waitRuns";
 
 // The shell needs activity indicators and titles. A streamed change to the
@@ -36,6 +37,7 @@ export type WorkbenchOverview = ReturnType<typeof selectWorkbenchOverview>;
 export function selectAgentActivity(
   overview: WorkbenchOverview,
   pinned: ReadonlySet<string>,
+  draftKeys?: ReadonlySet<string>,
 ): WorkbenchOverview {
   if (
     !overview.conversations.some((item) => item.backgroundOnly) &&
@@ -43,7 +45,10 @@ export function selectAgentActivity(
   )
     return overview;
   const conversations = overview.conversations.filter(
-    (item) => !item.backgroundOnly || pinned.has(item.id),
+    (item) =>
+      !item.backgroundOnly ||
+      pinned.has(item.id) ||
+      Boolean(draftKeys?.has(conversationDraftKey(item))),
   );
   const backgroundChats = new Set(
     overview.conversations
@@ -57,7 +62,10 @@ export function selectAgentActivity(
     // Explicitly created empty Chats are also valid navigation targets.
     chats: overview.chats.filter(
       (chat) =>
-        !chat.source || chat.source === "user" || !backgroundChats.has(chat.id),
+        !chat.source ||
+        chat.source === "user" ||
+        !backgroundChats.has(chat.id) ||
+        Boolean(draftKeys?.has(chat.id)),
     ),
     runs: overview.runs.filter(
       (run) =>

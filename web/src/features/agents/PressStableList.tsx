@@ -34,7 +34,7 @@ export function PressStableList({ children }: { children: ReactNode }) {
       !event.ctrlKey &&
       event.isPrimary &&
       event.target instanceof Element &&
-      event.target.closest("button[data-session-id]")
+      event.target.closest("button[data-session-id], button[data-draft-key]")
     )
       setPress({ rows, pointerId: event.pointerId });
   }

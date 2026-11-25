@@ -29,6 +29,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  conversationDraftKey,
+  formatDraftPreview,
+  useComposerDraftSummary,
+} from "@/features/chat/composerDraft";
+import { draftChatId } from "@/features/chat/NewChat";
 import { isWorking } from "@/features/chat/RunStatus";
 import {
   sharedConversationKey,
@@ -38,7 +44,7 @@ import { useEventCallback } from "@/hooks/useEventCallback";
 import { cn } from "@/lib/utils";
 
 import { pinId, type useRecentState } from "./useRecentState";
-import type { MenuTarget } from "./AgentSidebarMenus";
+import type { MenuTarget, SidebarNavigation } from "./AgentSidebarMenus";
 import {
   rowMenuHandlers,
   type MenuAnchor,
@@ -46,12 +52,29 @@ import {
 import { displayChatTitle } from "@/features/chat/conversationTitle";
 import { PressStableList } from "./PressStableList";
 
-type RecentTarget = Extract<MenuTarget, { kind: "conversation" | "shared" }>;
+type RecentDraftSource = {
+  kind: "draft";
+  agentId: string;
+  chatId?: string;
+  draftKey: string;
+  preview?: undefined;
+};
+function isRecentDraft(
+  source: RecentEntry["source"],
+): source is RecentDraftSource {
+  return "draftKey" in source;
+}
+type RecentTarget = Extract<
+  MenuTarget,
+  { kind: "conversation" | "shared" | "draft" }
+>;
 const sharedRefreshInterval = 3000;
 const eagerRows = 24;
 type RecentEntry = {
-  source: Conversation | SharedConversation;
+  source: Conversation | SharedConversation | RecentDraftSource;
   id: string;
+  draftKey: string;
+  hasDraft: boolean;
   title: string;
   origin: string;
   updatedAt: string;
@@ -85,8 +108,12 @@ export function RecentConversations({
   overview,
   visible,
   selected,
+  selectedDraftKey,
+  draftKeys,
   readCursors,
   onConversation,
+  onOpenChat,
+  onNewChat,
   onShared,
   recent,
   onMenu,
@@ -94,10 +121,14 @@ export function RecentConversations({
   overview?: WorkbenchOverview;
   visible: boolean;
   recent: ReturnType<typeof useRecentState>;
+  draftKeys: ReadonlySet<string>;
   onMenu: (anchor: MenuAnchor, target: MenuTarget) => void;
   selected?: string;
+  selectedDraftKey?: string;
   readCursors: Record<string, number>;
   onConversation: (conversation: Conversation) => void;
+  onOpenChat: SidebarNavigation["onOpenChat"];
+  onNewChat: SidebarNavigation["onNewChat"];
   onShared: (conversation: SharedConversation) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -139,7 +170,10 @@ export function RecentConversations({
   });
   const openEntry = useEventCallback((target: RecentTarget) => {
     if (target.kind === "shared") onShared(target.session);
-    else onConversation(target.conversation);
+    else if (target.kind === "draft") {
+      if (target.chatId) onOpenChat(target.chatId);
+      else onNewChat(target.agentId);
+    } else onConversation(target.conversation);
   });
   const { agents, chats, conversations, runs, requests } = overview ?? {};
   const { groups, priority, eagerIds } = useMemo(() => {
@@ -157,21 +191,26 @@ export function RecentConversations({
         );
       }
     }
+    const mainChats = new Set<string>();
     const entries = (conversations ?? []).flatMap<RecentEntry>(
       (conversation) => {
         const agent = agentsById.get(conversation.agentId);
         const chat = chatsById.get(conversation.chatId);
         if (!agent || agent.archived || !chat) return [];
+        if (conversation.kind === "main") mainChats.add(conversation.chatId);
         const topic = conversation.kind === "topic";
         const messageAt = conversation.messageAt || chat.updatedAt;
         const sequence = conversation.unreadSequence;
         // Older saved activity predates the completion timestamp.
         const finishedAt =
           conversation.finishedAt ?? (sequence ? messageAt : undefined);
+        const draftKey = conversationDraftKey(conversation);
         return [
           {
             source: conversation,
             id: conversation.id,
+            draftKey,
+            hasDraft: draftKeys.has(draftKey),
             title: topic
               ? conversation.title || t("chat.topic")
               : displayChatTitle(chat, t),
@@ -191,6 +230,40 @@ export function RecentConversations({
         ];
       },
     );
+    for (const agent of agents ?? []) {
+      if (agent.archived) continue;
+      const newChatKey = draftChatId(agent.id);
+      if (draftKeys.has(newChatKey)) {
+        entries.push({
+          source: { kind: "draft", agentId: agent.id, draftKey: newChatKey },
+          id: newChatKey,
+          draftKey: newChatKey,
+          hasDraft: true,
+          title: t("workspace.newChat"),
+          origin: agent.name,
+          updatedAt: "",
+        });
+      }
+    }
+    for (const chat of chats ?? []) {
+      if (mainChats.has(chat.id) || !draftKeys.has(chat.id)) continue;
+      const agent = agentsById.get(chat.agentId);
+      if (!agent || agent.archived) continue;
+      entries.push({
+        source: {
+          kind: "draft",
+          agentId: agent.id,
+          chatId: chat.id,
+          draftKey: chat.id,
+        },
+        id: chat.id,
+        draftKey: chat.id,
+        hasDraft: true,
+        title: displayChatTitle(chat, t),
+        origin: agent.name,
+        updatedAt: chat.updatedAt || chat.createdAt,
+      });
+    }
     // A pinned native conversation can age out of the native recent list.
     const shared = new Map<string, SharedConversation>();
     for (const pin of pins) {
@@ -203,6 +276,8 @@ export function RecentConversations({
       const directory = session.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
       entries.push({
         id,
+        draftKey: id,
+        hasDraft: draftKeys.has(id),
         source: session,
         title: session.title || t("shared.untitled"),
         origin: directory,
@@ -210,9 +285,12 @@ export function RecentConversations({
         status: session.activity?.status,
       });
     }
-    entries.sort(
-      (a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
-    );
+    const entryTime = (entry: RecentEntry) =>
+      Date.parse(entry.updatedAt) ||
+      (isRecentDraft(entry.source) && !entry.source.chatId
+        ? Number.MAX_SAFE_INTEGER
+        : 0);
+    entries.sort((a, b) => entryTime(b) - entryTime(a));
     const todayKey = today.toDateString();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -224,6 +302,7 @@ export function RecentConversations({
       if (pinnedIds.has(entry.id)) {
         pinned.set(entry.id, entry);
       } else if (
+        entry.hasDraft ||
         entry.status ||
         (entry.finishedAt &&
           Date.parse(entry.finishedAt) >= today.getTime() &&
@@ -288,6 +367,7 @@ export function RecentConversations({
     pins,
     pinnedIds,
     cleared,
+    draftKeys,
     today,
     i18n.language,
     t,
@@ -295,7 +375,11 @@ export function RecentConversations({
   const isUnread = (entry: RecentEntry) =>
     (entry.sequence ?? 0) > (readCursors[entry.id] ?? 0);
   const clearable = priority.flatMap((entry) =>
-    !entry.status && !isUnread(entry) && !("runtime" in entry.source)
+    !entry.hasDraft &&
+    !entry.status &&
+    !isUnread(entry) &&
+    !("runtime" in entry.source) &&
+    !isRecentDraft(entry.source)
       ? [entry.source]
       : [],
   );
@@ -333,11 +417,17 @@ export function RecentConversations({
                 observe={eagerIds.has(entry.id) ? undefined : observeRow}
                 t={t}
                 id={entry.id}
+                draftKey={entry.draftKey}
+                hasDraft={entry.hasDraft}
                 source={entry.source}
                 title={entry.title}
                 origin={entry.origin}
                 status={entry.status}
-                selected={selected === entry.id}
+                selected={
+                  isRecentDraft(entry.source)
+                    ? selectedDraftKey === entry.draftKey
+                    : selected === entry.id
+                }
                 unread={isUnread(entry)}
                 isPinned={pinnedIds.has(entry.id)}
                 setPinned={setPinned}
@@ -373,6 +463,8 @@ const RecentConversationRow = memo(function RecentConversationRow({
   observe,
   t,
   id,
+  draftKey,
+  hasDraft,
   source,
   title,
   origin,
@@ -383,7 +475,10 @@ const RecentConversationRow = memo(function RecentConversationRow({
   setPinned,
   onOpen,
   onMenu,
-}: Pick<RecentEntry, "id" | "source" | "title" | "origin" | "status"> & {
+}: Pick<
+  RecentEntry,
+  "id" | "draftKey" | "hasDraft" | "source" | "title" | "origin" | "status"
+> & {
   observe?: ReturnType<typeof createRowObserver>;
   t: TFunction;
   selected: boolean;
@@ -402,10 +497,29 @@ const RecentConversationRow = memo(function RecentConversationRow({
     },
     [observe, detailed, reveal],
   );
+  const draftSummary = useComposerDraftSummary(hasDraft ? draftKey : undefined);
+  const draftPreview = hasDraft ? formatDraftPreview(draftSummary, t) : "";
+  const isDraftOnly = isRecentDraft(source);
   const target: RecentTarget =
     "runtime" in source
-      ? { kind: "shared", session: source }
-      : { kind: "conversation", conversation: source };
+      ? {
+          kind: "shared",
+          session: source,
+          draftKey: hasDraft ? draftKey : undefined,
+        }
+      : isRecentDraft(source)
+        ? {
+            kind: "draft",
+            agentId: source.agentId,
+            chatId: source.chatId,
+            draftKey: source.draftKey,
+            title,
+          }
+        : {
+            kind: "conversation",
+            conversation: source,
+            draftKey: hasDraft ? draftKey : undefined,
+          };
   const ConversationIcon =
     tabIcons[
       target.kind === "conversation" && target.conversation.kind === "topic"
@@ -438,6 +552,11 @@ const RecentConversationRow = memo(function RecentConversationRow({
       : status
         ? t(`status.${status}`)
         : "";
+  const draftTitle = hasDraft
+    ? draftPreview
+      ? t("agents.draftPreview", { preview: draftPreview })
+      : t("agents.draft")
+    : "";
   return (
     <li
       ref={rowRef}
@@ -457,18 +576,22 @@ const RecentConversationRow = memo(function RecentConversationRow({
             ? undefined
             : [
                 title,
-                source.preview && origin,
+                (hasDraft || source.preview) && origin,
+                draftTitle,
                 unread && t("agents.unread"),
                 statusLabel,
-                summary,
+                !hasDraft && summary,
               ]
                 .filter(Boolean)
                 .join(" ")
         }
-        data-session-id={id}
+        data-session-id={isDraftOnly ? undefined : id}
+        data-draft={hasDraft ? "true" : undefined}
+        data-draft-key={draftKey}
         title={[
           title,
           target.kind === "shared" ? target.session.cwd || origin : origin,
+          draftTitle,
         ]
           .filter(Boolean)
           .join("\n")}
@@ -490,7 +613,7 @@ const RecentConversationRow = memo(function RecentConversationRow({
               </span>
               <span className="flex h-[1lh] min-w-0 flex-1 flex-wrap gap-x-1.5 overflow-hidden">
                 <span className="max-w-full truncate">{title}</span>
-                {source.preview && origin && (
+                {(hasDraft || source.preview) && origin && (
                   <span className="max-w-full truncate font-normal text-muted-foreground">
                     {origin}
                   </span>
@@ -518,15 +641,22 @@ const RecentConversationRow = memo(function RecentConversationRow({
                 />
               )}
             </span>
-            {summary && (
+            {(hasDraft || summary) && (
               <span className="conversation-origin">
                 <span
                   className={cn(
                     "min-w-0",
-                    source.preview ? "line-clamp-2 wrap-anywhere" : "truncate",
+                    hasDraft || source.preview
+                      ? "line-clamp-2 wrap-anywhere"
+                      : "truncate",
                   )}
                 >
-                  {summary}
+                  {hasDraft && (
+                    <span className="recent-draft-label">
+                      {t("agents.draft")}
+                    </span>
+                  )}
+                  {hasDraft ? draftPreview || summary : summary}
                 </span>
               </span>
             )}
@@ -534,32 +664,36 @@ const RecentConversationRow = memo(function RecentConversationRow({
         ) : (
           <span className="conversation-content">
             <span className="contact-name truncate">{title}</span>
-            {summary && (
-              <span className="conversation-origin truncate">{summary}</span>
+            {(hasDraft || summary) && (
+              <span className="conversation-origin truncate">
+                {hasDraft ? draftTitle : summary}
+              </span>
             )}
           </span>
         )}
       </button>
-      <Toggle
-        id={pinButtonId}
-        size="sm"
-        className="recent-pin absolute end-1 top-1 size-7 min-w-0 p-0 text-muted-foreground"
-        pressed={isPinned}
-        aria-label={pinLabel}
-        title={pinLabel}
-        onPressedChange={(pressed) => {
-          const focused = document
-            .getElementById(pinButtonId)
-            ?.matches(":focus-visible");
-          setPinned(target.kind === "shared" ? target.session : id, pressed);
-          if (focused)
-            window.requestAnimationFrame(() =>
-              document.getElementById(pinButtonId)?.focus(),
-            );
-        }}
-      >
-        {detailed && <Pin className={cn(isPinned && "fill-current")} />}
-      </Toggle>
+      {!isDraftOnly && (
+        <Toggle
+          id={pinButtonId}
+          size="sm"
+          className="recent-pin absolute end-1 top-1 size-7 min-w-0 p-0 text-muted-foreground"
+          pressed={isPinned}
+          aria-label={pinLabel}
+          title={pinLabel}
+          onPressedChange={(pressed) => {
+            const focused = document
+              .getElementById(pinButtonId)
+              ?.matches(":focus-visible");
+            setPinned(target.kind === "shared" ? target.session : id, pressed);
+            if (focused)
+              window.requestAnimationFrame(() =>
+                document.getElementById(pinButtonId)?.focus(),
+              );
+          }}
+        >
+          {detailed && <Pin className={cn(isPinned && "fill-current")} />}
+        </Toggle>
+      )}
     </li>
   );
 });

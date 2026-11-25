@@ -67,9 +67,11 @@ import type { ComposerBrowser, ComposerCommand } from "./composerActions";
 import { extractDroppedFiles, hasDraggedFiles } from "./composerFiles";
 import { ComposerContext, KeepConversationOpen } from "./ComposerContext";
 import {
+  clearSubmission,
   recoverTopicLauncherDraft,
   readSubmission,
   saveComposerDraft,
+  saveSubmission,
   useComposerDraft,
   type DraftSelection,
 } from "./composerDraft";
@@ -176,7 +178,6 @@ export function Composer({
     if (!reply && !fixedSession && !draftAgentId)
       recoverTopicLauncherDraft(chatId);
   }, [chatId, draftAgentId, fixedSession, reply]);
-  const submissionKey = `lever:submission:${key}`;
   const sending = useIsMutating({ mutationKey: ["message", key] }) > 0;
   const [draft, setDraft] = useComposerDraft(key);
   const preferences = useRuntimePreferences(agentId);
@@ -563,7 +564,7 @@ export function Composer({
           queryClient.invalidateQueries({ queryKey: ["session", session.id] }),
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
       ]);
-      localStorage.removeItem(submissionKey);
+      clearSubmission(key);
       setDraft(
         draftAgentId
           ? { ...nextDraft, sessionSelection: undefined }
@@ -628,7 +629,7 @@ export function Composer({
   }
   function cancelEdit() {
     if (sending || uploading || !draft.editing) return;
-    localStorage.removeItem(submissionKey);
+    clearSubmission(key);
     setDraft(draft.editing.previous);
     send.reset();
     textbox.current?.focus();
@@ -935,7 +936,7 @@ export function Composer({
         ...comparisonMessage,
         selections: comparisonSelections,
       };
-      localStorage.setItem(submissionKey, JSON.stringify(input));
+      saveSubmission(key, input);
       // Freeze resolved defaults too, so a later edit or retry starts from what was sent.
       if (!replayComparison)
         setDraft((d) => ({ ...d, comparisonModels: input.selections }));
@@ -984,7 +985,7 @@ export function Composer({
       input.delivery = delivery;
       input.steerRunId = delivery === "steer" ? activeRun?.id : undefined;
     }
-    localStorage.setItem(submissionKey, JSON.stringify(input));
+    saveSubmission(key, input);
     if (override && !replaySelection && override !== nextSelection)
       setSelection(nextSelection);
     send.mutate({

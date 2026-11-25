@@ -3709,6 +3709,192 @@ test("All and Recent share cleared sessions and the cleared lens restores them",
   await expect(priority.locator(mainRow)).toBeVisible();
 });
 
+test("unsent drafts surface cleared conversations and new-chat drafts in the Agents sidebar", async ({
+  page,
+}) => {
+  const sidebar = page.locator("#agent-sidebar");
+  const list = sidebar.getByRole("tabpanel");
+  const showCleared = sidebar.getByRole("button", {
+    name: "显示已清理会话",
+    exact: true,
+  });
+  const all = sidebar.getByRole("tab", { name: "全部", exact: true });
+  const recent = sidebar.getByRole("tab", { name: "最近", exact: true });
+  const priority = sidebar.getByRole("region", { name: "优先", exact: true });
+  const menuItem = (name: string) =>
+    page.getByRole("menuitem", { name, exact: true });
+
+  await createAgent(page, "草稿回溯甲");
+  await send(page, "主会话历史消息");
+  const firstAgentId = await page.evaluate(
+    () => localStorage.getItem("lever:agent")!,
+  );
+  const topicRes = await page.request.post("/api/messages", {
+    data: {
+      agentId: firstAgentId,
+      operation: "topic",
+      commandId: randomUUID(),
+      text: "独立话题历史消息",
+    },
+  });
+  expect(topicRes.ok()).toBeTruthy();
+  const topicRun: Run = await topicRes.json();
+
+  const firstGroup = list.locator(`[data-agent-id="${firstAgentId}"]`);
+  const firstRows = firstGroup.locator("[data-session-id]");
+  await expect(firstRows).toHaveCount(2);
+  await expect(firstRows.locator(".agent-working")).toHaveCount(0);
+  const overview = (await (
+    await page.request.get("/api/overview")
+  ).json()) as Overview;
+  const mainSessionId = overview.conversations.find(
+    (item) => item.agentId === firstAgentId && item.kind === "main",
+  )!.id;
+  const mainSelector = `[data-session-id="${mainSessionId}"]`;
+  const topicSelector = `[data-session-id="${topicRun.sessionId}"]`;
+
+  // Mark read and clear both conversations of Agent A.
+  await firstGroup.locator(".agent-select").click({ button: "right" });
+  await menuItem("全部标为已读").click();
+  await expect(firstRows.locator(".agent-unread")).toHaveCount(0);
+  await firstGroup
+    .getByRole("button", { name: "清除 草稿回溯甲 的已读会话", exact: true })
+    .click();
+  await expect(firstRows).toHaveCount(0);
+
+  // Create Agent B so we can switch away after drafting.
+  await createAgent(page, "草稿回溯乙");
+  await send(page, "另一个 Agent 的会话");
+  const secondAgentId = await page.evaluate(
+    () => localStorage.getItem("lever:agent")!,
+  );
+  const secondGroup = list.locator(`[data-agent-id="${secondAgentId}"]`);
+
+  // Reveal cleared history, open Agent A's cleared Main Chat and type a draft.
+  await showCleared.click();
+  await expect(firstGroup.locator(`${mainSelector}[data-cleared="true"]`)).toBeVisible();
+  await firstGroup.locator(mainSelector).click();
+  const mainComposer = page
+    .locator(".chat-composer-wrap:visible")
+    .getByRole("textbox", { name: "发送消息", exact: true });
+  await mainComposer.fill("继续排查主会话草稿");
+
+  const mainRow = firstGroup.locator(mainSelector);
+  await expect(mainRow).toHaveCount(1);
+  await expect(mainRow).not.toHaveAttribute("data-cleared", "true");
+  await expect(mainRow).toHaveAttribute("data-draft", "true");
+  await expect(mainRow.locator(".agent-draft")).toBeVisible();
+  await expect(mainRow).toHaveAttribute("title", /草稿：继续排查主会话草稿/);
+
+  // Also open Agent A's cleared Topic and type a reply draft.
+  const topicRow = firstGroup.locator(topicSelector);
+  await expect(topicRow).toHaveAttribute("data-cleared", "true");
+  await topicRow.click();
+  const topicComposer = page
+    .locator(".topic-composer-wrap:visible")
+    .getByRole("textbox", { name: "回复话题", exact: true });
+  await topicComposer.fill("继续排查话题草稿");
+  await expect(topicRow).toHaveCount(1);
+  await expect(topicRow).not.toHaveAttribute("data-cleared", "true");
+  await expect(topicRow).toHaveAttribute("data-draft", "true");
+  await expect(topicRow.locator(".agent-draft")).toBeVisible();
+
+  // Switch away to Agent B; cleared lens has no cleared items left and both drafts stay visible.
+  await secondGroup.locator(".agent-select").click();
+  await expect(mainRow).toBeVisible();
+  await expect(topicRow).toBeVisible();
+  await expect(
+    firstGroup.getByRole("button", {
+      name: "清除 草稿回溯甲 的已读会话",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+
+  // Collapsing Agent A surfaces the aggregated draft indicator on the Agent row.
+  const toggleA = firstGroup.getByRole("button", {
+    name: "展开或收起 草稿回溯甲 的活动会话",
+    exact: true,
+  });
+  await toggleA.click();
+  const draftBadge = firstGroup.locator(".agent-draft-count");
+  await expect(draftBadge).toBeVisible();
+  await expect(draftBadge).toHaveAttribute("aria-label", "2 条未发送草稿");
+  await expect(draftBadge).toHaveText("2");
+  await toggleA.click();
+  await expect(draftBadge).toBeHidden();
+
+  // Recent view elevates both drafted conversations into Priority with draft previews.
+  await recent.click();
+  const recentMain = priority.locator(mainSelector);
+  const recentTopic = priority.locator(topicSelector);
+  await expect(recentMain).toBeVisible();
+  await expect(recentMain.locator(".recent-draft-label")).toHaveText("草稿");
+  await expect(recentMain.locator(".conversation-origin")).toContainText(
+    "继续排查主会话草稿",
+  );
+  await expect(recentTopic).toBeVisible();
+  await expect(recentTopic.locator(".recent-draft-label")).toHaveText("草稿");
+  await expect(recentTopic.locator(".conversation-origin")).toContainText(
+    "继续排查话题草稿",
+  );
+
+  // Clearing read chats in Priority clears Agent B's read chat but keeps drafted conversations.
+  await priority
+    .getByRole("button", { name: "清除已读会话", exact: true })
+    .click();
+  await expect(recentMain).toBeVisible();
+  await expect(recentTopic).toBeVisible();
+
+  // Discarding a cleared Topic's draft from the context menu folds it back into cleared.
+  await all.click();
+  await topicRow.click({ button: "right" });
+  await menuItem("清空草稿").click();
+  await expect(topicRow).toHaveCount(0);
+  await expect(showCleared).toBeEnabled();
+
+  // Clicking the surfaced Main Chat restores the draft; clearing the input folds it back too.
+  await mainRow.click();
+  const restoredComposer = page
+    .locator(".chat-composer-wrap:visible")
+    .getByRole("textbox", { name: "发送消息", exact: true });
+  await expect(restoredComposer).toHaveText("继续排查主会话草稿");
+  await restoredComposer.click();
+  await restoredComposer.press("ControlOrMeta+a");
+  await restoredComposer.press("Backspace");
+  await expect(restoredComposer).toHaveText("");
+  await expect(mainRow).toHaveCount(0);
+
+  // A new unsent chat draft also appears under its Agent and can be reopened or discarded.
+  await firstGroup.locator(".agent-select").click({ button: "right" });
+  await menuItem("新建对话").click();
+  const newChatInput = page
+    .locator(".new-chat-panel:visible")
+    .getByRole("textbox", { name: "发送消息", exact: true });
+  await newChatInput.fill("新对话未发送内容");
+  await secondGroup.locator(".agent-select").click();
+  const newDraftRow = firstGroup.locator(
+    `[data-draft-key="draft:${firstAgentId}"]`,
+  );
+  await expect(newDraftRow).toBeVisible();
+  await expect(newDraftRow.locator(".agent-draft")).toBeVisible();
+  await expect(newDraftRow).toHaveAccessibleName("草稿：新对话");
+  await expect(newDraftRow).toHaveAttribute("title", /草稿：新对话未发送内容/);
+  await newDraftRow.click();
+  await expect(
+    page
+      .locator(".new-chat-panel:visible")
+      .getByRole("textbox", { name: "发送消息", exact: true }),
+  ).toHaveText("新对话未发送内容");
+  await newDraftRow.click({ button: "right" });
+  await menuItem("清空草稿").click();
+  await expect(newDraftRow).toHaveCount(0);
+  await expect(
+    page
+      .locator(".new-chat-panel:visible")
+      .getByRole("textbox", { name: "发送消息", exact: true }),
+  ).toHaveText("");
+});
+
 test("first-send rejection leaves no Chat and a lost response retries exactly once", async ({
   page,
 }) => {
@@ -4373,7 +4559,7 @@ test("message actions preserve drafts and forward to an Agent with a note exactl
 
   const input = page.getByRole("textbox", { name: "发送消息", exact: true });
   await input.fill("保留我的草稿 @hello");
-  await page.getByRole("option", { name: /hello.go/ }).click();
+  await page.getByRole("option", { name: "hello.go", exact: true }).click();
   const originalDraft = await input.textContent();
   const composer = page.locator(".chat-composer-wrap");
   await answer.getByRole("button", { name: "引用消息", exact: true }).click();
@@ -5851,7 +6037,7 @@ test("editing a sent Chat message restores the draft and resends once after a lo
   });
   await expect(composer.locator(".attachment-chip")).toHaveCount(1);
   await input.fill("Original prompt @hello");
-  await page.getByRole("option", { name: "hello.go" }).click();
+  await page.getByRole("option", { name: "hello.go", exact: true }).click();
   await send(page);
   const original = runs.nth(1);
   const originalId = (await original.getAttribute("data-run-id"))!;

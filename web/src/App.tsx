@@ -110,7 +110,10 @@ import {
   KeepConversationOpen,
   type ComposerInsertion,
 } from "@/features/chat/ComposerContext";
-import { hasStoredComposerInput } from "@/features/chat/composerDraft";
+import {
+  hasStoredComposerInput,
+  useComposerDraftKeys,
+} from "@/features/chat/composerDraft";
 import {
   hasQuestionDraft,
   pruneQuestionDrafts,
@@ -274,6 +277,7 @@ export default function App() {
   const { t } = useTranslation();
   const { preferences } = usePreferences();
   const recentState = useRecentState();
+  const draftKeys = useComposerDraftKeys();
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: () => api<Overview>("/overview"),
@@ -283,8 +287,8 @@ export default function App() {
   const agentActivity = useMemo(
     () =>
       overview.data &&
-      selectAgentActivity(overview.data, recentState.pinnedIds),
-    [overview.data, recentState.pinnedIds],
+      selectAgentActivity(overview.data, recentState.pinnedIds, draftKeys),
+    [overview.data, recentState.pinnedIds, draftKeys],
   );
   const agentOrder = useAgentOrder(agentActivity);
   useEffect(() => {
@@ -606,6 +610,12 @@ export default function App() {
       )?.id;
   }
   const selectedSessionId = sessionIdFor(activeTab);
+  const selectedDraftKey =
+    activeTab?.kind === "draft"
+      ? activeTab.id
+      : activeTab?.kind === "chat" && !activeTab.expandedTopicId
+        ? activeTab.id
+        : undefined;
   const activeSessionId =
     activeTab?.sessionId ?? activeTab?.diff?.sessionId ?? selectedSessionId;
   function contextualTool(tab: WorkspaceTab, source?: WorkspaceTab) {
@@ -1951,6 +1961,7 @@ export default function App() {
                   activity={agentActivity}
                   ordering={agentOrder}
                   recent={recentState}
+                  draftKeys={draftKeys}
                   selected={selected}
                   readCursors={readCursors}
                   markRead={markConversationsRead}
@@ -1965,12 +1976,19 @@ export default function App() {
                       ),
                     )
                   }
+                  onOpenChat={(chatId, mode) =>
+                    openConversation(chatId, undefined, undefined, {
+                      mode,
+                      fromSidebar: true,
+                    })
+                  }
                   onLocate={(item) =>
                     item.comparison
                       ? locateComparison(item.comparison, item.id)
                       : locateTopic(item.chatId, item.id)
                   }
                   selectedSessionId={selectedSessionId}
+                  selectedDraftKey={selectedDraftKey}
                   visible={page === "agents" && sidebar}
                   onShared={openSharedConversation}
                   onSearch={(event) =>

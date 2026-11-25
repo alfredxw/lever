@@ -28,6 +28,7 @@ export type SidebarNavigation = {
     conversation: Conversation,
     mode?: OpenConversationMode,
   ) => void;
+  onOpenChat: (chatId: string, mode?: OpenConversationMode) => void;
   onShared: (session: SharedConversation) => void;
   onLocate: (conversation: Conversation) => void;
   tabState: (conversation: Conversation) => "closed" | "preview" | "open";
@@ -52,8 +53,16 @@ export type MenuTarget =
       conversation: Conversation;
       clearable?: boolean;
       restorable?: boolean;
+      draftKey?: string;
     }
-  | { kind: "shared"; session: SharedConversation };
+  | { kind: "shared"; session: SharedConversation; draftKey?: string }
+  | {
+      kind: "draft";
+      agentId: string;
+      chatId?: string;
+      draftKey: string;
+      title: string;
+    };
 
 export function AgentSidebarMenus({
   menu,
@@ -66,6 +75,7 @@ export function AgentSidebarMenus({
   clear,
   restore,
   revealCleared,
+  discardDraft,
 }: {
   menu?: { anchor: MenuAnchor; target: MenuTarget };
   close: () => void;
@@ -77,6 +87,7 @@ export function AgentSidebarMenus({
   clear: (conversations: Conversation[]) => void;
   restore: (id: string, agentId?: string) => void;
   revealCleared: (agentId: string) => void;
+  discardDraft: (key: string, agentId?: string) => void;
 }) {
   const { t } = useTranslation();
   const [renaming, setRenaming] = useState<RenameTarget>();
@@ -185,7 +196,42 @@ export function AgentSidebarMenus({
       label: t("agents.openConversation"),
       run: () => navigation.onShared(target.session),
     });
-    group(pin(target.session));
+    group(
+      pin(target.session),
+      !!target.draftKey && {
+        id: "discard-draft",
+        label: t("agents.discardDraft"),
+        restoreFocus: false,
+        run: () => discardDraft(target.draftKey!),
+      },
+    );
+  } else if (target.kind === "draft") {
+    label = target.title;
+    group(
+      target.chatId
+        ? {
+            id: "open",
+            label: t("agents.openConversation"),
+            run: () => navigation.onOpenChat(target.chatId!, "keep"),
+          }
+        : {
+            id: "open",
+            label: t("workspace.openDraft"),
+            run: () => navigation.onNewChat(target.agentId),
+          },
+      !!target.chatId &&
+        navigation.canSplit && {
+          id: "open-other",
+          label: t("agents.openOtherPane"),
+          run: () => navigation.onOpenChat(target.chatId!, "other"),
+        },
+    );
+    group({
+      id: "discard-draft",
+      label: t("agents.discardDraft"),
+      restoreFocus: false,
+      run: () => discardDraft(target.draftKey, target.agentId),
+    });
   } else {
     const { conversation } = target;
     const chat = overview.chats.find((item) => item.id === conversation.chatId);
@@ -260,6 +306,12 @@ export function AgentSidebarMenus({
         label: t("agents.restoreConversation"),
         restoreFocus: false,
         run: () => restore(conversation.id, conversation.agentId),
+      },
+      !!target.draftKey && {
+        id: "discard-draft",
+        label: t("agents.discardDraft"),
+        restoreFocus: false,
+        run: () => discardDraft(target.draftKey!, conversation.agentId),
       },
     );
     group(

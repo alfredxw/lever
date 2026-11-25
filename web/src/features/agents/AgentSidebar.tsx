@@ -27,6 +27,7 @@ import {
   History,
   LoaderCircle,
   MessageCircle,
+  PencilLine,
   Pin,
   Plus,
   RotateCcw,
@@ -69,7 +70,14 @@ import {
   rowMenuHandlers,
   type MenuAnchor,
 } from "@/components/ui/action-context-menu";
+import {
+  clearComposerDraft,
+  conversationDraftKey,
+  formatDraftPreview,
+  useComposerDraftSummary,
+} from "@/features/chat/composerDraft";
 import { displayChatTitle } from "@/features/chat/conversationTitle";
+import { draftChatId } from "@/features/chat/NewChat";
 import {
   AgentSidebarMenus,
   type MenuTarget,
@@ -158,9 +166,11 @@ export function AgentSidebar({
   activity,
   ordering: { agents, sort, setSort, moveAgent },
   recent,
+  draftKeys,
   selected,
   readCursors,
   selectedSessionId,
+  selectedDraftKey,
   visible,
   markRead,
   onSearch,
@@ -173,9 +183,11 @@ export function AgentSidebar({
   activity?: WorkbenchOverview;
   ordering: ReturnType<typeof useAgentOrder>;
   recent: ReturnType<typeof useRecentState>;
+  draftKeys: ReadonlySet<string>;
   selected: string;
   readCursors: Record<string, number>;
   selectedSessionId?: string;
+  selectedDraftKey?: string;
   visible: boolean;
   markRead: (items: Conversation[]) => void;
   onSearch: MouseEventHandler<HTMLButtonElement>;
@@ -184,7 +196,7 @@ export function AgentSidebar({
   onPreview: (id: string) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const { onShared, onOpen, onChat } = navigation;
+  const { onShared, onOpen, onChat, onOpenChat, onNewChat } = navigation;
   const onConversation = useEventCallback(navigation.onConversation);
   const [menu, setMenu] = useState<{
     anchor: MenuAnchor;
@@ -235,10 +247,12 @@ export function AgentSidebar({
       recent.pins.map((pin, index) => [pinId(pin), index]),
     );
     const unpinnedIndex = recent.pins.length;
+    const mainChats = new Set<string>();
     const conversationItems = (conversations ?? []).flatMap((conversation) => {
       const agent = agentsById.get(conversation.agentId);
       const chat = chatsById.get(conversation.chatId);
       if (!agent || agent.archived || !chat) return [];
+      if (conversation.kind === "main") mainChats.add(conversation.chatId);
       const title =
         conversation.kind === "main"
           ? displayChatTitle(chat, t)
@@ -251,11 +265,13 @@ export function AgentSidebar({
           (run) => run.status !== "queued" && run.status !== "paused",
         ) ?? sessionRuns?.find((run) => run.waiting);
       const pending = pendingSessions.has(conversation.id);
+      const draftKey = conversationDraftKey(conversation);
+      const hasDraft = draftKeys.has(draftKey);
       const pinIndex =
         conversation.kind === "topic"
           ? pinOrder.get(conversation.id)
           : undefined;
-      const readAndIdle = !unread && !run && !pending;
+      const readAndIdle = !unread && !run && !pending && !hasDraft;
       return [
         {
           conversation,
@@ -265,6 +281,8 @@ export function AgentSidebar({
           unread,
           run,
           pending,
+          draftKey,
+          hasDraft,
           pinIndex,
           readAndIdle,
           canClear: readAndIdle && pinIndex === undefined,
@@ -274,11 +292,12 @@ export function AgentSidebar({
     // Show pinned topics first and keep the order of the other activity rows.
     const activityItems = conversationItems
       .filter(
-        ({ conversation, unread, run, pending, pinIndex }) =>
+        ({ conversation, unread, run, pending, hasDraft, pinIndex }) =>
           pinIndex !== undefined ||
           unread ||
           run ||
           pending ||
+          hasDraft ||
           conversation.unreadSequence >
             (recent.cleared[conversation.id] ?? 0),
       )
@@ -308,10 +327,39 @@ export function AgentSidebar({
         const agentRuns = runsByAgent.get(agent.id) ?? [];
         const agentActivity = activityByAgent.get(agent.id) ?? [];
         const agentConversations = itemsByAgent.get(agent.id) ?? [];
+        const draftRows: {
+          draftKey: string;
+          agentId: string;
+          chatId?: string;
+          title: string;
+        }[] = [];
+        const newChatDraftKey = draftChatId(agent.id);
+        if (draftKeys.has(newChatDraftKey)) {
+          draftRows.push({
+            draftKey: newChatDraftKey,
+            agentId: agent.id,
+            title: t("workspace.newChat"),
+          });
+        }
+        for (const chat of agentChats) {
+          if (!mainChats.has(chat.id) && draftKeys.has(chat.id)) {
+            draftRows.push({
+              draftKey: chat.id,
+              agentId: agent.id,
+              chatId: chat.id,
+              title: displayChatTitle(chat, t),
+            });
+          }
+        }
+        const draftCount =
+          agentConversations.filter(({ hasDraft }) => hasDraft).length +
+          draftRows.length;
         return {
           agent,
           chats: agentChats,
           conversations: agentConversations,
+          draftRows,
+          draftCount,
           cleared: clearedByAgent.get(agent.id) ?? [],
           clearable: agentConversations
             .filter(({ canClear }) => canClear)
@@ -346,6 +394,7 @@ export function AgentSidebar({
     readCursors,
     recent.cleared,
     recent.pins,
+    draftKeys,
     t,
   ]);
 
@@ -524,6 +573,29 @@ export function AgentSidebar({
     recent.setPinned(id, false);
   }
 
+  const discardDraft = useEventCallback((key: string, agentId?: string) => {
+    clearComposerDraft(key);
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        sidebarRef.current?.contains(active)
+      )
+        return;
+      const target =
+        sidebarRef.current?.querySelector<HTMLButtonElement>(
+          `.agent-list:not([hidden]) [data-draft-key="${globalThis.CSS.escape(key)}"]`,
+        ) ??
+        (agentId
+          ? sidebarRef.current?.querySelector<HTMLButtonElement>(
+              `.agent-list:not([hidden]) [data-agent-id="${globalThis.CSS.escape(agentId)}"] .agent-select`,
+            )
+          : null);
+      target?.focus({ preventScroll: true });
+    });
+  });
+
   const handleActivityAction = useEventCallback(
     (
       conversation: Conversation,
@@ -645,10 +717,14 @@ export function AgentSidebar({
             overview={activity}
             visible={visible && filter === "recent"}
             selected={selectedSessionId}
+            selectedDraftKey={selectedDraftKey}
+            draftKeys={draftKeys}
             readCursors={readCursors}
             recent={recent}
             onMenu={openMenu}
             onConversation={onConversation}
+            onOpenChat={onOpenChat}
+            onNewChat={onNewChat}
             onShared={onShared}
           />
         )}
@@ -671,6 +747,7 @@ export function AgentSidebar({
         clear={recent.clearConversations}
         restore={restoreConversation}
         revealCleared={revealAgentCleared}
+        discardDraft={discardDraft}
       />
     </Tabs>
   );
@@ -711,6 +788,8 @@ export function AgentSidebar({
                 waiting,
                 working,
                 conversations,
+                draftRows,
+                draftCount,
                 cleared,
                 clearable: agentClearable,
               }) => {
@@ -723,7 +802,9 @@ export function AgentSidebar({
                   0,
                   cleared.length - visibleCleared.length,
                 );
-                const hasChildren = conversations.length > 0 || lensActive;
+                const hasActive =
+                  conversations.length > 0 || draftRows.length > 0;
+                const hasChildren = hasActive || lensActive;
                 return (
                   <AgentRow
                     key={agent.id}
@@ -739,7 +820,7 @@ export function AgentSidebar({
                             }))
                         : undefined
                     }
-                    clearedOnly={conversations.length === 0 && lensActive}
+                    clearedOnly={!hasActive && lensActive}
                     onMenu={(anchor) =>
                       openMenu(anchor, {
                         kind: "agent",
@@ -774,6 +855,7 @@ export function AgentSidebar({
                     unread={unread}
                     waiting={waiting}
                     working={working}
+                    draftCount={draftCount}
                     defaultExpanded={preferences.expandAgentActivity}
                     actions={
                       <>
@@ -833,6 +915,20 @@ export function AgentSidebar({
                   >
                     {hasChildren && (
                       <>
+                        {draftRows.map(({ draftKey, agentId, chatId, title }) => (
+                          <AgentDraftRow
+                            key={draftKey}
+                            t={t}
+                            draftKey={draftKey}
+                            agentId={agentId}
+                            chatId={chatId}
+                            title={title}
+                            selected={selectedDraftKey === draftKey}
+                            onOpenChat={onOpenChat}
+                            onNewChat={onNewChat}
+                            openMenu={openMenu}
+                          />
+                        ))}
                         {conversations.map(
                           ({
                             conversation,
@@ -841,6 +937,8 @@ export function AgentSidebar({
                             unread,
                             run,
                             pending,
+                            draftKey,
+                            hasDraft,
                             pinIndex,
                             canClear,
                           }) => (
@@ -851,6 +949,8 @@ export function AgentSidebar({
                               chatTitle={chat.title}
                               title={title}
                               unread={unread}
+                              draftKey={draftKey}
+                              hasDraft={hasDraft}
                               runStatus={
                                 run?.waiting
                                   ? run.waitingBlocked
@@ -895,7 +995,7 @@ export function AgentSidebar({
                             <li
                               className={cn(
                                 "agent-cleared-block",
-                                !conversations.length && "no-active-above",
+                                !hasActive && "no-active-above",
                               )}
                             >
                               <div className="agent-cleared-header">
@@ -1089,12 +1189,72 @@ const AgentClearedRow = memo(function AgentClearedRow({
   );
 });
 
+const AgentDraftRow = memo(function AgentDraftRow({
+  t,
+  draftKey,
+  agentId,
+  chatId,
+  title,
+  selected,
+  onOpenChat,
+  onNewChat,
+  openMenu,
+}: {
+  t: TFunction;
+  draftKey: string;
+  agentId: string;
+  chatId?: string;
+  title: string;
+  selected: boolean;
+  onOpenChat: SidebarNavigation["onOpenChat"];
+  onNewChat: SidebarNavigation["onNewChat"];
+  openMenu: (anchor: MenuAnchor, target: MenuTarget) => void;
+}) {
+  const draftSummary = useComposerDraftSummary(draftKey);
+  const draftPreview = formatDraftPreview(draftSummary, t);
+  const draftTitle = draftPreview
+    ? t("agents.draftPreview", { preview: draftPreview })
+    : t("agents.draft");
+  return (
+    <li className="agent-activity-row">
+      <button
+        type="button"
+        className={cn("agent-activity-item", selected && "selected")}
+        data-draft="true"
+        data-draft-key={draftKey}
+        aria-current={selected ? "true" : undefined}
+        aria-label={chatId ? title : t("agents.draftPreview", { preview: title })}
+        title={[title, draftTitle].filter(Boolean).join("\n")}
+        onClick={() => (chatId ? onOpenChat(chatId) : onNewChat(agentId))}
+        {...rowMenuHandlers((anchor) =>
+          openMenu(anchor, {
+            kind: "draft",
+            agentId,
+            chatId,
+            draftKey,
+            title,
+          }),
+        )}
+      >
+        <span className="truncate">{title}</span>
+        <PencilLine
+          className="agent-draft"
+          role="img"
+          aria-label={t("agents.draft")}
+        />
+      </button>
+    </li>
+  );
+});
+
 const AgentActivityRow = memo(function AgentActivityRow({
   t,
   conversation,
   chatTitle,
   title,
   unread,
+  draftKey,
+  hasDraft,
   runStatus,
   pending,
   pinned,
@@ -1109,6 +1269,8 @@ const AgentActivityRow = memo(function AgentActivityRow({
   chatTitle: string;
   title: string;
   unread: boolean;
+  draftKey: string;
+  hasDraft: boolean;
   runStatus?: string;
   pending: boolean;
   pinned: boolean;
@@ -1122,6 +1284,13 @@ const AgentActivityRow = memo(function AgentActivityRow({
     trigger: HTMLButtonElement,
   ) => void;
 }) {
+  const draftSummary = useComposerDraftSummary(hasDraft ? draftKey : undefined);
+  const draftPreview = hasDraft ? formatDraftPreview(draftSummary, t) : "";
+  const draftTitle = hasDraft
+    ? draftPreview
+      ? t("agents.draftPreview", { preview: draftPreview })
+      : t("agents.draft")
+    : "";
   const working = !!runStatus && isWorking(runStatus);
   const waiting = runStatus === "waiting";
   const waitingBlocked = runStatus === "waiting_blocked";
@@ -1156,11 +1325,14 @@ const AgentActivityRow = memo(function AgentActivityRow({
         type="button"
         className={cn("agent-activity-item", selected && "selected")}
         data-session-id={conversation.id}
+        data-draft={hasDraft ? "true" : undefined}
+        data-draft-key={draftKey}
         aria-current={selected ? "true" : undefined}
         aria-label={label}
         title={[
           label,
           conversation.kind === "topic" ? chatTitle : "",
+          draftTitle,
           status,
           unread ? t("agents.unread") : "",
         ]
@@ -1172,10 +1344,18 @@ const AgentActivityRow = memo(function AgentActivityRow({
             kind: "conversation",
             conversation,
             clearable: canClear,
+            draftKey: hasDraft ? draftKey : undefined,
           }),
         )}
       >
         <span className="truncate">{label}</span>
+        {hasDraft && (
+          <PencilLine
+            className="agent-draft"
+            role="img"
+            aria-label={t("agents.draft")}
+          />
+        )}
         {StatusIcon && (
           <StatusIcon
             className={cn(
@@ -1228,6 +1408,7 @@ function AgentRow({
   unread,
   waiting,
   working,
+  draftCount,
   defaultExpanded,
   children,
   actions,
@@ -1245,6 +1426,7 @@ function AgentRow({
   unread: boolean;
   waiting: number;
   working: number;
+  draftCount: number;
   defaultExpanded: boolean;
   children: React.ReactNode;
   actions: React.ReactNode;
@@ -1255,6 +1437,7 @@ function AgentRow({
 }) {
   const { t } = useTranslation();
   const workingLabel = t("agents.workingCount", { count: working });
+  const draftCountLabel = t("agents.draftCount", { count: draftCount });
   const [localOpen, setLocalOpen] = useState(defaultExpanded);
   const [trackedDefault, setTrackedDefault] = useState(defaultExpanded);
   if (trackedDefault !== defaultExpanded) {
@@ -1337,6 +1520,17 @@ function AgentRow({
           <div className="agent-contact-meta">
             <span className="contact-preview">{preview}</span>
             <span className="agent-contact-status">
+              {draftCount > 0 && (
+                <span
+                  className="agent-draft-count"
+                  role="img"
+                  aria-label={draftCountLabel}
+                  title={draftCountLabel}
+                >
+                  <PencilLine className="agent-draft" aria-hidden="true" />
+                  {draftCount > 1 && <span>{draftCount}</span>}
+                </span>
+              )}
               {waiting > 0 && (
                 <span className="pending-mark">
                   {t("agents.pending")} {waiting}

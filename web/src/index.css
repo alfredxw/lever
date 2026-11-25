@@ -604,7 +604,7 @@ button:focus-visible,
 .conversation-contact:focus-visible {
   background: var(--control-focus);
 }
-.recent-row:is(:hover, :has(:focus-visible))
+.recent-row:is(:hover, :has(:focus-visible)):has(> .recent-pin)
   .recent-conversation
   .contact-name {
   padding-inline-end: 26px;
@@ -616,9 +616,14 @@ button:focus-visible,
   }
 }
 @media (hover: none) {
-  .recent-conversation .contact-name {
+  .recent-row:has(> .recent-pin) .recent-conversation .contact-name {
     padding-inline-end: 26px;
   }
+}
+.recent-draft-label {
+  color: var(--status-attention);
+  font-weight: 550;
+  margin-inline-end: 5px;
 }
 .conversation-content {
   flex: 1;
@@ -1072,6 +1077,23 @@ button:focus-visible,
   gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
+}
+.agent-draft {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--status-attention);
+}
+.agent-draft-count {
+  display: inline-flex;
+  height: 16px;
+  align-items: center;
+  gap: 3px;
+  color: var(--status-attention);
+  font-size: 10px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 .agent-working {
   width: 14px;
