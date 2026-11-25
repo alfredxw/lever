@@ -1,8 +1,13 @@
-import { useLayoutEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useLayoutEffect,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
-export function usePressStableList<T>(latest: T) {
-  const [press, setPress] = useState<{ items: T; pointerId: number }>();
-  const items = press?.items ?? latest;
+export function PressStableList({ children }: { children: ReactNode }) {
+  const [press, setPress] = useState<{ rows: ReactNode; pointerId: number }>();
+  const rows = press ? press.rows : children;
 
   useLayoutEffect(() => {
     if (!press) return;
@@ -24,10 +29,22 @@ export function usePressStableList<T>(latest: T) {
   }, [press]);
 
   function onPointerDownCapture(event: ReactPointerEvent<HTMLElement>) {
-    if (event.button === 0 && event.isPrimary && event.target instanceof Element &&
-        event.target.closest("button[data-session-id]"))
-      setPress({ items, pointerId: event.pointerId });
+    if (
+      event.button === 0 &&
+      !event.ctrlKey &&
+      event.isPrimary &&
+      event.target instanceof Element &&
+      event.target.closest("button[data-session-id]")
+    )
+      setPress({ rows, pointerId: event.pointerId });
   }
 
-  return [items, onPointerDownCapture] as const;
+  return (
+    <div
+      onPointerDownCapture={onPointerDownCapture}
+      onClick={press ? () => setPress(undefined) : undefined}
+    >
+      {rows}
+    </div>
+  );
 }

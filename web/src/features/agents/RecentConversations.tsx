@@ -44,7 +44,7 @@ import {
   type MenuAnchor,
 } from "@/components/ui/action-context-menu";
 import { displayChatTitle } from "@/features/chat/conversationTitle";
-import { usePressStableList } from "./usePressStableList";
+import { PressStableList } from "./PressStableList";
 
 type RecentTarget = Extract<MenuTarget, { kind: "conversation" | "shared" }>;
 const sharedRefreshInterval = 3000;
@@ -142,7 +142,7 @@ export function RecentConversations({
     else onConversation(target.conversation);
   });
   const { agents, chats, conversations, runs, requests } = overview ?? {};
-  const liveList = useMemo(() => {
+  const { groups, priority, eagerIds } = useMemo(() => {
     const agentsById = new Map(agents?.map((agent) => [agent.id, agent]));
     const chatsById = new Map(chats?.map((chat) => [chat.id, chat]));
     const pending = new Set(requests?.map((request) => request.sessionId));
@@ -292,7 +292,6 @@ export function RecentConversations({
     i18n.language,
     t,
   ]);
-  const [{ groups, priority, eagerIds }, holdRows] = usePressStableList(liveList);
   const isUnread = (entry: RecentEntry) =>
     (entry.sequence ?? 0) > (readCursors[entry.id] ?? 0);
   const clearable = priority.flatMap((entry) =>
@@ -301,11 +300,11 @@ export function RecentConversations({
       : [],
   );
   const clearLabel = t("agents.clearReadChats");
-  return (
+  const list = (
     <TooltipProvider delayDuration={350}>
       {!overview || (sources.isLoading && !groups.length) ? <Loading /> : null}
       {groups.map(({ id, title, entries }) => (
-        <section key={id} aria-label={title} className="not-first:mt-3" onPointerDownCapture={holdRows}>
+        <section key={id} aria-label={title} className="not-first:mt-3">
           <div className="flex h-8 items-center justify-between gap-2 px-2 text-muted-foreground">
             <h2 className="truncate text-xs font-medium">{title}</h2>
             {id === "priority" && (
@@ -367,6 +366,7 @@ export function RecentConversations({
       )}
     </TooltipProvider>
   );
+  return <PressStableList>{list}</PressStableList>;
 }
 
 const RecentConversationRow = memo(function RecentConversationRow({
