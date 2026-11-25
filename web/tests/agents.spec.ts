@@ -5564,7 +5564,7 @@ test("approval and pause controls operate on the owning run", async ({
     running.getByRole("button", { name: "重试", exact: true }),
   ).toHaveCount(0);
   await page.reload();
-  const resume = running.getByRole("button", { name: "继续回复", exact: true });
+  const resume = running.getByRole("button", { name: "继续", exact: true });
   await expect(resume).toBeEnabled();
   await resume.focus();
   await resume.press("Enter");
@@ -5623,7 +5623,7 @@ test("approval and pause controls operate on the owning run", async ({
     "data-status",
     "completed",
   );
-  await topic.getByRole("button", { name: "继续回复", exact: true }).click();
+  await topic.getByRole("button", { name: "继续", exact: true }).click();
   await expect(topicRun).toHaveAttribute("data-status", "completed");
   await expect(topicRun).toContainText("Continued from the saved native turn");
   await expect(sidebar.locator(".run-content")).toHaveCount(2);
@@ -5646,7 +5646,7 @@ test("Claude Code continues a paused reply after reload", async ({ page }) => {
   await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
   await expect(run).toHaveAttribute("data-status", "paused");
   await page.reload();
-  await run.getByRole("button", { name: "继续回复", exact: true }).click();
+  await run.getByRole("button", { name: "继续", exact: true }).click();
   await expect(run).toHaveAttribute("data-status", "completed");
   await expect(run).toHaveAttribute("data-run-id", runId);
   await expect(
