@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+const windows = process.platform === "win32";
 const args = process.argv.slice(2);
-const prebuilt = args[0] === "--prebuilt";
+const prebuilt = args[0]?.match(/^--prebuilt(?:=(.+))?$/);
 if (prebuilt) args.shift();
 const frontendRestart =
   process.platform === "darwin" && args[0] === "--reload-on-sighup";
@@ -36,11 +37,9 @@ try {
     `Desktop frontend: ${origin} (proxied through the desktop backend)`,
   );
   // macOS uses the executable name for a desktop launched outside an app bundle.
-  const executable = join(
-    root,
-    "bin/desktop",
-    process.platform === "win32" ? "Lever.exe" : "Lever",
-  );
+  const executable = prebuilt?.[1]
+    ? resolve(root, prebuilt[1])
+    : join(root, "bin/desktop", windows ? "Lever.exe" : "Lever");
   if (!prebuilt) {
     const build = spawn(
       "go",
@@ -50,11 +49,11 @@ try {
     const [buildCode] = await once(build, "exit");
     if (buildCode !== 0) throw new Error("Desktop build failed");
   }
-  const child = spawn(
-    executable,
-    ["--dev-origin", origin, ...args],
-    { cwd: root, stdio: "inherit", detached: true },
-  );
+  const child = spawn(executable, ["--dev-origin", origin, ...args], {
+    cwd: root,
+    stdio: "inherit",
+    detached: !windows,
+  });
   let restarting;
   const restartFrontend = () => {
     // Keep the proxy origin stable and reload even if the HMR client never ran.
@@ -75,8 +74,10 @@ try {
       if (error.code !== "ESRCH") throw error;
     }
   };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  if (!windows) {
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  }
   if (frontendRestart) process.on("SIGUSR2", restartFrontend);
   try {
     const [code] = await once(child, "exit");

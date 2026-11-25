@@ -13,7 +13,7 @@ case "$(uname -m)" in
     *) echo "Error: unsupported macOS architecture." >&2; exit 1 ;;
 esac
 
-for tool in go node pnpm shlock osascript lsof ps sqlite3; do
+for tool in go node pnpm shlock osascript lsof ps; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
         echo "Error: ${tool} is required." >&2
         exit 1
@@ -60,18 +60,8 @@ while holders="$(lsof -w -t -- "${DATA_DIR}/lever.lock" 2>/dev/null)"; do
             exit 1
         fi
     done
-    db="${DATA_DIR}/lever.db"
-    owns="SELECT NULL WHERE 0"
-    if [ "$(sqlite3 -readonly -cmd '.timeout 5000' "${db}" "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='runtime_hosts';")" = 1 ]; then
-        owns="SELECT run_id FROM runtime_hosts"
-    fi
-    busy="$(sqlite3 -readonly -cmd '.timeout 5000' "${db}" \
-        "SELECT EXISTS(SELECT 1 FROM runs r JOIN sessions s ON s.id=r.session_id
-         WHERE (r.status IN ('starting','running','waiting_user','cancelling') AND r.id NOT IN (${owns}))
-            OR (r.status='steering' AND json_extract(r.data,'$.steerRunId') NOT IN (${owns}))
-            OR (r.status='queued' AND json_extract(s.data,'$.queuePaused') IS NOT 1
-                AND NOT EXISTS (SELECT 1 FROM runs active WHERE active.session_id=r.session_id AND active.id IN (${owns}))));")"
-    [ "${busy}" = 1 ] || break
+    busy="$("${DEV_PATH}" --data-dir "${DATA_DIR}" --print-restart-busy)"
+    [ "${busy}" = true ] || break
     if [ "${announced}" = false ]; then
         echo "==> Waiting for runs without an independent provider worker. The current window stays open for approvals (Ctrl+C cancels the restart)."
         announced=true

@@ -37,6 +37,10 @@ var ErrInUse = errors.New("data directory is already in use")
 // OpenConnection opens the WAL database without taking the backend's instance
 // lock or running migrations. A provider worker only accesses its own mailbox.
 func OpenConnection(dir string) (*sql.DB, error) {
+	return openConnection(dir, false)
+}
+
+func openConnection(dir string, readOnly bool) (*sql.DB, error) {
 	path, err := filepath.Abs(filepath.Join(dir, "lever.db"))
 	if err != nil {
 		return nil, err
@@ -46,6 +50,9 @@ func OpenConnection(dir string) (*sql.DB, error) {
 		path = "/" + path
 	}
 	uri := url.URL{Scheme: "file", Path: path, RawQuery: "_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"}
+	if readOnly {
+		uri.RawQuery += "&mode=ro"
+	}
 	db, err := sql.Open("sqlite", uri.String())
 	if err == nil {
 		db.SetMaxOpenConns(1)
@@ -669,6 +676,32 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 type RestartRun struct {
 	ID       string `json:"id"`
 	Continue bool   `json:"continue"`
+}
+
+// DesktopRestartBusy reports whether runs still depend on the current backend.
+// Older backends keep all provider executions in-process.
+func DesktopRestartBusy(dir string) (bool, error) {
+	db, err := openConnection(dir, true)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	var hasHosts bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_hosts')`).Scan(&hasHosts); err != nil {
+		return false, err
+	}
+	owned := `SELECT NULL WHERE 0`
+	if hasHosts {
+		owned = `SELECT run_id FROM runtime_hosts`
+	}
+	var busy bool
+	err = db.QueryRow(`WITH owned(run_id) AS (` + owned + `)
+		SELECT EXISTS(SELECT 1 FROM runs r JOIN sessions s ON s.id=r.session_id
+			WHERE (r.status IN ('starting','running','waiting_user','cancelling') AND r.id NOT IN (SELECT run_id FROM owned))
+			   OR (r.status='steering' AND json_extract(r.data,'$.steerRunId') NOT IN (SELECT run_id FROM owned))
+			   OR (r.status='queued' AND json_extract(s.data,'$.queuePaused') IS NOT 1
+			       AND NOT EXISTS (SELECT 1 FROM runs active JOIN owned ON owned.run_id=active.id WHERE active.session_id=r.session_id)))`).Scan(&busy)
+	return busy, err
 }
 
 const restartUnconfirmed = "The backend stopped before the runtime confirmed a result. Verify that the previous execution has stopped before continuing."

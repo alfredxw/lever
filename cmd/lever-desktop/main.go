@@ -19,6 +19,7 @@ import (
 	"lever/internal/host"
 	"lever/internal/provider"
 	"lever/internal/runhost"
+	"lever/internal/store"
 )
 
 //go:embed icon.png
@@ -40,6 +41,7 @@ func main() {
 	if !generate {
 		dir = flag.String("data-dir", host.DefaultDir(), "Local data directory")
 		printDir := flag.Bool("print-data-dir", false, "Print the effective data directory and exit")
+		printRestartBusy := flag.Bool("print-restart-busy", false, "Print whether active runs need the current desktop backend")
 		address = flag.String("listen", "127.0.0.1:4778", "Stable loopback origin for desktop preferences")
 		devOrigin = flag.String("dev-origin", "", "Vite development origin for frontend hot updates")
 		flag.BoolVar(&freshBackend, "fresh-backend", false, "Start the backend from this executable when restarting the desktop")
@@ -48,6 +50,15 @@ func main() {
 		flag.Parse()
 		if *printDir {
 			fmt.Println(filepath.Clean(*dir))
+			return
+		}
+		if *printRestartBusy {
+			busy, err := store.DesktopRestartBusy(*dir)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Println(busy)
 			return
 		}
 		if *serve {

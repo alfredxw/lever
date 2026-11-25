@@ -181,6 +181,7 @@ make desktop
 | :--- | :--- | :--- |
 | **应用 Go 改动**（macOS） | `./scripts/restart-backend.sh` | 编译 Go、重启后端，并重新打开桌面窗口，继续使用热更新 |
 | **恢复桌面前端**（macOS） | `./scripts/restart-frontend.sh` | 重启 Vite 并刷新当前窗口，后端与运行中的任务继续执行。先用 `./scripts/restart-backend.sh` 启动桌面。 |
+| **应用 Go 改动**（Windows） | `pwsh -File .\scripts\restart-desktop.ps1` | 编译 Go，等待依赖旧后端的任务结束，再重启后端并打开支持热更新的桌面窗口。可用 `-Port` 或 `-DataDir` 覆盖默认的 `4779` 或 `.lever/`。 |
 | **浏览器热更新** | `make dev` + `pnpm --dir web dev` | 先执行 `pnpm --dir web install --frozen-lockfile`，访问 `4778` / `5179` 端口 |
 | **打包桌面应用** | `make package` | 输出到 `desktop/dist/`；加 `TARGETS=darwin/arm64,windows/amd64` 同步构建 Windows |
 | **重新生成类型** | `make generate` | 修改 Go DTO 或桌面绑定后同步 TypeScript 类型 |
