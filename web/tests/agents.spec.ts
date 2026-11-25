@@ -2186,14 +2186,16 @@ test("workspace toolbar keeps chosen tools in the overflow menu", async ({
   await expect(page.getByLabel("输入网址或 localhost:端口")).toBeFocused();
 
   await more.click();
-  await page
-    .getByRole("menuitem", { name: "在工具栏显示" })
-    .press("ArrowRight");
+  const showInToolbar = page.getByRole("menuitem", { name: "在工具栏显示" });
+  await showInToolbar.hover();
   const option = (name: string) =>
     page.getByRole("menuitemcheckbox", { name, exact: true });
   await expect(option("变更")).toHaveCount(0);
   await expect(option("浏览器")).toHaveAttribute("aria-checked", "false");
-  await option("浏览器").press("Enter");
+  await option("浏览器").click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(showInToolbar).toBeFocused();
+  await showInToolbar.press("ArrowRight");
   await option("文件").press("Enter");
   await expect(option("浏览器")).toHaveAttribute("aria-checked", "true");
   await expect(option("文件")).toHaveAttribute("aria-checked", "false");

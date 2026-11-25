@@ -28,7 +28,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuPortal,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -244,27 +243,23 @@ export function NoteTableMenu({
               <Table2 />
               {t("tasks.table.cells")}
             </DropdownMenuSubTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuSubContent>
-                {(
-                  [
-                    ["deleteRow", "deleteRow"],
-                    ["deleteColumn", "deleteColumn"],
-                    ["merge", "mergeCells"],
-                    ["split", "splitCell"],
-                  ] as const
-                ).map(([label, command]) => (
-                  <DropdownMenuItem
-                    key={command}
-                    onSelect={() =>
-                      cellAction((chain) => chain[command]().run())
-                    }
-                  >
-                    {t("tasks.table." + label)}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuPortal>
+            <DropdownMenuSubContent>
+              {(
+                [
+                  ["deleteRow", "deleteRow"],
+                  ["deleteColumn", "deleteColumn"],
+                  ["merge", "mergeCells"],
+                  ["split", "splitCell"],
+                ] as const
+              ).map(([label, command]) => (
+                <DropdownMenuItem
+                  key={command}
+                  onSelect={() => cellAction((chain) => chain[command]().run())}
+                >
+                  {t("tasks.table." + label)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
         {originalSelection && (
@@ -273,17 +268,15 @@ export function NoteTableMenu({
               <PaintBucket />
               {t("tasks.table.fill")}
             </DropdownMenuSubTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuSubContent>
-                <NoteCellFillChoices
-                  onFill={(fill) =>
-                    cellAction((chain) =>
-                      chain.setCellAttribute("fill", fill).run(),
-                    )
-                  }
-                />
-              </DropdownMenuSubContent>
-            </DropdownMenuPortal>
+            <DropdownMenuSubContent>
+              <NoteCellFillChoices
+                onFill={(fill) =>
+                  cellAction((chain) =>
+                    chain.setCellAttribute("fill", fill).run(),
+                  )
+                }
+              />
+            </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
         <DropdownMenuSub>
@@ -291,39 +284,37 @@ export function NoteTableMenu({
             <PlusSquare />
             {t("tasks.table.addBelow")}
           </DropdownMenuSubTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuSubContent>
-              <DropdownMenuItem
-                onSelect={() =>
-                  run((chain) =>
-                    chain
-                      .insertContentAt(end, {
-                        type: "paragraph",
-                      })
-                      .setTextSelection(end + 1)
-                      .run(),
-                  )
-                }
-              >
-                {t("tasks.block.paragraph")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() =>
-                  run((chain) =>
-                    chain
-                      .insertContentAt(end, {
-                        type: "paragraph",
-                      })
-                      .setTextSelection(end + 1)
-                      .setNoteBlock("table")
-                      .run(),
-                  )
-                }
-              >
-                {t("tasks.block.table")}
-              </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuPortal>
+          <DropdownMenuSubContent>
+            <DropdownMenuItem
+              onSelect={() =>
+                run((chain) =>
+                  chain
+                    .insertContentAt(end, {
+                      type: "paragraph",
+                    })
+                    .setTextSelection(end + 1)
+                    .run(),
+                )
+              }
+            >
+              {t("tasks.block.paragraph")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() =>
+                run((chain) =>
+                  chain
+                    .insertContentAt(end, {
+                      type: "paragraph",
+                    })
+                    .setTextSelection(end + 1)
+                    .setNoteBlock("table")
+                    .run(),
+                )
+              }
+            >
+              {t("tasks.block.table")}
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
         </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>

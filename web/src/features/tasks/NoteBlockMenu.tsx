@@ -29,7 +29,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuPortal,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -335,14 +334,12 @@ export function NoteBlockMenu({
             <Heading4 aria-hidden="true" />
             {t("tasks.block.moreHeadings")}
           </DropdownMenuSubTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuSubContent
-              className="task-note-block-submenu"
-              onEscapeKeyDown={restoreOnClose}
-            >
-              {moreHeadings.map((type) => blockChoice(type))}
-            </DropdownMenuSubContent>
-          </DropdownMenuPortal>
+          <DropdownMenuSubContent
+            className="task-note-block-submenu"
+            onEscapeKeyDown={restoreOnClose}
+          >
+            {moreHeadings.map((type) => blockChoice(type))}
+          </DropdownMenuSubContent>
         </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
