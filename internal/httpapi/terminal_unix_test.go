@@ -20,6 +20,8 @@ import (
 	"lever/internal/model"
 )
 
+const terminalShellInit = `stty -echo; if [ -n "${BASH_VERSION:-}" ]; then set +H; fi; printf '\nREADY\n'` + "\r"
+
 func terminalSocket(t *testing.T, f *fixture, agent string) *websocket.Conn {
 	t.Helper()
 	conn := terminalConnect(t, f, agent, app.ID(), true)
@@ -136,7 +138,7 @@ func TestTerminalInteractionAndExit(t *testing.T) {
 	f := newFixture(t)
 	agent := f.agent("codex")
 	conn := terminalSocket(t, f, agent.ID)
-	terminalInput(t, conn, "stty -echo; set +H; printf '\\nREADY\\n'\r")
+	terminalInput(t, conn, terminalShellInit)
 	terminalUntil(t, conn, "\r\nREADY\r\n")
 	terminalInput(t, conn, "printf '\\nCWD:'; pwd; stty size; test -t 0 && test -t 1 && printf 'TTY_OK\\n'\r")
 	output := terminalUntil(t, conn, "TTY_OK")
@@ -192,7 +194,7 @@ func TestTerminalCloseAndShutdownReleaseJobs(t *testing.T) {
 			agent, id := f.agent("codex").ID, app.ID()
 			conn := terminalConnect(t, f, agent, id, true)
 			terminalReady(t, conn)
-			terminalInput(t, conn, "stty -echo; set +H; printf '\\nREADY\\n'\r")
+			terminalInput(t, conn, terminalShellInit)
 			terminalUntil(t, conn, "\r\nREADY\r\n")
 			command := "sh -c 'printf \"CHILD:%s:END\\n\" $$; exec sleep 30'\r"
 			if mode == "background" || mode == "exit" {
@@ -263,7 +265,7 @@ func TestTerminalReconnectRetainsShell(t *testing.T) {
 	agent, id := f.agent("codex").ID, app.ID()
 	conn := terminalConnect(t, f, agent, id, true)
 	terminalReady(t, conn)
-	terminalInput(t, conn, "stty -echo; set +H; printf '\\nREADY\\n'\r")
+	terminalInput(t, conn, terminalShellInit)
 	terminalUntil(t, conn, "READY\r\n")
 	terminalInput(t, conn, "export LEVER_TEST_VALUE=kept; printf 'PID:%s:END\\n' $$; (sleep 0.3; printf 'WHILE_AWAY\\n') &\r")
 	match := regexp.MustCompile(`PID:(\d+):END`).FindString(terminalUntil(t, conn, ":END"))
