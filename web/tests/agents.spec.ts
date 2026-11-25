@@ -3025,11 +3025,11 @@ test("switching Topics from the Agents sidebar keeps the side pane maximized", a
   await expect(layout).toHaveAttribute("data-view", "split");
 });
 
-for (const view of ["全部", "最近"]) {
-  test(`one press opens the intended sidebar Topic across live reordering in ${view}`, async ({ page }) => {
+for (const [view, sameAgent] of [["全部", true], ["全部", false], ["最近", false]] as const) {
+  test(`one press opens the intended sidebar Topic across live reordering in ${view} (${sameAgent ? "same Agent" : "across Agents"})`, async ({ page }) => {
     await page.goto(context().url);
     const overview: Overview = await (await page.request.get("/api/overview")).json();
-    const seedTopic = async (name: string): Promise<Run> => {
+    const seedChat = async (name: string): Promise<string> => {
       const agent = await page.request.post("/api/agents", {
         data: { name, profile: { ...overview.agents[0].profile, provider: "codex" } },
       });
@@ -3038,8 +3038,11 @@ for (const view of ["全部", "最近"]) {
         data: { agentId: (await agent.json()).id, title: name },
       });
       expect(chat.ok()).toBe(true);
+      return (await chat.json()).id;
+    };
+    const seedTopic = async (chatId: string, name: string): Promise<Run> => {
       const response = await page.request.post("/api/messages", {
-        data: { chatId: (await chat.json()).id, text: name, commandId: randomUUID(), operation: "topic" },
+        data: { chatId, text: name, commandId: randomUUID(), operation: "topic" },
       });
       expect(response.ok()).toBe(true);
       const topic: Run = await response.json();
@@ -3049,27 +3052,35 @@ for (const view of ["全部", "最近"]) {
       }).toBe("completed");
       return topic;
     };
-    const target = await seedTopic("按下时的话题");
-    const previous = await seedTopic("切换前的话题");
+    const firstChat = await seedChat("第一个分组");
+    const first = await seedTopic(firstChat, "第一个话题");
+    const second = await seedTopic(sameAgent ? firstChat : await seedChat("第二个分组"), "第二个话题");
+    const [target, previous] = sameAgent ? [second, first] : [first, second];
     const sidebar = page.locator("#agent-sidebar");
     await sidebar.getByRole("tab", { name: view, exact: true }).click();
     const list = sidebar.getByRole("tabpanel");
     const row = (topic: Run) => list.locator(`button[data-session-id="${topic.sessionId}"]`);
     await row(previous).click();
     await expect(row(previous)).toHaveAttribute("aria-current", "true");
+    if (sameAgent) {
+      await row(previous).hover();
+      await row(previous).locator("..").locator(".agent-activity-action").click();
+      await expect(row(previous)).toHaveCount(0);
+    }
     await row(target).scrollIntoViewIfNeeded();
     const box = (await row(target).boundingBox())!;
-    expect(box.y).toBeGreaterThan((await row(previous).boundingBox())!.y);
+    if (!sameAgent) expect(box.y).toBeGreaterThan((await row(previous).boundingBox())!.y);
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     try {
+      const changing = sameAgent ? previous : target;
       const update = page.waitForResponse(async (response) => {
         if (new URL(response.url()).pathname !== "/api/overview" || !response.ok()) return false;
         const data: Overview | undefined = await response.json().catch(() => undefined);
-        return !!data?.conversations.some((item) => item.id === target.sessionId && item.preview?.includes("按住鼠标时的新回复"));
+        return !!data?.conversations.some((item) => item.id === changing.sessionId && item.preview?.includes("按住鼠标时的新回复"));
       });
       const reply = await page.request.post("/api/messages", {
-        data: { chatId: target.chatId, sessionId: target.sessionId, text: "按住鼠标时的新回复", commandId: randomUUID(), operation: "reply" },
+        data: { chatId: changing.chatId, sessionId: changing.sessionId, text: "按住鼠标时的新回复", commandId: randomUUID(), operation: "reply" },
       });
       expect(reply.ok()).toBe(true);
       await update;
@@ -3079,7 +3090,8 @@ for (const view of ["全部", "最近"]) {
     }
     await expect(row(target)).toHaveAttribute("aria-current", "true");
     await expect(page.locator(`[id="panel-topic%3A${target.sessionId}"][data-visible=true] .topic-conversation`)).toContainText(target.input);
-    await expect.poll(async () => (await row(target).boundingBox())!.y < (await row(previous).boundingBox())!.y).toBe(true);
+    await expect(row(previous)).toBeVisible();
+    await expect.poll(async () => (await row(target).boundingBox())!.y < (await row(previous).boundingBox())!.y).toBe(!sameAgent);
     const other = (await row(previous).boundingBox())!;
     await page.mouse.move(other.x + other.width / 2, other.y + other.height / 2);
     await page.mouse.down();
