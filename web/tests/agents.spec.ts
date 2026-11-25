@@ -5655,6 +5655,14 @@ test("topic previews stay recent while its tab loads full history and preserves 
   await expect(topic.locator(".topic-previews")).not.toContainText(
     "第 1 次补充",
   );
+  // Mark the topic read so opening it does not page back to the first unread reply.
+  const activity = page.locator(
+    `#agent-sidebar [data-session-id="${sessionId}"]`,
+  );
+  await expect(activity.locator(".agent-unread")).toBeVisible();
+  await activity.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "标为已读", exact: true }).click();
+  await expect(activity.locator(".agent-unread")).toHaveCount(0);
   let earlierRequests = 0;
   await page.route(
     `**/api/sessions/${sessionId}/runs?before=*`,
