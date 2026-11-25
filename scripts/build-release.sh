@@ -28,7 +28,10 @@ case "$1" in
       security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
       security list-keychains -d user -s "$keychain"
       identity=$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application:/ { print $2 }')
-      [[ "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]
+      if ! [[ "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+        echo 'The imported keychain must contain one Developer ID Application identity.' >&2
+        exit 1
+      fi
       unset MACOS_SIGNING_P12_BASE64 MACOS_SIGNING_P12_PASSWORD APPLE_NOTARY_KEY_P8
       umask 022
     fi
@@ -36,7 +39,10 @@ case "$1" in
     make package TARGETS=darwin/arm64 PACKAGE_FLAGS="-sign $identity"
     app=desktop/dist/darwin-arm64/Lever.app
     codesign --verify --deep --strict "$app"
-    [[ "$(lipo -archs "$app/Contents/MacOS/Lever")" == arm64 ]]
+    if [[ "$(lipo -archs "$app/Contents/MacOS/Lever")" != arm64 ]]; then
+      echo 'Expected an Apple Silicon executable.' >&2
+      exit 1
+    fi
     dmg="$package_dir/lever-$VERSION-macos-arm64.dmg"
     mv "desktop/dist/darwin-arm64/lever-$VERSION-arm64.dmg" "$dmg"
     if [[ "$SIGN_RELEASE" == true ]]; then

@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
   SIGN_RELEASE: ${{ github.ref_type == 'tag' || inputs.sign }}
@@ -113,12 +113,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/build-release.sh android
 
-      - name: Run source checks
+      - name: Build desktop and Hub web assets
         if: matrix.target == 'hub'
-        run: |
-          make privacy web
-          pnpm --dir web test:unit
-          go test -race ./internal/...
+        run: make privacy web
       - name: Package Hub Linux images and Compose files
         if: matrix.target == 'hub'
         run: bash scripts/build-release.sh hub
@@ -130,6 +127,11 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+      - name: Run source checks
+        if: matrix.target == 'hub'
+        run: |
+          pnpm --dir web test:unit
+          go test -race ./internal/...
 
   publish:
     name: Publish private prerelease
@@ -152,7 +154,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" == true ]]
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" != true ]]; then
+            echo 'This workflow publishes only to private repositories.' >&2
+            exit 1
+          fi
           tag=$GITHUB_REF_NAME
           version=${tag#v}
           notes="$RUNNER_TEMP/release-notes.md"
@@ -189,7 +194,10 @@ jobs:
           assets+=(SHA256SUMS)
 
           if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
-            [[ "$draft" == true ]]
+            if [[ "$draft" != true ]]; then
+              echo "Release $tag is already published." >&2
+              exit 1
+            fi
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
