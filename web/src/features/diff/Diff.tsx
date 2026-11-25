@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   parsePatchFiles,
   type CodeViewItem,
+  type DiffLineAnnotation,
   type FileDiffMetadata,
   type SelectedLineRange,
 } from "@pierre/diffs";
@@ -40,6 +41,7 @@ import {
   Folders,
   GitCompare,
   MoreHorizontal,
+  MessageSquarePlus,
   MessageSquareQuote,
   RefreshCw,
   Rows3,
@@ -81,6 +83,7 @@ import {
   rootName,
   workspaceFilePath,
 } from "@/features/files/filePaths";
+import { useEventCallback } from "@/hooks/useEventCallback";
 import { DiffStats, type TurnSelection } from "./TurnChanges";
 import { selectedCode } from "./selectedCode";
 import { DiffFileTree, prepareDiffFileTree } from "./DiffFileTree";
@@ -90,6 +93,29 @@ import {
   formatCompactCommitTime,
   type DiffTarget,
 } from "./useGitSummary";
+import {
+  buildReviewContent,
+  buildReviewMarkdown,
+  extractDraftAnchor,
+  fileStatsFingerprint,
+  isCommentOutdated,
+  isFileViewed,
+  loadReviewDraft,
+  patchContentHash,
+  reviewScopeKey,
+  saveReviewDraft,
+  sortReviewComments,
+  type DiffFeedbackTarget,
+  type DraftAnchor,
+  type ReviewComment,
+  type ReviewDraft,
+  type ReviewSide,
+} from "./reviewDraft";
+import {
+  ReviewAnnotationSlot,
+  ReviewControls,
+  type ReviewAnnotationMetadata,
+} from "./ReviewAnnotation";
 
 const defaults = {
   split: false,
@@ -116,6 +142,11 @@ const diffCSS = `
 [data-diff-type="split"][data-overflow="wrap"] {
   --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
 }
+[data-utility-button]:focus,
+[data-utility-button]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 `;
 function readPreferences(): typeof defaults {
   try {
@@ -132,6 +163,7 @@ export default function Diff({
   agent,
   dark,
   canReview,
+  reviewChatId,
   openFile,
   initialTurn,
   target,
@@ -140,10 +172,14 @@ export default function Diff({
   agent: Agent;
   dark: boolean;
   canReview: boolean;
+  reviewChatId?: string;
   openFile: (root: Root, path: string) => void;
   initialTurn?: TurnSelection;
   target?: DiffTarget;
-  onFeedback: (sessionId: string, content: JSONContent[]) => Promise<void>;
+  onFeedback: (
+    target: DiffFeedbackTarget,
+    content: JSONContent[],
+  ) => Promise<void>;
 }) {
   const { t, i18n } = useTranslation();
   const sessionId = useContext(WorkspaceSession);
@@ -166,9 +202,17 @@ export default function Diff({
     file: FileDiffMetadata;
     range: SelectedLineRange;
   }>();
+  const [draftAnchor, setDraftAnchor] = useState<DraftAnchor>();
+  const [editingCommentId, setEditingCommentId] = useState<string>();
   const [replying, setReplying] = useState(false);
-  const viewer = useRef<CodeViewHandle<undefined>>(null);
+  const viewer = useRef<CodeViewHandle<ReviewAnnotationMetadata>>(null);
   const pendingReveal = useRef<string>(undefined);
+  const pendingRevealLine = useRef<{
+    path: string;
+    lineNumber: number;
+    side: ReviewSide;
+  }>(undefined);
+  const suppressNextSelection = useRef(false);
   const reviewingTurn = mode === "turn";
   const [latestReview, setLatestReview] = useState<TurnReview>();
   const changes = useQuery({
@@ -359,33 +403,250 @@ export default function Diff({
     () => new Map(files.map((file) => [file.path, file])),
     [files],
   );
+  const turnLabel = initialTurn ? t("diff.thisTurn") : t("diff.turn");
+  const scopeLabel = reviewingTurn ? turnLabel : t(`diff.${mode}`);
+  const canFeedback = !agent.archived;
+  const feedbackTarget: DiffFeedbackTarget = initialTurn?.sessionId
+    ? { agentId: agent.id, sessionId: initialTurn.sessionId }
+    : sessionId
+      ? { agentId: agent.id, sessionId }
+      : reviewChatId
+        ? { agentId: agent.id, chatId: reviewChatId }
+        : { agentId: agent.id };
+  const scopeKey = reviewScopeKey({
+    agentId: agent.id,
+    sessionId: initialTurn?.sessionId ?? sessionId,
+    rootId: root?.id,
+    mode,
+    runId: review?.runId,
+    commit: mode === "committed" ? commit : undefined,
+    base: mode === "branch" ? branchRefs.base : undefined,
+    head: mode === "branch" ? branchRefs.head : undefined,
+  });
+  const [reviewState, setReviewState] = useState<{
+    key: string;
+    draft: ReviewDraft;
+  }>(() => ({ key: scopeKey, draft: loadReviewDraft(scopeKey) }));
+  const reviewDraft =
+    reviewState.key === scopeKey
+      ? reviewState.draft
+      : loadReviewDraft(scopeKey);
+  useEffect(() => {
+    setReviewState({ key: scopeKey, draft: loadReviewDraft(scopeKey) });
+    setDraftAnchor(undefined);
+    setEditingCommentId(undefined);
+  }, [scopeKey]);
+  function updateReviewDraft(updater: (previous: ReviewDraft) => ReviewDraft) {
+    setReviewState((previous) => {
+      const current =
+        previous.key === scopeKey
+          ? previous.draft
+          : loadReviewDraft(scopeKey);
+      const next = updater(current);
+      saveReviewDraft(scopeKey, next);
+      return { key: scopeKey, draft: next };
+    });
+  }
+  const fileOrder = useMemo(() => files.map((file) => file.path), [files]);
+  const sortedComments = useMemo(
+    () => sortReviewComments(reviewDraft.comments, fileOrder),
+    [reviewDraft.comments, fileOrder],
+  );
+  const outdatedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const comment of sortedComments) {
+      if (
+        isCommentOutdated(
+          comment,
+          patches.get(comment.path),
+          filesByPath.has(comment.path),
+        )
+      ) {
+        ids.add(comment.id);
+      }
+    }
+    return ids;
+  }, [sortedComments, patches, filesByPath]);
+  const viewedPaths = useMemo(() => {
+    const viewed = new Set<string>();
+    for (const file of files) {
+      if (isFileViewed(reviewDraft.viewed, file, patches.get(file.path))) {
+        viewed.add(file.path);
+      }
+    }
+    return viewed;
+  }, [files, patches, reviewDraft.viewed]);
+  const commentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const comment of sortedComments) {
+      counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
+    }
+    return counts;
+  }, [sortedComments]);
+  const annotationsByPath = useMemo(() => {
+    const grouped = new Map<
+      string,
+      Map<
+        string,
+        {
+          side: ReviewSide;
+          lineNumber: number;
+          comments: ReviewComment[];
+          draft?: DraftAnchor;
+        }
+      >
+    >();
+    const ensureSlot = (path: string, side: ReviewSide, lineNumber: number) => {
+      let slots = grouped.get(path);
+      if (!slots) {
+        slots = new Map();
+        grouped.set(path, slots);
+      }
+      const key = `${side}:${lineNumber}`;
+      let slot = slots.get(key);
+      if (!slot) {
+        slot = { side, lineNumber, comments: [] };
+        slots.set(key, slot);
+      }
+      return slot;
+    };
+    for (const comment of sortedComments) {
+      if (outdatedIds.has(comment.id)) continue;
+      ensureSlot(comment.path, comment.side, comment.endLine).comments.push(
+        comment,
+      );
+    }
+    if (draftAnchor) {
+      ensureSlot(
+        draftAnchor.path,
+        draftAnchor.side,
+        draftAnchor.endLine,
+      ).draft = draftAnchor;
+    }
+    const result = new Map<
+      string,
+      { annotations: DiffLineAnnotation<ReviewAnnotationMetadata>[]; key: string }
+    >();
+    for (const [path, slots] of grouped) {
+      const annotations: DiffLineAnnotation<ReviewAnnotationMetadata>[] = [];
+      const keyParts: string[] = [];
+      for (const slot of slots.values()) {
+        annotations.push({
+          side: slot.side,
+          lineNumber: slot.lineNumber,
+          metadata: { comments: slot.comments, draft: slot.draft },
+        });
+        keyParts.push(
+          `${slot.side}:${slot.lineNumber}:${slot.comments
+            .map(
+              (c) =>
+                `${c.id}:${c.id === editingCommentId ? 1 : 0}:${c.body}`,
+            )
+            .join(",")}:${
+            slot.draft
+              ? `${slot.draft.startLine}-${slot.draft.endLine}`
+              : ""
+          }`,
+        );
+      }
+      result.set(path, { annotations, key: keyParts.join("|") });
+    }
+    return result;
+  }, [sortedComments, outdatedIds, draftAnchor, editingCommentId]);
   const itemVersion = useRef(0);
-  const items = useMemo<CodeViewItem[]>(() => {
-    // CodeView applies controlled content and collapse changes by version.
-    const version = ++itemVersion.current;
-    return displayed.map((file) => {
+  const itemVersionCache = useRef(
+    new Map<
+      string,
+      {
+        fileDiff?: FileDiffMetadata;
+        collapsed: boolean;
+        annotationsKey: string;
+        binary: boolean;
+        label: string;
+        version: number;
+      }
+    >(),
+  );
+  const items = useMemo<CodeViewItem<ReviewAnnotationMetadata>[]>(() => {
+    // CodeView applies controlled content, collapse, and annotation changes by version.
+    const nextCache = new Map(itemVersionCache.current);
+    const activeIds = new Set<string>();
+    const result = displayed.map((file) => {
+      activeIds.add(file.path);
       const fileDiff = patches.get(file.path);
+      const isCollapsed = collapsed.has(file.path);
+      const annotationEntry = annotationsByPath.get(file.path);
+      const annotationsKey = annotationEntry?.key ?? "";
+      const binary = !!file.binary;
+      const label =
+        fileDiff?.hunks.length && !binary
+          ? ""
+          : t(binary ? "diff.binary" : "diff.metadata");
+      const cached = nextCache.get(file.path);
+      const version =
+        cached &&
+        cached.fileDiff === fileDiff &&
+        cached.collapsed === isCollapsed &&
+        cached.annotationsKey === annotationsKey &&
+        cached.binary === binary &&
+        cached.label === label
+          ? cached.version
+          : ++itemVersion.current;
+      nextCache.set(file.path, {
+        fileDiff,
+        collapsed: isCollapsed,
+        annotationsKey,
+        binary,
+        label,
+        version,
+      });
       const item = {
         id: file.path,
-        collapsed: collapsed.has(file.path),
+        collapsed: isCollapsed,
         version,
       };
-      return fileDiff?.hunks.length && !file.binary
-        ? { ...item, type: "diff", fileDiff }
+      return fileDiff?.hunks.length && !binary
+        ? {
+            ...item,
+            type: "diff" as const,
+            fileDiff,
+            ...(annotationEntry ? { annotations: annotationEntry.annotations } : {}),
+          }
         : {
             ...item,
-            type: "file",
+            type: "file" as const,
             file: {
               name: file.path,
-              lang: "text",
-              contents: t(file.binary ? "diff.binary" : "diff.metadata"),
+              lang: "text" as const,
+              contents: label,
             },
           };
     });
-  }, [displayed, patches, collapsed, t]);
+    for (const key of nextCache.keys()) {
+      if (!activeIds.has(key)) nextCache.delete(key);
+    }
+    itemVersionCache.current = nextCache;
+    return result;
+  }, [displayed, patches, collapsed, annotationsByPath, t]);
   useLayoutEffect(() => {
+    if (!viewer.current) return;
+    const lineTarget = pendingRevealLine.current;
+    if (lineTarget && (!singleFile || activePath === lineTarget.path)) {
+      if (patches.has(lineTarget.path)) {
+        pendingRevealLine.current = undefined;
+        viewer.current.scrollTo({
+          type: "line",
+          id: lineTarget.path,
+          lineNumber: lineTarget.lineNumber,
+          side: lineTarget.side,
+          align: "center",
+          behavior: "instant",
+        });
+        return;
+      }
+    }
     const path = pendingReveal.current;
-    if (!path || !viewer.current) return;
+    if (!path) return;
     pendingReveal.current = undefined;
     viewer.current.scrollTo({
       type: "item",
@@ -393,12 +654,217 @@ export default function Diff({
       align: "start",
       behavior: "instant",
     });
-  }, [items, selected]);
+  }, [items, selected, singleFile, activePath, patches]);
   useEffect(() => setSelection(undefined), [patch, mode, root?.id]);
-  const canFeedback =
-    reviewingTurn && !!initialTurn?.sessionId && !agent.archived;
+  function openDraftForRange(
+    path: string,
+    fileDiff: FileDiffMetadata,
+    range: SelectedLineRange,
+  ) {
+    if (!canFeedback) return;
+    const anchor = extractDraftAnchor(path, fileDiff, range, prefs.split);
+    if (!anchor) return;
+    setSelection(undefined);
+    setEditingCommentId(undefined);
+    setCollapsed((previous) => {
+      if (!previous.has(path)) return previous;
+      const next = new Set(previous);
+      next.delete(path);
+      return next;
+    });
+    setDraftAnchor(anchor);
+  }
+  const handleGutterUtilityClick = useEventCallback(
+    (
+      range: SelectedLineRange,
+      context: { item: CodeViewItem<ReviewAnnotationMetadata> },
+    ) => {
+      if (!canFeedback || context.item.type !== "diff") return;
+      suppressNextSelection.current = true;
+      openDraftForRange(context.item.id, context.item.fileDiff, range);
+    },
+  );
+  const codeViewOptions = useMemo(
+    () => ({
+      diffStyle: (prefs.split ? "split" : "unified") as "split" | "unified",
+      themeType: (dark ? "dark" : "light") as "dark" | "light",
+      overflow: (prefs.wrap ? "wrap" : "scroll") as "wrap" | "scroll",
+      lineDiffType: "word" as const,
+      expandUnchanged: prefs.full,
+      enableLineSelection: canFeedback,
+      enableGutterUtility: canFeedback,
+      onGutterUtilityClick: canFeedback ? handleGutterUtilityClick : undefined,
+      stickyHeaders: true,
+      pointerEventsOnScroll: true,
+      itemMetrics: diffMetrics,
+      layout: diffLayout,
+      unsafeCSS: diffCSS,
+    }),
+    [prefs.split, prefs.wrap, prefs.full, dark, canFeedback, handleGutterUtilityClick],
+  );
+  function saveDraftComment(anchor: DraftAnchor, body: string) {
+    const comment: ReviewComment = {
+      id: crypto.randomUUID(),
+      path: anchor.path,
+      side: anchor.side,
+      startLine: anchor.startLine,
+      endLine: anchor.endLine,
+      anchorText: anchor.anchorText,
+      snippet: anchor.snippet,
+      lang: anchor.lang,
+      body,
+      createdAt: Date.now(),
+    };
+    updateReviewDraft((previous) => ({
+      ...previous,
+      comments: [...previous.comments, comment],
+    }));
+    setDraftAnchor(undefined);
+  }
+  function saveEditedComment(id: string, body: string) {
+    updateReviewDraft((previous) => ({
+      ...previous,
+      comments: previous.comments.map((comment) =>
+        comment.id === id ? { ...comment, body } : comment,
+      ),
+    }));
+    setEditingCommentId(undefined);
+  }
+  function deleteComment(id: string) {
+    updateReviewDraft((previous) => ({
+      ...previous,
+      comments: previous.comments.filter((comment) => comment.id !== id),
+    }));
+    if (editingCommentId === id) setEditingCommentId(undefined);
+  }
+  function clearComments() {
+    const removed = reviewDraft.comments;
+    if (removed.length === 0) return;
+    updateReviewDraft((previous) => ({ ...previous, comments: [] }));
+    setDraftAnchor(undefined);
+    setEditingCommentId(undefined);
+    toast.success(t("diff.commentsCleared", { count: removed.length }), {
+      action: {
+        label: t("diff.undoSubmit"),
+        onClick: () =>
+          updateReviewDraft((previous) => ({
+            ...previous,
+            comments: [
+              ...removed,
+              ...previous.comments.filter(
+                (item) => !removed.some((old) => old.id === item.id),
+              ),
+            ],
+          })),
+      },
+    });
+  }
+  function toggleViewed(file: (typeof files)[number]) {
+    const fileDiff = patches.get(file.path);
+    const currentlyViewed = viewedPaths.has(file.path);
+    updateReviewDraft((previous) => {
+      const viewed = { ...previous.viewed };
+      if (currentlyViewed) {
+        delete viewed[file.path];
+      } else {
+        viewed[file.path] = {
+          stats: fileStatsFingerprint(file),
+          ...(fileDiff ? { contentHash: patchContentHash(fileDiff) } : {}),
+        };
+      }
+      return { ...previous, viewed };
+    });
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      if (currentlyViewed) next.delete(file.path);
+      else next.add(file.path);
+      return next;
+    });
+  }
+  function jumpToComment(comment: ReviewComment) {
+    if (!filesByPath.has(comment.path)) return;
+    if (!visible.some((file) => file.path === comment.path)) setFilter("");
+    setSelected(comment.path);
+    setCollapsed((previous) => {
+      if (!previous.has(comment.path)) return previous;
+      const next = new Set(previous);
+      next.delete(comment.path);
+      return next;
+    });
+    if (outdatedIds.has(comment.id)) {
+      pendingReveal.current = comment.path;
+      return;
+    }
+    pendingRevealLine.current = {
+      path: comment.path,
+      lineNumber: comment.endLine,
+      side: comment.side,
+    };
+  }
+  function reviewFormatLabels() {
+    return {
+      header: t("diff.reviewHeader", {
+        scope: scopeLabel,
+        count: sortedComments.length,
+      }),
+      sideLabel: (side: ReviewSide) =>
+        t(side === "deletions" ? "diff.oldSide" : "diff.newSide"),
+      outdatedLabel: t("diff.commentOutdated"),
+    };
+  }
+  async function submitReview() {
+    if (!root || sortedComments.length === 0 || !canFeedback) return;
+    const submitted = [...sortedComments];
+    const content = buildReviewContent(
+      submitted,
+      root,
+      !!native,
+      reviewFormatLabels(),
+      outdatedIds,
+    );
+    setReplying(true);
+    try {
+      await onFeedback(feedbackTarget, content);
+      updateReviewDraft((previous) => ({ ...previous, comments: [] }));
+      setDraftAnchor(undefined);
+      setEditingCommentId(undefined);
+      toast.success(t("diff.reviewLoaded", { count: submitted.length }), {
+        action: {
+          label: t("diff.undoSubmit"),
+          onClick: () =>
+            updateReviewDraft((previous) => ({
+              ...previous,
+              comments: [
+                ...submitted,
+                ...previous.comments.filter(
+                  (item) => !submitted.some((old) => old.id === item.id),
+                ),
+              ],
+            })),
+        },
+      });
+    } catch {
+      // onFeedback already reports the error toast.
+    } finally {
+      setReplying(false);
+    }
+  }
+  function copyReview() {
+    if (!root || sortedComments.length === 0) return;
+    const markdown = buildReviewMarkdown(
+      sortedComments,
+      root,
+      !!native,
+      reviewFormatLabels(),
+      outdatedIds,
+    );
+    void navigator.clipboard.writeText(markdown).then(
+      () => toast.success(t("diff.reviewCopied")),
+      (error) => toast.error(String(error)),
+    );
+  }
   async function feedback() {
-    if (!selection || !initialTurn || !root) return;
+    if (!selection || !root || !canFeedback) return;
     const content: JSONContent[] = selectedCode(
       selection.file,
       selection.range,
@@ -412,6 +878,7 @@ export default function Diff({
             {
               type: "text",
               text: t("diff.quoteSource", {
+                scope: scopeLabel,
                 path: native
                   ? (workspaceFilePath(part.path, root.path) ?? part.path)
                   : absoluteFilePath({ root, path: part.path }),
@@ -436,7 +903,9 @@ export default function Diff({
     content.push({ type: "paragraph" });
     setReplying(true);
     try {
-      await onFeedback(initialTurn.sessionId, content);
+      await onFeedback(feedbackTarget, content);
+    } catch {
+      // onFeedback already reports the error toast.
     } finally {
       setReplying(false);
     }
@@ -526,8 +995,6 @@ export default function Diff({
     ((reviewingTurn ? canReview && changes.isPending : gitRoots.isPending) ||
       (mode === "branch" && !!root && branches.isPending) ||
       (canFetchDiff && query.isPending));
-  const turnLabel = initialTurn ? t("diff.thisTurn") : t("diff.turn");
-  const scopeLabel = reviewingTurn ? turnLabel : t(`diff.${mode}`);
   const navigation = (
     <>
       <ToolbarButton
@@ -716,122 +1183,135 @@ export default function Diff({
               />
             </div>
           )}
-          <div className="diff-toolbar-actions">
-            {singleFile && (
-              <>
-                <span
-                  className="diff-file-position"
-                  aria-label={t("diff.filePosition")}
-                >
-                  {visible.length ? activeIndex + 1 : 0} / {visible.length}
-                </span>
-                {navigation}
-              </>
-            )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t("diff.options")}
-                  title={t("diff.options")}
-                >
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="diff-menu">
-                <DropdownMenuGroup>
-                  <DropdownMenuCheckboxItem
-                    disabled={!!native}
-                    checked={!native && prefs.full}
-                    onCheckedChange={(full) =>
-                      setPrefs((p) => ({ ...p, full }))
-                    }
+          <div className="diff-toolbar-end">
+            <ReviewControls
+              comments={sortedComments}
+              outdatedIds={outdatedIds}
+              submitting={replying}
+              canSubmit={canFeedback && !!root}
+              onJump={jumpToComment}
+              onDelete={deleteComment}
+              onClearAll={clearComments}
+              onCopy={copyReview}
+              onSubmit={() => void submitReview()}
+            />
+            <div className="diff-toolbar-actions">
+              {singleFile && (
+                <>
+                  <span
+                    className="diff-file-position"
+                    aria-label={t("diff.filePosition")}
                   >
-                    <FileText />
-                    {t("diff.full")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={prefs.words}
-                    onCheckedChange={(words) =>
-                      setPrefs((p) => ({ ...p, words }))
-                    }
+                    {visible.length ? activeIndex + 1 : 0} / {visible.length}
+                  </span>
+                  {navigation}
+                </>
+              )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("diff.options")}
+                    title={t("diff.options")}
                   >
-                    <TextCursorInput />
-                    {t("diff.words")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    disabled={!!native}
-                    checked={!native && prefs.whitespace}
-                    onCheckedChange={(whitespace) =>
-                      setPrefs((p) => ({ ...p, whitespace }))
-                    }
-                  >
-                    <EyeOff />
-                    {t("diff.whitespace")}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={!patch}
-                    onSelect={() => {
-                      void navigator.clipboard.writeText(patch).then(
-                        () => toast.success(t("diff.copied")),
-                        (error) => toast.error(String(error)),
-                      );
-                    }}
-                  >
-                    <Copy />
-                    {t(singleFile ? "diff.copyFile" : "diff.copy")}
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <ToolbarButton label={t("diff.refresh")} onClick={refresh}>
-              <RefreshCw
-                className={
-                  query.isFetching || changes.isFetching
-                    ? "animate-spin"
-                    : undefined
-                }
-              />
-            </ToolbarButton>
-            <ToolbarButton
-              label={t("diff.wrap")}
-              active={prefs.wrap}
-              onClick={() => setPrefs((p) => ({ ...p, wrap: !p.wrap }))}
-            >
-              <WrapText />
-            </ToolbarButton>
-            <ToolbarButton
-              label={allCollapsed ? t("diff.expand") : t("diff.collapse")}
-              active={allCollapsed}
-              onClick={() =>
-                setCollapsed((previous) => {
-                  const next = new Set(previous);
-                  for (const file of displayed) {
-                    if (allCollapsed) next.delete(file.path);
-                    else next.add(file.path);
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="diff-menu">
+                  <DropdownMenuGroup>
+                    <DropdownMenuCheckboxItem
+                      disabled={!!native}
+                      checked={!native && prefs.full}
+                      onCheckedChange={(full) =>
+                        setPrefs((p) => ({ ...p, full }))
+                      }
+                    >
+                      <FileText />
+                      {t("diff.full")}
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={prefs.words}
+                      onCheckedChange={(words) =>
+                        setPrefs((p) => ({ ...p, words }))
+                      }
+                    >
+                      <TextCursorInput />
+                      {t("diff.words")}
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      disabled={!!native}
+                      checked={!native && prefs.whitespace}
+                      onCheckedChange={(whitespace) =>
+                        setPrefs((p) => ({ ...p, whitespace }))
+                      }
+                    >
+                      <EyeOff />
+                      {t("diff.whitespace")}
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={!patch}
+                      onSelect={() => {
+                        void navigator.clipboard.writeText(patch).then(
+                          () => toast.success(t("diff.copied")),
+                          (error) => toast.error(String(error)),
+                        );
+                      }}
+                    >
+                      <Copy />
+                      {t(singleFile ? "diff.copyFile" : "diff.copy")}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <ToolbarButton label={t("diff.refresh")} onClick={refresh}>
+                <RefreshCw
+                  className={
+                    query.isFetching || changes.isFetching
+                      ? "animate-spin"
+                      : undefined
                   }
-                  return next;
-                })
-              }
-            >
-              {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-            </ToolbarButton>
-            <ToolbarButton
-              label={prefs.split ? t("diff.unified") : t("diff.split")}
-              active={prefs.split}
-              onClick={() => setPrefs((p) => ({ ...p, split: !p.split }))}
-            >
-              {prefs.split ? <Rows3 /> : <Columns2 />}
-            </ToolbarButton>
-            <ToolbarButton
-              label={t("diff.fileList")}
-              active={prefs.sidebar}
-              onClick={() => setPrefs((p) => ({ ...p, sidebar: !p.sidebar }))}
-            >
-              <Folders />
-            </ToolbarButton>
+                />
+              </ToolbarButton>
+              <ToolbarButton
+                label={t("diff.wrap")}
+                active={prefs.wrap}
+                onClick={() => setPrefs((p) => ({ ...p, wrap: !p.wrap }))}
+              >
+                <WrapText />
+              </ToolbarButton>
+              <ToolbarButton
+                label={allCollapsed ? t("diff.expand") : t("diff.collapse")}
+                active={allCollapsed}
+                onClick={() =>
+                  setCollapsed((previous) => {
+                    const next = new Set(previous);
+                    for (const file of displayed) {
+                      if (allCollapsed) next.delete(file.path);
+                      else next.add(file.path);
+                    }
+                    return next;
+                  })
+                }
+              >
+                {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+              </ToolbarButton>
+              <ToolbarButton
+                label={prefs.split ? t("diff.unified") : t("diff.split")}
+                active={prefs.split}
+                onClick={() => setPrefs((p) => ({ ...p, split: !p.split }))}
+              >
+                {prefs.split ? <Rows3 /> : <Columns2 />}
+              </ToolbarButton>
+              <ToolbarButton
+                label={t("diff.fileList")}
+                active={prefs.sidebar}
+                onClick={() => setPrefs((p) => ({ ...p, sidebar: !p.sidebar }))}
+              >
+                <Folders />
+              </ToolbarButton>
+            </div>
           </div>
         </header>
         <div className="diff-body">
@@ -898,6 +1378,11 @@ export default function Diff({
                       : null
                   }
                   onSelectedLinesChange={(next) => {
+                    if (suppressNextSelection.current) {
+                      suppressNextSelection.current = false;
+                      setSelection(undefined);
+                      return;
+                    }
                     const file = next && patches.get(next.id);
                     setSelection(
                       file?.hunks.length && next
@@ -905,19 +1390,7 @@ export default function Diff({
                         : undefined,
                     );
                   }}
-                  options={{
-                    diffStyle: prefs.split ? "split" : "unified",
-                    themeType: dark ? "dark" : "light",
-                    overflow: prefs.wrap ? "wrap" : "scroll",
-                    lineDiffType: "word",
-                    expandUnchanged: prefs.full,
-                    enableLineSelection: canFeedback,
-                    stickyHeaders: true,
-                    pointerEventsOnScroll: true,
-                    itemMetrics: diffMetrics,
-                    layout: diffLayout,
-                    unsafeCSS: diffCSS,
-                  }}
+                  options={codeViewOptions}
                   onScroll={(scrollTop, instance) => {
                     if (singleFile) return;
                     let path = visible[0]?.path;
@@ -932,11 +1405,29 @@ export default function Diff({
                     }
                     if (path && path !== selected) setSelected(path);
                   }}
+                  renderAnnotation={(annotation) =>
+                    annotation.metadata ? (
+                      <ReviewAnnotationSlot
+                        metadata={annotation.metadata}
+                        editingId={editingCommentId}
+                        onStartEdit={(id) => {
+                          setDraftAnchor(undefined);
+                          setEditingCommentId(id);
+                        }}
+                        onCancelEdit={() => setEditingCommentId(undefined)}
+                        onSaveEdit={saveEditedComment}
+                        onDelete={deleteComment}
+                        onSaveDraft={saveDraftComment}
+                        onCancelDraft={() => setDraftAnchor(undefined)}
+                      />
+                    ) : null
+                  }
                   renderCustomHeader={({ id }) => {
                     const file = filesByPath.get(id);
                     if (!file) return null;
-                    const patch = patches.get(id);
-                    const target = native
+                    const fileDiff = patches.get(id);
+                    const fileViewed = viewedPaths.has(id);
+                    const fileTarget = native
                       ? resolveWorkspaceFile(
                           id,
                           native.root.path,
@@ -969,21 +1460,56 @@ export default function Diff({
                         <DiffStats files={[file]} />
                         {canFeedback &&
                           selection &&
-                          selection.file === patch && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={replying}
-                              onClick={() => void feedback()}
-                            >
-                              <MessageSquareQuote />
-                              {t("diff.feedback")}
-                            </Button>
+                          fileDiff &&
+                          selection.file === fileDiff && (
+                            <div className="diff-selection-actions">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  openDraftForRange(
+                                    id,
+                                    fileDiff,
+                                    selection.range,
+                                  )
+                                }
+                              >
+                                <MessageSquarePlus />
+                                {t("diff.addComment")}
+                              </Button>
+                              <ToolbarButton
+                                label={t("diff.feedback")}
+                                disabled={replying}
+                                onClick={() => void feedback()}
+                              >
+                                <MessageSquareQuote />
+                              </ToolbarButton>
+                            </div>
                           )}
-                        {file.status !== "D" && target && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="diff-viewed-toggle"
+                          aria-pressed={fileViewed}
+                          aria-label={t(
+                            fileViewed ? "diff.markUnviewed" : "diff.markViewed",
+                          )}
+                          title={t(
+                            fileViewed ? "diff.markUnviewed" : "diff.markViewed",
+                          )}
+                          onClick={() => toggleViewed(file)}
+                        >
+                          <Check />
+                          <span>{t("diff.viewed")}</span>
+                        </Button>
+                        {file.status !== "D" && fileTarget && (
                           <ToolbarButton
                             label={t("diff.openFile")}
-                            onClick={() => openFile(target.root, target.path)}
+                            onClick={() =>
+                              openFile(fileTarget.root, fileTarget.path)
+                            }
                           >
                             <FileText />
                           </ToolbarButton>
@@ -1009,12 +1535,18 @@ export default function Diff({
               />
               <div className="diff-list-heading">
                 <span>{t("diff.changedFiles")}</span>
-                <span>{files.length}</span>
+                <span>
+                  {viewedPaths.size > 0
+                    ? `${viewedPaths.size}/${files.length}`
+                    : files.length}
+                </span>
                 {!singleFile && navigation}
               </div>
               <DiffFileTree
                 tree={fileTree}
                 selected={activePath}
+                viewed={viewedPaths}
+                commentCounts={commentCounts}
                 onSelect={reveal}
               />
             </aside>

@@ -192,6 +192,7 @@ import {
 import { GitStatusControl } from "@/features/diff/GitStatusControl";
 import { useGitRoots } from "@/features/diff/useGitRoots";
 import type { DiffTarget } from "@/features/diff/useGitSummary";
+import type { DiffFeedbackTarget } from "@/features/diff/reviewDraft";
 
 import {
   closeTerminals,
@@ -1353,35 +1354,113 @@ export default function App() {
     setPage("agents");
     requestReveal({ tabId: chatId, topicId: sessionId });
   }
-  async function replyToDiff(sessionId: string, content: JSONContent[]) {
+  async function replyToDiff(
+    target: DiffFeedbackTarget,
+    content: JSONContent[],
+  ) {
     try {
-      const view = await queryClient.fetchQuery(sessionQuery(sessionId));
-      const { session } = view;
-      choose(session.agentId);
-      if (session.kind === "topic") openTopic(view);
-      else
+      if (target.sessionId) {
+        const view = await queryClient.fetchQuery(
+          sessionQuery(target.sessionId),
+        );
+        const { session } = view;
+        const tabs = workspaceFor(session.agentId)?.tabs ?? [];
+        choose(session.agentId);
+        if (session.kind === "topic") openTopic(view);
+        else {
+          const chat = overview.data?.chats.find(
+            (item) => item.id === session.chatId,
+          );
+          if (!chat) throw new Error(t("composer.sourceUnavailable"));
+          openTab(
+            {
+              id: session.chatId,
+              kind: "chat",
+              title: displayChatTitle(chat, t),
+            },
+            session.agentId,
+            tabs.some((tab) => tab.id === session.chatId) ? undefined : "main",
+          );
+        }
+        insertIntoComposer({
+          id: crypto.randomUUID(),
+          composer: session.kind === "topic" ? session.id : session.chatId,
+          kind: "reply",
+          content,
+        });
+        return;
+      }
+
+      const targetWorkspace = workspaceFor(target.agentId);
+      const tabs = targetWorkspace?.tabs ?? [];
+      const openChatForReply = (chatId: string) => {
+        const draftId = draftChatId(target.agentId);
+        if (chatId === draftId) {
+          newChat(
+            target.agentId,
+            tabs.some((tab) => tab.id === draftId) ? undefined : "main",
+          );
+          return draftId;
+        }
+        const chat = overview.data?.chats.find((item) => item.id === chatId);
+        if (!chat) return undefined;
+        choose(chat.agentId);
         openTab(
           {
-            id: session.chatId,
+            id: chat.id,
             kind: "chat",
-            title: displayChatTitle(
-              overview.data!.chats.find((chat) => chat.id === session.chatId)!,
-              t,
-            ),
+            title: displayChatTitle(chat, t),
           },
-          session.agentId,
-          workspace.tabs.some((tab) => tab.id === session.chatId)
-            ? undefined
-            : "main",
+          chat.agentId,
+          tabs.some((tab) => tab.id === chat.id) ? undefined : "main",
         );
+        return chat.id;
+      };
+
+      let composerKey = target.chatId
+        ? openChatForReply(target.chatId)
+        : undefined;
+      if (!composerKey) {
+        const openConversationTab =
+          tabs.find(
+            (tab) =>
+              tab.kind === "chat" && tab.id === targetWorkspace?.lastChatId,
+          ) ??
+          tabs.find(
+            (tab) =>
+              tab.kind === "chat" ||
+              tab.kind === "draft" ||
+              tab.kind === "topic",
+          );
+        if (openConversationTab?.kind === "topic") {
+          const view = await queryClient.fetchQuery(
+            sessionQuery(openConversationTab.topic.sessionId),
+          );
+          choose(view.session.agentId);
+          openTopic(view);
+          composerKey = view.session.id;
+        } else if (openConversationTab) {
+          composerKey = openChatForReply(openConversationTab.id);
+        }
+      }
+      if (!composerKey) {
+        const preferred = agentActivity
+          ? preferredAgentChat(agentActivity.chats, target.agentId)
+          : undefined;
+        composerKey =
+          (preferred && openChatForReply(preferred.id)) ||
+          openChatForReply(draftChatId(target.agentId));
+      }
+      if (!composerKey) throw new Error(t("composer.sourceUnavailable"));
       insertIntoComposer({
         id: crypto.randomUUID(),
-        composer: session.kind === "topic" ? session.id : session.chatId,
+        composer: composerKey,
         kind: "reply",
         content,
       });
     } catch (error) {
       toast.error(String(error));
+      throw error;
     }
   }
   function closeWorkspaceTabs(
@@ -2892,7 +2971,10 @@ const ScopedTool = memo(function ScopedTool({
     file: FileSelection & { source?: SkillFileSource | HostFileSource },
     source: AgentFileSource,
   ) => void;
-  onFeedback: (sessionId: string, content: JSONContent[]) => Promise<void>;
+  onFeedback: (
+    target: DiffFeedbackTarget,
+    content: JSONContent[],
+  ) => Promise<void>;
   onReference: (view: SessionView, reference: Reference) => void;
 }) {
   const { t: translate } = useTranslation();
@@ -2976,6 +3058,7 @@ const ScopedTool = memo(function ScopedTool({
             agent={scopedAgent}
             dark={dark}
             canReview={!tab.reviewChatId || !!sessionId}
+            reviewChatId={tab.reviewChatId}
             openFile={(root, path) => openFile({ root, path }, fileSource)}
             initialTurn={tab.diff}
             target={tab.diffTarget}

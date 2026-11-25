@@ -41,17 +41,21 @@ export function prepareDiffFileTree(files: DiffFile[]) {
 export function DiffFileTree({
   tree,
   selected,
+  viewed,
+  commentCounts,
   onSelect,
 }: {
   tree: ReturnType<typeof prepareDiffFileTree>;
   selected?: string;
+  viewed?: ReadonlySet<string>;
+  commentCounts?: ReadonlyMap<string, number>;
   onSelect: (path: string) => void;
 }) {
   const { t } = useTranslation();
   const { entries, preparedInput } = tree;
   const syncing = useRef(false);
-  const live = useRef({ entries, onSelect });
-  live.current = { entries, onSelect };
+  const live = useRef({ entries, onSelect, viewed, commentCounts });
+  live.current = { entries, onSelect, viewed, commentCounts };
   const { model } = useFileTree({
     paths: [],
     initialExpansion: "open",
@@ -68,15 +72,32 @@ export function DiffFileTree({
     renderRowDecoration: ({ item }) => {
       const file = live.current.entries.get(item.path);
       if (!file) return null;
+      const isViewed = live.current.viewed?.has(file.path) ?? false;
+      const count = live.current.commentCounts?.get(file.path) ?? 0;
+      const parts: { text: string; color?: string }[] = [];
+      if (isViewed) {
+        parts.push({ text: "✓", color: "var(--muted-foreground)" });
+        parts.push({ text: "\u00a0\u00a0" });
+      }
+      parts.push(
+        { text: `+${file.additions}`, color: "var(--diff-added)" },
+        { text: `\u00a0−${file.deletions}`, color: "var(--diff-removed)" },
+      );
+      if (count > 0) {
+        parts.push(
+          { text: "\u00a0·\u00a0", color: "var(--muted-foreground)" },
+          { text: String(count), color: "var(--foreground)" },
+        );
+      }
       return {
-        text: `+${file.additions} −${file.deletions}`,
-        parts: [
-          { text: `+${file.additions}`, color: "var(--diff-added)" },
-          { text: `\u00a0−${file.deletions}`, color: "var(--diff-removed)" },
-        ],
+        text: parts.map((part) => part.text).join(""),
+        parts,
       };
     },
   });
+  useLayoutEffect(() => {
+    model.setComposition(undefined);
+  }, [model, viewed, commentCounts]);
   useLayoutEffect(() => {
     syncing.current = true;
     try {
