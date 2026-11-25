@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Verify macOS notarization and Android release signing
+        type: boolean
+        default: false
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SIGN_RELEASE: ${{ github.ref_type == 'tag' || inputs.sign }}
+
+jobs:
+  build:
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            runner: macos-15
+          - target: windows
+            runner: windows-2025
+          - target: android
+            runner: ubuntu-24.04
+          - target: hub
+            runner: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Check package versions
+        run: |
+          version=$(node -p "require('./desktop/mygo.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$version" == "$(node -p "require('./mobile/mygo.json').version")" ]]
+          [[ "$version" == "$(node -p "require('./web/package.json').version")" ]]
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install pinned pnpm
+        run: npm install --global "$(node -p "require('./web/package.json').packageManager")"
+
+      - name: Package macOS Apple Silicon
+        if: matrix.target == 'macos'
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/build-release.sh macos
+
+      - name: Package Windows x64
+        if: matrix.target == 'windows'
+        run: bash scripts/build-release.sh windows
+      - name: Check Windows install and uninstall
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path "output/release/lever-$env:VERSION-windows-amd64-setup.exe"
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\Lever'
+          $setup = Start-Process -FilePath $installer.Path -ArgumentList '/S' -Wait -PassThru
+          if ($setup.ExitCode -ne 0 -or !(Test-Path "$installed\Lever.exe")) {
+            throw "Lever installation failed with exit code $($setup.ExitCode)"
+          }
+          $uninstall = Start-Process -FilePath "$installed\Uninstall.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0 -or (Test-Path "$installed\Lever.exe")) {
+            throw "Lever uninstallation failed with exit code $($uninstall.ExitCode)"
+          }
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        if: matrix.target == 'android'
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build Android APK
+        if: matrix.target == 'android'
+        run: |
+          ndk_version=27.3.13750724
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;$ndk_version"
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ndk_version" make mobile-android
+      - name: Package Android APK
+        if: matrix.target == 'android'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/build-release.sh android
+
+      - name: Run source checks
+        if: matrix.target == 'hub'
+        run: |
+          make privacy web
+          pnpm --dir web test:unit
+          go test -race ./internal/...
+      - name: Package Hub Linux images and Compose files
+        if: matrix.target == 'hub'
+        run: bash scripts/build-release.sh hub
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.target }}
+          path: output/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish private prerelease
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-*
+          path: output/release
+          merge-multiple: true
+      - name: Publish all release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" == true ]]
+          tag=$GITHUB_REF_NAME
+          version=${tag#v}
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v heading="## [$version] - " '
+            index($0, heading) == 1 { in_release = 1; next }
+            in_release && /^## / { exit }
+            in_release { print }
+          ' CHANGELOG.md > "$notes"
+          grep -q '[^[:space:]]' "$notes"
+          cat >> "$notes" <<'EOF'
+
+          ### 安装
+
+          - macOS Apple Silicon 下载 DMG，打开后将 Lever 拖入「应用程序」。
+          - Windows Intel/AMD 64 位下载 setup.exe。内测安装器可能显示 SmartScreen 提示。
+          - Android 下载 APK，安装后使用 Lever Hub 的配对码连接。
+          - Hub 选一个对应服务器架构的 Linux 镜像，搭配 Compose 部署包。
+          - 使用 SHA256SUMS 校验下载文件。
+          EOF
+
+          cd output/release
+          assets=(
+            "lever-$version-macos-arm64.dmg"
+            "lever-$version-windows-amd64-setup.exe"
+            "lever-mobile-$version-android.apk"
+            "lever-hub-$version-linux-amd64.tar.gz"
+            "lever-hub-$version-linux-arm64.tar.gz"
+            "lever-hub-deploy-$version.tar.gz"
+          )
+          for asset in "${assets[@]}"; do
+            test -s "$asset"
+          done
+          sha256sum "${assets[@]}" > SHA256SUMS
+          assets+=(SHA256SUMS)
+
+          if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
+            [[ "$draft" == true ]]
+            gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --prerelease --title "Lever $tag" --notes-file "$notes"
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            | sort | diff - <(printf '%s\n' "${assets[@]}" | sort)
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --prerelease --draft=false --latest=false \
+            --title "Lever $tag" --notes-file "$notes"

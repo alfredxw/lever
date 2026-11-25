@@ -1,6 +1,7 @@
 .PHONY: web hub-web hub hub-image hub-deploy mobile-ios mobile-ios-simulator mobile-android build desktop package dev privacy test generate
 VERSION ?= 0.1.0
 TARGETS ?= darwin/arm64
+PACKAGE_FLAGS ?= -skip-dmg -skip-installer
 MYGO_IOS_CLI := github.com/egoist/mygo/cmd/mygo@v0.10.1-0.20261118115623-e1e4364ce377
 web:
 	pnpm --dir web install --frozen-lockfile
@@ -10,7 +11,7 @@ build: web
 desktop: web
 	go build -o bin/desktop/Lever ./cmd/lever-desktop
 package: web
-	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform $(TARGETS) -skip-dmg -skip-installer desktop
+	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform $(TARGETS) $(PACKAGE_FLAGS) desktop
 dev:
 	go run -tags dev ./cmd/lever --dev-origin http://127.0.0.1:5179
 privacy:

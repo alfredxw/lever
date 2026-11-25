@@ -1,6 +1,6 @@
 # 部署 Lever Hub
 
-部署包与同一版本的镜像一起使用。用 `docker load -i lever-hub-linux-arm64.tar.gz` 导入镜像，或在源码根目录用 `HUB_ARCH=amd64 make hub-image` 为 x86 服务器构建镜像。将服务器架构代入文件名。
+下载部署包 `lever-hub-deploy-<版本>.tar.gz` 和对应架构的镜像包 `lever-hub-<版本>-linux-<架构>.tar.gz`。Intel/AMD 服务器选 `amd64`，ARM 服务器选 `arm64`。解压部署包，使用 `docker load -i` 导入下载的镜像，再在解压目录执行以下命令。
 
 ```sh
 cp .env.example .env

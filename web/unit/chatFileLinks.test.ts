@@ -180,18 +180,18 @@ test("resolveChatFile distinguishes workspace files from read-only host files", 
   );
 
   const brainPath =
-    "file:///Users/me/.gemini/antigravity-cli/brain/abc/design.md";
+    "file:///fixtures/.gemini/antigravity-cli/brain/abc/design.md";
   const brain = resolveChatFile(brainPath, scope, [root], origin);
   assert.deepEqual(brain, {
     host: true,
     file: {
-      root: { id: "host", path: "/Users/me/.gemini/antigravity-cli/brain/abc" },
+      root: { id: "host", path: "/fixtures/.gemini/antigravity-cli/brain/abc" },
       path: "design.md",
     },
   });
   assert.equal(
     absoluteFilePath(brain!.file),
-    "/Users/me/.gemini/antigravity-cli/brain/abc/design.md",
+    "/fixtures/.gemini/antigravity-cli/brain/abc/design.md",
   );
   assert.equal(resolveChatFileLink(brainPath, scope, [root], origin), null);
 
@@ -214,15 +214,15 @@ test("resolveChatFile distinguishes workspace files from read-only host files", 
     null,
   );
 
-  const win = resolveChatFile("file:///C:/Users/me/plan.md", scope, [root], origin);
+  const win = resolveChatFile("file:///C:/fixtures/plan.md", scope, [root], origin);
   assert.deepEqual(win, {
     host: true,
     file: {
-      root: { id: "host", path: "C:/Users/me" },
+      root: { id: "host", path: "C:/fixtures" },
       path: "plan.md",
     },
   });
-  assert.equal(absoluteFilePath(win!.file), "C:/Users/me/plan.md");
+  assert.equal(absoluteFilePath(win!.file), "C:/fixtures/plan.md");
 
   const winRoot = hostFileSelection("C:/plan.md");
   assert.deepEqual(winRoot, {
