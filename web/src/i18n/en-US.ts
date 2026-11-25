@@ -2558,6 +2558,7 @@ export const enUS = {
   "chat.description":
     "Continue the conversation, or turn a message into its own topic.",
   "chat.latest": "Jump to latest message",
+  "chat.yesterdayTime": "Yesterday {{time}}",
   "status.starting": "Starting",
   "status.queued": "Queued",
   "status.running": "Running",

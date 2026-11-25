@@ -2438,6 +2438,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.welcome": "和 {{name}} 开始协作",
   "chat.description": "继续聊，或把一条消息展开成独立话题。",
   "chat.latest": "回到最新消息",
+  "chat.yesterdayTime": "昨天 {{time}}",
   "status.starting": "启动中",
   "status.queued": "排队中",
   "status.running": "正在执行",

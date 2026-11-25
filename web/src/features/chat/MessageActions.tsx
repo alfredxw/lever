@@ -6,7 +6,9 @@ import type { MessageQuote } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 import { CodeBlockCopyButton } from "@/components/ui/code-block";
 import { MessageFooter } from "@/components/ui/message";
+import { useLocalDayKey } from "@/hooks/useLocalDayKey";
 import { ComposerContext } from "./ComposerContext";
+import { formatMessageTime } from "./messageTime";
 
 export type MessageActionHandlers = {
   onQuote?: (message: MessageQuote) => void;
@@ -34,7 +36,10 @@ export function MessageActions({
 }) {
   const { t, i18n } = useTranslation();
   const composer = useContext(ComposerContext);
-  const date = timestamp ? new Date(timestamp) : undefined;
+  useLocalDayKey();
+  const formattedTime = formatMessageTime(timestamp, i18n.language, {
+    formatYesterday: (time) => t("chat.yesterdayTime", { time }),
+  });
   return (
     <MessageFooter className="message-actions gap-1 px-0">
       {persistentAction}
@@ -96,17 +101,13 @@ export function MessageActions({
           </>
         )}
         {children}
-        {date && Number.isFinite(date.getTime()) && (
+        {formattedTime && (
           <time
-            className="ml-1 shrink-0 font-normal tabular-nums"
+            className="ml-1 shrink-0 whitespace-nowrap font-normal tabular-nums"
             dateTime={timestamp}
-            title={date.toLocaleString(i18n.language)}
+            title={formattedTime.full}
           >
-            {date.toLocaleTimeString(i18n.language, {
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: false,
-            })}
+            {formattedTime.displayed}
           </time>
         )}
       </div>
