@@ -63,6 +63,11 @@ func terminalConnect(t *testing.T, f *fixture, agent, id string, start bool) *we
 
 func terminalUntil(t *testing.T, conn *websocket.Conn, marker string) string {
 	t.Helper()
+	return readTerminalOutput(t, conn, marker, false)
+}
+
+func readTerminalOutput(t *testing.T, conn *websocket.Conn, marker string, waitForReady bool) string {
+	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var output strings.Builder
 	for {
@@ -75,14 +80,17 @@ func terminalUntil(t *testing.T, conn *websocket.Conn, marker string) string {
 			if err := conn.WriteJSON(map[string]string{"type": "ack"}); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(output.String(), marker) {
-				return output.String()
-			}
 		} else {
 			var message struct{ Type, Message string }
 			if err := json.Unmarshal(data, &message); err != nil || message.Type != "ready" && message.Type != "replay" && message.Type != "size" {
 				t.Fatalf("unexpected control frame: %s (%v)", data, err)
 			}
+			if message.Type == "ready" {
+				waitForReady = false
+			}
+		}
+		if !waitForReady && strings.Contains(output.String(), marker) {
+			return output.String()
 		}
 	}
 }
@@ -272,10 +280,10 @@ func TestTerminalReconnectRetainsShell(t *testing.T) {
 	}
 	time.Sleep(400 * time.Millisecond)
 	reconnected := terminalConnect(t, f, agent, id, false)
-	if output := terminalUntil(t, reconnected, "WHILE_AWAY"); !strings.Contains(output, match) {
+	// Background output can arrive with replay or just after the ready frame.
+	if output := readTerminalOutput(t, reconnected, "WHILE_AWAY", true); !strings.Contains(output, match) {
 		t.Fatalf("missing earlier output in replay: %q", output)
 	}
-	terminalReady(t, reconnected)
 	terminalInput(t, reconnected, "printf '%s PID:%s:END\\n' \"$LEVER_TEST_VALUE\" $$\r")
 	if output := terminalUntil(t, reconnected, ":END"); !strings.Contains(output, "kept "+match) {
 		t.Fatalf("reattached to a different shell: %q", output)
