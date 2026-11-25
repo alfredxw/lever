@@ -28,16 +28,11 @@ func TestPauseReplyResumesSameRun(t *testing.T) {
 			chat := f.chat(f.agent(tc.runtime))
 			first := f.send(chat.ID, "main", "", "[pausable] original prompt")
 			bound := waitPausable(f, first.ID)
-			queued := model.Run{}
-			f.request("POST", "/messages", model.SendInput{
-				CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Queued follow-up", Delivery: "queue",
-			}, 200, &queued)
 			f.request("POST", "/runs/"+first.ID+"/pause", nil, 200, nil)
 			paused := f.wait(first.ID, "paused")
 			if paused.Error != "" || paused.FinishedAt != "" || !hasPauseTestOutput(paused, "Partial reply before the pause") {
 				t.Fatalf("pause lost the original reply: %+v", paused)
 			}
-			f.wait(queued.ID, "queued")
 			f.request("POST", "/runs/"+first.ID+"/retry", map[string]string{"commandId": app.ID()}, 409, nil)
 			f.s.HTTP.Close()
 			if err := f.a.Close(); err != nil {
@@ -70,7 +65,47 @@ func TestPauseReplyResumesSameRun(t *testing.T) {
 			if len(history.Runs) != 1 {
 				t.Fatalf("continuation created a second message: %+v", history.Runs)
 			}
-			f.wait(queued.ID, "queued")
+		})
+	}
+}
+
+func TestPausingReplyLetsIndependentAfterMessagesRun(t *testing.T) {
+	for _, runtime := range []string{"codex", "claude"} {
+		t.Run(runtime, func(t *testing.T) {
+			f := openFixture(t, app.OpenServer).withLocalProviders()
+			chat := f.chat(f.agent(runtime))
+			first := waitPausable(f, f.send(chat.ID, "main", "", "[pausable] first reply").ID)
+			prerequisite := f.send(chat.ID, "topic", "", "Independent prerequisite")
+			f.wait(prerequisite.ID, "completed")
+
+			input := model.SendInput{
+				CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Ready to run after the prerequisite",
+				Delivery: "queue", AfterRunIDs: []string{prerequisite.ID},
+			}
+			var after, follow model.Run
+			f.request("POST", "/messages", input, 200, &after)
+			if after.Status != "queued" || len(after.WaitingOn) != 1 || after.WaitingOn[0].Status != "completed" {
+				t.Fatalf("expected a ready After message queued behind the active reply: %+v", after)
+			}
+			f.request("POST", "/messages", model.SendInput{
+				CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Ordinary queued follow-up", Delivery: "queue",
+			}, 200, &follow)
+			f.request("POST", "/runs/"+first.ID+"/pause", nil, 200, nil)
+			f.wait(after.ID, "completed")
+			f.wait(follow.ID, "completed")
+			if stopped := f.wait(first.ID, "interrupted"); !hasPauseTestOutput(stopped, "Partial reply before the pause") {
+				t.Fatalf("starting the next turn lost the interrupted reply: %+v", stopped)
+			}
+
+			second := waitPausable(f, f.send(chat.ID, "main", "", "[pausable] second reply").ID)
+			f.request("POST", "/runs/"+second.ID+"/pause", nil, 200, nil)
+			f.wait(second.ID, "paused")
+			if session := f.waitNative(second.SessionID); session.QueuePaused {
+				t.Fatal("a confirmed reply pause held the session queue")
+			}
+			input.CommandID, input.Delivery = app.ID(), ""
+			f.request("POST", "/messages", input, 200, &after)
+			f.wait(after.ID, "completed")
 		})
 	}
 }
@@ -79,15 +114,11 @@ func TestSendingAndEditingAfterPauseStartNewRuns(t *testing.T) {
 	f := newFixture(t)
 	chat := f.chat(f.agent("codex"))
 	first := waitPausable(f, f.send(chat.ID, "main", "", "[pausable] first prompt").ID)
-	var queued, revised model.Run
-	f.request("POST", "/messages", model.SendInput{
-		CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Queued first", Delivery: "queue",
-	}, 200, &queued)
+	var revised model.Run
 	f.request("POST", "/runs/"+first.ID+"/pause", nil, 200, nil)
 	f.wait(first.ID, "paused")
 	second := waitPausable(f, f.send(chat.ID, "main", "", "[pausable] new prompt").ID)
 	f.wait(first.ID, "interrupted")
-	f.wait(queued.ID, "queued")
 	f.request("POST", "/runs/"+first.ID+"/resume", map[string]string{"nativeTurnId": *first.NativeTurnID}, 409, nil)
 	f.request("POST", "/runs/"+second.ID+"/pause", nil, 200, nil)
 	f.wait(second.ID, "paused")
@@ -101,7 +132,6 @@ func TestSendingAndEditingAfterPauseStartNewRuns(t *testing.T) {
 	if discarded := f.wait(second.ID, "interrupted"); !discarded.Superseded {
 		t.Fatal("paused original is still in the active transcript")
 	}
-	f.wait(queued.ID, "queued")
 }
 
 func TestPauseReplyRequiresNativeConfirmation(t *testing.T) {
@@ -110,8 +140,16 @@ func TestPauseReplyRequiresNativeConfirmation(t *testing.T) {
 			f := newFixture(t)
 			chat := f.chat(f.agent("codex"))
 			run := waitPausable(f, f.send(chat.ID, "main", "", "[pausable] "+marker).ID)
+			var queued model.Run
+			f.request("POST", "/messages", model.SendInput{
+				CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "Wait until the previous run exits safely", Delivery: "queue",
+			}, 200, &queued)
 			f.request("POST", "/runs/"+run.ID+"/pause", nil, 200, nil)
 			f.wait(run.ID, status)
+			if session := f.waitNative(run.SessionID); !session.QueuePaused {
+				t.Fatal("a failed pause should hold the session queue")
+			}
+			f.wait(queued.ID, "queued")
 			f.request("POST", "/runs/"+run.ID+"/resume", map[string]string{"nativeTurnId": *run.NativeTurnID}, 409, nil)
 		})
 	}

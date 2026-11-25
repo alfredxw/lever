@@ -972,10 +972,10 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, session.ID).Scan(&paused, &queued); err != nil {
 				return err
 			}
-			// An explicit submission starts its own turn. Keep existing queued
-			// work on hold until the user resumes the queue.
-			startAfterPause = paused && input.Delivery == "" && origin == (sendOrigin{}) && len(afterRunIDs) == 0
-			if !queued && (!paused || startAfterPause) {
+			// Explicit sends can start a new turn while a stored queue hold
+			// still protects existing queued work.
+			startAfterPause = queued && paused && input.Delivery == "" && origin == (sendOrigin{}) && len(afterRunIDs) == 0
+			if !queued {
 				if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false')) WHERE id=?", session.ID); err != nil {
 					return err
 				}
@@ -1274,7 +1274,12 @@ func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 			return conflict("Execution status is unknown; confirm the external runtime has stopped first")
 		}
 		if !pause && run.Status == "paused" {
-			return a.Store.Write(ctx, func(tx *sql.Tx) error { return finishPausedRun(tx, run) })
+			return a.Store.Write(ctx, func(tx *sql.Tx) error {
+				if err := pauseQueue(tx, run.SessionID); err != nil {
+					return err
+				}
+				return finishPausedRun(tx, run)
+			})
 		}
 		if pause && run.Status != "paused" {
 			return conflict("This reply is no longer running")

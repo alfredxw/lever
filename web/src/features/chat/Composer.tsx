@@ -585,7 +585,6 @@ export function Composer({
       onSent(result, launchedFromTopicId);
     },
   });
-  const hasPausedReply = Boolean(pausedRun);
   const interrupt = useMutation({
     mutationFn: interruptReply,
     onError: (error) => toast.error(error.message),
@@ -682,9 +681,11 @@ export function Composer({
     requestAnimationFrame(() => textbox.current?.focus());
   }, [composer, draft.editing, draft.topic, fixedSession, key, sending, uploading, visible, t]);
   const running = Boolean(activeRun && !topicMode);
+  const canSendWithPausedQueue = Boolean(pausedRun && session?.queuePaused);
   const followUp =
     !editingSent &&
-    (running || (queuedRuns.length > 0 && !topicMode && !hasPausedReply));
+    !topicMode &&
+    (running || (queuedRuns.length > 0 && !canSendWithPausedQueue));
   const matchingRun =
     running &&
     !draft.editing &&
@@ -1151,6 +1152,7 @@ export function Composer({
         <QueuedMessages
           runs={queuedRuns}
           activeRun={activeRun}
+          queuePaused={session?.queuePaused}
           catalog={catalog.data}
           disabled={sending || uploading || archived || !!readSubmission(key)}
           editing={draft.editing?.runId}

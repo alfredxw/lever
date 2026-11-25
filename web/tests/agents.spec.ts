@@ -4128,13 +4128,10 @@ test("main and Topics execute independently with isolated queues, approvals and 
     .locator(".topic-composer-wrap:visible")
     .getByRole("button", { name: "暂停回复", exact: true })
     .click();
-  await expect(topicB).toHaveAttribute("data-status", "paused");
+  await expect(topicB).toHaveAttribute("data-status", "completed");
+  await expect(topicQueue).not.toBeVisible();
   await expect(mainRuns).toHaveAttribute("data-status", "running");
   await expect(topicA).toHaveAttribute("data-status", "waiting_user");
-  await topicQueue
-    .getByRole("button", { name: "继续队列", exact: true })
-    .click();
-  await expect(topicB).toHaveAttribute("data-status", "completed");
   await mode.click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("edited independent task");
@@ -5671,10 +5668,6 @@ test("sending and editing a paused reply start new executions", async ({
   await input.fill("[pausable] First prompt");
   await composer.getByRole("button", { name: "发送", exact: true }).click();
   await expect(runs.first()).toContainText("Partial reply before the pause");
-  await input.fill("Queued follow-up");
-  await composer.getByRole("button", { name: "加入队列", exact: true }).click();
-  const queue = composer.getByRole("region", { name: "消息队列" });
-  await expect(queue).toContainText("Queued follow-up");
   await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
   await expect(runs.first()).toHaveAttribute("data-status", "paused");
 
@@ -5683,7 +5676,6 @@ test("sending and editing a paused reply start new executions", async ({
   await expect(runs).toHaveCount(2);
   await expect(runs.first()).toHaveAttribute("data-status", "interrupted");
   await expect(runs.last()).toContainText("New prompt");
-  await expect(queue).toContainText("Queued follow-up");
 
   await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
   await expect(runs.last()).toHaveAttribute("data-status", "paused");
@@ -5694,7 +5686,6 @@ test("sending and editing a paused reply start new executions", async ({
   await expect(runs.last()).toHaveAttribute("data-status", "completed");
   await expect(runs.last()).not.toHaveAttribute("data-run-id", replacedId!);
   await expect(runs.last()).toContainText("Revised prompt");
-  await expect(queue).toContainText("Queued follow-up");
 });
 
 test("editing a sent Chat message restores the draft and resends once after a lost response", async ({

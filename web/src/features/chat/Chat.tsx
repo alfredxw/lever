@@ -626,6 +626,7 @@ function ChatContent(props: ChatProps) {
           <QueuedMessages
             runs={queuedRuns}
             activeRun={activeRun}
+            queuePaused={main?.queuePaused}
             disabled={agent.archived}
           />
           <div className="flex flex-wrap items-center justify-center gap-2">

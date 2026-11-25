@@ -220,7 +220,9 @@ func TestRunDependenciesRejectPausedAndTreatMidwayPauseAsBlocked(t *testing.T) {
 	f.request("POST", "/messages", model.SendInput{
 		CommandID:   app.ID(),
 		ChatID:      chat.ID,
-		Operation:   "topic",
+		SessionID:   pausable.SessionID,
+		Operation:   "reply",
+		Delivery:    "queue",
 		Text:        "commit after pausable",
 		AfterRunIDs: []string{pausable.ID},
 	}, 200, &follow)
@@ -230,7 +232,7 @@ func TestRunDependenciesRejectPausedAndTreatMidwayPauseAsBlocked(t *testing.T) {
 
 	// Pause the upstream task mid-way -> downstream stays queued and projects paused.
 	f.request("POST", "/runs/"+pausable.ID+"/pause", map[string]bool{}, 200, nil)
-	f.wait(pausable.ID, "paused")
+	paused := f.wait(pausable.ID, "paused")
 	time.Sleep(120 * time.Millisecond)
 
 	var afterPause model.Run
@@ -250,6 +252,10 @@ func TestRunDependenciesRejectPausedAndTreatMidwayPauseAsBlocked(t *testing.T) {
 		Text:        "cannot wait on paused",
 		AfterRunIDs: []string{pausable.ID},
 	}, 409, nil)
+
+	f.request("POST", "/runs/"+pausable.ID+"/resume", map[string]string{"nativeTurnId": *paused.NativeTurnID}, 200, nil)
+	f.wait(pausable.ID, "completed")
+	f.wait(follow.ID, "completed")
 }
 
 func TestRunDependenciesSurviveServerRestartWithLiveHost(t *testing.T) {

@@ -148,8 +148,10 @@ func (e *execution) stop(ctx context.Context, pause bool) error {
 				return err
 			}
 		}
-		if err := pauseQueue(tx, run.SessionID); err != nil {
-			return err
+		if !pause {
+			if err := pauseQueue(tx, run.SessionID); err != nil {
+				return err
+			}
 		}
 		return store.SaveRun(tx, run)
 	}); err != nil {
@@ -500,7 +502,7 @@ func (e *execution) finish(err error) {
 				}
 			}
 		}
-		if e.run.Status != "completed" {
+		if e.run.Status != "completed" && e.run.Status != "paused" {
 			if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('true')) WHERE id=?", e.run.SessionID); err != nil {
 				return err
 			}

@@ -24,6 +24,7 @@ import { dependencyProgress } from "./waitRuns";
 export function QueuedMessages({
   runs,
   activeRun,
+  queuePaused,
   catalog,
   disabled,
   editing,
@@ -32,6 +33,7 @@ export function QueuedMessages({
 }: {
   runs: Run[];
   activeRun?: Run;
+  queuePaused?: boolean;
   catalog?: Catalog | null;
   disabled?: boolean;
   editing?: string;
@@ -81,26 +83,21 @@ export function QueuedMessages({
   if (!runs.length) return null;
   const sorted = [...runs].sort((a, b) => a.sequence - b.sequence);
   const head = sorted[0];
-  const headDeps = head?.waitingOn?.length
-    ? dependencyProgress(head.waitingOn)
-    : undefined;
-  const headWaiting = Boolean(headDeps && headDeps.completed < headDeps.total);
+  const headDeps = dependencyProgress(head.waitingOn);
+  const waiting = !activeRun && headDeps.completed < headDeps.total;
+  const paused = !activeRun && !waiting && queuePaused;
+  const heading = waiting
+    ? headDeps.blocked > 0
+      ? "after.queueBlocked"
+      : "after.queueWaiting"
+    : paused
+      ? "queue.paused"
+      : "queue.count";
   return (
     <section className="queued-messages" aria-label={t("queue.title")}>
       <div className="queue-heading">
-        <span>
-          {activeRun
-            ? t("queue.count", { count: runs.length })
-            : headWaiting
-              ? t(
-                  headDeps!.blocked > 0
-                    ? "after.queueBlocked"
-                    : "after.queueWaiting",
-                  { count: runs.length },
-                )
-              : t("queue.paused", { count: runs.length })}
-        </span>
-        {!activeRun && !headWaiting && (
+        <span>{t(heading, { count: runs.length })}</span>
+        {paused && (
           <Button
             variant="ghost"
             size="sm"
