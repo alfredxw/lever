@@ -216,6 +216,7 @@ export interface FeishuRegistrationInput {
   agentId?: string;
   preset?: string;
   brand?: string;
+  settings?: FeishuBotSettings;
 }
 export interface ChannelRegistration {
   phase: string;

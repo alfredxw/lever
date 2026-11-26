@@ -551,3 +551,203 @@ test("compact plugin index supports keyboard selection and the card switch opera
     ),
   ).toBe(true);
 });
+
+test("feishu add bot dialog defaults to QR registration with direct configurable options", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+
+  let channelState: Record<string, unknown> = {
+    configured: false,
+    enabled: true,
+    connection: "offline",
+    paused: false,
+    bots: [],
+  };
+  const registerPosts: Array<Record<string, unknown>> = [];
+  const registerPuts: Array<Record<string, unknown>> = [];
+  let cancelCount = 0;
+  const createPosts: Array<Record<string, unknown>> = [];
+
+  await page.route("**/api/channels/feishu**", async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const method = req.method();
+    if (url.pathname === "/api/channels/feishu" && method === "GET") {
+      await route.fulfill({ json: channelState });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/bots/registration" &&
+      method === "POST"
+    ) {
+      registerPosts.push(req.postDataJSON() as Record<string, unknown>);
+      channelState = {
+        ...channelState,
+        registration: {
+          phase: "waiting",
+          url: "https://accounts.feishu.cn/create?user_code=test-qr",
+          brand: "feishu",
+        },
+      };
+      await route.fulfill({ json: channelState });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/bots/registration" &&
+      method === "PUT"
+    ) {
+      registerPuts.push(req.postDataJSON() as Record<string, unknown>);
+      await route.fulfill({ json: channelState });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/registration" &&
+      method === "DELETE"
+    ) {
+      cancelCount += 1;
+      channelState = {
+        ...channelState,
+        registration: { phase: "cancelled" },
+      };
+      await route.fulfill({ json: channelState });
+      return;
+    }
+    if (url.pathname === "/api/channels/feishu/bots" && method === "POST") {
+      const payload = req.postDataJSON() as {
+        appId: string;
+        brand?: string;
+        displayName?: string;
+        agentId?: string;
+        settings?: Record<string, unknown>;
+      };
+      createPosts.push(payload as Record<string, unknown>);
+      channelState = {
+        configured: true,
+        enabled: true,
+        connection: "online",
+        paused: false,
+        bots: [
+          {
+            id: "bot-1",
+            appId: payload.appId,
+            brand: payload.brand ?? "feishu",
+            botName: payload.displayName || "Test Bot",
+            enabled: true,
+            connection: "online",
+            paired: false,
+            settings: payload.settings,
+          },
+        ],
+      };
+      await route.fulfill({ json: channelState });
+      return;
+    }
+    await route.continue();
+  });
+
+  const plugins = await openPlugins(page);
+  await plugins
+    .getByRole("navigation", { name: "插件" })
+    .getByRole("button", { name: "飞书机器人", exact: true })
+    .click();
+
+  await expect(
+    plugins.getByRole("heading", { name: "飞书机器人", exact: true }),
+  ).toBeVisible();
+  // Empty state renders a single primary CTA button
+  await expect(
+    plugins.getByRole("button", { name: "绑定第一个机器人" }),
+  ).toBeVisible();
+  await expect(
+    plugins.getByRole("button", { name: "绑定机器人", exact: true }),
+  ).toHaveCount(0);
+
+  await plugins.getByRole("button", { name: "绑定第一个机器人" }).click();
+  const dialog = page.getByRole("dialog", { name: "绑定新的飞书机器人" });
+  await expect(dialog).toBeVisible();
+
+  // Defaults to QR scan mode and auto-starts QR registration without extra clicks
+  const qrMode = dialog.getByRole("radio", { name: "扫码新建 / 绑定" });
+  const manualMode = dialog.getByRole("radio", { name: "手动输入凭据" });
+  await expect(qrMode).toHaveAttribute("data-state", "on");
+  await expect(manualMode).toHaveAttribute("data-state", "off");
+  await expect(
+    dialog.getByRole("link", { name: "打开配置链接" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "新建或选择机器人" }),
+  ).toHaveCount(0);
+  // Platform selector is hidden in QR mode (Feishu/Lark is auto-detected)
+  await expect(dialog.getByRole("radio", { name: "Lark" })).toHaveCount(0);
+  expect(registerPosts).toHaveLength(1);
+
+  // Scene presets are replaced by direct configurable options
+  await expect(dialog.getByText("初始场景预设")).toHaveCount(0);
+  await expect(dialog.getByText("个人随身助手")).toHaveCount(0);
+  await expect(dialog.getByText("初始配置")).toBeVisible();
+  await expect(dialog.getByText("私聊调用权限")).toBeVisible();
+  await expect(dialog.getByText("私聊形态")).toBeVisible();
+  await expect(dialog.getByText("回复样式")).toBeVisible();
+  await expect(dialog.getByText("允许在群聊中使用")).toBeVisible();
+  await expect(dialog.getByText("群聊默认触发")).toHaveCount(0);
+
+  // Configure direct options and verify live draft sync to backend
+  await dialog.getByRole("radio", { name: "应用内全员" }).click();
+  await dialog.getByRole("radio", { name: "简洁文本" }).click();
+  await dialog.getByRole("switch", { name: "允许在群聊中使用" }).click();
+  await expect(dialog.getByText("群聊准入范围")).toBeVisible();
+  await expect(dialog.getByText("群聊默认触发")).toBeVisible();
+  await expect(dialog.getByText("群聊回复落点")).toBeVisible();
+  await dialog.getByRole("radio", { name: "必须 @" }).click();
+  await dialog.getByRole("radio", { name: "引用回复" }).click();
+
+  await expect
+    .poll(
+      () =>
+        (
+          registerPuts[registerPuts.length - 1] as
+            | { settings?: Record<string, unknown> }
+            | undefined
+        )?.settings,
+    )
+    .toMatchObject({
+      dmAccess: "all",
+      replyStyle: "text",
+      groupEnabled: true,
+      groupMention: "at_only",
+      groupReplyTarget: "quote",
+    });
+
+  // Switch to manual credentials mode: cancels QR, reveals platform & App ID/Secret
+  await manualMode.click();
+  await expect.poll(() => cancelCount).toBe(1);
+  await expect(dialog.getByRole("radio", { name: "Lark" })).toBeVisible();
+  await dialog.getByLabel("App ID").fill("cli_direct_options");
+  await dialog.getByLabel("App Secret").fill("sec_direct_options");
+  await dialog.getByLabel("显示名称（可选）").fill("直配测试机器人");
+  await dialog.getByRole("button", { name: "验证并绑定" }).click();
+
+  await expect(dialog).toBeHidden();
+  expect(createPosts).toHaveLength(1);
+  expect(createPosts[0]).toMatchObject({
+    appId: "cli_direct_options",
+    displayName: "直配测试机器人",
+    settings: {
+      dmAccess: "all",
+      replyStyle: "text",
+      groupEnabled: true,
+      groupMention: "at_only",
+      groupReplyTarget: "quote",
+    },
+  });
+  expect(createPosts[0]).not.toHaveProperty("preset");
+
+  // Bot summary bar should no longer show scene preset dropdown
+  await expect(
+    plugins.getByRole("button", { name: "套用预设" }),
+  ).toHaveCount(0);
+  await expect(
+    plugins.getByRole("tab", { name: /直配测试机器人/ }),
+  ).toBeVisible();
+});

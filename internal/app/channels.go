@@ -223,6 +223,39 @@ func applyFeishuPreset(s *model.FeishuBotSettings, preset string) {
 	}
 }
 
+func hasExplicitFeishuAdvanced(a model.FeishuBotAdvanced) bool {
+	return a.ReactionAck ||
+		a.SenderTag ||
+		a.HideLocalAddresses ||
+		a.HistoryLimit != 0 ||
+		a.TrustSameOwnerBots ||
+		a.SessionMapping != "" ||
+		a.ApprovalMode != "" ||
+		len(a.BlockedUsers) > 0
+}
+
+func resolveFeishuCreateSettings(override *model.FeishuBotSettings, preset, displayName, agentID, fallbackBotName string) model.FeishuBotSettings {
+	settings := defaultFeishuSettings()
+	if override != nil {
+		defaultAdvanced := settings.Advanced
+		settings = *override
+		if !hasExplicitFeishuAdvanced(override.Advanced) {
+			settings.Advanced = defaultAdvanced
+		}
+	}
+	applyFeishuPreset(&settings, preset)
+	if name := strings.TrimSpace(displayName); name != "" {
+		settings.DisplayName = name
+	} else if settings.DisplayName == "" {
+		settings.DisplayName = fallbackBotName
+	}
+	if agentID != "" {
+		settings.AgentID = agentID
+	}
+	normalizeFeishuSettings(&settings)
+	return settings
+}
+
 func normalizeFeishuSettings(s *model.FeishuBotSettings) {
 	if s.DMMode != "continuous" && s.DMMode != "topic" {
 		s.DMMode = "continuous"
@@ -654,20 +687,7 @@ func (a *App) CreateFeishuBot(ctx context.Context, input model.FeishuBotCreateIn
 		}
 	}
 
-	settings := defaultFeishuSettings()
-	if input.Settings != nil {
-		settings = *input.Settings
-	}
-	applyFeishuPreset(&settings, input.Preset)
-	if name := strings.TrimSpace(input.DisplayName); name != "" {
-		settings.DisplayName = name
-	} else if settings.DisplayName == "" {
-		settings.DisplayName = botName
-	}
-	if input.AgentID != "" {
-		settings.AgentID = input.AgentID
-	}
-	normalizeFeishuSettings(&settings)
+	settings := resolveFeishuCreateSettings(input.Settings, input.Preset, input.DisplayName, input.AgentID, botName)
 	if err := validateFeishuSettings(settings); err != nil {
 		return model.ChannelView{}, err
 	}

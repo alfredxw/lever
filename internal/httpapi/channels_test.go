@@ -708,3 +708,127 @@ FROM runs r JOIN channel_deliveries d ON d.run_id=r.id WHERE d.message_id='grp-a
 		t.Fatalf("expected 1 remaining bot after delete, got %+v", view.Bots)
 	}
 }
+
+func TestFeishuMultiBotRegistrationWithDirectSettings(t *testing.T) {
+	const appID, secret = "cli_qr_direct", "secret-qr-direct"
+	approved := make(chan struct{})
+	var starts atomic.Int32
+	feishu := newFeishuFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.FormValue("action") {
+		case "begin":
+			starts.Add(1)
+			fmt.Fprint(w, `{"device_code":"device-multi","verification_uri_complete":"https://accounts.feishu.cn/create?user_code=multi","interval":1,"expire_in":60}`)
+		case "poll":
+			select {
+			case <-approved:
+				fmt.Fprintf(w, `{"client_id":%q,"client_secret":%q}`, appID, secret)
+			case <-r.Context().Done():
+			}
+		default:
+			http.Error(w, "unknown registration action", http.StatusBadRequest)
+		}
+	})
+	f := newFixture(t)
+	agentA := f.agent("codex")
+	agentB := f.agent("codex")
+
+	// Start QR registration with direct settings (no preset).
+	var view model.ChannelView
+	f.request("POST", "/channels/feishu/bots/registration", model.FeishuRegistrationInput{
+		AgentID: agentA.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:     "admin",
+			DMMode:       "continuous",
+			ReplyStyle:   "card",
+			GroupEnabled: false,
+		},
+	}, 200, &view)
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return c.Registration != nil && c.Registration.Phase == "waiting" && c.Registration.URL != ""
+	})
+	if starts.Load() != 1 {
+		t.Fatalf("expected 1 registration start, got %d", starts.Load())
+	}
+
+	// Update the pending registration draft while QR is waiting (must not start a second registration).
+	f.request("PUT", "/channels/feishu/bots/registration", model.FeishuRegistrationInput{
+		DisplayName: "我的群聊助手",
+		AgentID:     agentB.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:         "whitelist",
+			DMWhitelist:      []string{"ou_alice"},
+			DMMode:           "topic",
+			ReplyStyle:       "text",
+			GroupEnabled:     true,
+			GroupAccess:      "any",
+			GroupMention:     "at_only",
+			GroupReplyTarget: "quote",
+		},
+	}, 200, &view)
+	if starts.Load() != 1 {
+		t.Fatalf("updating draft started a second registration: %d", starts.Load())
+	}
+
+	// Cancel and immediately restart must not get stuck in cancelling state.
+	f.request("DELETE", "/channels/feishu/registration", nil, 200, &view)
+	f.request("POST", "/channels/feishu/bots/registration", model.FeishuRegistrationInput{
+		DisplayName: "我的群聊助手",
+		AgentID:     agentB.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:         "whitelist",
+			DMWhitelist:      []string{"ou_alice"},
+			DMMode:           "topic",
+			ReplyStyle:       "text",
+			GroupEnabled:     true,
+			GroupAccess:      "any",
+			GroupMention:     "at_only",
+			GroupReplyTarget: "quote",
+		},
+	}, 200, &view)
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return c.Registration != nil && c.Registration.Phase == "waiting" && c.Registration.URL != ""
+	})
+	if starts.Load() != 2 {
+		t.Fatalf("expected restart after cancel to start registration #2, got %d", starts.Load())
+	}
+
+	// Complete QR authorization and verify the bot uses the direct settings + default advanced safety flags.
+	close(approved)
+	_ = feishu.nextSocket()
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return c.Registration == nil && len(c.Bots) == 1 && c.Bots[0].Connection == "online"
+	})
+	got := view.Bots[0].Settings
+	if got.DisplayName != "我的群聊助手" || got.AgentID != agentB.ID ||
+		got.DMAccess != "whitelist" || len(got.DMWhitelist) != 1 || got.DMWhitelist[0] != "ou_alice" ||
+		got.DMMode != "topic" || got.ReplyStyle != "text" ||
+		!got.GroupEnabled || got.GroupAccess != "any" || got.GroupMention != "at_only" || got.GroupReplyTarget != "quote" {
+		t.Fatalf("unexpected bot settings after QR registration: %+v", got)
+	}
+	if !got.Advanced.ReactionAck || !got.Advanced.SenderTag || !got.Advanced.HideLocalAddresses || got.Advanced.HistoryLimit != 20 {
+		t.Fatalf("default advanced settings were not preserved: %+v", got.Advanced)
+	}
+
+	// Creating a second bot manually with direct settings (no preset) also preserves advanced defaults.
+	f.request("POST", "/channels/feishu/bots", model.FeishuBotCreateInput{
+		AppID:       "cli_manual_direct",
+		AppSecret:   "secret-manual-direct",
+		Brand:       "feishu",
+		DisplayName: "手动直配机器人",
+		AgentID:     agentA.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:     "all",
+			DMMode:       "continuous",
+			ReplyStyle:   "card",
+			GroupEnabled: false,
+		},
+	}, 200, &view)
+	_ = feishu.nextSocket()
+	if len(view.Bots) != 2 {
+		t.Fatalf("expected 2 bots, got %d", len(view.Bots))
+	}
+	manual := view.Bots[1].Settings
+	if manual.DMAccess != "all" || manual.GroupEnabled || !manual.Advanced.HideLocalAddresses || manual.Advanced.HistoryLimit != 20 {
+		t.Fatalf("unexpected manual bot settings: %+v", manual)
+	}
+}

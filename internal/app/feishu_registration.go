@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 	"time"
 
 	"lever/internal/model"
@@ -31,6 +30,19 @@ func (a *App) RegisterFeishu() (model.ChannelView, error) {
 	return a.startFeishuRegistrationLocked(false, model.FeishuRegistrationInput{})
 }
 
+func (a *App) validateFeishuRegistrationDraft(ctx context.Context, input model.FeishuRegistrationInput) error {
+	settings := resolveFeishuCreateSettings(input.Settings, input.Preset, input.DisplayName, input.AgentID, "")
+	if err := validateFeishuSettings(settings); err != nil {
+		return err
+	}
+	if settings.AgentID != "" {
+		if err := a.ensureActiveAgent(ctx, settings.AgentID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) RegisterFeishuBot(ctx context.Context, input model.FeishuRegistrationInput) (model.ChannelView, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -38,18 +50,35 @@ func (a *App) RegisterFeishuBot(ctx context.Context, input model.FeishuRegistrat
 	if a.closed || !f.enabled {
 		return model.ChannelView{}, conflict("Enable Lark Bot first")
 	}
-	if input.AgentID != "" {
-		if err := a.ensureActiveAgent(ctx, input.AgentID); err != nil {
-			return model.ChannelView{}, err
-		}
+	if err := a.validateFeishuRegistrationDraft(ctx, input); err != nil {
+		return model.ChannelView{}, err
 	}
 	return a.startFeishuRegistrationLocked(true, input)
+}
+
+func (a *App) UpdateFeishuRegistrationDraft(ctx context.Context, input model.FeishuRegistrationInput) (model.ChannelView, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := &a.feishu
+	if a.closed || !f.enabled {
+		return model.ChannelView{}, conflict("Enable Lark Bot first")
+	}
+	if err := a.validateFeishuRegistrationDraft(ctx, input); err != nil {
+		return model.ChannelView{}, err
+	}
+	if current := f.registration; current != nil && current.cancel != nil && current.multiBot {
+		current.draftInput = input
+	}
+	return a.feishuViewLocked(), nil
 }
 
 func (a *App) startFeishuRegistrationLocked(multiBot bool, input model.FeishuRegistrationInput) (model.ChannelView, error) {
 	f := &a.feishu
 	if current := f.registration; current != nil {
 		if current.cancel != nil {
+			if multiBot && current.multiBot {
+				current.draftInput = input
+			}
 			return a.feishuViewLocked(), nil
 		}
 		if !multiBot && current.state.AppID != "" {
@@ -83,7 +112,9 @@ func (a *App) CancelFeishuRegistration() model.ChannelView {
 
 func (a *App) cancelFeishuRegistrationLocked() {
 	if job := a.feishu.registration; job != nil && job.cancel != nil {
-		job.cancel()
+		cancel := job.cancel
+		job.cancel = nil
+		cancel()
 		job.state = model.ChannelRegistration{Phase: "cancelling"}
 	}
 }
@@ -92,7 +123,7 @@ func (a *App) registerFeishu(ctx context.Context, job *feishuRegistration) {
 	result, err := larkbot.Register(ctx, func(link string) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if ctx.Err() == nil {
+		if a.feishu.registration == job && ctx.Err() == nil {
 			job.state = model.ChannelRegistration{Phase: "waiting", URL: link}
 		}
 	})
@@ -100,6 +131,9 @@ func (a *App) registerFeishu(ctx context.Context, job *feishuRegistration) {
 	defer a.mu.Unlock()
 	job.cancel = nil
 	f := &a.feishu
+	if f.registration != job {
+		return
+	}
 	switch {
 	case a.closed || !f.enabled || errors.Is(ctx.Err(), context.Canceled):
 		job.state = model.ChannelRegistration{Phase: "cancelled", AppID: result.AppID, Brand: result.Brand}
@@ -125,15 +159,13 @@ func (a *App) registerFeishu(ctx context.Context, job *feishuRegistration) {
 		} else {
 			settings := legacyFeishuSettings("", "")
 			if job.multiBot {
-				settings = defaultFeishuSettings()
-				applyFeishuPreset(&settings, job.draftInput.Preset)
-				if name := strings.TrimSpace(job.draftInput.DisplayName); name != "" {
-					settings.DisplayName = name
-				}
-				if job.draftInput.AgentID != "" {
-					settings.AgentID = job.draftInput.AgentID
-				}
-				normalizeFeishuSettings(&settings)
+				settings = resolveFeishuCreateSettings(
+					job.draftInput.Settings,
+					job.draftInput.Preset,
+					job.draftInput.DisplayName,
+					job.draftInput.AgentID,
+					"",
+				)
 			}
 			cfg = feishuBotConfig{
 				ID:       ID(),

@@ -107,10 +107,11 @@ type FeishuBotCredentialsInput struct {
 }
 
 type FeishuRegistrationInput struct {
-	DisplayName string `json:"displayName,omitempty"`
-	AgentID     string `json:"agentId,omitempty"`
-	Preset      string `json:"preset,omitempty"`
-	Brand       string `json:"brand,omitempty"`
+	DisplayName string             `json:"displayName,omitempty"`
+	AgentID     string             `json:"agentId,omitempty"`
+	Preset      string             `json:"preset,omitempty"`
+	Brand       string             `json:"brand,omitempty"`
+	Settings    *FeishuBotSettings `json:"settings,omitempty"`
 }
 
 type ChannelRegistration struct {

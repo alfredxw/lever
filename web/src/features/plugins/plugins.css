@@ -766,6 +766,9 @@
   justify-content: flex-end;
   gap: 6px;
 }
+.feishu-chip-list[data-align="start"] {
+  justify-content: flex-start;
+}
 .feishu-chip {
   display: inline-flex;
   align-items: center;
@@ -868,48 +871,6 @@
   background: var(--control-focus);
 }
 
-.feishu-preset-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.feishu-preset-card {
-  padding: 10px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--surface-border);
-  background: var(--panel-background);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  text-align: left;
-  outline: none;
-  box-shadow: none;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease;
-}
-.feishu-preset-card:hover {
-  background: var(--control-hover);
-}
-.feishu-preset-card:focus-visible {
-  outline: none;
-  box-shadow: none;
-  background: var(--control-focus);
-}
-.feishu-preset-card[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--foreground) 55%, transparent);
-  background: var(--background);
-}
-.feishu-preset-title {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.feishu-preset-desc {
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--muted-foreground);
-}
-
 .feishu-qr-card {
   display: flex;
   align-items: center;
@@ -926,6 +887,13 @@
   border: 1px solid var(--surface-border);
   flex-shrink: 0;
 }
+.feishu-qr-placeholder {
+  width: 130px;
+  height: 130px;
+  display: grid;
+  place-items: center;
+  background: var(--background);
+}
 
 .feishu-override-box {
   border: 1px solid var(--surface-border);
@@ -939,7 +907,8 @@
   flex-direction: column;
   gap: 6px;
 }
-.feishu-override-item + .feishu-override-item {
+.feishu-override-item + .feishu-override-item,
+.feishu-override-group {
   border-top: 1px solid var(--surface-border);
 }
 .feishu-override-row {
@@ -1012,9 +981,9 @@
     justify-content: flex-start;
   }
 }
-@media (max-width: 600px) {
-  .feishu-preset-grid {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 520px) {
+  .feishu-qr-card {
+    flex-wrap: wrap;
   }
 }
 @media (prefers-reduced-motion: reduce) {

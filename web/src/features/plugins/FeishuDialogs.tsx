@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowUpRight, Copy, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Copy, RefreshCw, X } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -14,6 +15,7 @@ import type {
   FeishuBotCredentialsInput,
   FeishuBotView,
   FeishuChatOverride,
+  FeishuRegistrationInput,
   Selection,
 } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
@@ -30,11 +32,13 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { ModelPicker } from "@/features/chat/ModelPicker";
 import { useModels, useProviders } from "@/features/runtime/queries";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import {
   feishuPath,
   feishuQueryKey,
@@ -45,13 +49,14 @@ import { FeishuPairForm } from "./FeishuPairForm";
 import {
   baseSelectionForAgent,
   botDisplayName,
+  buildInitialBotSettings,
   countRuleOverrides,
-  FEISHU_PRESET_KEYS,
-  type FeishuPresetKey,
+  defaultFeishuInitialConfig,
+  type FeishuInitialConfig,
   formatSelectionLabel,
   primaryWorkspaceForAgent,
   shortId,
-} from "./feishuPresets";
+} from "./feishuBotHelpers";
 
 function syncChannelCache(next: ChannelView) {
   queryClient.setQueryData(feishuQueryKey, next);
@@ -59,7 +64,78 @@ function syncChannelCache(next: ChannelView) {
 }
 
 // =========================================================================
-// 1. Add / Bind New Bot Dialog (Existing Credentials or QR Scan + Preset)
+// Shared Chip List Input (Admins / Whitelist / Blocklist)
+// =========================================================================
+export function ChipListInput({
+  items,
+  staticChips,
+  placeholder,
+  disabled,
+  align = "end",
+  onChange,
+}: {
+  items: string[];
+  staticChips?: string[];
+  placeholder: string;
+  disabled?: boolean;
+  align?: "start" | "end";
+  onChange: (next: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+
+  const add = () => {
+    const value = draft.trim();
+    if (!value) return;
+    if (!items.includes(value)) {
+      onChange([...items, value]);
+    }
+    setDraft("");
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      add();
+    }
+  };
+
+  return (
+    <div className="feishu-chip-list" data-align={align}>
+      {staticChips?.map((label) => (
+        <span key={label} className="feishu-chip">
+          {label}
+        </span>
+      ))}
+      {items.map((item) => (
+        <span key={item} className="feishu-chip font-mono">
+          {item}
+          <button
+            type="button"
+            className="feishu-chip-remove"
+            disabled={disabled}
+            aria-label={t("channels.bot.removeItem", { item })}
+            onClick={() => onChange(items.filter((x) => x !== item))}
+          >
+            <X className="size-3" />
+          </button>
+        </span>
+      ))}
+      <Input
+        className="h-7 w-36 px-2 text-xs"
+        placeholder={placeholder}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={add}
+      />
+    </div>
+  );
+}
+
+// =========================================================================
+// 1. Add / Bind New Bot Dialog (QR Scan by default + Direct Initial Settings)
 // =========================================================================
 export function FeishuAddBotDialog({
   open,
@@ -75,14 +151,31 @@ export function FeishuAddBotDialog({
   onBotCreated: (next: ChannelView) => void;
 }) {
   const { t } = useTranslation();
+  const reducedMotion = usePrefersReducedMotion();
   const available = agents.filter((a) => !a.archived);
-  const [mode, setMode] = useState<"existing" | "qr">("existing");
+  const [mode, setMode] = useState<"qr" | "manual">("qr");
   const [brand, setBrand] = useState<"feishu" | "lark">("feishu");
   const [displayName, setDisplayName] = useState("");
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const [agentId, setAgentId] = useState(available[0]?.id ?? "");
-  const [preset, setPreset] = useState<FeishuPresetKey>("dev");
+  const [config, setConfig] = useState<FeishuInitialConfig>(() =>
+    defaultFeishuInitialConfig(),
+  );
+
+  const wasQrActiveRef = useRef(false);
+  const userCancelledRef = useRef(false);
+  const lastSyncedDraftRef = useRef("");
+
+  const buildDraftInput = (
+    nextDisplayName: string,
+    nextAgentId: string,
+    nextConfig: FeishuInitialConfig,
+  ): FeishuRegistrationInput => ({
+    displayName: nextDisplayName.trim(),
+    agentId: nextAgentId,
+    settings: buildInitialBotSettings(nextConfig, nextDisplayName, nextAgentId),
+  });
 
   const createBot = useMutation({
     mutationFn: (payload: FeishuBotCreateInput) =>
@@ -101,18 +194,14 @@ export function FeishuAddBotDialog({
   });
 
   const startQr = useMutation({
-    mutationFn: () =>
-      api<ChannelView>(
-        `${feishuPath}/bots/registration`,
-        {
-          displayName: displayName.trim(),
-          agentId,
-          preset,
-          brand,
-        },
-        "POST",
-      ),
+    mutationFn: (payload: FeishuRegistrationInput) =>
+      api<ChannelView>(`${feishuPath}/bots/registration`, payload, "POST"),
     onSuccess: (next) => syncChannelCache(next),
+  });
+
+  const updateQrDraft = useMutation({
+    mutationFn: (payload: FeishuRegistrationInput) =>
+      api<ChannelView>(`${feishuPath}/bots/registration`, payload, "PUT"),
   });
 
   const cancelQr = useMutation({
@@ -122,36 +211,155 @@ export function FeishuAddBotDialog({
   });
 
   const qrRunning = registrationInProgress(registration);
+  const qrActive =
+    registration?.phase === "starting" || registration?.phase === "waiting";
+  const manualBusy = createBot.isPending;
 
-  // Reset fields cleanly each time dialog opens
+  // Reset to QR default and auto-start QR generation each time dialog opens
   useEffect(() => {
-    if (!open) return;
-    createBot.reset();
-    startQr.reset();
+    if (!open) {
+      wasQrActiveRef.current = false;
+      userCancelledRef.current = false;
+      lastSyncedDraftRef.current = "";
+      return;
+    }
+    const nextAgentId = available.some((a) => a.id === agentId)
+      ? agentId
+      : (available[0]?.id ?? "");
+    const nextConfig = defaultFeishuInitialConfig();
+    setMode("qr");
+    setBrand("feishu");
     setDisplayName("");
     setAppId("");
     setAppSecret("");
-    setAgentId((current) =>
-      available.some((a) => a.id === current)
-        ? current
-        : (available[0]?.id ?? ""),
-    );
+    setAgentId(nextAgentId);
+    setConfig(nextConfig);
+    createBot.reset();
+    startQr.reset();
+    updateQrDraft.reset();
+    userCancelledRef.current = false;
+    wasQrActiveRef.current = false;
+
+    const payload = buildDraftInput("", nextAgentId, nextConfig);
+    lastSyncedDraftRef.current = JSON.stringify(payload);
+    if (
+      registration?.phase === "starting" ||
+      registration?.phase === "waiting"
+    ) {
+      updateQrDraft.mutate(payload);
+    } else {
+      startQr.mutate(payload);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const busy = createBot.isPending || startQr.isPending || cancelQr.isPending;
+  // Keep backend QR registration draft in sync as user adjusts Agent/name/options
+  useEffect(() => {
+    if (!open || mode !== "qr" || !qrActive) return;
+    const payload = buildDraftInput(displayName, agentId, config);
+    const serialized = JSON.stringify(payload);
+    if (serialized === lastSyncedDraftRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedDraftRef.current = serialized;
+      updateQrDraft.mutate(payload);
+    }, 180);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mode, qrActive, displayName, agentId, config]);
+
+  // Detect successful QR completion (covers both new bot & re-authorizing an existing bot)
+  useEffect(() => {
+    if (!open || mode !== "qr") return;
+    if (qrActive) {
+      wasQrActiveRef.current = true;
+      userCancelledRef.current = false;
+      return;
+    }
+    if (
+      wasQrActiveRef.current &&
+      !userCancelledRef.current &&
+      !registration &&
+      !startQr.isPending &&
+      !cancelQr.isPending
+    ) {
+      wasQrActiveRef.current = false;
+      toast.success(t("channels.bot.qrBoundToast"));
+      onOpenChange(false);
+    }
+  }, [
+    open,
+    mode,
+    qrActive,
+    registration,
+    startQr.isPending,
+    cancelQr.isPending,
+    onOpenChange,
+    t,
+  ]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      userCancelledRef.current = true;
+      wasQrActiveRef.current = false;
+      if (qrRunning || startQr.isPending) {
+        cancelQr.mutate();
+      }
+    }
+    onOpenChange(nextOpen);
+  };
+
+  const switchMode = (nextMode: "qr" | "manual") => {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    if (nextMode === "manual") {
+      userCancelledRef.current = true;
+      wasQrActiveRef.current = false;
+      if (qrRunning || startQr.isPending) {
+        cancelQr.mutate();
+      }
+    } else {
+      userCancelledRef.current = false;
+      wasQrActiveRef.current = false;
+      startQr.reset();
+      const payload = buildDraftInput(displayName, agentId, config);
+      lastSyncedDraftRef.current = JSON.stringify(payload);
+      startQr.mutate(payload);
+    }
+  };
+
+  const handleRegenerateQr = async () => {
+    startQr.reset();
+    userCancelledRef.current = true;
+    wasQrActiveRef.current = false;
+    if (qrRunning) {
+      try {
+        await cancelQr.mutateAsync();
+      } catch {
+        // Proceed with starting a fresh registration even if cancel raced with expiry.
+      }
+    }
+    userCancelledRef.current = false;
+    const payload = buildDraftInput(displayName, agentId, config);
+    lastSyncedDraftRef.current = JSON.stringify(payload);
+    startQr.mutate(payload);
+  };
+
+  const qrLoading =
+    startQr.isPending ||
+    cancelQr.isPending ||
+    registration?.phase === "starting" ||
+    registration?.phase === "cancelling";
+  const qrReady =
+    !qrLoading &&
+    registration?.phase === "waiting" &&
+    !!registration.url &&
+    registration.url.length <= 2500;
+  const registrationDomain =
+    registration?.brand === "lark" ? "larksuite.com" : "feishu.cn";
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && qrRunning) {
-          cancelQr.mutate();
-        }
-        onOpenChange(nextOpen);
-      }}
-    >
-      <DialogContent className="sm:max-w-[560px]">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-[580px]">
         <DialogHeader>
           <DialogTitle>{t("channels.bot.addDialogTitle")}</DialogTitle>
           <DialogDescription>
@@ -163,67 +371,160 @@ export function FeishuAddBotDialog({
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
-            if (mode !== "existing") return;
+            if (mode !== "manual") return;
             createBot.mutate({
               appId: appId.trim(),
               appSecret: appSecret.trim(),
               brand,
               displayName: displayName.trim(),
               agentId,
-              preset,
+              settings: buildInitialBotSettings(config, displayName, agentId),
             });
           }}
         >
+          {/* Connection Mode Toggle (QR Scan is default; stays pinned above scroll area) */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <ToggleGroup
               type="single"
               variant="outline"
               spacing={1}
               value={mode}
-              disabled={busy}
+              disabled={manualBusy}
               onValueChange={(v) => {
-                if (v === "existing" || v === "qr") setMode(v);
+                if (v === "qr" || v === "manual") switchMode(v);
               }}
             >
-              <ToggleGroupItem value="existing">
-                {t("channels.bot.modeExisting")}
-              </ToggleGroupItem>
               <ToggleGroupItem value="qr">
                 {t("channels.bot.modeQr")}
               </ToggleGroupItem>
+              <ToggleGroupItem value="manual">
+                {t("channels.bot.modeManual")}
+              </ToggleGroupItem>
             </ToggleGroup>
 
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              spacing={1}
-              value={brand}
-              disabled={busy}
-              onValueChange={(v) => {
-                if (v === "feishu" || v === "lark") setBrand(v);
-              }}
-            >
-              <ToggleGroupItem value="feishu">
-                {t("channels.platformFeishu")}
-              </ToggleGroupItem>
-              <ToggleGroupItem value="lark">Lark</ToggleGroupItem>
-            </ToggleGroup>
+            {mode === "manual" && (
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                spacing={1}
+                value={brand}
+                disabled={manualBusy}
+                onValueChange={(v) => {
+                  if (v === "feishu" || v === "lark") setBrand(v);
+                }}
+              >
+                <ToggleGroupItem value="feishu">
+                  {t("channels.platformFeishu")}
+                </ToggleGroupItem>
+                <ToggleGroupItem value="lark">Lark</ToggleGroupItem>
+              </ToggleGroup>
+            )}
           </div>
 
-          {mode === "existing" ? (
-            <>
-              <Field>
-                <FieldLabel htmlFor="feishu-add-name">
-                  {t("channels.bot.displayName")}
-                </FieldLabel>
-                <Input
-                  id="feishu-add-name"
-                  placeholder={t("channels.bot.displayNamePlaceholder")}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  disabled={busy}
-                />
-              </Field>
+          <div className="flex max-h-[min(70vh,680px)] flex-col gap-4 overflow-y-auto pr-1">
+            {/* Connection Panel: QR Scan (Default) or Manual Credentials */}
+            {mode === "qr" ? (
+              <div className="feishu-qr-card">
+                {qrReady && registration?.url ? (
+                  <>
+                    <div className="feishu-qr-box">
+                      <QRCodeSVG
+                        value={registration.url}
+                        size={112}
+                        level="M"
+                        title={t("channels.registration.qrCode")}
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {t("channels.registration.waiting")}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button asChild size="sm" variant="outline">
+                          <a
+                            href={registration.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {t("channels.registration.openLink")}
+                            <ArrowUpRight data-icon="inline-end" />
+                          </a>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void handleRegenerateQr()}
+                        >
+                          <RefreshCw data-icon="inline-start" />
+                          {t("channels.registration.refresh")}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                ) : qrLoading ? (
+                  <>
+                    <div
+                      className="feishu-qr-box feishu-qr-placeholder"
+                      aria-hidden="true"
+                    >
+                      <RefreshCw className="size-5 animate-spin text-muted-foreground" />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <p className="text-sm font-medium">
+                        {t("channels.registration.starting")}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {t("channels.registration.waiting")}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex w-full flex-col gap-2.5">
+                    {startQr.error ? (
+                      <ErrorNotice error={startQr.error} />
+                    ) : (
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {registration?.phase
+                          ? t(`channels.registration.${registration.phase}`)
+                          : t("channels.registration.waiting")}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleRegenerateQr()}
+                      >
+                        <RefreshCw data-icon="inline-start" />
+                        {t("channels.registration.regenerate")}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => switchMode("manual")}
+                      >
+                        {t("channels.bot.switchToManual")}
+                      </Button>
+                      {registration?.appId && (
+                        <Button asChild size="sm" variant="ghost">
+                          <a
+                            href={`https://open.${registrationDomain}/app/${encodeURIComponent(registration.appId)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {t("channels.openDeveloperConsole")}
+                            <ArrowUpRight data-icon="inline-end" />
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field>
                   <FieldLabel htmlFor="feishu-add-appid">App ID</FieldLabel>
@@ -233,7 +534,7 @@ export function FeishuAddBotDialog({
                     placeholder="cli_xxxxxxxxxxxx"
                     value={appId}
                     onChange={(e) => setAppId(e.target.value)}
-                    disabled={busy}
+                    disabled={manualBusy}
                     autoComplete="off"
                     required
                   />
@@ -249,148 +550,320 @@ export function FeishuAddBotDialog({
                     placeholder="••••••••••••"
                     value={appSecret}
                     onChange={(e) => setAppSecret(e.target.value)}
-                    disabled={busy}
+                    disabled={manualBusy}
                     autoComplete="off"
                     required
                   />
                 </Field>
               </div>
-            </>
-          ) : (
-            <div className="feishu-qr-card">
-              {registration?.phase === "waiting" && registration.url ? (
-                <>
-                  <div className="feishu-qr-box">
-                    <QRCodeSVG
-                      value={registration.url}
-                      size={112}
-                      level="M"
-                      title={t("channels.registration.qrCode")}
-                    />
-                  </div>
-                  <div className="flex min-w-0 flex-1 flex-col gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      {t("channels.registration.waiting")}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button asChild size="sm" variant="outline">
-                        <a
-                          href={registration.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {t("channels.registration.openLink")}
-                          <ArrowUpRight data-icon="inline-end" />
-                        </a>
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={cancelQr.isPending}
-                        onClick={() => cancelQr.mutate()}
-                      >
-                        {t("common.cancel")}
-                      </Button>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="flex w-full flex-col gap-2.5">
-                  <p className="text-xs text-muted-foreground">
-                    {registration && registration.phase !== "cancelled"
-                      ? t(`channels.registration.${registration.phase}`)
-                      : t("channels.registration.waiting")}
-                  </p>
-                  <Input
-                    placeholder={t("channels.bot.displayNameOptional")}
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    disabled={busy}
-                  />
-                  <div>
-                    <Button
-                      type="button"
-                      size="sm"
+            )}
+
+            {/* Target Agent & Optional Display Name */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>{t("channels.targetAgent")}</FieldLabel>
+                <SearchableSelect
+                  label={t("channels.chooseAgent")}
+                  placeholder={t("channels.chooseAgent")}
+                  searchLabel={t("skills.agentFilter")}
+                  emptyLabel={t("personal.noAgents")}
+                  align="start"
+                  className="w-full"
+                  value={agentId}
+                  disabled={manualBusy}
+                  options={available.map((agent) => ({
+                    id: agent.id,
+                    label: agent.name,
+                    icon: <AgentAvatar agent={agent} size="xs" />,
+                    description:
+                      agent.profile.model || t("profile.defaultModel"),
+                  }))}
+                  onChange={setAgentId}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="feishu-add-name">
+                  {t("channels.bot.displayNameOptionalLabel")}
+                </FieldLabel>
+                <Input
+                  id="feishu-add-name"
+                  placeholder={t("channels.bot.displayNameOptionalPlaceholder")}
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  disabled={manualBusy}
+                />
+              </Field>
+            </div>
+
+            {/* Direct Initial Settings (replaces opaque scene presets) */}
+            <Field>
+              <div className="flex items-center justify-between gap-2">
+                <FieldLabel>{t("channels.bot.initialSettings")}</FieldLabel>
+                <span className="text-xs text-muted-foreground">
+                  {t("channels.bot.initialSettingsHint")}
+                </span>
+              </div>
+              <div className="feishu-override-box">
+                {/* DM Access */}
+                <div className="feishu-override-item">
+                  <div className="feishu-override-row">
+                    <span className="text-xs font-medium">
+                      {t("channels.bot.dmAccess")}
+                    </span>
+                    <ToggleGroup
+                      type="single"
                       variant="outline"
-                      disabled={busy}
-                      onClick={() => startQr.mutate()}
+                      size="sm"
+                      spacing={1}
+                      className="flex-wrap"
+                      value={config.dmAccess}
+                      disabled={manualBusy}
+                      onValueChange={(v) => {
+                        if (v === "admin" || v === "whitelist" || v === "all") {
+                          setConfig((cur) => ({ ...cur, dmAccess: v }));
+                        }
+                      }}
                     >
-                      {t("channels.registration.start")}
-                    </Button>
+                      {(["admin", "whitelist", "all"] as const).map((k) => (
+                        <ToggleGroupItem key={k} value={k}>
+                          {t(`channels.bot.dmAccess.${k}`)}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+                  {config.dmAccess === "whitelist" && (
+                    <div className="pt-1">
+                      <ChipListInput
+                        items={config.dmWhitelist}
+                        placeholder={t("channels.bot.whitelistPlaceholder")}
+                        disabled={manualBusy}
+                        align="start"
+                        onChange={(dmWhitelist) =>
+                          setConfig((cur) => ({ ...cur, dmWhitelist }))
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* DM Style */}
+                <div className="feishu-override-item">
+                  <div className="feishu-override-row">
+                    <span className="text-xs font-medium">
+                      {t("channels.bot.dmMode")}
+                    </span>
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      size="sm"
+                      spacing={1}
+                      value={config.dmMode}
+                      disabled={manualBusy}
+                      onValueChange={(v) => {
+                        if (v === "continuous" || v === "topic") {
+                          setConfig((cur) => ({ ...cur, dmMode: v }));
+                        }
+                      }}
+                    >
+                      <ToggleGroupItem value="continuous">
+                        {t("channels.bot.dmMode.continuous")}
+                      </ToggleGroupItem>
+                      <ToggleGroupItem value="topic">
+                        {t("channels.bot.dmMode.topic")}
+                      </ToggleGroupItem>
+                    </ToggleGroup>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
 
-          <Field>
-            <FieldLabel>{t("channels.targetAgent")}</FieldLabel>
-            <SearchableSelect
-              label={t("channels.chooseAgent")}
-              placeholder={t("channels.chooseAgent")}
-              searchLabel={t("skills.agentFilter")}
-              emptyLabel={t("personal.noAgents")}
-              align="start"
-              className="w-full"
-              value={agentId}
-              disabled={busy}
-              options={available.map((agent) => ({
-                id: agent.id,
-                label: agent.name,
-                icon: <AgentAvatar agent={agent} size="xs" />,
-                description:
-                  agent.profile.model || t("profile.defaultModel"),
-              }))}
-              onChange={setAgentId}
-            />
-          </Field>
+                {/* Reply Style */}
+                <div className="feishu-override-item">
+                  <div className="feishu-override-row">
+                    <span className="text-xs font-medium">
+                      {t("channels.bot.replyStyle")}
+                    </span>
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      size="sm"
+                      spacing={1}
+                      value={config.replyStyle}
+                      disabled={manualBusy}
+                      onValueChange={(v) => {
+                        if (v === "card" || v === "text") {
+                          setConfig((cur) => ({ ...cur, replyStyle: v }));
+                        }
+                      }}
+                    >
+                      <ToggleGroupItem value="card">
+                        {t("channels.bot.replyStyle.card")}
+                      </ToggleGroupItem>
+                      <ToggleGroupItem value="text">
+                        {t("channels.bot.replyStyle.text")}
+                      </ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
+                </div>
 
-          <Field>
-            <div className="flex items-center justify-between gap-2">
-              <FieldLabel>{t("channels.bot.initialPreset")}</FieldLabel>
-              <span className="text-xs text-muted-foreground">
-                {t("channels.bot.initialPresetHint")}
-              </span>
-            </div>
-            <div className="feishu-preset-grid">
-              {FEISHU_PRESET_KEYS.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  data-selected={preset === key}
-                  className="feishu-preset-card"
-                  disabled={busy}
-                  onClick={() => setPreset(key)}
-                >
-                  <span className="feishu-preset-title">
-                    {t(`channels.bot.preset.${key}`)}
-                  </span>
-                  <span className="feishu-preset-desc">
-                    {t(`channels.bot.preset.${key}Desc`)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </Field>
+                {/* Allow Group Chats */}
+                <div className="feishu-override-item">
+                  <div className="feishu-override-row">
+                    <span className="text-xs font-medium">
+                      {t("channels.bot.groupEnabled")}
+                    </span>
+                    <Switch
+                      checked={config.groupEnabled}
+                      disabled={manualBusy}
+                      aria-label={t("channels.bot.groupEnabled")}
+                      onCheckedChange={(groupEnabled) =>
+                        setConfig((cur) => ({ ...cur, groupEnabled }))
+                      }
+                    />
+                  </div>
+                </div>
 
-          {(createBot.error || startQr.error) && (
-            <ErrorNotice error={createBot.error ?? startQr.error} />
-          )}
+                {/* Group Chat Options (revealed when groupEnabled is on) */}
+                <AnimatePresence initial={false}>
+                  {config.groupEnabled && (
+                    <motion.div
+                      key="group-options"
+                      initial={
+                        reducedMotion ? false : { height: 0, opacity: 0 }
+                      }
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={reducedMotion ? undefined : { height: 0, opacity: 0 }}
+                      transition={{ duration: reducedMotion ? 0 : 0.16 }}
+                      className="feishu-override-group overflow-hidden"
+                    >
+                      {/* Group Access */}
+                      <div className="feishu-override-item">
+                        <div className="feishu-override-row">
+                          <span className="text-xs font-medium">
+                            {t("channels.bot.groupAccess")}
+                          </span>
+                          <ToggleGroup
+                            type="single"
+                            variant="outline"
+                            size="sm"
+                            spacing={1}
+                            value={config.groupAccess}
+                            disabled={manualBusy}
+                            onValueChange={(v) => {
+                              if (v === "whitelist" || v === "any") {
+                                setConfig((cur) => ({ ...cur, groupAccess: v }));
+                              }
+                            }}
+                          >
+                            {(["whitelist", "any"] as const).map((k) => (
+                              <ToggleGroupItem key={k} value={k}>
+                                {t(`channels.bot.groupAccess.${k}`)}
+                              </ToggleGroupItem>
+                            ))}
+                          </ToggleGroup>
+                        </div>
+                      </div>
+
+                      {/* Group Default Trigger */}
+                      <div className="feishu-override-item">
+                        <div className="feishu-override-row">
+                          <span className="text-xs font-medium">
+                            {t("channels.bot.groupMention")}
+                          </span>
+                          <ToggleGroup
+                            type="single"
+                            variant="outline"
+                            size="sm"
+                            spacing={1}
+                            className="flex-wrap"
+                            value={config.groupMention}
+                            disabled={manualBusy}
+                            onValueChange={(v) => {
+                              if (
+                                v === "at_only" ||
+                                v === "thread_free" ||
+                                v === "yield" ||
+                                v === "free"
+                              ) {
+                                setConfig((cur) => ({
+                                  ...cur,
+                                  groupMention: v,
+                                }));
+                              }
+                            }}
+                          >
+                            {(
+                              [
+                                "at_only",
+                                "thread_free",
+                                "yield",
+                                "free",
+                              ] as const
+                            ).map((k) => (
+                              <ToggleGroupItem key={k} value={k}>
+                                {t(`channels.bot.groupMention.${k}`)}
+                              </ToggleGroupItem>
+                            ))}
+                          </ToggleGroup>
+                        </div>
+                      </div>
+
+                      {/* Group Reply Target */}
+                      <div className="feishu-override-item">
+                        <div className="feishu-override-row">
+                          <span className="text-xs font-medium">
+                            {t("channels.bot.groupReplyTarget")}
+                          </span>
+                          <ToggleGroup
+                            type="single"
+                            variant="outline"
+                            size="sm"
+                            spacing={1}
+                            value={config.groupReplyTarget}
+                            disabled={manualBusy}
+                            onValueChange={(v) => {
+                              if (
+                                v === "topic" ||
+                                v === "main" ||
+                                v === "quote"
+                              ) {
+                                setConfig((cur) => ({
+                                  ...cur,
+                                  groupReplyTarget: v,
+                                }));
+                              }
+                            }}
+                          >
+                            {(["topic", "main", "quote"] as const).map((k) => (
+                              <ToggleGroupItem key={k} value={k}>
+                                {t(`channels.bot.groupReplyTarget.${k}`)}
+                              </ToggleGroupItem>
+                            ))}
+                          </ToggleGroup>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </Field>
+
+            {mode === "manual" && createBot.error && (
+              <ErrorNotice error={createBot.error} />
+            )}
+          </div>
 
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
-              disabled={busy}
-              onClick={() => onOpenChange(false)}
+              disabled={manualBusy}
+              onClick={() => handleOpenChange(false)}
             >
               {t("common.cancel")}
             </Button>
-            {mode === "existing" && (
+            {mode === "manual" && (
               <Button
                 type="submit"
-                disabled={busy || !appId.trim() || !appSecret.trim()}
+                disabled={manualBusy || !appId.trim() || !appSecret.trim()}
               >
                 {t("channels.bot.verifyAndBind")}
               </Button>

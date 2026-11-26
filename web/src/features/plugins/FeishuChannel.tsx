@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -7,7 +7,6 @@ import {
   Ellipsis,
   Plus,
   Send,
-  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -51,11 +50,9 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { ModelPicker } from "@/features/chat/ModelPicker";
 import { useModels, useProviders } from "@/features/runtime/queries";
@@ -71,6 +68,7 @@ import {
   useFeishuChannel,
 } from "./channelQuery";
 import {
+  ChipListInput,
   FeishuAddBotDialog,
   FeishuCredsDialog,
   FeishuGroupRuleDialog,
@@ -81,13 +79,10 @@ import {
   baseSelectionForAgent,
   botDisplayName,
   buildRuleDiffChips,
-  FEISHU_PRESET_KEYS,
-  FEISHU_PRESET_PATCHES,
-  type FeishuPresetKey,
   formatSelectionLabel,
   primaryWorkspaceForAgent,
   shortId,
-} from "./feishuPresets";
+} from "./feishuBotHelpers";
 
 const HISTORY_LIMIT_OPTIONS = ["0", "10", "20", "50"] as const;
 
@@ -316,8 +311,8 @@ export function FeishuChannel({
       )}
 
       {/* Multi-Bot Switcher Bar + Bind Bot Button */}
-      <div className="feishu-switcher-row">
-        {bots.length > 0 ? (
+      {bots.length > 0 && (
+        <div className="feishu-switcher-row">
           <div
             className="feishu-bot-strip"
             role="tablist"
@@ -374,21 +369,19 @@ export function FeishuChannel({
               );
             })}
           </div>
-        ) : (
-          <div />
-        )}
 
-        <Button
-          type="button"
-          size="sm"
-          disabled={pluginDisabled}
-          onClick={() => setAddOpen(true)}
-          className="shrink-0"
-        >
-          <Plus data-icon="inline-start" />
-          {t("channels.bot.bind")}
-        </Button>
-      </div>
+          <Button
+            type="button"
+            size="sm"
+            disabled={pluginDisabled}
+            onClick={() => setAddOpen(true)}
+            className="shrink-0"
+          >
+            <Plus data-icon="inline-start" />
+            {t("channels.bot.bind")}
+          </Button>
+        </div>
+      )}
 
       {/* Empty State when no bots configured yet */}
       {!bot ? (
@@ -477,46 +470,6 @@ export function FeishuChannel({
                   <ArrowUpRight data-icon="inline-end" />
                 </Button>
               )}
-
-              {/* Quick Scene Preset Menu */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                  >
-                    {t("channels.bot.applyPreset")}
-                    <ChevronDown data-icon="inline-end" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64">
-                  {FEISHU_PRESET_KEYS.map((key: FeishuPresetKey) => (
-                    <DropdownMenuItem
-                      key={key}
-                      onSelect={() => {
-                        patchSettings(FEISHU_PRESET_PATCHES[key]);
-                        toast.success(
-                          t("channels.bot.presetApplied", {
-                            name: botDisplayName(bot, t("channels.feishu")),
-                            preset: t(`channels.bot.preset.${key}`),
-                          }),
-                        );
-                      }}
-                    >
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-medium">
-                          {t(`channels.bot.preset.${key}`)}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {t(`channels.bot.preset.${key}Desc`)}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
 
               <Button
                 type="button"
@@ -1303,74 +1256,5 @@ function BotModelRow({
         </SettingsRow>
       )}
     </>
-  );
-}
-
-// =========================================================================
-// Reusable Chip List Input (Admins / Whitelist / Blocklist)
-// =========================================================================
-function ChipListInput({
-  items,
-  staticChips,
-  placeholder,
-  disabled,
-  onChange,
-}: {
-  items: string[];
-  staticChips?: string[];
-  placeholder: string;
-  disabled?: boolean;
-  onChange: (next: string[]) => void;
-}) {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState("");
-
-  const add = () => {
-    const value = draft.trim();
-    if (!value) return;
-    if (!items.includes(value)) {
-      onChange([...items, value]);
-    }
-    setDraft("");
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      add();
-    }
-  };
-
-  return (
-    <div className="feishu-chip-list">
-      {staticChips?.map((label) => (
-        <span key={label} className="feishu-chip">
-          {label}
-        </span>
-      ))}
-      {items.map((item) => (
-        <span key={item} className="feishu-chip font-mono">
-          {item}
-          <button
-            type="button"
-            className="feishu-chip-remove"
-            disabled={disabled}
-            aria-label={t("channels.bot.removeItem", { item })}
-            onClick={() => onChange(items.filter((x) => x !== item))}
-          >
-            <X className="size-3" />
-          </button>
-        </span>
-      ))}
-      <Input
-        className="h-7 w-36 px-2 text-xs"
-        placeholder={placeholder}
-        value={draft}
-        disabled={disabled}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={onKeyDown}
-        onBlur={add}
-      />
-    </div>
   );
 }

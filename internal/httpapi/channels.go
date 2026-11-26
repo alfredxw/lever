@@ -120,6 +120,15 @@ func (s *Server) channelRoutes(mux *http.ServeMux) {
 		v, err := a.RegisterFeishuBot(r.Context(), in)
 		respond(w, v, err)
 	})
+	mux.HandleFunc("PUT /api/channels/feishu/bots/registration", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuRegistrationInput
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.UpdateFeishuRegistrationDraft(r.Context(), in)
+		respond(w, v, err)
+	})
 	mux.HandleFunc("PUT /api/channels/feishu/bots/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
 		var in model.FeishuBotSettings
 		if err := read(w, r, &in); err != nil {

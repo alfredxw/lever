@@ -9,49 +9,62 @@ import type {
 } from "@/api/types.gen";
 import { connectionName } from "@/features/runtime/connections";
 
-export type FeishuPresetKey = "personal" | "dev" | "oncall";
+export interface FeishuInitialConfig {
+  dmAccess: "admin" | "whitelist" | "all";
+  dmWhitelist: string[];
+  dmMode: "continuous" | "topic";
+  replyStyle: "card" | "text";
+  groupEnabled: boolean;
+  groupAccess: "whitelist" | "any";
+  groupMention: "at_only" | "thread_free" | "yield" | "free";
+  groupReplyTarget: "topic" | "main" | "quote";
+}
 
-export const FEISHU_PRESET_KEYS: readonly FeishuPresetKey[] = [
-  "personal",
-  "dev",
-  "oncall",
-];
-
-export const FEISHU_PRESET_PATCHES: Record<
-  FeishuPresetKey,
-  Partial<FeishuBotSettings>
-> = {
-  personal: {
+export function defaultFeishuInitialConfig(): FeishuInitialConfig {
+  return {
+    dmAccess: "admin",
+    dmWhitelist: [],
     dmMode: "continuous",
     replyStyle: "card",
     groupEnabled: false,
-    groupMention: "at_only",
-    groupReplyTarget: "topic",
-    dmAccess: "admin",
     groupAccess: "whitelist",
-    replyMention: "none",
-  },
-  dev: {
-    dmMode: "continuous",
-    replyStyle: "card",
-    groupEnabled: true,
     groupMention: "thread_free",
     groupReplyTarget: "topic",
-    dmAccess: "all",
-    groupAccess: "whitelist",
+  };
+}
+
+export function buildInitialBotSettings(
+  config: FeishuInitialConfig,
+  displayName: string,
+  agentId: string,
+): FeishuBotSettings {
+  return {
+    displayName: displayName.trim(),
+    agentId,
+    dmMode: config.dmMode,
+    replyStyle: config.replyStyle,
+    groupEnabled: config.groupEnabled,
+    groupMention: config.groupMention,
+    groupReplyTarget: config.groupReplyTarget,
+    dmAccess: config.dmAccess,
+    dmWhitelist: config.dmAccess === "whitelist" ? config.dmWhitelist : [],
+    groupAccess: config.groupAccess,
     replyMention: "requester",
-  },
-  oncall: {
-    dmMode: "topic",
-    replyStyle: "text",
-    groupEnabled: true,
-    groupMention: "yield",
-    groupReplyTarget: "main",
-    dmAccess: "whitelist",
-    groupAccess: "whitelist",
-    replyMention: "members",
-  },
-};
+    admins: [],
+    defaultPrompt: "",
+    chatOverrides: [],
+    advanced: {
+      reactionAck: true,
+      senderTag: true,
+      hideLocalAddresses: true,
+      historyLimit: 20,
+      trustSameOwnerBots: false,
+      sessionMapping: "single_chat_topics",
+      approvalMode: "lever",
+      blockedUsers: [],
+    },
+  };
+}
 
 export function shortId(id: string | undefined) {
   if (!id || id.length <= 14) return id ?? "";
