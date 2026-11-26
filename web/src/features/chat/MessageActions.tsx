@@ -1,5 +1,5 @@
-import { useContext, type ReactNode } from "react";
-import { Forward, MessagesSquare, Pencil, Quote } from "lucide-react";
+import type { ReactNode } from "react";
+import { Forward, Pencil, Quote } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import type { MessageQuote } from "@/api/types.gen";
@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { CodeBlockCopyButton } from "@/components/ui/code-block";
 import { MessageFooter } from "@/components/ui/message";
 import { useLocalDayKey } from "@/hooks/useLocalDayKey";
-import { ComposerContext } from "./ComposerContext";
 import { formatMessageTime } from "./messageTime";
 
 export type MessageActionHandlers = {
@@ -16,34 +15,34 @@ export type MessageActionHandlers = {
 };
 
 export function MessageActions({
-  chatId,
   message,
   timestamp,
   disabled,
   onQuote,
   onForward,
   onEdit,
-  persistentAction,
+  leadingAction,
+  leadingActionPersistent = false,
   children,
 }: MessageActionHandlers & {
-  chatId: string;
   message: MessageQuote;
   timestamp?: string;
   disabled?: boolean;
   onEdit?: () => void;
-  persistentAction?: ReactNode;
+  leadingAction?: ReactNode;
+  leadingActionPersistent?: boolean;
   children?: ReactNode;
 }) {
   const { t, i18n } = useTranslation();
-  const composer = useContext(ComposerContext);
   useLocalDayKey();
   const formattedTime = formatMessageTime(timestamp, i18n.language, {
     formatYesterday: (time) => t("chat.yesterdayTime", { time }),
   });
   return (
     <MessageFooter className="message-actions gap-1 px-0">
-      {persistentAction}
+      {leadingActionPersistent && leadingAction}
       <div className="message-actions-secondary flex min-w-0 items-center gap-1 overflow-x-auto">
+        {!leadingActionPersistent && leadingAction}
         {onEdit && (
           <Button
             type="button"
@@ -75,18 +74,6 @@ export function MessageActions({
                 onClick={() => onQuote(message)}
               >
                 <Quote />
-              </Button>
-            )}
-            {composer && (
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t("chat.quoteTo")}
-                title={t("chat.quoteTo")}
-                disabled={disabled}
-                onClick={() => composer.quoteTo(chatId, message)}
-              >
-                <MessagesSquare />
               </Button>
             )}
             <Button

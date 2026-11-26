@@ -4715,76 +4715,85 @@ test("quoting a topic message targets its reply and preserves the main draft", a
   });
 });
 
-test("cross-session quotes open the chosen composer and only send on submit", async ({
+test("message actions omit quote-to and keep the topic action in a stable leading position", async ({
   page,
 }) => {
-  await createAgent(page, "跨会话引用");
+  await createAgent(page, "话题入口位置");
   await send(page, "主线确定了接口约定。");
-  const main = page.locator(".chat-composer-wrap:visible");
-  const input = main.getByRole("textbox", { name: "发送消息", exact: true });
-  const mode = main.getByRole("button", { name: "话题", exact: true });
-  const dialog = page.getByRole("dialog", { name: "引用到…" });
-  const quoteAction = { name: "引用到…", exact: true };
-  const source = page
-    .locator(".chat-panel:visible .run-content .user-message")
-    .first();
-  await input.fill("请在话题里复核这项约定");
-  await source.getByRole("button", quoteAction).click();
-  await dialog.getByRole("button", { name: "新话题", exact: true }).click();
-  await expect(input).toBeFocused();
-  await expect(input).toHaveText("请在话题里复核这项约定");
-  await expect(mode).toHaveAttribute("aria-pressed", "true");
-  await expect(main.locator(".message-quote")).toContainText(
-    "主线确定了接口约定。",
-  );
-  const topic = page.locator(".topic-thread");
-  await expect(topic).toHaveCount(0);
-  await send(page);
+  const run = page.locator(".chat-panel:visible .run-content").first();
+  const userActions = run.locator(".user-message .message-actions");
+  const agentMessage = run.locator(".agent-message");
+  const agentActions = agentMessage.locator(".message-actions");
 
-  await topic.locator(".topic-open").click();
-  const panel = page.getByRole("region", { name: "话题", exact: true });
-  const topicComposer = panel.locator(".topic-composer-wrap");
-  const reply = topicComposer.getByRole("textbox", {
-    name: "回复话题",
+  await expect(run.getByRole("button", { name: "引用到…" })).toHaveCount(0);
+  await expect(userActions.locator("button").first()).toHaveAccessibleName(
+    "转为话题",
+  );
+  await expect(agentActions.locator("button").first()).toHaveAccessibleName(
+    "转为话题",
+  );
+
+  await agentMessage.hover();
+  await expect(agentActions.locator(".message-actions-secondary")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  const createTopic = agentActions.getByRole("button", {
+    name: "转为话题",
     exact: true,
   });
-  await reply.fill("保留话题草稿");
-  await input.fill("在主线继续");
-  await panel
-    .locator(".agent-message")
-    .getByRole("button", quoteAction)
-    .click();
-  await dialog.getByRole("button", { name: "主对话", exact: true }).click();
-  await expect(input).toBeFocused();
-  await expect(mode).toHaveAttribute("aria-pressed", "false");
-  await expect(main.locator(".message-quote")).toContainText(
-    "请在话题里复核这项约定",
-  );
-  await expect(reply).toHaveText("保留话题草稿");
-  await expect(input).toHaveText("在主线继续");
-  await send(page);
+  const beforeBox = (await createTopic.boundingBox())!;
+  const beforeCopyBox = (await agentActions
+    .getByRole("button", { name: "复制消息", exact: true })
+    .boundingBox())!;
+  expect(beforeBox.x).toBeLessThan(beforeCopyBox.x);
+  await agentActions.screenshot({
+    path: "../output/e2e/topic-action-before.png",
+    animations: "disabled",
+  });
 
-  await source.getByRole("button", quoteAction).click();
-  await dialog
-    .getByRole("button", { name: "请在话题里复核这项约定", exact: true })
-    .click();
-  await expect(reply).toBeFocused();
-  await expect(reply).toHaveText("保留话题草稿");
-  await expect(topicComposer.locator(".message-quote")).toContainText(
-    "主线确定了接口约定。",
+  await createTopic.click();
+  const topicPanel = page.getByRole("region", { name: "话题", exact: true });
+  await expect(topicPanel).toBeVisible();
+  await expect(
+    topicPanel.getByRole("button", { name: "引用到…" }),
+  ).toHaveCount(0);
+
+  // Close the topic pane so the main chat returns to its full width before comparing coordinates.
+  await closeTopic(page);
+  await expect(topicPanel).toHaveCount(0);
+
+  const openTopic = agentActions.getByRole("button", {
+    name: "打开话题",
+    exact: true,
+  });
+  await expect(openTopic).toBeVisible();
+  await expect(agentActions.locator("button").first()).toHaveAccessibleName(
+    "打开话题",
   );
-  const sessionId = await topic.getAttribute("data-session-id");
-  const before = await page.request.get(`/api/sessions/${sessionId}/runs`);
-  expect((await before.json()).runs).toHaveLength(1);
-  await topicComposer
-    .getByRole("button", { name: "发送", exact: true })
-    .click();
-  await expect(topic).toHaveAttribute("data-status", "completed");
-  await expect(reply).toHaveText("");
-  const after = await page.request.get(`/api/sessions/${sessionId}/runs`);
-  const { runs } = (await after.json()) as { runs: Run[] };
-  expect(runs[0].input).toBe("保留话题草稿");
-  expect(runs[0].quote?.text).toBe("主线确定了接口约定。");
+  // Persistent action stays visible without hovering the message.
+  await page.mouse.move(0, 0);
+  await expect(agentActions.locator(".message-actions-secondary")).toHaveCSS(
+    "opacity",
+    "0",
+  );
+  await expect(openTopic).toHaveCSS("opacity", "1");
+
+  await agentMessage.hover();
+  await expect(agentActions.locator(".message-actions-secondary")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  const afterBox = (await openTopic.boundingBox())!;
+  const afterCopyBox = (await agentActions
+    .getByRole("button", { name: "复制消息", exact: true })
+    .boundingBox())!;
+  expect(Math.abs(afterBox.x - beforeBox.x)).toBeLessThanOrEqual(1);
+  expect(afterBox.x).toBeLessThan(afterCopyBox.x);
+  await agentActions.screenshot({
+    path: "../output/e2e/topic-action-after.png",
+    animations: "disabled",
+  });
 });
 
 test("work duration uses persisted times and expands activity before the final answer", async ({

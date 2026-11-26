@@ -200,7 +200,7 @@ export function RunMessages({
     onOpenFile,
     onQuote,
     onForward,
-    userFooterActions: createTopicAction,
+    userLeadingAction: createTopicAction,
   });
   const hasCollaboration = !!(
     delegatedRuns?.length ||
@@ -227,13 +227,12 @@ export function RunMessages({
                 </p>
               )}
               <UserMessage
-                chatId={run.chatId}
                 sessionId={run.sessionId}
                 message={run}
                 archived={agent.archived}
                 onQuote={onQuote}
                 onForward={onForward}
-                footerActions={createTopicAction}
+                leadingAction={createTopicAction}
                 onEdit={
                   onEdit &&
                   !agent.archived &&
@@ -414,7 +413,6 @@ export function RunMessages({
           {retryReply.error && <ErrorNotice error={retryReply.error} />}
           {!hideTurnChanges && <TurnChanges run={run} />}
           <MessageActions
-            chatId={run.chatId}
             message={{
               runId: run.id,
               role: "assistant",
@@ -425,10 +423,9 @@ export function RunMessages({
             disabled={agent.archived}
             onQuote={onQuote}
             onForward={onForward}
-            persistentAction={sourceTopicId ? topicAction : undefined}
-          >
-            {createTopicAction}
-          </MessageActions>
+            leadingAction={topicAction}
+            leadingActionPersistent={!!sourceTopicId}
+          />
         </MessageContent>
       </Message>
     </>

@@ -33,7 +33,7 @@ export type RunResponseProps = MessageActionHandlers & {
   agent?: Agent;
   requests: Request[];
   onOpenFile: OpenChatFile;
-  userFooterActions?: ReactNode;
+  userLeadingAction?: ReactNode;
 };
 
 export function useRunResponse({
@@ -44,7 +44,7 @@ export function useRunResponse({
   onOpenFile,
   onQuote,
   onForward,
-  userFooterActions,
+  userLeadingAction,
 }: RunResponseProps) {
   const { t } = useTranslation();
   const providers = useProviders();
@@ -104,14 +104,13 @@ export function useRunResponse({
     ) : part.kind === "user" && part.message ? (
       <div key={part.id}>
         <UserMessage
-          chatId={run.chatId}
           sessionId={run.sessionId}
           message={part.message}
           archived={agent?.archived}
           onQuote={onQuote}
           onForward={onForward}
-          footerActions={
-            part.status === "completed" ? userFooterActions : undefined
+          leadingAction={
+            part.status === "completed" ? userLeadingAction : undefined
           }
         />
         {(part.status === "unknown" || part.status === "running") && (

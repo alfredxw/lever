@@ -115,7 +115,6 @@ export function ComparisonMessage({
       className="flex min-w-0 flex-col gap-3"
     >
       <UserMessage
-        chatId={comparison.chatId}
         message={comparison.message}
         archived={archived}
         {...messageActions}

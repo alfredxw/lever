@@ -2389,11 +2389,7 @@ export const enUS = {
   "chat.resumeReply": "Continue",
   "chat.copy": "Copy message",
   "chat.quote": "Quote message",
-  "chat.quoteTo": "Quote to…",
-  "chat.mainDestination": "Main Chat",
   "chat.newTopicDestination": "New Topic",
-  "chat.quoteWhileEditing":
-    "Finish editing this message before changing its destination.",
   "chat.editFromHere": "Edit from here",
   "chat.editingSent": "Editing sent message",
   "chat.editConsequence":

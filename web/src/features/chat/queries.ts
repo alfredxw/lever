@@ -13,7 +13,6 @@ import type {
   Overview,
   SessionRuns,
   SessionView,
-  TopicSummary,
 } from "@/api/types.gen";
 import type { WorkspaceTab } from "@/components/workbench/useWorkspaces";
 
@@ -71,14 +70,6 @@ export function chatQuery(chatId: string) {
       ),
     getNextPageParam: (page) =>
       page.hasMore ? page.entries[0]?.sequence : undefined,
-  });
-}
-
-export function chatTopicsQuery(chatId: string) {
-  return queryOptions({
-    queryKey: ["chat", chatId, "topics"],
-    queryFn: ({ signal }) =>
-      api<TopicSummary[]>(`/chats/${chatId}/topics`, undefined, "GET", signal),
   });
 }
 

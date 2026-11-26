@@ -15,7 +15,7 @@ export type ComposerInsertion = {
   | { kind: "reference"; reference: Reference }
   | { kind: "files"; files: File[] }
   | { kind: "reply"; content: JSONContent[] }
-  | { kind: "quote"; quote: MessageQuote; mode?: "main" | "topic" }
+  | { kind: "quote"; quote: MessageQuote }
   | { kind: "edit"; run: Run }
 );
 
@@ -25,7 +25,6 @@ export const ComposerContext = createContext<{
   openFileReference?: OpenReference;
   openRuntimeSettings: (providerId?: string) => void;
   quote: (composer: string, message: MessageQuote) => void;
-  quoteTo: (chatId: string, message: MessageQuote) => void;
   edit: (composer: string, run: Run) => void;
   insertions: ReadonlyMap<string, ComposerInsertion>;
   inserted: (composer: string, id: string) => void;

@@ -204,7 +204,6 @@ export function Topic({
         </p>
       )}
       <UserMessage
-        chatId={session.chatId}
         sessionId={session.id}
         message={root}
         archived={agent.archived}

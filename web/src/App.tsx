@@ -124,10 +124,6 @@ import { TopicConversation } from "@/features/chat/Topic";
 import { prefetchConversation, sessionQuery } from "@/features/chat/queries";
 import type { TaskDestination } from "@/features/tasks/TasksPage";
 import { ForwardMessageDialog } from "@/features/chat/ForwardMessageDialog";
-import {
-  QuoteDestinationDialog,
-  type QuoteDestination,
-} from "@/features/chat/QuoteDestinationDialog";
 import { Profile } from "@/features/agents/Profile";
 import {
   hasDesktopNotifications,
@@ -323,10 +319,6 @@ export default function App() {
   const [revealTask, setRevealTask] = useState<TaskDestination>();
   const onTaskLocated = useCallback(() => setRevealTask(undefined), []);
   const [forward, setForward] = useState<MessageQuote>();
-  const [quoteSource, setQuoteSource] = useState<{
-    chatId: string;
-    quote: MessageQuote;
-  }>();
   const [workspaceSearch, setWorkspaceSearch] = useState<{
     type: SearchType;
     scope?: SearchScope;
@@ -1080,13 +1072,12 @@ export default function App() {
     );
   }, []);
   const insertQuote = useCallback(
-    (composer: string, quote: MessageQuote, mode?: "main" | "topic") => {
+    (composer: string, quote: MessageQuote) => {
       insertIntoComposer({
         id: crypto.randomUUID(),
         composer,
         kind: "quote",
         quote,
-        mode,
       });
     },
     [insertIntoComposer],
@@ -1214,33 +1205,6 @@ export default function App() {
     setPage("agents");
     setFocusComposer(undefined);
     requestReveal({ tabId: chat.id, comparisonId: origin.id });
-  }
-  async function quoteTo(destination: QuoteDestination) {
-    const { chatId, quote } = quoteSource!;
-    if (destination.kind === "topic") {
-      const view = await queryClient.fetchQuery(
-        sessionQuery(destination.sessionId),
-      );
-      openTopic(view, quote);
-      choose(view.session.agentId);
-      setPage("agents");
-      return;
-    }
-    const chat = overview.data?.chats.find((item) => item.id === chatId);
-    const owner = chat?.agentId ?? selected;
-    openTab(
-      {
-        id: chatId,
-        kind: "chat",
-        title: chat ? displayChatTitle(chat, t) : t("workspace.newChat"),
-      },
-      owner,
-      primaryTabPane(workspaceFor(owner)?.tabs ?? [], chatId),
-    );
-    if (destination.kind === "main") setChatTopic(owner, chatId);
-    choose(owner);
-    setPage("agents");
-    insertQuote(chatId, quote, destination.kind === "main" ? "main" : "topic");
   }
   function selectChatTopic(agentId: string, chatId: string, topicId?: string) {
     setChatTopic(agentId, chatId, topicId);
@@ -1917,7 +1881,6 @@ export default function App() {
       openFileReference,
       openRuntimeSettings: showProviderSettings,
       quote: insertQuote,
-      quoteTo: (chatId, quote) => setQuoteSource({ chatId, quote }),
       edit: (composer, run) =>
         insertIntoComposer({
           id: crypto.randomUUID(),
@@ -2356,7 +2319,6 @@ export default function App() {
                           focused &&
                           !create &&
                           !forward &&
-                          !quoteSource &&
                           !workspaceSearch;
                         const panel = (
                           <Panel
@@ -2808,13 +2770,6 @@ export default function App() {
                       ?.focus(),
                   );
               }}
-            />
-          )}
-          {quoteSource && (
-            <QuoteDestinationDialog
-              {...quoteSource}
-              onSelect={quoteTo}
-              onClose={() => setQuoteSource(undefined)}
             />
           )}
           {forward && overview.data && (

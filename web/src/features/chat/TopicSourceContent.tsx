@@ -34,7 +34,6 @@ export function TopicSourceContent({
   const userMessage = (entry: TopicSource["message"]) => (
     <UserMessage
       key={entry.id}
-      chatId={session.chatId}
       sessionId={session.id}
       message={entry}
       archived={agent.archived}
@@ -74,7 +73,6 @@ export function TopicSourceContent({
               )}
             </div>
             <MessageActions
-              chatId={session.chatId}
               message={{
                 runId: message.id,
                 role: "assistant",

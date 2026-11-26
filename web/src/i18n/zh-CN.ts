@@ -2276,10 +2276,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.resumeReply": "继续",
   "chat.copy": "复制消息",
   "chat.quote": "引用消息",
-  "chat.quoteTo": "引用到…",
-  "chat.mainDestination": "主对话",
   "chat.newTopicDestination": "新话题",
-  "chat.quoteWhileEditing": "请先完成当前消息的编辑，再更改发送目标。",
   "chat.editFromHere": "从这里编辑",
   "chat.editingSent": "正在编辑已发送消息",
   "chat.editConsequence":

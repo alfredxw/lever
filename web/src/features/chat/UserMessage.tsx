@@ -9,7 +9,6 @@ import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { QuotedMessage } from "./QuotedMessage";
 
 export function UserMessage({
-  chatId,
   sessionId,
   message: run,
   archived,
@@ -17,13 +16,14 @@ export function UserMessage({
   onForward,
   onEdit,
   children,
+  leadingAction,
   footerActions,
 }: {
-  chatId: string;
   sessionId?: string;
   message: MessageData;
   archived?: boolean;
   children?: ReactNode;
+  leadingAction?: ReactNode;
   footerActions?: ReactNode;
   onEdit?: () => void;
 } & MessageActionHandlers) {
@@ -52,7 +52,6 @@ export function UserMessage({
           </Bubble>
         )}
         <MessageActions
-          chatId={chatId}
           message={{
             runId: run.id,
             role: "user",
@@ -69,6 +68,7 @@ export function UserMessage({
           onQuote={onQuote}
           onForward={onForward}
           onEdit={onEdit}
+          leadingAction={leadingAction}
         >
           {footerActions}
         </MessageActions>

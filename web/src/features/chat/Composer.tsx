@@ -662,25 +662,10 @@ export function Composer({
       return;
     }
     if (sending || insertion.kind !== "quote") return;
-    const topic = fixedSession
-      ? draft.topic
-      : insertion.mode === undefined
-        ? draft.topic
-        : insertion.mode === "topic";
-    if (draft.editing && topic !== draft.topic) {
-      toast.error(t("chat.quoteWhileEditing"));
-    } else {
-      setDraft((d) => ({
-        ...d,
-        quote: insertion.quote,
-        topic,
-        comparisonAgents: topic ? d.comparisonAgents : undefined,
-        comparisonModels: topic ? d.comparisonModels : undefined,
-      }));
-    }
+    setDraft((d) => ({ ...d, quote: insertion.quote }));
     composer.inserted(key, insertion.id);
     requestAnimationFrame(() => textbox.current?.focus());
-  }, [composer, draft.editing, draft.topic, fixedSession, key, sending, uploading, visible, t]);
+  }, [composer, key, sending, uploading, visible]);
   const running = Boolean(activeRun && !topicMode);
   const canSendWithPausedQueue = Boolean(pausedRun && session?.queuePaused);
   const followUp =
