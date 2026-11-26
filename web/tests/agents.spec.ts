@@ -2190,8 +2190,8 @@ test("workspace toolbar keeps chosen tools in the overflow menu", async ({
   await showInToolbar.hover();
   const option = (name: string) =>
     page.getByRole("menuitemcheckbox", { name, exact: true });
-  await expect(option("变更")).toHaveCount(0);
   await expect(option("浏览器")).toHaveAttribute("aria-checked", "false");
+  await expect(option("变更")).toHaveCount(0);
   await option("浏览器").click();
   await page.keyboard.press("ArrowLeft");
   await expect(showInToolbar).toBeFocused();
