@@ -492,9 +492,10 @@ type Run struct {
 	CanPause            bool                `json:"canPause,omitempty"`
 	CanSteer            bool                `json:"canSteer,omitempty"`
 	SteerPending        bool                `json:"steerPending,omitempty"`
-	PauseRequested      bool                `json:"pauseRequested,omitempty"`
-	Continued           bool                `json:"continued,omitempty"`
-	ResumeAfterShutdown bool                `json:"resumeAfterShutdown,omitempty"`
+	PauseRequested        bool                `json:"pauseRequested,omitempty"`
+	Continued             bool                `json:"continued,omitempty"`
+	ContinuationCommandID string              `json:"continuationCommandId,omitempty"`
+	ResumeAfterShutdown   bool                `json:"resumeAfterShutdown,omitempty"`
 	Operation           string              `json:"operation,omitempty"`
 	Delivery            string              `json:"delivery,omitempty"`
 	SteerRunID          string              `json:"steerRunId,omitempty"`

@@ -107,6 +107,33 @@ func saveRunDependencies(ctx context.Context, tx *sql.Tx, runID string, afterRun
 	return nil
 }
 
+func replaceRunDependencyTarget(ctx context.Context, tx *sql.Tx, oldRunID, newRunID string) error {
+	waiters, err := store.List[model.Run](ctx, tx, `SELECT r.data FROM runs r
+JOIN run_dependencies rd ON rd.run_id=r.id
+WHERE rd.after_run_id=? AND r.status='queued'`, oldRunID)
+	if err != nil {
+		return err
+	}
+	if len(waiters) == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE run_dependencies SET after_run_id=?
+WHERE after_run_id=? AND run_id IN (SELECT id FROM runs WHERE status='queued')`, newRunID, oldRunID); err != nil {
+		return err
+	}
+	for _, waiter := range waiters {
+		for i, depID := range waiter.AfterRunIDs {
+			if depID == oldRunID {
+				waiter.AfterRunIDs[i] = newRunID
+			}
+		}
+		if err := store.SaveRun(tx, waiter); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func dependenciesReady(ctx context.Context, tx *sql.Tx, runID string) (bool, error) {
 	var ready bool
 	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(

@@ -48,10 +48,16 @@ type Input struct {
 	Recovery                                       *Recovery
 }
 
+// ContinueInterruptedPrompt asks runtimes without empty-input native turn
+// continuation to resume an interrupted or failed turn in the same session.
+const ContinueInterruptedPrompt = "Continue the interrupted request in this conversation from the last confirmed step. Do not repeat completed actions. Verify any uncertain outcome before acting."
+
 type Recovery struct {
 	NativeTurnID     *string
 	Continue         bool
-	SkipOutputReplay bool // A confirmed pause already saved the streamed output.
+	SkipOutputReplay bool   // A confirmed pause or prior output already saved the streamed output.
+	ResumeFailed     bool   // Explicit user continuation of a failed or interrupted run with partial progress.
+	ItemPrefix       string // Unique prefix so continued output appends instead of overwriting prior items.
 }
 
 func SupportsTurnContinuation(kind string) bool {
@@ -161,6 +167,25 @@ type Sink interface {
 	Steered(string, error) error
 }
 
+type continuationSink struct {
+	Sink
+	prefix string
+}
+
+func (s continuationSink) Item(item model.Item) error {
+	if item.Kind != "user" {
+		item.ID = s.prefix + item.ID
+	}
+	return s.Sink.Item(item)
+}
+
+func (s continuationSink) Ask(ctx context.Context, r model.Request) (model.Answer, error) {
+	if r.SubagentID != "" {
+		r.SubagentID = s.prefix + r.SubagentID
+	}
+	return s.Sink.Ask(ctx, r)
+}
+
 func Run(ctx context.Context, in Input, sink Sink) error {
 	d, ok := drivers[in.Provider.Type]
 	if !ok {
@@ -172,6 +197,9 @@ func Run(ctx context.Context, in Input, sink Sink) error {
 	}
 	in.Selection = selection
 	in.Profile.Scope = in.Session.Scope
+	if in.Recovery != nil && in.Recovery.Continue && in.Recovery.ItemPrefix != "" {
+		sink = continuationSink{Sink: sink, prefix: in.Recovery.ItemPrefix}
+	}
 	// The process driving the turn can outlive the backend that started it.
 	// Each concurrent turn owns its own system sleep assertion.
 	if release, err := device.PreventIdleSleep(ctx); err == nil {

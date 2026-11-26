@@ -229,7 +229,15 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 	if err != nil {
 		return err
 	}
-	in.prepareSlashPrompt()
+	if in.Recovery != nil && in.Recovery.Continue {
+		if in.Session.NativeID == "" {
+			return errors.New("Cannot continue Pi reply without a native session")
+		}
+		in.Text, in.History, in.HistoryContext = ContinueInterruptedPrompt, "", ""
+		in.Attachments, in.References = nil, nil
+	} else {
+		in.prepareSlashPrompt()
+	}
 	prompt, err := piPrompt(in)
 	if err != nil {
 		return err

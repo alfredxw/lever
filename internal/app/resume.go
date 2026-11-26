@@ -28,7 +28,7 @@ func (a *App) Resume(ctx context.Context, runID, nativeTurnID string) error {
 	if nativeTurnID == "" {
 		return invalid("Select the paused turn to continue")
 	}
-	if e := a.active[runID]; e != nil && e.recovery != nil && e.recovery.Continue &&
+	if e := a.active[runID]; e != nil && e.recovery != nil && e.recovery.Continue && !e.recovery.ResumeFailed &&
 		e.recovery.NativeTurnID != nil && *e.recovery.NativeTurnID == nativeTurnID {
 		return nil
 	}
@@ -69,11 +69,14 @@ func (a *App) Resume(ctx context.Context, runID, nativeTurnID string) error {
 		profile = agent.Profile
 		run.Status, run.Error = "starting", ""
 		run.Continued = true
+		if err := initRunSteerState(tx, &run, session, config); err != nil {
+			return err
+		}
 		return store.SaveRun(tx, run)
 	})
 	if err == nil {
 		a.launchLocked(run, session, profile, config, &provider.Recovery{
-			NativeTurnID: run.NativeTurnID, Continue: true, SkipOutputReplay: true,
+			NativeTurnID: run.NativeTurnID, Continue: true, SkipOutputReplay: true, ItemPrefix: "continue-" + ID() + ":",
 		})
 	}
 	return err

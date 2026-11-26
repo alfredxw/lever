@@ -801,9 +801,19 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			if err != nil {
 				return err
 			}
-			input.Operation = "main"
-			if session.Kind == "topic" {
-				input.Operation = "reply"
+			later, err := hasLaterExecutedRun(ctx, tx, session.ID, origin.retry.Sequence)
+			if err != nil {
+				return err
+			}
+			if later {
+				return conflict("Only the latest failed or stopped execution in this conversation can be retried")
+			}
+			input.Operation = origin.retry.Operation
+			if input.Operation == "" {
+				input.Operation = "main"
+				if session.Kind == "topic" {
+					input.Operation = "reply"
+				}
 			}
 		case input.Operation == "main":
 			session, err = store.Get[model.Session](ctx, tx, "SELECT data FROM sessions WHERE chat_id=? AND kind='main'", chat.ID)
@@ -890,7 +900,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		if err := a.checkSessionScope(session); err != nil {
 			return err
 		}
-		if replaced.ID != "" && a.hasActiveSessionLocked(session.ID) {
+		if (replaced.ID != "" || origin.retry != nil) && a.hasActiveSessionLocked(session.ID) {
 			return conflict("This conversation still owns an execution")
 		}
 		var current *model.Run
@@ -1063,6 +1073,10 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 				session.Runtime = nil
 				run.Sequence = replaced.Sequence
 			} else if origin.retry != nil {
+				if err := store.SupersedeRuns(tx, *origin.retry, &session); err != nil {
+					return err
+				}
+				run.Sequence = origin.retry.Sequence
 				// Start the chosen input while leaving the session's queue paused.
 				session.QueuePaused = true
 			}
@@ -1079,6 +1093,11 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			}
 			if err = store.InsertRun(tx, &run, input.CommandID, digest); err != nil {
 				return err
+			}
+			if origin.retry != nil {
+				if err := replaceRunDependencyTarget(ctx, tx, origin.retry.ID, run.ID); err != nil {
+					return err
+				}
 			}
 			if origin.remote != nil {
 				if err := origin.remote.record(tx, run); err != nil {
@@ -1144,6 +1163,8 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 		previous := replaced
 		if editing.ID != "" {
 			previous = editing
+		} else if origin.retry != nil {
+			previous = *origin.retry
 		}
 		if err := store.SeedChatTitle(tx, &chat, run, previous); err != nil {
 			return err

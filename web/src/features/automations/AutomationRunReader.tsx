@@ -42,6 +42,7 @@ import {
 } from "@/features/chat/queries";
 import { RequestCard } from "@/features/chat/RequestCard";
 import { RunMessages } from "@/features/chat/RunContent";
+import { canContinueRun } from "@/features/chat/runControls";
 import { TurnChanges } from "@/features/diff/TurnChanges";
 import { directoryName } from "@/lib/paths";
 import { AutomationDiffExcerpt } from "./AutomationDiffExcerpt";
@@ -226,11 +227,20 @@ function AutomationRunReaderContent({
         (item) => item.sessionId === session.id && active(item.status),
       )
     : undefined;
+  const latestThreadRun = followUpRuns.at(-1) ?? rootRun;
   const pausedRun = session
     ? activity.data?.runs.find(
         (item) => item.sessionId === session.id && item.status === "paused",
       )
     : undefined;
+  const resumableRun =
+    pausedRun ??
+    (!run.nextFireSequence &&
+    !activeRun &&
+    latestThreadRun &&
+    canContinueRun(latestThreadRun, session)
+      ? latestThreadRun
+      : undefined);
   const queuedRuns = useMemo(
     () =>
       session
@@ -511,7 +521,7 @@ function AutomationRunReaderContent({
                 hideUserMessage
                 hideAgentHeader
                 hideTurnChanges
-                canRecover={!run.nextFireSequence}
+                canRecover={!run.nextFireSequence && followUpRuns.length === 0}
                 wrapBody={
                   report
                     ? (content) =>
@@ -614,7 +624,10 @@ function AutomationRunReaderContent({
                       onOpenFile={onOpenFile}
                       requests={allRequests}
                       sessionBusy={sessionBusy}
-                      canRecover={!run.nextFireSequence}
+                      canRecover={
+                        !run.nextFireSequence &&
+                        turn.id === followUpRuns.at(-1)?.id
+                      }
                       onRetried={() => {
                         invalidateAutomationRuns();
                         scrollToBottom();
@@ -710,7 +723,7 @@ function AutomationRunReaderContent({
             reply={session.kind === "topic"}
             fixedSession
             activeRun={activeRun}
-            pausedRun={pausedRun}
+            resumableRun={resumableRun}
             queuedRuns={queuedRuns}
             archived={agent.archived}
             visible

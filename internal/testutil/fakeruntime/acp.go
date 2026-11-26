@@ -485,7 +485,27 @@ func acpFixture() {
 					time.Sleep(100 * time.Millisecond)
 					os.Exit(0)
 				}
+			case strings.Contains(command, "[fail-before-output-once]"):
+				marker := filepath.Join(cwd, ".fixture-acp", identity+"-fail-once")
+				_ = os.MkdirAll(filepath.Dir(marker), 0700)
+				if f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600); err == nil {
+					f.Close()
+					history = history[:len(history)-1]
+					save()
+					send(object{"jsonrpc": "2.0", "id": promptID, "error": object{"code": -32000, "message": "ACP fixture failed before output"}})
+				} else {
+					complete()
+				}
+			case strings.Contains(command, "[fail-before-output]"):
+				history = history[:len(history)-1]
+				save()
+				send(object{"jsonrpc": "2.0", "id": promptID, "error": object{"code": -32000, "message": "ACP fixture failed before output"}})
+			case strings.Contains(command, "[fail-after-partial]"):
+				save()
+				notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "Partial reply before failure"}})
+				send(object{"jsonrpc": "2.0", "id": promptID, "error": object{"code": -32000, "message": "ACP fixture failed after partial output"}})
 			case strings.Contains(command, "[hang]"):
+				save()
 				notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "ACP waiting"}})
 			case strings.Contains(command, "[mode-change]"):
 				waitingForMode = true

@@ -128,7 +128,7 @@ func (e *execution) stop(ctx context.Context, pause bool) error {
 	if e.run.Status == "cancelling" {
 		return nil
 	}
-	if e.recovery != nil && e.run.Status == "starting" {
+	if e.recovery != nil && !e.recovery.ResumeFailed && e.run.Status == "starting" {
 		return conflict("Checking whether the previous execution has stopped")
 	}
 	if pause && !e.run.CanPause {
@@ -374,10 +374,10 @@ func (e *execution) execute() error {
 	if err == nil && e.recovery == nil {
 		err = validateSkillReferences(e.run.References, plan.Disabled)
 	}
-	if err != nil && e.recovery != nil {
+	if err != nil && e.recovery != nil && !e.recovery.ResumeFailed {
 		err = errors.Join(provider.ErrUnconfirmed, err)
 	}
-	if e.recovery == nil && !e.app.independentProviders {
+	if (e.recovery == nil || e.recovery.ResumeFailed) && !e.app.independentProviders {
 		e.run.Status = "running"
 	}
 	e.dirty = true
@@ -461,7 +461,7 @@ func (e *execution) finish(err error) {
 	e.run.CanPause, e.run.PauseRequested = false, false
 	e.run.ResumeAfterShutdown = false
 	switch {
-	case e.recovery != nil && e.run.Status == "starting" && e.ctx.Err() != nil:
+	case e.recovery != nil && !e.recovery.ResumeFailed && e.run.Status == "starting" && e.ctx.Err() != nil:
 		e.run.Status = "unknown"
 		e.run.ResumeAfterShutdown = e.app.closed && e.recovery.Continue
 	case errors.Is(err, provider.ErrPaused):

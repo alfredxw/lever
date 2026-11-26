@@ -150,6 +150,7 @@ export function RunMessages({
     canRecoverRun(run.status) && (
       <RunRecoveryButton
         run={run}
+        session={session}
         disabled={sessionBusy}
         onRetried={() => {
           onRetried?.();

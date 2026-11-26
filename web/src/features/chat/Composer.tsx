@@ -110,7 +110,7 @@ import {
 import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPicker";
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
-import { canPauseReply, interruptReply, resumeReply } from "./runControls";
+import { canPauseReply, interruptReply, recoverRun } from "./runControls";
 
 const MotionInputGroupButton = motion.create(InputGroupButton);
 
@@ -141,7 +141,7 @@ export function Composer({
   topicLauncher,
   compact,
   activeRun,
-  pausedRun,
+  resumableRun,
   queuedRuns = [],
   archived,
   autoFocus,
@@ -160,7 +160,7 @@ export function Composer({
   topicLauncher?: { topicId: string; backButton: ReactElement };
   compact?: boolean;
   activeRun?: Run;
-  pausedRun?: Run;
+  resumableRun?: Run;
   queuedRuns?: Run[];
   archived?: boolean;
   autoFocus?: boolean;
@@ -591,17 +591,26 @@ export function Composer({
     onError: (error) => toast.error(error.message),
   });
   const resume = useMutation({
-    mutationFn: resumeReply,
-    onSuccess: async () => {
+    mutationFn: ({ run, commandId }: { run: Run; commandId?: string }) =>
+      recoverRun(run, commandId),
+    onSuccess: async (_data, { run }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
         queryClient.invalidateQueries({ queryKey: ["chat", chatId] }),
         session &&
           queryClient.invalidateQueries({ queryKey: ["session", session.id] }),
+        run.comparisonId
+          ? queryClient.invalidateQueries({
+              queryKey: ["comparison", run.comparisonId],
+            })
+          : undefined,
       ]);
     },
     onError: (error) => toast.error(error.message),
   });
+  const resumeUncertain =
+    resume.isError &&
+    (!(resume.error instanceof APIError) || resume.error.status >= 500);
   const canPause = !!activeRun && canPauseReply(activeRun);
   const interruptLabel = t(
     activeRun?.pauseRequested
@@ -667,7 +676,9 @@ export function Composer({
     requestAnimationFrame(() => textbox.current?.focus());
   }, [composer, key, sending, uploading, visible]);
   const running = Boolean(activeRun && !topicMode);
-  const canSendWithPausedQueue = Boolean(pausedRun && session?.queuePaused);
+  const canSendWithPausedQueue = Boolean(
+    resumableRun?.status === "paused" && session?.queuePaused,
+  );
   const followUp =
     !editingSent &&
     !topicMode &&
@@ -799,8 +810,8 @@ export function Composer({
         : defaultAction && t(defaultAction.shortLabel);
   const promptEmpty = !prompt.text.trim() && !prompt.references.length;
   const hasContent = !promptEmpty || draft.files.length > 0 || !!draft.quote;
-  const canResumePaused = Boolean(
-    pausedRun &&
+  const canResume = Boolean(
+    resumableRun &&
       !running &&
       !topicMode &&
       !hasContent &&
@@ -808,7 +819,7 @@ export function Composer({
       !comparisonAgents &&
       afterRunIds === undefined &&
       !archived &&
-      !pausedRun.channel,
+      !resumableRun.channel,
   );
   const hasInput = hasContent || !!draft.editing || uploading || sending;
   useEffect(() => {
@@ -1680,7 +1691,7 @@ export function Composer({
                     <alternateAction.Icon />
                   </InputGroupButton>
                 )}
-                {canResumePaused && pausedRun && (
+                {canResume && resumableRun && (
                   <InputGroupButton
                     className="send-button rounded-full"
                     variant="default"
@@ -1688,7 +1699,18 @@ export function Composer({
                     aria-label={t("chat.resumeReply")}
                     title={t("chat.resumeReply")}
                     disabled={resume.isPending || sending}
-                    onClick={() => resume.mutate(pausedRun)}
+                    onClick={() =>
+                      resume.mutate({
+                        run: resumableRun,
+                        commandId:
+                          resumableRun.status === "paused"
+                            ? undefined
+                            : (resumeUncertain &&
+                                resume.variables?.run.id === resumableRun.id &&
+                                resume.variables.commandId) ||
+                              crypto.randomUUID(),
+                      })
+                    }
                   >
                     {resume.isPending ? (
                       <LoaderCircle className="animate-spin" />
@@ -1697,7 +1719,7 @@ export function Composer({
                     )}
                   </InputGroupButton>
                 )}
-                {((!running && !canResumePaused) || hasContent || draft.editing) && (
+                {((!running && !canResume) || hasContent || draft.editing) && (
                   <InputGroupButton
                     className="send-button rounded-full"
                     variant="default"

@@ -1237,6 +1237,7 @@ export interface Run {
   steerPending?: boolean;
   pauseRequested?: boolean;
   continued?: boolean;
+  continuationCommandId?: string;
   resumeAfterShutdown?: boolean;
   operation?: string;
   delivery?: string;

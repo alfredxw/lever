@@ -32,7 +32,7 @@ func codexCommand(path string, config model.Provider) *exec.Cmd {
 }
 
 func codex(ctx context.Context, in Input, sink Sink) (err error) {
-	checking := in.Recovery != nil
+	checking := in.Recovery != nil && !in.Recovery.ResumeFailed
 	defer func() {
 		if checking && err != nil && !errors.Is(err, ErrUnconfirmed) {
 			err = errors.Join(ErrUnconfirmed, err)
@@ -472,7 +472,10 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		case "completed":
 			return nil
 		case "failed":
-			return fail(previous["error"])
+			if !in.Recovery.Continue || !in.Recovery.ResumeFailed {
+				return fail(previous["error"])
+			}
+			interruptedTurnID = str(previous["id"])
 		case "interrupted":
 			if !in.Recovery.Continue {
 				return context.Canceled
@@ -522,7 +525,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 	if interruptedTurnID != "" {
 		var cancel context.CancelFunc
 		rpcCtx, cancel = context.WithTimeout(ctx, 90*time.Second)
-		result, err = resumeInterruptedCodexThread(rpcCtx, call, params, in.Session.NativeID, interruptedTurnID)
+		result, err = resumeInterruptedCodexThread(rpcCtx, call, params, in.Session.NativeID, interruptedTurnID, in.Recovery != nil && in.Recovery.ResumeFailed)
 		cancel()
 		rpcCtx = ctx
 	} else {
@@ -601,6 +604,10 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		result, err = call("turn/start", turnParams)
 	}
 	if err != nil {
+		var reqErr *codexRequestError
+		if interruptedTurnID != "" && errors.As(err, &reqErr) {
+			_ = sink.BindTurn(interruptedTurnID)
+		}
 		return err
 	}
 	if !compacting {

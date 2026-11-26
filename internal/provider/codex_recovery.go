@@ -48,7 +48,13 @@ func codexRecoveryTurn(ctx context.Context, call func(string, object) (object, e
 	}
 }
 
-func resumeInterruptedCodexThread(ctx context.Context, call func(string, object) (object, error), params object, threadID, turnID string) (object, error) {
+func resumeInterruptedCodexThread(ctx context.Context, call func(string, object) (object, error), params object, threadID, turnID string, allowFailed bool) (object, error) {
+	wrap := func(err error) error {
+		if allowFailed {
+			return err
+		}
+		return errors.Join(ErrUnconfirmed, err)
+	}
 	params["excludeTurns"] = true
 	var result object
 	var err error
@@ -59,12 +65,12 @@ func resumeInterruptedCodexThread(ctx context.Context, call func(string, object)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(ErrUnconfirmed, errCodexThreadBusy)
+			return nil, wrap(errCodexThreadBusy)
 		case <-time.After(delay):
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return nil, errors.Join(ErrUnconfirmed, err)
+		return nil, wrap(err)
 	}
 	if err != nil {
 		return nil, err
@@ -73,17 +79,24 @@ func resumeInterruptedCodexThread(ctx context.Context, call func(string, object)
 	// Verify the turn again under our write lock before sending a continuation.
 	turn, err := latestCodexTurn(call, threadID, "notLoaded")
 	if err != nil {
-		return nil, errors.Join(ErrUnconfirmed, err)
+		return nil, wrap(err)
 	}
-	if !confirmedCodexInterruption(turn, turnID) {
-		return nil, errors.Join(ErrUnconfirmed, errors.New("The interrupted turn is no longer the latest confirmed turn in this Codex conversation."))
+	if !confirmedCodexResumable(turn, turnID, allowFailed) {
+		return nil, wrap(errors.New("The interrupted turn is no longer the latest confirmed turn in this Codex conversation."))
 	}
 	return result, nil
 }
 
 func confirmedCodexInterruption(turn object, turnID string) bool {
+	return confirmedCodexResumable(turn, turnID, false)
+}
+
+func confirmedCodexResumable(turn object, turnID string, allowFailed bool) bool {
 	completedAt, _ := turn["completedAt"].(float64)
-	return turn["id"] == turnID && turn["status"] == "interrupted" && completedAt > 0
+	if turn["id"] != turnID || completedAt <= 0 {
+		return false
+	}
+	return turn["status"] == "interrupted" || (allowFailed && turn["status"] == "failed")
 }
 
 func matchesCodexRecoveryTurn(turn object, in Input) bool {

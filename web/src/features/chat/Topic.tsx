@@ -42,6 +42,7 @@ import { Item, ItemContent, ItemGroup, ItemMedia } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
 import { UserMessage } from "./UserMessage";
 import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
+import { canContinueRun } from "./runControls";
 import { canEditSentMessage, RunContent } from "./RunContent";
 import { isWorking, RunStatus } from "./RunStatus";
 import { useRevealEntry } from "./useRevealEntry";
@@ -330,7 +331,11 @@ export function Topic({
             !latest.channel &&
             !latest.superseded &&
             canRecoverRun(latest.status) && (
-              <RunRecoveryButton key={latest.id} run={latest} />
+              <RunRecoveryButton
+                key={latest.id}
+                run={latest}
+                session={session}
+              />
             )}
           {onExpand && (
             <Button
@@ -482,6 +487,15 @@ function TopicConversationContent({
   const activeRun = overview?.runs.find(
     (run) => run.sessionId === session.id && active(run.status),
   );
+  const latestRun = runs.at(-1);
+  const pausedRun = overview?.runs.find(
+    (run) => run.sessionId === session.id && run.status === "paused",
+  );
+  const resumableRun =
+    pausedRun ??
+    (!activeRun && latestRun && canContinueRun(latestRun, session)
+      ? latestRun
+      : undefined);
   const panel = useRef<HTMLElement>(null);
   useUnreadStart({
     active: enabled,
@@ -639,6 +653,7 @@ function TopicConversationContent({
                 onOpenAgent={onOpenAgent}
                 requests={overview.requests}
                 sessionBusy={!!activeRun}
+                canRecover={run.id === latestRun?.id}
                 onQuote={onQuote}
                 onForward={onForward}
                 onEdit={onEdit}
@@ -656,9 +671,7 @@ function TopicConversationContent({
           reply
           compact={props.compactReply}
           activeRun={activeRun}
-          pausedRun={overview.runs.find(
-            (run) => run.sessionId === session.id && run.status === "paused",
-          )}
+          resumableRun={resumableRun}
           queuedRuns={overview.runs.filter(
             (run) =>
               run.sessionId === session.id &&

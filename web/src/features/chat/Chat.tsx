@@ -51,6 +51,7 @@ import { ComparisonMessage } from "./ComparisonMessage";
 import { ComposerContext } from "./ComposerContext";
 import { QueuedMessages } from "./QueuedMessages";
 import { RunContent } from "./RunContent";
+import { canContinueRun } from "./runControls";
 import { Topic, type TopicConversationProps } from "./Topic";
 import { ChatTopicView } from "./ChatTopicView";
 import { useRevealEntry } from "./useRevealEntry";
@@ -359,6 +360,15 @@ function ChatContent(props: ChatProps) {
   const activeRun = overview.runs.find(
     (r) => r.sessionId === main?.id && active(r.status),
   );
+  const latestMainRun = mainRuns.at(-1);
+  const pausedMainRun = overview.runs.find(
+    (run) => run.sessionId === main?.id && run.status === "paused",
+  );
+  const resumableMainRun =
+    pausedMainRun ??
+    (!activeRun && latestMainRun && canContinueRun(latestMainRun, main)
+      ? latestMainRun
+      : undefined);
   const queuedRuns = overview.runs.filter(
     (r) => r.sessionId === main?.id && r.status === "queued",
   );
@@ -601,6 +611,7 @@ function ChatContent(props: ChatProps) {
                     onOpenAgent={onOpenAgent}
                     requests={overview.requests}
                     sessionBusy={!!activeRun}
+                    canRecover={entry.runId === latestMainRun?.id}
                     onQuote={botChat ? undefined : quoteMessage}
                     onForward={onForward}
                     onEdit={botChat || !edit ? undefined : editMessage}
@@ -671,9 +682,7 @@ function ChatContent(props: ChatProps) {
             session={main}
             profile={agent.profile}
             activeRun={activeRun}
-            pausedRun={overview.runs.find(
-              (run) => run.sessionId === main?.id && run.status === "paused",
-            )}
+            resumableRun={resumableMainRun}
             queuedRuns={queuedRuns}
             archived={agent.archived}
             visible={enabled}

@@ -76,7 +76,7 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	nativePermission := claudePermission(in.Selection.Permission)
 	cwd := workspace.CWD(in.Session.Scope)
 	entrypoint := claudeProcessEntrypoint(in.Provider)
-	supportsResumeDialog := command != "compact" && (in.Provider.IdleCompaction == "onReturn" || in.Provider.IdleCompaction == "beforeCacheExpires")
+	supportsResumeDialog := in.Recovery == nil && command != "compact" && (in.Provider.IdleCompaction == "onReturn" || in.Provider.IdleCompaction == "beforeCacheExpires")
 	addDirs := []string{in.Assets}
 	for _, root := range in.Session.Scope.Roots {
 		if root.ID != in.Session.Scope.PrimaryRootID {

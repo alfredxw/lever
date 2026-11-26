@@ -490,6 +490,13 @@ func (c *acpRuntime) applySelection(ctx context.Context, state *acpState, select
 }
 
 func runACP(ctx context.Context, in Input, sink Sink) error {
+	if in.Recovery != nil && in.Recovery.Continue {
+		if in.Session.NativeID == "" {
+			return errors.New("Cannot continue ACP reply without a native session")
+		}
+		in.Text, in.History, in.HistoryContext = ContinueInterruptedPrompt, "", ""
+		in.Attachments, in.References = nil, nil
+	}
 	cwd := workspace.CWD(in.Session.Scope)
 	if isTraeCLI(in.Provider) {
 		in.Provider.Args = traeSkillArguments(in.Provider.Args, in.Skills)

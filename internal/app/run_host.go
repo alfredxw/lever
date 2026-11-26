@@ -27,14 +27,14 @@ func (e *execution) startHost(in provider.Input) error {
 			return err
 		}
 		run := e.run
-		if e.recovery == nil {
+		if e.recovery == nil || e.recovery.ResumeFailed {
 			run.Status = "running"
 		}
 		return store.SaveRun(tx, run)
 	})
 	if err == nil {
 		e.hosted = true
-		if e.recovery == nil {
+		if e.recovery == nil || e.recovery.ResumeFailed {
 			e.run.Status = "running"
 		}
 	}

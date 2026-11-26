@@ -11,17 +11,26 @@ import (
 )
 
 func checkClaudeContinuation(ctx context.Context, in Input) error {
-	if !in.Recovery.Continue || in.Recovery.NativeTurnID == nil {
+	if !in.Recovery.Continue {
 		return errors.New("Claude requires a confirmed pause to continue this reply")
 	}
+	if !in.Recovery.ResumeFailed && in.Recovery.NativeTurnID == nil {
+		return errors.New("Claude requires a confirmed pause to continue this reply")
+	}
+	wrap := func(err error) error {
+		if in.Recovery.ResumeFailed {
+			return err
+		}
+		return errors.Join(ErrUnconfirmed, err)
+	}
 	if len(sharedClaudeSessions(ConfigurationDirectory(in.Provider))[in.Session.NativeID]) > 0 {
-		return errors.Join(ErrUnconfirmed, errors.New("Another Claude Code process has this conversation open"))
+		return wrap(errors.New("Another Claude Code process has this conversation open"))
 	}
 	tip, err := claudeCheckpoint(ctx, in.Provider, in.Session.NativeID, in.RunID)
 	if err != nil {
-		return errors.Join(ErrUnconfirmed, err)
+		return wrap(err)
 	}
-	if tip != *in.Recovery.NativeTurnID {
+	if !in.Recovery.ResumeFailed && tip != *in.Recovery.NativeTurnID {
 		return errors.Join(ErrUnconfirmed, errors.New("The saved Claude Code conversation changed after the reply was paused"))
 	}
 	return nil

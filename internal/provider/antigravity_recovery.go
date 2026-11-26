@@ -11,7 +11,7 @@ import (
 	"lever/internal/model"
 )
 
-const antigravityContinuePrompt = "Continue the interrupted request in this conversation from the last confirmed step. Do not repeat completed actions. Verify any uncertain outcome before acting."
+const antigravityContinuePrompt = ContinueInterruptedPrompt
 
 type antigravityAuthCheckpoint struct {
 	store        *antigravitySessionDB

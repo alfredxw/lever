@@ -134,6 +134,27 @@ func piFixture() {
 			if strings.Contains(input, "[pi-disconnect]") {
 				return
 			}
+			if strings.Contains(fixtureCommands(input), "[fail-after-partial]") {
+				history = append(history, input)
+				data, _ := json.Marshal(history)
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					os.Exit(2)
+				}
+				send(object{"type": "message_start", "message": object{"role": "assistant"}})
+				send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "error", "errorMessage": "Pi fixture failed after partial output", "content": []object{{"type": "text", "text": "Partial reply before failure"}}}})
+				send(object{"type": "agent_settled"})
+				continue
+			}
+			if strings.Contains(fixtureCommands(input), "[partial-hang]") {
+				history = append(history, input)
+				data, _ := json.Marshal(history)
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					os.Exit(2)
+				}
+				send(object{"type": "message_start", "message": object{"role": "assistant"}})
+				send(object{"type": "message_update", "assistantMessageEvent": object{"type": "text_delta", "contentIndex": 0, "delta": "Partial reply before stop"}})
+				continue
+			}
 			history = append(history, input)
 			data, _ := json.Marshal(history)
 			if err := os.WriteFile(path, data, 0600); err != nil {
@@ -155,6 +176,9 @@ func piFixture() {
 				}
 			}
 			send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "stop", "content": []object{{"type": "thinking", "thinking": "Thinking"}, {"type": "text", "text": string(data)}}}})
+			send(object{"type": "agent_settled"})
+		case "abort":
+			send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "aborted", "content": []object{{"type": "text", "text": "Partial reply before stop"}}}})
 			send(object{"type": "agent_settled"})
 		case "steer":
 			input := str(frame["message"])

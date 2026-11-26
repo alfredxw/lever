@@ -522,13 +522,32 @@ func main() {
 				if err == nil {
 					file.Close()
 					send(object{"id": frame["id"], "result": object{"turn": object{"id": turn}}})
-					send(object{"method": "item/completed", "params": object{"threadId": native, "turnId": turn, "item": object{"id": "partial", "type": "agentMessage", "text": "Partial reply"}}})
 					send(object{"id": "approval-fail-once", "method": "item/commandExecution/requestApproval", "params": object{"threadId": native, "turnId": turn, "command": "echo fixture"}})
 					continue
 				}
 				if !errors.Is(err, os.ErrExist) {
 					os.Exit(2)
 				}
+			}
+			if strings.Contains(commands, "[fail-after-partial]") {
+				send(object{"id": frame["id"], "result": object{"turn": object{"id": turn}}})
+				partialReply = "Partial reply before failure"
+				send(object{"method": "item/completed", "params": object{"threadId": native, "turnId": turn, "item": object{"id": "answer", "type": "agentMessage", "text": partialReply}}})
+				ended := object{
+					"id": turn, "status": "failed", "completedAt": time.Now().Unix(),
+					"error": "Fixture failed after partial output",
+					"items": []object{
+						{"type": "userMessage", "id": "original-user-message", "clientId": clientMessageID},
+						{"type": "agentMessage", "id": "answer", "text": partialReply},
+					},
+				}
+				if home := os.Getenv("CODEX_HOME"); home != "" {
+					data, _ := json.Marshal(object{"threadId": native, "turns": []object{ended}})
+					_ = os.MkdirAll(home, 0700)
+					_ = os.WriteFile(fixtureCodexTurnFile(native), data, 0600)
+				}
+				send(object{"method": "turn/completed", "params": object{"threadId": native, "turn": ended}})
+				continue
 			}
 			send(object{"id": frame["id"], "result": object{"turn": object{"id": turn}}})
 			notify := func(method string, params object) {
@@ -941,6 +960,21 @@ func claude() {
 					os.Exit(3)
 				}
 				text = "Continued from the saved native turn"
+			}
+			if strings.Contains(fixtureCommands(text), "[fail-after-partial]") {
+				if !resumed {
+					native = uuid.NewString()
+				}
+				writeClaudeFixtureMessage(native, "user", str(f["uuid"]))
+				send(object{"type": "system", "subtype": "init", "session_id": native})
+				send(object{"type": "assistant", "message": object{"id": "msg-1", "content": []object{{"type": "text", "text": "Partial reply before failure"}}}})
+				send(object{"type": "result", "subtype": "error_during_execution", "is_error": true, "errors": []string{"Claude fixture failed after partial output"}, "session_id": native})
+				continue
+			}
+			if strings.Contains(fixtureCommands(text), "[fail-before-output]") {
+				send(object{"type": "system", "subtype": "init", "session_id": native})
+				send(object{"type": "result", "subtype": "error_during_execution", "is_error": true, "errors": []string{"Claude fixture failed before output"}, "session_id": native})
+				continue
 			}
 			if strings.Contains(fixtureCommands(text), "[pausable]") {
 				if !resumed {

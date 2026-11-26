@@ -11,18 +11,22 @@ import (
 
 // A reference, attachment or quote belongs to a normal user message. A native
 // control must occupy the start of a standalone text prompt.
-func (in Input) command() (name, argument string) {
-	if len(in.Attachments) != 0 || len(in.References) != 0 {
+func Command(text string, hasAttachments, hasReferences bool) (name, argument string) {
+	if hasAttachments || hasReferences {
 		return "", ""
 	}
-	text, ok := strings.CutPrefix(strings.TrimSpace(in.Text), "/")
+	trimmed, ok := strings.CutPrefix(strings.TrimSpace(text), "/")
 	if !ok {
 		return "", ""
 	}
-	if i := strings.IndexFunc(text, unicode.IsSpace); i >= 0 {
-		return text[:i], strings.TrimSpace(text[i:])
+	if i := strings.IndexFunc(trimmed, unicode.IsSpace); i >= 0 {
+		return trimmed[:i], strings.TrimSpace(trimmed[i:])
 	}
-	return text, ""
+	return trimmed, ""
+}
+
+func (in Input) command() (name, argument string) {
+	return Command(in.Text, len(in.Attachments) != 0, len(in.References) != 0)
 }
 
 func hasCommand(commands []model.NativeCommand, name string) bool {

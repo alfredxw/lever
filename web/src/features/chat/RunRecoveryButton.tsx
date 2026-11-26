@@ -2,34 +2,39 @@ import { useMutation } from "@tanstack/react-query";
 import { LoaderCircle, Play, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { api, APIError, queryClient } from "@/api/client";
-import type { Run } from "@/api/types.gen";
+import { APIError, queryClient } from "@/api/client";
+import type { Run, Session } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
-import { resumeReply } from "./runControls";
+import { canContinueRun, canRecoverRun, recoverRun } from "./runControls";
 
-export function canRecoverRun(status: string) {
-  return ["paused", "failed", "interrupted"].includes(status);
-}
+export { canRecoverRun };
 
 export function RunRecoveryButton({
   run,
+  session,
   disabled,
   onRetried,
 }: {
   run: Run;
+  session?: Session;
   disabled?: boolean;
   onRetried?: () => void;
 }) {
   const { t } = useTranslation();
   const paused = run.status === "paused";
+  const continuing = canContinueRun(run, session);
   const action = useMutation({
-    mutationFn: (commandId?: string) =>
-      paused ? resumeReply(run) : api(`/runs/${run.id}/retry`, { commandId }),
+    mutationFn: (commandId?: string) => recoverRun(run, commandId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
         queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] }),
         queryClient.invalidateQueries({ queryKey: ["session", run.sessionId] }),
+        run.comparisonId
+          ? queryClient.invalidateQueries({
+              queryKey: ["comparison", run.comparisonId],
+            })
+          : undefined,
       ]);
       if (!paused) onRetried?.();
     },
@@ -38,7 +43,7 @@ export function RunRecoveryButton({
   const responseUncertain =
     action.isError &&
     (!(action.error instanceof APIError) || action.error.status >= 500);
-  const Icon = paused ? Play : RotateCcw;
+  const Icon = continuing ? Play : RotateCcw;
   return (
     <Button
       type="button"
@@ -61,7 +66,7 @@ export function RunRecoveryButton({
       ) : (
         <Icon data-icon="inline-start" />
       )}
-      {t(paused ? "chat.resumeReply" : "common.retry")}
+      {t(continuing ? "chat.resumeReply" : "common.retry")}
     </Button>
   );
 }

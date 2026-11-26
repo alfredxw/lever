@@ -34,9 +34,19 @@ func TestCodexRecoveryLeavesPersistentWriterUnconfirmed(t *testing.T) {
 			return nil, &codexRequestError{payload: object{
 				"code": float64(-32600), "message": "thread saved-thread already has an active writer",
 			}}
-		}, object{}, "saved-thread", "previous-turn")
+		}, object{}, "saved-thread", "previous-turn", false)
 		if attempts < 2 || ctx.Err() != context.DeadlineExceeded || !errors.Is(err, ErrUnconfirmed) || !errors.Is(err, errCodexThreadBusy) {
 			t.Fatalf("got %d attempts, context %v, error %v", attempts, ctx.Err(), err)
 		}
 	})
+}
+
+func TestCodexRecoveryAllowsFailedTurnContinuation(t *testing.T) {
+	turn := object{"id": "failed-turn", "status": "failed", "completedAt": float64(123)}
+	if confirmedCodexInterruption(turn, "failed-turn") {
+		t.Fatal("strict pause interruption unexpectedly accepted failed turn")
+	}
+	if !confirmedCodexResumable(turn, "failed-turn", true) {
+		t.Fatal("failed turn continuation rejected confirmed failed turn")
+	}
 }

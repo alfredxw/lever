@@ -469,8 +469,8 @@ test("new Agent uses the current workspace and both copy entries open the same d
     skills.getByText("fixture-review", { exact: true }),
   ).toBeVisible();
   await expect(
-    delegations.getByRole("checkbox", { name: source.name }),
-  ).toBeVisible();
+    delegations.getByRole("radio", { name: "关闭", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
   const skillsBounds = (await skills.boundingBox())!;
   const delegationsBounds = (await delegations.boundingBox())!;
   expect(delegationsBounds.y).toBeGreaterThanOrEqual(
@@ -6561,7 +6561,7 @@ test("retrying a failed Chat message reuses its payload and leaves the queue pau
   );
   const retry = original.getByRole("button", { name: "重试", exact: true });
   await retry.click();
-  await expect(runs).toHaveCount(3);
+  await expect(runs).toHaveCount(2);
   await expect(runs.last()).toHaveAttribute("data-status", "completed");
   await expect(runs.last().locator(".message-body")).toContainText(
     '"images":1',
@@ -6569,11 +6569,9 @@ test("retrying a failed Chat message reuses its payload and leaves the queue pau
   await expect(runs.last().locator(".message-body")).toContainText(
     `"native":"${session.nativeId}"`,
   );
+  await expect(runs.last().locator(".runtime-handoff")).toHaveCount(0);
   await expect(input).toHaveText("我的当前草稿");
-  await expect(original).toHaveAttribute("data-status", "failed");
-  await expect(original.locator(".message-body")).toContainText(
-    "Partial reply",
-  );
+  await expect(original).toHaveCount(0);
   await expect(
     page.locator(`[data-queued-id="${queuedRun.id}"]`),
   ).toBeVisible();
@@ -6582,29 +6580,89 @@ test("retrying a failed Chat message reuses its payload and leaves the queue pau
   const retried = view.runs.at(-1)!;
   expect(retried).toMatchObject({
     sessionId: failed.sessionId,
+    sequence: failed.sequence,
     input: failed.input,
     attachments: failed.attachments,
     quote: failed.quote,
     selection: failed.selection,
+    handoff: false,
   });
   expect(retried.quote?.text).toBe("供后续消息引用的内容");
   expect(
     view.sessions.find((session) => session.id === failed.sessionId)
       ?.queuePaused,
   ).toBe(true);
-  const replay = page.waitForResponse((response) =>
-    response.url().endsWith(retryPath),
-  );
-  await retry.click();
-  const duplicate = await replay;
+  const duplicate = await page.request.post(retryPath, {
+    data: { commandId },
+  });
   expect(duplicate.status()).toBe(200);
-  expect(duplicate.request().postDataJSON().commandId).toBe(commandId);
   expect((await duplicate.json()).id).toBe(retried.id);
+  const conflict = await page.request.post(retryPath, {
+    data: { commandId: randomUUID() },
+  });
+  expect(conflict.status()).toBe(409);
   await composer.getByRole("button", { name: "继续队列", exact: true }).click();
   await expect(page.locator(`[data-run-id="${queuedRun.id}"]`)).toHaveAttribute(
     "data-status",
     "completed",
   );
+});
+
+test("continuing a failed Chat message with partial output resumes the same turn in place", async ({
+  page,
+}) => {
+  await createAgent(page, "中断续接");
+  const composer = page.locator(".chat-composer-wrap");
+  const input = composer.getByRole("textbox", { name: "发送消息" });
+  const runs = page.locator(".chat-panel .conversation > .run-content");
+  await input.fill("[fail-after-partial] 保留已生成内容并继续");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+
+  const failedRun = runs.first();
+  await expect(failedRun).toHaveAttribute("data-status", "failed");
+  await expect(failedRun.locator(".message-body")).toContainText(
+    "Partial reply before failure",
+  );
+  const runId = (await failedRun.getAttribute("data-run-id"))!;
+  await expect(
+    failedRun.getByRole("button", { name: "重试", exact: true }),
+  ).toHaveCount(0);
+  const continueButton = failedRun.getByRole("button", {
+    name: "继续",
+    exact: true,
+  });
+  await expect(continueButton).toBeVisible();
+  await expect(
+    composer.getByRole("button", { name: "继续", exact: true }),
+  ).toBeVisible();
+
+  await continueButton.click();
+  await expect(runs).toHaveCount(1);
+  await expect(runs.first()).toHaveAttribute("data-run-id", runId);
+  await expect(runs.first()).toHaveAttribute("data-status", "completed");
+  await expect(
+    runs.first().getByText("Partial reply before failure", { exact: true }),
+  ).toHaveCount(1);
+  await expect(runs.first()).toContainText(
+    "Continued from the saved native turn",
+  );
+
+  // Moving on after a failed turn hides the recovery button on the older failed turn.
+  await input.fill("[fail-after-partial] 跳过这一轮");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(runs).toHaveCount(2);
+  await expect(runs.nth(1)).toHaveAttribute("data-status", "failed");
+  await expect(
+    runs.nth(1).getByRole("button", { name: "继续", exact: true }),
+  ).toBeVisible();
+  await send(page, "忽略旧失败，继续聊新的");
+  await expect(runs).toHaveCount(3);
+  await expect(
+    runs.nth(1).getByRole("button", { name: "继续", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    runs.nth(1).getByRole("button", { name: "重试", exact: true }),
+  ).toHaveCount(0);
 });
 
 test("retrying a Topic stopped before runtime binding starts it in the same Topic", async ({
@@ -6628,6 +6686,7 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
       await page.request.get(`/api/sessions/${sessionId}`)
     ).json()) as SessionView;
   await expect(runs.first()).toHaveAttribute("data-status", "running");
+  const oldId = (await runs.first().getAttribute("data-run-id"))!;
   await composer.getByRole("button", { name: "停止执行", exact: true }).click();
   const retry = runs.first().getByRole("button", { name: "重试", exact: true });
   await expect(topic).toHaveAttribute("data-status", "interrupted");
@@ -6635,10 +6694,10 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
   await expect(retry).toBeEnabled();
   await topic.getByRole("button", { name: "重试", exact: true }).click();
   await expect(topic).toHaveCount(1);
-  await expect(runs).toHaveCount(2);
-  await expect(runs.last()).toHaveAttribute("data-status", "running");
-  await expect(retry).toBeDisabled();
-  const oldId = (await runs.first().getAttribute("data-run-id"))!;
+  await expect(runs).toHaveCount(1);
+  await expect(runs.first()).toHaveAttribute("data-status", "running");
+  await expect(runs.first()).not.toHaveAttribute("data-run-id", oldId);
+  await expect(runs.first().locator(".runtime-handoff")).toHaveCount(0);
   const conflict = await page.request.post(`/api/runs/${oldId}/retry`, {
     data: { commandId: randomUUID() },
   });
@@ -6647,7 +6706,7 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
     .poll(async () => (await readSession()).session.nativeId)
     .not.toBe("");
   await composer.getByRole("button", { name: "暂停回复", exact: true }).click();
-  await expect(runs.last()).toHaveAttribute("data-status", "paused");
+  await expect(runs.first()).toHaveAttribute("data-status", "paused");
 });
 
 test("topic submission stays pending across closing and reopening its tab", async ({

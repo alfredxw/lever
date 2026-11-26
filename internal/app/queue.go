@@ -136,6 +136,16 @@ WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','cancell
 		}
 	}
 	run.Status, run.Error, run.SteerRunID = "starting", "", ""
+	if err := initRunSteerState(tx, run, *session, config); err != nil {
+		return err
+	}
+	run.StartedAt = now()
+	session.Selection = run.Selection
+	_, err = tx.Exec("UPDATE sessions SET data=? WHERE id=?", store.JSON(session), session.ID)
+	return err
+}
+
+func initRunSteerState(tx *sql.Tx, run *model.Run, session model.Session, config model.Provider) error {
 	run.CanSteer, run.SteerPending = config.Type == "codex" || config.Type == "claude", false
 	switch config.Type {
 	case "pi":
@@ -149,10 +159,7 @@ WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','cancell
 			return err
 		}
 	}
-	run.StartedAt = now()
-	session.Selection = run.Selection
-	_, err = tx.Exec("UPDATE sessions SET data=? WHERE id=?", store.JSON(session), session.ID)
-	return err
+	return nil
 }
 
 func (a *App) ResumeQueue(ctx context.Context, sessionID string) error {
