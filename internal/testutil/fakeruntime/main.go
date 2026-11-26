@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -166,6 +167,19 @@ func main() {
 	if nativeAGY && slices.Equal(os.Args[1:], []string{"--print", "/usage", "--output-format", "json"}) {
 		if os.Getenv("AGY_CLI_DISABLE_AUTO_UPDATE") != "true" {
 			os.Exit(2)
+		}
+		// Match agy print mode's controlling-terminal checks so background usage
+		// polling cannot trigger interactive browser OAuth when silent auth fails.
+		if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice != 0 {
+			os.Exit(3)
+		}
+		tty := "/dev/tty"
+		if runtime.GOOS == "windows" {
+			tty = "CONIN$"
+		}
+		if file, err := os.Open(tty); err == nil {
+			_ = file.Close()
+			os.Exit(4)
 		}
 		recordFixtureUsageProbe("agy")
 		if os.Getenv("LEVER_FIXTURE_USAGE_ERROR") == "1" {

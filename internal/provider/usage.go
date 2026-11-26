@@ -103,6 +103,11 @@ func readAntigravityUsage(ctx context.Context, config model.Provider, home strin
 	defer usageCancel()
 	cmd := device.Command(path, "--print", "/usage", "--output-format", "json")
 	cmd.Dir = home
+	// Keep /usage strictly non-interactive: agy treats os.DevNull (ModeCharDevice)
+	// or an inherited CONIN$//dev/tty as a controlling terminal and opens a browser
+	// OAuth login page whenever silent auth fails or times out during token refresh.
+	cmd.Stdin = strings.NewReader("")
+	device.Detach(cmd)
 	cmd.Env = append(cmd.Env, "AGY_CLI_DISABLE_AUTO_UPDATE=true")
 	data, err := device.OutputCommand(usageCtx, cmd)
 	if err != nil {
