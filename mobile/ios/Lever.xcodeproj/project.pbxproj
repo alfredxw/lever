@@ -1,0 +1,362 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */; };
+		D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = EF3D370F9E7072622532FDC7 /* libresolv.tbd */; };
+		BCDEA934D2501353B4C4CE9F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */; };
+		68F22B0A38A8B50DCCF1EFD6 /* LeverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BDA077271B0671437109A1 /* LeverApp.swift */; };
+		BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF458FF520B178EFFCC596A9 /* KeychainStore.swift */; };
+		3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */; };
+		266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B671069DAB71F1479E38E4C /* LocalCache.swift */; };
+		FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700092EB08D52553B063B7AD /* LeverModels.swift */; };
+		189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */; };
+		5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */; };
+		3CDDDB2100A699493E0A715B /* ChatDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */; };
+		9CABDC77C0424FAFCD3A79B4 /* MessageComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */; };
+		718D7DD69C416EBCFBF64279 /* TopicListSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 802FEBA57BCB6254BDC7D195 /* TopicListSheetView.swift */; };
+		B66D0050D8944F72EF0DE58E /* TopicSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493C2E3A03016CD0E7DCAD7C /* TopicSheetView.swift */; };
+		D8A4C8A9978A9A339A63381F /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC1DFBB329B7908A05DECC4B /* FeedView.swift */; };
+		E57E504DF635401259223BC5 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B726BCC74D553569B2B6FD4 /* PairingView.swift */; };
+		6F0398DDE8A160733FB7E905 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448F490B3A677FC4BC317678 /* SettingsView.swift */; };
+		48A8C83F0E4714ECD63B0621 /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BC8CC738F09A29C90D3069C /* TasksView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E2C2A2171291AF99E44DA06F /* Lever.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lever.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LeverCore.xcframework; path = Frameworks/LeverCore.xcframework; sourceTree = "<group>"; };
+		EF3D370F9E7072622532FDC7 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
+		CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Lever/Resources/Assets.xcassets; sourceTree = "<group>"; };
+		3FB6BD64A997C517BC11CC6E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Lever/Resources/Info.plist; sourceTree = "<group>"; };
+		6568386E81175B9AF27FE35A /* Lever.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Lever/Resources/Lever.entitlements; sourceTree = "<group>"; };
+		C3BDA077271B0671437109A1 /* LeverApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverApp.swift; path = Lever/App/LeverApp.swift; sourceTree = "<group>"; };
+		DF458FF520B178EFFCC596A9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainStore.swift; path = Lever/Core/KeychainStore.swift; sourceTree = "<group>"; };
+		2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverBridge.swift; path = Lever/Core/LeverBridge.swift; sourceTree = "<group>"; };
+		4B671069DAB71F1479E38E4C /* LocalCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalCache.swift; path = Lever/Core/LocalCache.swift; sourceTree = "<group>"; };
+		700092EB08D52553B063B7AD /* LeverModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverModels.swift; path = Lever/Models/LeverModels.swift; sourceTree = "<group>"; };
+		DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverStore.swift; path = Lever/Store/LeverStore.swift; sourceTree = "<group>"; };
+		AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverTheme.swift; path = Lever/Theme/LeverTheme.swift; sourceTree = "<group>"; };
+		73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatDetailView.swift; path = Lever/Views/Chat/ChatDetailView.swift; sourceTree = "<group>"; };
+		2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MessageComponents.swift; path = Lever/Views/Chat/MessageComponents.swift; sourceTree = "<group>"; };
+		802FEBA57BCB6254BDC7D195 /* TopicListSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TopicListSheetView.swift; path = Lever/Views/Chat/TopicListSheetView.swift; sourceTree = "<group>"; };
+		493C2E3A03016CD0E7DCAD7C /* TopicSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TopicSheetView.swift; path = Lever/Views/Chat/TopicSheetView.swift; sourceTree = "<group>"; };
+		FC1DFBB329B7908A05DECC4B /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FeedView.swift; path = Lever/Views/Feed/FeedView.swift; sourceTree = "<group>"; };
+		4B726BCC74D553569B2B6FD4 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingView.swift; path = Lever/Views/Onboarding/PairingView.swift; sourceTree = "<group>"; };
+		448F490B3A677FC4BC317678 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Lever/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		6BC8CC738F09A29C90D3069C /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TasksView.swift; path = Lever/Views/Tasks/TasksView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CA8003021206097066E984FF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */,
+				D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		ADCF10F76EBF2A74473E9DC4 = {
+			isa = PBXGroup;
+			children = (
+				CEB74274C30014D4628C3792 /* Lever */,
+				2D17C89EB2C5B87E8B0EC3B6 /* Frameworks */,
+				5151B46607EBC8890D8DFCC2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CEB74274C30014D4628C3792 /* Lever */ = {
+			isa = PBXGroup;
+			children = (
+				CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */,
+				3FB6BD64A997C517BC11CC6E /* Info.plist */,
+				6568386E81175B9AF27FE35A /* Lever.entitlements */,
+				C3BDA077271B0671437109A1 /* LeverApp.swift */,
+				DF458FF520B178EFFCC596A9 /* KeychainStore.swift */,
+				2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */,
+				4B671069DAB71F1479E38E4C /* LocalCache.swift */,
+				700092EB08D52553B063B7AD /* LeverModels.swift */,
+				DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */,
+				AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */,
+				73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */,
+				2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */,
+				802FEBA57BCB6254BDC7D195 /* TopicListSheetView.swift */,
+				493C2E3A03016CD0E7DCAD7C /* TopicSheetView.swift */,
+				FC1DFBB329B7908A05DECC4B /* FeedView.swift */,
+				4B726BCC74D553569B2B6FD4 /* PairingView.swift */,
+				448F490B3A677FC4BC317678 /* SettingsView.swift */,
+				6BC8CC738F09A29C90D3069C /* TasksView.swift */,
+			);
+			name = Lever;
+			sourceTree = "<group>";
+		};
+		2D17C89EB2C5B87E8B0EC3B6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */,
+				EF3D370F9E7072622532FDC7 /* libresolv.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		5151B46607EBC8890D8DFCC2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E2C2A2171291AF99E44DA06F /* Lever.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F68208A47F64C6806838030C /* Lever */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7ADE71700E9404B10E13B577 /* Build configuration list for PBXNativeTarget "Lever" */;
+			buildPhases = (
+				28BE49E1E42D704C38EEA420 /* Sources */,
+				CA8003021206097066E984FF /* Frameworks */,
+				E26E44B743A848DED8844ED9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Lever;
+			productName = Lever;
+			productReference = E2C2A2171291AF99E44DA06F /* Lever.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 12D04D787E90C9B967248BFD /* Build configuration list for PBXProject "Lever" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				zh_CN,
+				en,
+				Base,
+			);
+			mainGroup = ADCF10F76EBF2A74473E9DC4;
+			productRefGroup = 5151B46607EBC8890D8DFCC2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F68208A47F64C6806838030C /* Lever */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E26E44B743A848DED8844ED9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BCDEA934D2501353B4C4CE9F /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		28BE49E1E42D704C38EEA420 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				68F22B0A38A8B50DCCF1EFD6 /* LeverApp.swift in Sources */,
+				BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */,
+				3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */,
+				266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */,
+				FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */,
+				189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */,
+				5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */,
+				3CDDDB2100A699493E0A715B /* ChatDetailView.swift in Sources */,
+				9CABDC77C0424FAFCD3A79B4 /* MessageComponents.swift in Sources */,
+				718D7DD69C416EBCFBF64279 /* TopicListSheetView.swift in Sources */,
+				B66D0050D8944F72EF0DE58E /* TopicSheetView.swift in Sources */,
+				D8A4C8A9978A9A339A63381F /* FeedView.swift in Sources */,
+				E57E504DF635401259223BC5 /* PairingView.swift in Sources */,
+				6F0398DDE8A160733FB7E905 /* SettingsView.swift in Sources */,
+				48A8C83F0E4714ECD63B0621 /* TasksView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		877A6BA951A2EA0025A2ABE8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		959134B361DD7E21ADEA3164 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		1E0DDAF384B911BF23BC77ED /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Lever/Resources/Lever.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Lever/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					"Security",
+					"-framework",
+					"Network",
+					"-framework",
+					"UserNotifications",
+					"-framework",
+					"AVFoundation",
+					"-framework",
+					"CFNetwork",
+					"-framework",
+					"SystemConfiguration",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.lever.mobile;
+				PRODUCT_NAME = Lever;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A1EFC270D4D6011185E1BD4D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Lever/Resources/Lever.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Lever/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					"Security",
+					"-framework",
+					"Network",
+					"-framework",
+					"UserNotifications",
+					"-framework",
+					"AVFoundation",
+					"-framework",
+					"CFNetwork",
+					"-framework",
+					"SystemConfiguration",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.lever.mobile;
+				PRODUCT_NAME = Lever;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		12D04D787E90C9B967248BFD /* Build configuration list for PBXProject "Lever" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				877A6BA951A2EA0025A2ABE8 /* Debug */,
+				959134B361DD7E21ADEA3164 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7ADE71700E9404B10E13B577 /* Build configuration list for PBXNativeTarget "Lever" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1E0DDAF384B911BF23BC77ED /* Debug */,
+				A1EFC270D4D6011185E1BD4D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}

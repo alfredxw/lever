@@ -1,4 +1,4 @@
-.PHONY: web hub-web hub hub-image hub-deploy mobile-ios mobile-ios-simulator mobile-android build desktop package dev privacy test generate
+.PHONY: web hub-web hub hub-image hub-deploy mobile-ios-core mobile-ios mobile-ios-simulator mobile-android build desktop package dev privacy test generate
 VERSION ?= 0.1.0
 TARGETS ?= darwin/arm64
 PACKAGE_FLAGS ?= -skip-dmg -skip-installer
@@ -36,10 +36,11 @@ hub-image: hub-web
 hub-deploy:
 	mkdir -p output/remote
 	COPYFILE_DISABLE=1 tar -czf output/remote/lever-hub-deploy-$(VERSION).tar.gz -C deploy/hub compose.yaml .env.example README.md
-mobile-ios: hub-web
-	go run $(MYGO_IOS_CLI) build -platform ios mobile
-	python3 mobile/sign_ios_keychain.py mobile/dist/ios-arm64/*.ipa
-mobile-ios-simulator: hub-web
-	go run $(MYGO_IOS_CLI) build -platform ios/simulator mobile
+mobile-ios-core:
+	bash mobile/ios/build-core.sh
+mobile-ios:
+	bash mobile/ios/build-app.sh device
+mobile-ios-simulator:
+	bash mobile/ios/build-app.sh simulator
 mobile-android: hub-web
 	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform android mobile

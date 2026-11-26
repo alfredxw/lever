@@ -11,18 +11,20 @@
 
 开启「设置 → 锁屏通知」后，待回答或审批、运行失败和完成结果会触发 APNs 或 FCM 通知。点开会进入对应 Chat 或 Topic 并更新请求状态。离开局域网或漏收通知后，App 按游标向 Hub 补齐共享历史；同一条指令在切网重试后沿用原回执。Hub 可直连平台或使用发行方提供的推送中继。[Hub 推送部署](../deploy/hub/README.md#手机系统推送)
 
-## iOS 构建
+## iOS 构建（原生 SwiftUI + Go Core XCFramework）
 
-在配有 Xcode 和 iOS SDK 的 Mac 上构建。为显式应用标识符 `app.lever.mobile` 启用 Push Notifications，重新生成包含 `aps-environment` 和目标 iPhone 的描述文件，并安装对应的签名身份。Hub 的 APNs 环境应与签名一致。存在多组身份时可在 `mygo.json` 的 `ios.team` 中指定团队。
+iOS 客户端位于 [`mobile/ios/`](ios/)，界面采用原生 SwiftUI（飞书 IM 风格消息流 + 主对话/独立话题混合时间线 + 原生话题 Sheet 抽屉 + 双向已读游标同步），底层通过 [`mobile/core/`](core/) 编译为 `LeverCore.xcframework` 复用 Lever 的 Ed25519 签名、TLS 1.3 证书钉扎、Bonjour 局域网发现、LAN/Hub 自动切换与 APNs 载荷解密，凭证保存在系统原生 Keychain。
+
+在配有 Xcode 和 iOS SDK 的 Mac 上构建。如需真机签名，为应用标识符 `app.lever.mobile` 启用 Push Notifications，或直接用 Xcode 打开 `mobile/ios/Lever.xcodeproj`；存在多组签名身份时可通过 `IOS_TEAM=<TEAM_ID> make mobile-ios` 指定团队。
 
 ```sh
 xcrun --sdk iphoneos --show-sdk-version
 make mobile-ios
 ```
 
-从仓库根目录运行。设备包输出到 `mobile/dist/ios-arm64/`。将描述文件包含的 iPhone 解锁并连接到 Mac，在手机上信任这台电脑并启用开发者模式。解压 IPA 后，用 `xcrun devicectl list devices` 查看设备标识，在解压目录中运行 `xcrun devicectl device install app --device DEVICE_ID "Payload/Lever.app"`。
+从仓库根目录运行。设备包输出到 `mobile/dist/ios-arm64/Lever.ipa`。将描述文件包含的 iPhone 解锁并连接到 Mac，在手机上信任这台电脑并启用开发者模式。解压 IPA 后，用 `xcrun devicectl list devices` 查看设备标识，在解压目录中运行 `xcrun devicectl device install app --device DEVICE_ID "Payload/Lever.app"`。
 
-在 Apple Silicon Mac 上测试模拟器版时，先在 Xcode 的 Components 设置中安装 iOS 模拟器运行时并启动一个 iPhone 模拟器，然后从仓库根目录运行。
+在 Apple Silicon Mac 上测试模拟器版时，先启动一个 iPhone 模拟器，然后从仓库根目录运行：
 
 ```sh
 make mobile-ios-simulator

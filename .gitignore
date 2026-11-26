@@ -12,6 +12,8 @@ node_modules/
 /web/hubassets/dist/
 /mobile/dist/
 /mobile/.mygo/
+/mobile/ios/build/
+/mobile/ios/Frameworks/
 /desktop/dist/
 *.tsbuildinfo
 
