@@ -114,13 +114,35 @@ html[data-desktop-platform="darwin"] :is(.tab-strip, .sidebar-heading) {
 .desktop-titlebar {
   display: flex;
   align-items: center;
+  gap: 12px;
   flex-shrink: 0;
   height: max(40px, var(--mygo-titlebar-height, 40px));
   padding-left: 16px;
   padding-right: var(--mygo-titlebar-inset-right, 138px);
   font-size: 12px;
   font-weight: 600;
+  user-select: none;
   --app-region: drag;
+}
+.desktop-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: var(--text-control);
+  white-space: nowrap;
+  cursor: default;
+  outline: none;
+  user-select: none;
+}
+.desktop-menu-item[data-highlighted] {
+  background: var(--control-focus);
+  color: var(--foreground);
+}
+.desktop-menu-item[data-disabled] {
+  opacity: 0.5;
+  pointer-events: none;
 }
 .desktop-shell > .app-shell {
   height: auto;

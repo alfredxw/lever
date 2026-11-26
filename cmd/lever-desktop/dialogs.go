@@ -15,6 +15,12 @@ import (
 
 type Dialogs struct{}
 
+func (*Dialogs) ShowAbout() {
+	mygo.App.ShowAboutPanel(mygo.AboutPanelOptions{
+		ApplicationName: mygo.App.Name(), ApplicationVersion: mygo.App.Version(),
+	})
+}
+
 func (*Dialogs) OpenPreviewInBrowser(path, fragment string) error {
 	link, err := htmlFileURL(path, fragment)
 	if err != nil {

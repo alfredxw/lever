@@ -26,17 +26,6 @@ if (desktop)
     root.dispatchEvent(new Event("lever-frame"));
   });
 
-function DesktopFrame({ children }: { children: React.ReactNode }) {
-  return platform === "win32" ? (
-    <div className="desktop-shell">
-      <header className="desktop-titlebar">Lever</header>
-      {children}
-    </div>
-  ) : (
-    children
-  );
-}
-
 function Notifications() {
   const { t } = useTranslation();
   return (
@@ -60,11 +49,9 @@ const previewPage = location.pathname.startsWith("/view/");
             <StandaloneHtmlPreview />
           ) : (
             <>
-              <DesktopFrame>
-                <PreferencesProvider>
-                  <App />
-                </PreferencesProvider>
-              </DesktopFrame>
+              <PreferencesProvider>
+                <App />
+              </PreferencesProvider>
               <Notifications />
             </>
           )}

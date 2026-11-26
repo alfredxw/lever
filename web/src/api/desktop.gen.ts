@@ -54,11 +54,12 @@ export interface NotificationTarget {
 // ---- Services ----
 
 /**
- * Appearance keeps native menus and dialogs in the language chosen in the Web UI.
+ * Appearance applies the workbench's language and theme to native controls.
  * Only the desktop's trusted local page can call this bound service.
  */
 export const Appearance = {
   setLanguage: bind<[string], void>("Appearance.SetLanguage", (language: string) => [language]),
+  setWindowButtonsTheme: bind<[boolean], void>("Appearance.SetWindowButtonsTheme", (dark: boolean) => [dark]),
 } as const;
 
 export const Dialogs = {
@@ -66,6 +67,7 @@ export const Dialogs = {
   openPath: bind<[string], void>("Dialogs.OpenPath", (path: string) => [path]),
   openPreviewInBrowser: bind<[string, string], void>("Dialogs.OpenPreviewInBrowser", (path: string, fragment: string) => [path, fragment]),
   pickDirectories: bind<[string, boolean], string[]>("Dialogs.PickDirectories", (defaultPath: string, multiple: boolean) => [defaultPath, multiple]),
+  showAbout: bind<[], void>("Dialogs.ShowAbout", () => []),
   /**
    * ShowContextMenu returns the chosen action, or an empty string on dismissal.
    * Empty IDs separate groups. Menu.PopupAt waits until the native menu closes.

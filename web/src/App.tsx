@@ -1,4 +1,6 @@
 import { useTranslation } from "react-i18next";
+import { runtime } from "mygo-runtime";
+import { DesktopTitlebar } from "@/components/workbench/DesktopTitlebar";
 import {
   WorkbenchShell,
   type PrimaryPage,
@@ -206,6 +208,7 @@ const Files = lazy(() =>
 const Terminal = lazy(() => import("@/features/terminal/Terminal"));
 const WorkspaceNotes = lazy(() => import("@/features/tasks/WorkspaceNotes"));
 const BrowserPanel = lazy(() => import("@/features/browser/BrowserPanel"));
+const windowsDesktop = isDesktop && runtime().platform === "win32";
 const noAgents: Agent[] = [];
 const noProjects: Project[] = [];
 const noChats: Overview["chats"] = [];
@@ -972,6 +975,10 @@ export default function App() {
     );
     return tab;
   }
+  function openNewWorkspaceChat(agentId: string) {
+    setPage("agents");
+    newChat(agentId, mainTab ? activePane : "main");
+  }
   function finishDraft(
     agentId: string,
     chatId: string,
@@ -1589,6 +1596,17 @@ export default function App() {
     }
   }
 
+  const openSettings = () => setPage("settings");
+  const toggleAgentSidebar = () => setSidebar((open) => !open);
+  const findChatId =
+    activeTab?.kind === "chat" ? activeTab.id : activeTab?.topic?.chatId;
+  const canUseAgentActions = overview.isSuccess && page === "agents";
+  function findInCurrentChat(trigger?: HTMLElement | null) {
+    if (!findChatId) return;
+    showWorkspaceSearch({ scope: `chat:${findChatId}`, trigger });
+    return true;
+  }
+
   useShortcutListener((shortcut, event) => {
     if (
       event.target instanceof Element &&
@@ -1601,7 +1619,7 @@ export default function App() {
       (item) => binding(preferences.shortcutOverrides, item) === shortcut,
     );
     if (command === "openSettings") {
-      setPage("settings");
+      openSettings();
       return true;
     }
     if (!overview.isSuccess) return;
@@ -1621,7 +1639,7 @@ export default function App() {
         )
       )
         return;
-      setSidebar((open) => !open);
+      toggleAgentSidebar();
       return true;
     }
     if (command === "reopenTab") {
@@ -1635,15 +1653,10 @@ export default function App() {
         return true;
       case "newChat":
         if (!agent) return;
-        if (!agent.archived) newChat(agent.id, mainTab ? activePane : "main");
+        if (!agent.archived) openNewWorkspaceChat(agent.id);
         return true;
-      case "find": {
-        const chatId =
-          activeTab?.kind === "chat" ? activeTab.id : activeTab?.topic?.chatId;
-        if (!chatId) return;
-        showWorkspaceSearch({ scope: `chat:${chatId}` });
-        return true;
-      }
+      case "find":
+        return findInCurrentChat();
     }
     const number = isDesktop ? tabNumber(shortcut) : undefined;
     if (!number && command !== "previousTab" && command !== "nextTab") return;
@@ -2016,7 +2029,7 @@ export default function App() {
             prefetchPrimaryPage("skills");
             setPage("skills");
           }}
-          onSettings={() => setPage("settings")}
+          onSettings={openSettings}
         >
           <MotionConfig
             transition={{
@@ -2947,7 +2960,37 @@ export default function App() {
   );
   return (
     <AgentOrderContext value={agentOrder.agents}>
-      {workbenchContent}
+      {windowsDesktop ? (
+        <div className="desktop-shell">
+          <DesktopTitlebar
+            dark={dark}
+            sidebarOpen={sidebar}
+            onNewChat={
+              overview.isSuccess && agent && !agent.archived
+                ? () => openNewWorkspaceChat(agent.id)
+                : undefined
+            }
+            onCloseTab={
+              canUseAgentActions && activeTab
+                ? () => closeWorkspaceTab(activeTab.id)
+                : undefined
+            }
+            onSearch={
+              overview.isSuccess
+                ? (trigger) => showWorkspaceSearch({ trigger })
+                : undefined
+            }
+            onFind={
+              canUseAgentActions && findChatId ? findInCurrentChat : undefined
+            }
+            onToggleSidebar={canUseAgentActions ? toggleAgentSidebar : undefined}
+            onOpenSettings={openSettings}
+          />
+          {workbenchContent}
+        </div>
+      ) : (
+        workbenchContent
+      )}
     </AgentOrderContext>
   );
 }
