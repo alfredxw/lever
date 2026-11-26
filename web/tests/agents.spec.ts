@@ -2972,15 +2972,13 @@ test("Recent shows the generated conversation title when it arrives after the re
   }
 });
 
-test("switching Topics from the Agents sidebar keeps the side pane maximized", async ({
-  page,
-}) => {
-  await createAgent(page, "话题分栏切换");
+async function createSidebarTopicsInDifferentChats(page: Page, name: string) {
+  await createAgent(page, name);
   await send(page, "第一个 Chat");
   const overview: Overview = await (
     await page.request.get("/api/overview")
   ).json();
-  const agent = overview.agents.find(({ name }) => name === "话题分栏切换")!;
+  const agent = overview.agents.find((agent) => agent.name === name)!;
   const firstChat = overview.chats.find(({ agentId }) => agentId === agent.id)!;
   const response = await page.request.post("/api/chats", {
     data: { agentId: agent.id, title: "第二个 Chat" },
@@ -2996,6 +2994,88 @@ test("switching Topics from the Agents sidebar keeps the side pane maximized", a
   };
   const first = await createTopic(firstChat.id, "第一个 Topic");
   const second = await createTopic(secondChat.id, "第二个 Topic");
+  return { first, second };
+}
+
+test("one sidebar click switches across Chats when mouse release arrives before press", async ({
+  page,
+}) => {
+  const { first, second } = await createSidebarTopicsInDifferentChats(
+    page,
+    "跨 Chat 单击",
+  );
+  const sidebar = page.locator("#agent-sidebar").getByRole("tabpanel");
+  const row = (topic: Run) =>
+    sidebar.locator(`button[data-session-id="${topic.sessionId}"]`);
+  const expectSelected = async (topic: Run) => {
+    await expect(row(topic)).toHaveAttribute("aria-current", "true");
+    await expect(
+      page.locator(
+        `[id="panel-topic%3A${topic.sessionId}"][data-visible=true]`,
+      ),
+    ).toContainText(topic.input);
+    await expect(
+      page.locator(`[id="panel-${topic.chatId}"][data-visible=true]`),
+    ).toBeVisible();
+  };
+  await row(first).click();
+  await expectSelected(first);
+  await row(second).click();
+  await expectSelected(second);
+
+  // AppKit can deliver mouse events to the WebView out of order. Their
+  // timestamps still describe the physical press followed by the release.
+  const reversed = async (down: Run, up: Run, click?: "list" | "row") =>
+    row(down).evaluate(
+      (button, { upId, click }) => {
+        const end = document.querySelector<HTMLButtonElement>(
+          `#agent-sidebar button[data-session-id="${upId}"]`,
+        )!;
+        const init = {
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        };
+        const press = new PointerEvent("pointerdown", { ...init, buttons: 1 });
+        const release = new PointerEvent("pointerup", init);
+        let clicks = 0;
+        const count = () => clicks++;
+        button.addEventListener("click", count);
+        try {
+          end.dispatchEvent(release);
+          if (click === "row") end.click();
+          if (click === "list") end.closest("ul")!.click();
+          button.dispatchEvent(press);
+          return clicks;
+        } finally {
+          button.removeEventListener("click", count);
+        }
+      },
+      { upId: up.sessionId, click },
+    );
+
+  expect(await reversed(first, first)).toBe(1);
+  await expectSelected(first);
+  expect(await reversed(second, first)).toBe(0);
+  await expectSelected(first);
+  expect(await reversed(second, second, "row")).toBe(1);
+  await expectSelected(second);
+  expect(await reversed(first, first, "list")).toBe(1);
+  await expectSelected(first);
+  await row(second).press("Enter");
+  await expectSelected(second);
+});
+
+test("switching Topics from the Agents sidebar keeps the side pane maximized", async ({
+  page,
+}) => {
+  const { first, second } = await createSidebarTopicsInDifferentChats(
+    page,
+    "话题分栏切换",
+  );
   const layout = page.locator(".workspace-layout");
   const openTopic = async (topic: Run) => {
     await page
