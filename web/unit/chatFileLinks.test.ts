@@ -4,10 +4,12 @@ import {
   chatFileTarget,
   chatHtmlPreview,
   chatPreviewURL,
+  findBlockHtmlPreview,
   htmlViewerURL,
   parseHtmlPreviewURL,
   resolveChatFile,
   resolveChatFileLink,
+  type HtmlPreviewNode,
 } from "../src/features/chat/chatFileLinks.ts";
 import {
   absoluteFilePath,
@@ -251,5 +253,154 @@ test("resolveChatFile distinguishes workspace files from read-only host files", 
         path: "README.md",
       },
     },
+  );
+});
+
+const element = (
+  tagName: string,
+  children: HtmlPreviewNode[] = [],
+  properties?: Record<string, unknown>,
+): HtmlPreviewNode => ({
+  type: "element",
+  tagName,
+  properties,
+  children,
+});
+
+const linkNode = (href: string): HtmlPreviewNode =>
+  element("a", [{ type: "text" }], { href });
+
+test("findBlockHtmlPreview finds inline HTML links inside paragraphs, lists, headings, tables, and stops at nested preview blocks", () => {
+  const endpoint = "/api/runs/1/preview";
+  const singleRow = {
+    src: chatPreviewURL(
+      endpoint,
+      "html",
+      "output/agent-sidebar-variants/single-row.html",
+    ),
+    title: "single-row.html",
+  };
+  const nestedRow = {
+    src: chatPreviewURL(endpoint, "html", "output/nested.html"),
+    title: "nested.html",
+  };
+
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("li", [
+        { type: "text" },
+        linkNode("output/agent-sidebar-variants/single-row.html"),
+      ]),
+      endpoint,
+      origin,
+    ),
+    singleRow,
+  );
+
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("p", [
+        element("strong", [
+          element("em", [
+            linkNode("output/agent-sidebar-variants/single-row.html"),
+          ]),
+        ]),
+      ]),
+      endpoint,
+      origin,
+    ),
+    singleRow,
+  );
+
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("h3", [
+        { type: "text" },
+        linkNode("output/agent-sidebar-variants/single-row.html"),
+      ]),
+      endpoint,
+      origin,
+    ),
+    singleRow,
+  );
+
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("table", [
+        element("tbody", [
+          element("tr", [
+            element("td", [
+              linkNode("https://example.test/ignored.html"),
+              linkNode("output/agent-sidebar-variants/single-row.html"),
+            ]),
+          ]),
+        ]),
+      ]),
+      endpoint,
+      origin,
+    ),
+    singleRow,
+  );
+
+  // Loose list items and nested lists delegate ownership to their inner blocks.
+  assert.equal(
+    findBlockHtmlPreview(
+      element("li", [
+        element("p", [linkNode("output/nested.html")]),
+      ]),
+      endpoint,
+      origin,
+    ),
+    null,
+  );
+  assert.equal(
+    findBlockHtmlPreview(
+      element("li", [
+        { type: "text" },
+        element("ul", [element("li", [linkNode("output/nested.html")])]),
+      ]),
+      endpoint,
+      origin,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("li", [
+        linkNode("output/agent-sidebar-variants/single-row.html"),
+        element("ul", [element("li", [linkNode("output/nested.html")])]),
+      ]),
+      endpoint,
+      origin,
+    ),
+    singleRow,
+  );
+  assert.equal(
+    findBlockHtmlPreview(
+      element("blockquote", [element("p", [linkNode("output/nested.html")])]),
+      endpoint,
+      origin,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    findBlockHtmlPreview(
+      element("blockquote", [linkNode("output/nested.html")]),
+      endpoint,
+      origin,
+    ),
+    nestedRow,
+  );
+  assert.equal(
+    findBlockHtmlPreview(
+      element("li", [
+        linkNode("https://example.test/foreign.html"),
+        linkNode("report.html:12:3"),
+        linkNode("notes.md"),
+      ]),
+      endpoint,
+      origin,
+    ),
+    null,
   );
 });

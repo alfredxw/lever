@@ -21,7 +21,7 @@ import { MessageResponse } from "@/components/ai-elements/message-response";
 import { Button } from "@/components/ui/button";
 import type { ReferenceScope } from "@/features/files/fileSource";
 import { ComposerContext, ReferenceScopeContext } from "./ComposerContext";
-import { ChatHtmlLink, ChatHtmlParagraph } from "./ChatMedia";
+import { chatHtmlBlockComponents, ChatHtmlLink } from "./ChatMedia";
 import { InlineHtmlPreview } from "./InlineHtmlPreview";
 import {
   chatHtmlPreview,
@@ -247,7 +247,7 @@ export function MessageInput({
   const components = useMemo(
     () => ({
       a: promptLink,
-      ...(previewEndpoint && { p: ChatHtmlParagraph }),
+      ...(previewEndpoint && chatHtmlBlockComponents),
       ...rendering?.components,
     }),
     [previewEndpoint, rendering],

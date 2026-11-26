@@ -1,8 +1,10 @@
 import {
   createContext,
+  isValidElement,
   useContext,
   useState,
   type ComponentProps,
+  type ComponentType,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -12,8 +14,10 @@ import { toast } from "sonner";
 import {
   defaultComponents,
   StreamdownContext,
+  type Components,
   type ExtraProps,
 } from "streamdown";
+import { ResponseTable } from "@/components/ai-elements/response-table";
 import { rowMenuHandlers } from "@/components/ui/action-context-menu";
 import {
   ChatPreviewEndpoint,
@@ -21,9 +25,10 @@ import {
   openOriginalHtml,
 } from "./HtmlPreview";
 import {
-  chatHtmlPreview,
+  findBlockHtmlPreview,
   htmlViewerURL,
   type HtmlPreview,
+  type HtmlPreviewNode,
 } from "./chatFileLinks";
 import { useImagePreview } from "./ImagePreview";
 import { InlineHtmlPreview, useInlineHtmlPreview } from "./InlineHtmlPreview";
@@ -138,6 +143,35 @@ export function ChatPicture({
   );
 }
 
+const listNestedBlocks = new Set([
+  "ul",
+  "ol",
+  "p",
+  "blockquote",
+  "table",
+  "pre",
+  "hr",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+]);
+
+function childAstNode(child: ReactNode): HtmlPreviewNode | undefined {
+  return isValidElement<{ node?: HtmlPreviewNode }>(child)
+    ? child.props.node
+    : undefined;
+}
+
+function childTagName(child: ReactNode): string | undefined {
+  if (!isValidElement<{ node?: HtmlPreviewNode }>(child)) return undefined;
+  return typeof child.type === "string"
+    ? child.type
+    : child.props.node?.tagName;
+}
+
 export function ChatHtmlParagraph({
   node,
   ...props
@@ -145,27 +179,90 @@ export function ChatHtmlParagraph({
   const endpoint = useContext(ChatPreviewEndpoint);
   const { isAnimating } = useContext(StreamdownContext);
   const paragraph = <defaultComponents.p node={node} {...props} />;
-  for (const child of node?.children ?? []) {
-    if (child.type !== "element" || child.tagName !== "a") continue;
-    const href = child.properties.href;
-    const preview =
-      typeof href === "string" &&
-      chatHtmlPreview(href, endpoint, location.origin);
-    if (preview) {
-      const wholeReport =
-        node?.children.length === 1 && !preview.src.includes("#");
-      return (
-        <InlineHtmlPreview
-          key={preview.src}
-          defaultPreview={!isAnimating && wholeReport ? preview : undefined}
-        >
-          {paragraph}
-        </InlineHtmlPreview>
-      );
+  const preview = findBlockHtmlPreview(node, endpoint, location.origin);
+  if (!preview) return paragraph;
+  const wholeReport =
+    node?.children.length === 1 &&
+    node.children[0].type === "element" &&
+    node.children[0].tagName === "a" &&
+    !preview.src.includes("#");
+  return (
+    <InlineHtmlPreview
+      key={preview.src}
+      defaultPreview={!isAnimating && wholeReport ? preview : undefined}
+    >
+      {paragraph}
+    </InlineHtmlPreview>
+  );
+}
+
+function ChatHtmlListItem({
+  node,
+  children,
+  ...props
+}: ComponentProps<"li"> & ExtraProps) {
+  const endpoint = useContext(ChatPreviewEndpoint);
+  const preview = findBlockHtmlPreview(node, endpoint, location.origin);
+  if (!preview) {
+    return (
+      <defaultComponents.li node={node} {...props}>
+        {children}
+      </defaultComponents.li>
+    );
+  }
+  let before: ReactNode = children;
+  let after: ReactNode;
+  if (Array.isArray(children)) {
+    const splitAt = children.findIndex((child) => {
+      const tag = childTagName(child);
+      return tag !== undefined && listNestedBlocks.has(tag);
+    });
+    if (splitAt > 0) {
+      const tail = children.slice(splitAt);
+      const tailNodes = tail
+        .map(childAstNode)
+        .filter((item): item is HtmlPreviewNode => item !== undefined);
+      if (
+        !findBlockHtmlPreview({ children: tailNodes }, endpoint, location.origin)
+      ) {
+        before = children.slice(0, splitAt);
+        after = tail;
+      }
     }
   }
-  return paragraph;
+  return (
+    <defaultComponents.li node={node} {...props}>
+      <InlineHtmlPreview after={after}>{before}</InlineHtmlPreview>
+    </defaultComponents.li>
+  );
 }
+
+function createChatHtmlBlock<P extends ExtraProps>(
+  Component: ComponentType<P>,
+) {
+  return function ChatHtmlBlock(props: P) {
+    const endpoint = useContext(ChatPreviewEndpoint);
+    const element = <Component {...props} />;
+    return findBlockHtmlPreview(props.node, endpoint, location.origin) ? (
+      <InlineHtmlPreview>{element}</InlineHtmlPreview>
+    ) : (
+      element
+    );
+  };
+}
+
+export const chatHtmlBlockComponents: Components = {
+  p: ChatHtmlParagraph,
+  li: ChatHtmlListItem,
+  h1: createChatHtmlBlock(defaultComponents.h1),
+  h2: createChatHtmlBlock(defaultComponents.h2),
+  h3: createChatHtmlBlock(defaultComponents.h3),
+  h4: createChatHtmlBlock(defaultComponents.h4),
+  h5: createChatHtmlBlock(defaultComponents.h5),
+  h6: createChatHtmlBlock(defaultComponents.h6),
+  blockquote: createChatHtmlBlock(defaultComponents.blockquote),
+  table: createChatHtmlBlock(ResponseTable),
+};
 
 export function ChatHtmlLink({
   preview,

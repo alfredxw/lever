@@ -17,6 +17,55 @@ type ChatFileTarget = {
 
 export type HtmlPreview = { src: string; title: string };
 
+export type HtmlPreviewNode = {
+  type?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HtmlPreviewNode[];
+};
+
+// Block elements that host their own InlineHtmlPreview (plus list containers
+// whose items host their own previews). Scanning a parent block stops at these
+// so nested blocks own their previews independently.
+const nestedHtmlPreviewBlocks = new Set([
+  "p",
+  "li",
+  "ul",
+  "ol",
+  "blockquote",
+  "table",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+]);
+
+export function findBlockHtmlPreview(
+  node: HtmlPreviewNode | undefined,
+  endpoint: string | undefined,
+  origin: string,
+): HtmlPreview | null {
+  function visit(children: HtmlPreviewNode[] | undefined): HtmlPreview | null {
+    for (const child of children ?? []) {
+      if (child.type !== "element") continue;
+      if (child.tagName === "a") {
+        const href = child.properties?.href;
+        const preview =
+          typeof href === "string" && chatHtmlPreview(href, endpoint, origin);
+        if (preview) return preview;
+        continue;
+      }
+      if (child.tagName && nestedHtmlPreviewBlocks.has(child.tagName)) continue;
+      const nested = visit(child.children);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  return visit(node?.children);
+}
+
 export function chatPreviewURL(
   endpoint: string,
   kind: "image" | "html" | "visualization",

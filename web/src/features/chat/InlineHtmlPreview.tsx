@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,9 +24,11 @@ export function useInlineHtmlPreview() {
 
 export function InlineHtmlPreview({
   children,
+  after,
   defaultPreview,
 }: {
   children: ReactNode;
+  after?: ReactNode;
   defaultPreview?: HtmlPreview;
 }) {
   const id = useId();
@@ -33,34 +36,47 @@ export function InlineHtmlPreview({
   const active = selection === undefined ? defaultPreview : selection;
   const src = active?.src;
   const lastTrigger = useRef<HTMLElement | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const shouldReveal = useRef(false);
   const toggle = useCallback(
     (preview: HtmlPreview, trigger: HTMLElement) => {
       lastTrigger.current = trigger;
-      setSelection(preview.src === src ? null : preview);
+      const opening = preview.src !== src;
+      shouldReveal.current = opening;
+      setSelection(opening ? preview : null);
     },
     [src],
   );
+  useLayoutEffect(() => {
+    if (!shouldReveal.current || !src) return;
+    shouldReveal.current = false;
+    panel.current?.scrollIntoView({ block: "nearest" });
+  }, [src]);
   const value = useMemo(() => ({ id, src, toggle }), [id, src, toggle]);
   return (
-    <InlinePreviewContext.Provider value={value}>
-      {children}
-      {active && (
-        <div
-          id={id}
-          className="chat-inline-html-preview my-2 h-[min(26rem,55dvh)] w-full min-w-0 overflow-hidden rounded-md border bg-background"
-        >
-          <HtmlPreviewPanel
-            preview={active}
-            onCollapse={() => {
-              const trigger =
-                lastTrigger.current ??
-                document.querySelector<HTMLElement>(`[aria-controls="${id}"]`);
-              setSelection(null);
-              trigger?.focus({ preventScroll: true });
-            }}
-          />
-        </div>
-      )}
-    </InlinePreviewContext.Provider>
+    <>
+      <InlinePreviewContext.Provider value={value}>
+        {children}
+        {active && (
+          <div
+            ref={panel}
+            id={id}
+            className="chat-inline-html-preview my-2 h-[min(26rem,55dvh)] w-full min-w-0 overflow-hidden rounded-md border bg-background font-normal not-italic text-foreground"
+          >
+            <HtmlPreviewPanel
+              preview={active}
+              onCollapse={() => {
+                const trigger =
+                  lastTrigger.current ??
+                  document.querySelector<HTMLElement>(`[aria-controls="${id}"]`);
+                setSelection(null);
+                trigger?.focus({ preventScroll: true });
+              }}
+            />
+          </div>
+        )}
+      </InlinePreviewContext.Provider>
+      {after}
+    </>
   );
 }

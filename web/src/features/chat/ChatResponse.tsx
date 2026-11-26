@@ -18,8 +18,8 @@ import {
   resolveChatFile,
 } from "./chatFileLinks";
 import {
+  chatHtmlBlockComponents,
   ChatHtmlLink,
-  ChatHtmlParagraph,
   ChatImage,
   ChatImageLink,
   ChatPicture,
@@ -161,7 +161,7 @@ export function ChatMarkdown({
       if (src && /^https?:\/\//i.test(src)) return src;
     };
     return {
-      p: ChatHtmlParagraph,
+      ...chatHtmlBlockComponents,
       img: ({ src, ...props }) => <ChatImage {...props} src={imageURL(src)} />,
       source: ({ srcSet, media }) => {
         const src = srcSet && /^\S+$/.test(srcSet) && imageURL(srcSet);
