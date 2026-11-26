@@ -217,6 +217,7 @@ type worker struct {
 	steers     chan struct{}
 	mu         sync.Mutex
 	runtime    model.SessionRuntime
+	lastTitle  string
 	items      []model.Item
 	positions  map[string]int
 	permission func(context.Context, string) error
@@ -422,12 +423,26 @@ func (w *worker) controls() error {
 type RuntimeUpdate struct {
 	model.SessionRuntime
 	SteerState provider.SteerState `json:"steerState,omitempty"`
+	Title      string              `json:"title,omitempty"`
 }
 
 func (w *worker) SetSteerState(state provider.SteerState) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.emitLocked("runtime", RuntimeUpdate{SessionRuntime: w.runtime, SteerState: state})
+}
+
+func (w *worker) Title(title string) error {
+	if title == "" {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.lastTitle == title {
+		return nil
+	}
+	w.lastTitle = title
+	return w.emitLocked("runtime", RuntimeUpdate{SessionRuntime: w.runtime, Title: title})
 }
 
 func (w *worker) NextSteer() (*provider.Input, error) {

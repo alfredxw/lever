@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,8 +13,9 @@ import (
 )
 
 type recordingSink struct {
-	items []model.Item
-	byID  map[string]model.Item
+	items  []model.Item
+	byID   map[string]model.Item
+	titles []string
 }
 
 func newRecordingSink() *recordingSink {
@@ -22,6 +25,7 @@ func newRecordingSink() *recordingSink {
 func (s *recordingSink) Bind(string) error                                           { return nil }
 func (s *recordingSink) BindTurn(string) error                                       { return nil }
 func (s *recordingSink) UpdateRuntime(func(*model.SessionRuntime)) error             { return nil }
+func (s *recordingSink) Title(title string) error                                    { s.titles = append(s.titles, title); return nil }
 func (s *recordingSink) TurnDiff(string) error                                       { return nil }
 func (s *recordingSink) EnablePermissionChanges(func(context.Context, string) error) {}
 func (s *recordingSink) SetSteerState(SteerState) error                              { return nil }
@@ -267,5 +271,78 @@ func TestACPAntigravitySubagentMapping(t *testing.T) {
 	}
 	if sink.byID["tool-mcp-1"].Kind != "tool" {
 		t.Fatalf("MCP tool call should remain a normal tool: %+v", sink.byID["tool-mcp-1"])
+	}
+}
+
+func TestACPSessionInfoUpdateTitles(t *testing.T) {
+	rt, sink := newTestACPRuntime("/workspace", true)
+	rt.session = "sess-1"
+	rt.promptStarted = make(chan struct{})
+
+	sendUpdate := func(payload map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, rpcErr := rt.handle(context.Background(), "session/update", raw); rpcErr != nil {
+			t.Fatalf("handle session/update: %+v", rpcErr)
+		}
+	}
+
+	// Arriving before c.active (e.g. during session/resume) is buffered per session.
+	sendUpdate(map[string]any{
+		"sessionId": "other-session",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "Wrong Session"},
+	})
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "  Resumed\n  Summary  "},
+	})
+	if len(sink.titles) != 0 {
+		t.Fatalf("pre-active title published early: %v", sink.titles)
+	}
+	if rt.titles["sess-1"] != "Resumed Summary" || rt.titles["other-session"] != "" {
+		t.Fatalf("unexpected buffered titles: %+v", rt.titles)
+	}
+	select {
+	case <-rt.promptStarted:
+		t.Fatal("session_info_update must not signal prompt start")
+	default:
+	}
+
+	// Flush on activation, then deduplicate identical live repeats.
+	rt.active = true
+	if err := rt.publishTitle(rt.titles[rt.session]); err != nil {
+		t.Fatal(err)
+	}
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "Resumed Summary"},
+	})
+	// Null and whitespace-only titles are ignored.
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": nil},
+	})
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "   \t\n "},
+	})
+	// A distinct title over 80 runes is normalized and clipped to 80 runes.
+	longTitle := strings.Repeat("标", 90)
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "  " + longTitle + "  "},
+	})
+
+	want := []string{"Resumed Summary", strings.Repeat("标", 80)}
+	if !slices.Equal(sink.titles, want) {
+		t.Fatalf("titles = %v, want %v", sink.titles, want)
+	}
+	select {
+	case <-rt.promptStarted:
+		t.Fatal("live session_info_update must not signal prompt start")
+	default:
 	}
 }

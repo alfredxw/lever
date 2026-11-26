@@ -39,9 +39,11 @@ type acpRuntime struct {
 	modeTouched   bool
 	promptStarted chan struct{}
 	agyCLI        bool
-	commands      map[acp.SessionId][]model.NativeCommand
-	skillCommands map[string]bool
-	commandUpdate chan struct{}
+	commands       map[acp.SessionId][]model.NativeCommand
+	titles         map[acp.SessionId]string
+	publishedTitle string
+	skillCommands  map[string]bool
+	commandUpdate  chan struct{}
 	background    *antigravityBackground
 	interruptDone <-chan struct{}
 	items         map[string]model.Item
@@ -105,6 +107,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 		tools:         map[string]*acpToolState{},
 		subagents:     map[string]*subagent{},
 		commands:      make(map[acp.SessionId][]model.NativeCommand),
+		titles:        make(map[acp.SessionId]string),
 		commandUpdate: make(chan struct{}, 1),
 	}
 	cmd := device.Command(path, config.Args...)
@@ -618,6 +621,11 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 	if commands, ok := c.commands[c.session]; ok {
 		err = c.publishCommands(commands)
 	}
+	if err == nil {
+		if title := c.titles[c.session]; title != "" {
+			err = c.publishTitle(title)
+		}
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return err
@@ -906,6 +914,28 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 			}
 			return nil, nil
 		}
+		if u := update.Update.SessionInfoUpdate; u != nil {
+			if c.session != "" && update.SessionId != c.session {
+				return nil, nil
+			}
+			if u.Title == nil {
+				return nil, nil
+			}
+			title := normalizeConversationTitle(*u.Title)
+			if title == "" {
+				return nil, nil
+			}
+			if c.titles == nil {
+				c.titles = make(map[acp.SessionId]string)
+			}
+			c.titles[update.SessionId] = title
+			if c.active {
+				if err := c.publishTitle(title); err != nil {
+					return nil, acp.NewInternalError(err.Error())
+				}
+			}
+			return nil, nil
+		}
 		if !c.active || update.SessionId != c.session {
 			return nil, nil
 		}
@@ -935,6 +965,19 @@ func (c *acpRuntime) publishCommands(commands []model.NativeCommand) error {
 		commands = slices.DeleteFunc(slices.Clone(commands), func(command model.NativeCommand) bool { return c.skillCommands[command.Name] })
 	}
 	return c.sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Commands = &commands })
+}
+
+// publishTitle forwards a session summary title once per distinct value.
+// The caller holds c.mu.
+func (c *acpRuntime) publishTitle(title string) error {
+	if title == "" || c.sink == nil || c.publishedTitle == title {
+		return nil
+	}
+	if err := c.sink.Title(title); err != nil {
+		return err
+	}
+	c.publishedTitle = title
+	return nil
 }
 
 // ACP announcements may precede or follow session/new. Most agents publish

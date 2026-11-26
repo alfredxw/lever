@@ -212,6 +212,18 @@ func (e *execution) UpdateRuntime(update func(*model.SessionRuntime)) error {
 	return err
 }
 
+func (e *execution) Title(title string) error {
+	e.mu.Lock()
+	run, providerID := e.run, e.provider.ID
+	e.mu.Unlock()
+	ctx, cancel := context.WithTimeout(e.app.ctx, 2*time.Second)
+	defer cancel()
+	if err := e.app.Store.SaveSessionTitle(ctx, run, title); err != nil && e.app.ctx.Err() == nil {
+		slog.Debug("conversation title unavailable", "session", run.SessionID, "provider", providerID, "error", err)
+	}
+	return nil
+}
+
 // Persist the payload and its lightweight chat summary together. Codex may
 // publish the same aggregate more than once, including at turn completion.
 func (e *execution) TurnDiff(patch string) error {

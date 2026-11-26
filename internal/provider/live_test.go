@@ -120,6 +120,7 @@ func (s *liveSink) NextSteer() (*Input, error)                                  
 func (s *liveSink) Steered(string, error) error                                 { return nil }
 func (s *liveSink) TurnDiff(string) error                                       { return nil }
 func (s *liveSink) UpdateRuntime(func(*model.SessionRuntime)) error             { return nil }
+func (s *liveSink) Title(string) error                                          { return nil }
 func (s *liveSink) EnablePermissionChanges(func(context.Context, string) error) {}
 
 func (s *liveSink) Bind(id string) error  { s.native = id; return nil }

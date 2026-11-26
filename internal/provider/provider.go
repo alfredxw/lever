@@ -150,6 +150,7 @@ type Sink interface {
 	Bind(string) error
 	BindTurn(string) error
 	UpdateRuntime(func(*model.SessionRuntime)) error
+	Title(string) error
 	Item(model.Item) error
 	TurnDiff(string) error
 	Ask(context.Context, model.Request) (model.Answer, error)

@@ -75,7 +75,7 @@ func acpFixture() {
 	modelEfforts := slices.Contains(os.Args, "--model-efforts")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 65536), 32<<20)
-	var native, cwd, mode, model, effort string
+	var native, cwd, mode, model, effort, title string
 	var directories, servers []any
 	var history []string
 	var promptID any
@@ -87,7 +87,7 @@ func acpFixture() {
 	path := func() string { return filepath.Join(cwd, ".fixture-acp", identity, native+".json") }
 	save := func() {
 		_ = os.MkdirAll(filepath.Dir(path()), 0700)
-		b, _ := json.Marshal(object{"history": history, "mode": mode, "model": model, "effort": effort})
+		b, _ := json.Marshal(object{"history": history, "mode": mode, "model": model, "effort": effort, "title": title})
 		_ = os.WriteFile(path(), b, 0600)
 	}
 	state := func() object {
@@ -236,6 +236,7 @@ func acpFixture() {
 				mode = "default"
 			}
 			native = str(params["sessionId"])
+			title = ""
 			if native == "" {
 				native = fmt.Sprintf("%s-%d", identity, time.Now().UnixNano())
 				history = []string{}
@@ -250,11 +251,11 @@ func acpFixture() {
 					continue
 				}
 				var saved struct {
-					History             []string
-					Mode, Model, Effort string
+					History                    []string
+					Mode, Model, Effort, Title string
 				}
 				_ = json.Unmarshal(data, &saved)
-				history, mode, model, effort = saved.History, saved.Mode, saved.Model, saved.Effort
+				history, mode, model, effort, title = saved.History, saved.Mode, saved.Model, saved.Effort, saved.Title
 				if nativeCLI && len(history) != 0 && strings.HasPrefix(fixtureCommands(history[0]), "[agy-token-login]") {
 					send(object{"jsonrpc": "2.0", "id": frame["id"], "error": object{"code": -32000, "message": "Authentication required", "data": "private-fixture-detail"}})
 					continue
@@ -273,6 +274,9 @@ func acpFixture() {
 				}
 			}
 			notify(object{"sessionUpdate": "available_commands_update", "availableCommands": commands})
+			if title != "" {
+				notify(object{"sessionUpdate": "session_info_update", "title": title})
+			}
 			respond(state())
 		case "session/set_config_option":
 			key := str(params["configId"])
@@ -402,6 +406,12 @@ func acpFixture() {
 				}
 			}
 			command := fixtureCommands(input)
+			if raw, ok := strings.CutPrefix(command, "Title fixture: "); ok {
+				title = raw
+				notify(object{"sessionUpdate": "session_info_update", "title": title})
+			} else if raw, ok := strings.CutPrefix(command, "Resume title fixture: "); ok {
+				title = raw
+			}
 			if nativeCLI && strings.HasPrefix(fixtureCommands(history[0]), "[agy-token-") {
 				receipt["pid"] = os.Getpid()
 				if strings.HasPrefix(command, "[agy-token-pending]") {

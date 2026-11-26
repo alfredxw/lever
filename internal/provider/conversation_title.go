@@ -37,8 +37,12 @@ func GenerateConversationTitle(ctx context.Context, config model.Provider, sessi
 			return "", err
 		}
 	}
+	return normalizeConversationTitle(title), nil
+}
+
+func normalizeConversationTitle(title string) string {
 	runes := []rune(strings.Join(strings.Fields(title), " "))
-	return string(runes[:min(len(runes), 80)]), nil
+	return string(runes[:min(len(runes), 80)])
 }
 
 func codexConversationTitle(client *nativeClient, cwd, modelID, prompt string) (string, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -119,61 +120,126 @@ func TitlePrompt(run model.Run) string {
 	return string(text[:min(len(text), 2048)])
 }
 
-func (s *Store) NeedsConversationTitle(ctx context.Context, run model.Run) (bool, error) {
+func needsConversationTitle(ctx context.Context, q Queryer, run model.Run) (bool, error) {
 	var needed bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions
 WHERE id=? AND title_run_id=? AND COALESCE(json_extract(data,'$.title'),'')='')
 OR EXISTS(SELECT 1 FROM chats WHERE title_run_id=? AND json_extract(data,'$.title')=?)`,
 		run.SessionID, run.ID, run.ID, ChatTitle(run)).Scan(&needed)
 	return needed, err
 }
 
+func (s *Store) NeedsConversationTitle(ctx context.Context, run model.Run) (bool, error) {
+	return needsConversationTitle(ctx, s.DB, run)
+}
+
+func sessionTitleOwner(ctx context.Context, q Queryer, run model.Run) (model.Run, bool, error) {
+	var superseded bool
+	if err := q.QueryRowContext(ctx, "SELECT COALESCE(json_extract(data,'$.superseded'),0) FROM runs WHERE id=?", run.ID).Scan(&superseded); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Run{}, false, nil
+		}
+		return model.Run{}, false, err
+	}
+	if superseded {
+		return model.Run{}, false, nil
+	}
+	var ownerID string
+	err := q.QueryRowContext(ctx, `SELECT r.id FROM runs r WHERE r.session_id=? AND COALESCE(json_extract(r.data,'$.superseded'),0)=0
+AND (
+  EXISTS(SELECT 1 FROM sessions s WHERE s.id=r.session_id AND s.title_run_id=r.id AND COALESCE(json_extract(s.data,'$.title'),'')='')
+  OR EXISTS(SELECT 1 FROM chats c WHERE c.title_run_id=r.id)
+) ORDER BY CASE WHEN r.id=? THEN 0 ELSE 1 END, r.position LIMIT 1`, run.SessionID, run.ID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Run{}, false, nil
+	}
+	if err != nil {
+		return model.Run{}, false, err
+	}
+	owner := run
+	if ownerID != run.ID {
+		owner, err = Get[model.Run](ctx, q, "SELECT data FROM runs WHERE id=?", ownerID)
+		if err != nil {
+			return model.Run{}, false, err
+		}
+	}
+	needed, err := needsConversationTitle(ctx, q, owner)
+	if err != nil || !needed {
+		return model.Run{}, false, err
+	}
+	return owner, true, nil
+}
+
 // Apply only to the placeholders still owned by this input. Activity timestamps,
 // message previews and unread cursors are independent of title changes.
 func (s *Store) SaveConversationTitle(ctx context.Context, run model.Run, title string) error {
 	return s.Write(ctx, func(tx *sql.Tx) error {
-		r, err := tx.Exec(`UPDATE sessions SET data=json_set(data,'$.title',?),activity=json_set(activity,'$.title',?)
-WHERE id=? AND title_run_id=? AND COALESCE(json_extract(data,'$.title'),'')=''`, title, title, run.SessionID, run.ID)
-		if err != nil {
-			return err
-		}
-		topics, err := r.RowsAffected()
-		if err != nil {
-			return err
-		}
-		rows, err := tx.Query(`UPDATE chats SET data=json_set(data,'$.title',?)
-WHERE title_run_id=? AND json_extract(data,'$.title')=? RETURNING id`, title, run.ID, ChatTitle(run))
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		changed := make(map[string]bool)
-		if topics != 0 {
-			changed[run.ChatID] = true
-		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			changed[id] = true
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for id := range changed {
-			if id == run.ChatID && topics == 0 {
-				if _, err := tx.Exec(`UPDATE sessions SET activity=json_set(activity,'$.title',?)
-WHERE id=? AND kind='main' AND activity IS NOT NULL`, title, run.SessionID); err != nil {
-					return err
-				}
-			}
-			if err := Event(tx, model.Event{Type: "conversation-title", ChatID: id, SessionID: run.SessionID}); err != nil {
-				return err
-			}
-		}
-		return nil
+		return saveConversationTitle(tx, run, title)
 	})
+}
+
+// SaveSessionTitle saves a native runtime-reported title for either this run
+// or an earlier non-superseded root run in the same session whose placeholder
+// still has not been named (e.g. a fast first turn followed by a resume update).
+func (s *Store) SaveSessionTitle(ctx context.Context, run model.Run, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	if _, needed, err := sessionTitleOwner(ctx, s.DB, run); err != nil || !needed {
+		return err
+	}
+	return s.Write(ctx, func(tx *sql.Tx) error {
+		owner, needed, err := sessionTitleOwner(ctx, tx, run)
+		if err != nil || !needed {
+			return err
+		}
+		return saveConversationTitle(tx, owner, title)
+	})
+}
+
+func saveConversationTitle(tx *sql.Tx, run model.Run, title string) error {
+	r, err := tx.Exec(`UPDATE sessions SET data=json_set(data,'$.title',?),activity=json_set(activity,'$.title',?)
+WHERE id=? AND title_run_id=? AND COALESCE(json_extract(data,'$.title'),'')=''`, title, title, run.SessionID, run.ID)
+	if err != nil {
+		return err
+	}
+	topics, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(`UPDATE chats SET data=json_set(data,'$.title',?)
+WHERE title_run_id=? AND json_extract(data,'$.title')=? AND json_extract(data,'$.title')<>? RETURNING id`, title, run.ID, ChatTitle(run), title)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	changed := make(map[string]bool)
+	if topics != 0 {
+		changed[run.ChatID] = true
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		changed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id := range changed {
+		if id == run.ChatID && topics == 0 {
+			if _, err := tx.Exec(`UPDATE sessions SET activity=json_set(activity,'$.title',?)
+WHERE id=? AND kind='main' AND activity IS NOT NULL`, title, run.SessionID); err != nil {
+				return err
+			}
+		}
+		if err := Event(tx, model.Event{Type: "conversation-title", ChatID: id, SessionID: run.SessionID}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // The original full input is needed to resolve markup that crossed the old title limit.

@@ -170,3 +170,104 @@ func TestRenameChatAndTopicAcrossLateTitleAndRootEdit(t *testing.T) {
 		t.Fatalf("unexpected titles after editing the root: chat=%+v topics=%+v", view.Chat, topics)
 	}
 }
+
+func TestAntigravityNativeConversationTitles(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		open func(string) (*app.App, error)
+	}{
+		{"embedded", app.Open},
+		{"worker", app.OpenServer},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			f := openFixture(t, mode.open).withLocalProviders()
+			agent := f.acpAgent(model.Provider{ID: "antigravity", Name: "Antigravity"})
+
+			// 1. Live session_info_update names both main chats and topics, and later
+			// turns do not overwrite an already-applied title.
+			chat := f.chat(agent)
+			f.wait(f.send(chat.ID, "main", "", "Title fixture: 实时会话标题").ID, "completed")
+			var overview model.Overview
+			f.request("GET", "/overview", nil, 200, &overview)
+			if overview.Chats[0].Title != "实时会话标题" || overview.Conversations[0].Title != "实时会话标题" {
+				t.Fatalf("live native title missing: chats=%+v convs=%+v", overview.Chats, overview.Conversations)
+			}
+			f.wait(f.send(chat.ID, "main", "", "Title fixture: 后续不覆盖").ID, "completed")
+			f.request("GET", "/overview", nil, 200, &overview)
+			if overview.Chats[0].Title != "实时会话标题" {
+				t.Fatalf("follow-up turn overwrote chat title: %q", overview.Chats[0].Title)
+			}
+
+			topic := f.wait(f.send(chat.ID, "topic", "", "Title fixture: 子话题摘要").ID, "completed")
+			var topics []model.TopicSummary
+			f.request("GET", "/chats/"+chat.ID+"/topics", nil, 200, &topics)
+			var sessionView model.SessionView
+			f.request("GET", "/sessions/"+topic.SessionID, nil, 200, &sessionView)
+			if len(topics) != 1 || topics[0].Title != "子话题摘要" || sessionView.Session.Title != "子话题摘要" {
+				t.Fatalf("topic native title mismatch: topics=%+v session=%+v", topics, sessionView.Session)
+			}
+			f.request("GET", "/overview", nil, 200, &overview)
+			if overview.Chats[0].Title != "实时会话标题" {
+				t.Fatalf("topic changed main chat title: %q", overview.Chats[0].Title)
+			}
+
+			// Editing the topic root starts a fresh native session and applies its new title.
+			var replacement model.Run
+			f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, ReplaceRunID: topic.ID, Text: "Title fixture: 修订话题"}, 200, &replacement)
+			f.wait(replacement.ID, "completed")
+			f.request("GET", "/sessions/"+topic.SessionID, nil, 200, &sessionView)
+			if sessionView.Session.Title != "修订话题" {
+				t.Fatalf("edited topic title = %q, want 修订话题", sessionView.Session.Title)
+			}
+
+			// 2. When turn 1 ends before a title arrives, session_info_update emitted
+			// before activation on turn 2 resume backfills the unnamed placeholder.
+			resumedChat := f.chat(agent)
+			first := f.wait(f.send(resumedChat.ID, "main", "", "Resume title fixture: 恢复补全标题").ID, "completed")
+			var chatView model.ChatView
+			f.request("GET", "/chats/"+resumedChat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != store.ChatTitle(first) {
+				t.Fatalf("unexpected title before resume: %q", chatView.Chat.Title)
+			}
+			f.wait(f.send(resumedChat.ID, "main", "", "Follow up on resumed session").ID, "completed")
+			f.request("GET", "/chats/"+resumedChat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != "恢复补全标题" {
+				t.Fatalf("resume did not backfill chat title: %q", chatView.Chat.Title)
+			}
+
+			// 3. A chat seeded by a topic must not be hijacked by a main-session update,
+			// and resuming that topic backfills both the topic and the chat.
+			topicFirstChat := f.chat(agent)
+			firstTopic := f.wait(f.send(topicFirstChat.ID, "topic", "", "Resume title fixture: 话题归属").ID, "completed")
+			f.wait(f.send(topicFirstChat.ID, "main", "", "Title fixture: 主对话不抢占").ID, "completed")
+			f.request("GET", "/chats/"+topicFirstChat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != store.ChatTitle(firstTopic) {
+				t.Fatalf("main turn hijacked topic-owned chat title: %q", chatView.Chat.Title)
+			}
+			f.wait(f.send(topicFirstChat.ID, "reply", firstTopic.SessionID, "Continue topic").ID, "completed")
+			f.request("GET", "/chats/"+topicFirstChat.ID, nil, 200, &chatView)
+			f.request("GET", "/sessions/"+firstTopic.SessionID, nil, 200, &sessionView)
+			if chatView.Chat.Title != "话题归属" || sessionView.Session.Title != "话题归属" {
+				t.Fatalf("topic resume did not backfill chat/topic: chat=%q topic=%q", chatView.Chat.Title, sessionView.Session.Title)
+			}
+
+			// 4. Explicit names and manual renames are never overwritten by native titles.
+			var explicit model.Chat
+			f.request("POST", "/chats", map[string]string{"agentId": agent.ID, "title": "自定名称"}, 200, &explicit)
+			f.wait(f.send(explicit.ID, "main", "", "Title fixture: 忽略标题").ID, "completed")
+			f.request("GET", "/chats/"+explicit.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != "自定名称" || !chatView.Chat.TitleIsCustom {
+				t.Fatalf("explicit title overwritten: %+v", chatView.Chat)
+			}
+
+			renamed := f.chat(agent)
+			f.wait(f.send(renamed.ID, "main", "", "Resume title fixture: 待重命名").ID, "completed")
+			f.request("PUT", "/chats/"+renamed.ID+"/title", map[string]string{"title": "手动改名"}, 200, nil)
+			f.wait(f.send(renamed.ID, "main", "", "Continue after rename").ID, "completed")
+			f.request("GET", "/chats/"+renamed.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != "手动改名" || !chatView.Chat.TitleIsCustom {
+				t.Fatalf("manual rename overwritten on resume: %+v", chatView.Chat)
+			}
+		})
+	}
+}
