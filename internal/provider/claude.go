@@ -521,6 +521,9 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					case "text":
 						item.Kind = "text"
 						item.Text = str(v["text"])
+						if sources := claudeCitations(v["citations"]); len(sources) > 0 {
+							item.Citations = appendCitation(nil, utf16StringLen(item.Text), sources)
+						}
 					case "thinking":
 						item.Kind = "reasoning"
 						item.Text = str(v["thinking"])
@@ -544,6 +547,10 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					switch str(delta["type"]) {
 					case "text_delta":
 						item.Text += str(delta["text"])
+					case "citations_delta":
+						if sources := claudeCitations([]any{delta["citation"]}); len(sources) > 0 {
+							item.Citations = appendCitation(item.Citations, utf16StringLen(item.Text), sources)
+						}
 					case "thinking_delta":
 						item.Text += str(delta["thinking"])
 					case "input_json_delta":
@@ -593,6 +600,9 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					case "text":
 						item.Kind = "text"
 						item.Text = str(v["text"])
+						if sources := claudeCitations(v["citations"]); len(sources) > 0 {
+							item.Citations = appendCitation(nil, utf16StringLen(item.Text), sources)
+						}
 						item.Status = "completed"
 					case "thinking":
 						item.Kind = "reasoning"

@@ -87,6 +87,8 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		}
 	})
 	items := map[string]model.Item{}
+	rawText := map[string]string{}
+	citations := codexCitationIndex{}
 	reasoning := map[string]codexReasoning{}
 	subagents := codexSubagents{}
 	emit := func(item model.Item) error {
@@ -188,6 +190,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 						turnID = next
 						stateMu.Unlock()
 						terminal = false
+						citations = codexCitationIndex{}
 						return sink.BindTurn(next)
 					}
 				}
@@ -226,7 +229,8 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			item.ID = id
 			item.Kind = "text"
 			item.Status = "running"
-			item.Text += str(q["delta"])
+			rawText[id] += str(q["delta"])
+			item.Text, item.Citations = resolveCodexCitations(rawText[id], citations, true)
 			return emit(item)
 		case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
 			id, delta := str(q["itemId"]), str(q["delta"])
@@ -274,7 +278,13 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			case "agentMessage":
 				item.Kind = "text"
 				if text, ok := v["text"].(string); ok {
-					item.Text = text
+					rawText[id] = text
+				}
+				if raw, ok := rawText[id]; ok {
+					item.Text, item.Citations = resolveCodexCitations(raw, citations, method != "item/completed")
+				}
+				if method == "item/completed" {
+					delete(rawText, id)
 				}
 			case "commandExecution":
 				item.Kind = "tool"
@@ -294,6 +304,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 				item.Title = str(v["server"]) + " / " + str(v["tool"])
 				item.Text = clip(pretty(v["arguments"]))
 				if v["result"] != nil {
+					citations.addMCPResult(v["result"])
 					item.Text += "\n" + clip(pretty(v["result"]))
 				}
 				if v["error"] != nil {
@@ -442,6 +453,12 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		threadID = in.Session.NativeID
 		stateMu.Unlock()
 		if !in.Recovery.SkipOutputReplay {
+			for _, value := range arr(previous["items"]) {
+				item := obj(value)
+				if item["type"] == "mcpToolCall" && item["result"] != nil {
+					citations.addMCPResult(item["result"])
+				}
+			}
 			for _, value := range arr(previous["items"]) {
 				item := obj(value)
 				if item["type"] == "agentMessage" {

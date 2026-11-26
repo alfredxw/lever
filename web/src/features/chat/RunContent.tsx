@@ -53,6 +53,7 @@ import { WaitingDependencies } from "./WaitingDependencies";
 import { TurnChanges } from "@/features/diff/TurnChanges";
 import { UserMessage } from "./UserMessage";
 import type { OpenChatFile } from "./ChatResponse";
+import { stripCitationMarkers } from "./chatCitations";
 
 export function canEditSentMessage(run: Run) {
   return (
@@ -167,7 +168,7 @@ export function RunMessages({
   });
   const output = run.items
     .filter((item) => item.kind === "text")
-    .map((item) => item.text)
+    .map((item) => stripCitationMarkers(item.text))
     .join("\n\n");
   const pendingRequests = requests.filter(
     (request) => request.runId === run.id,

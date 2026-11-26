@@ -106,6 +106,7 @@ export const SharedTurn = memo(function SharedTurn({
       {message.text && (
         <ChatMarkdown
           text={message.text}
+          citations={message.citations}
           endpoint={`/api${path}/preview`}
           files={files}
         />

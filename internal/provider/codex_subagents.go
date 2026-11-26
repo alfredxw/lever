@@ -61,7 +61,7 @@ func (s codexSubagents) lifecycle(item object, owner string, sink Sink) error {
 			}
 			state := obj(states[id])
 			if status := subagentTerminalStatus(str(state["status"])); status != "" && (agent.item.Status == "running" || agent.item.Status == status) {
-				agent.finish(status, cmp.Or(str(state["message"]), agent.answer))
+				agent.finish(status, cmp.Or(stripCodexCitations(str(state["message"])), agent.answer))
 			}
 			if err := agent.publish(sink); err != nil {
 				return err
@@ -92,7 +92,7 @@ func (s codexSubagents) frame(agent *codexSubagent, method string, params object
 		case "userMessage":
 			agent.task("", contentText(item["content"]))
 		case "agentMessage":
-			message := clip(str(item["text"]))
+			message := clip(stripCodexCitations(str(item["text"])))
 			if message == "" {
 				return nil
 			}

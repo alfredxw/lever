@@ -2249,6 +2249,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "profile.archiveHint": "保留所有对话和配置。",
   "chat.image": "[图片：{{alt}}]",
   "chat.imageUnavailable": "图片无法预览",
+  "chat.citationSources": "参考来源（{{count}}）",
   "chat.reply": "回复话题",
   "chat.topicCreated": "已创建新话题",
   "chat.expandTopic": "在当前对话展开话题",

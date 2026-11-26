@@ -209,6 +209,7 @@ func sharedCodexHistory(ctx context.Context, config model.Provider, thread share
 	}
 	defer rows.Close()
 	page := sharedPage{remaining: limit}
+	turnCitations := map[string]codexCitationIndex{}
 	for rows.Next() {
 		var turn, id string
 		var ms int64
@@ -220,6 +221,7 @@ func sharedCodexHistory(ctx context.Context, config model.Provider, thread share
 		if err != nil {
 			return state, nil, false, err
 		}
+		recordCodexSharedCitations(turnCitations, turn, item)
 		if entry, ok := codexSharedEntry(item, turn, id, sharedTime(ms)); ok && !page.add(entry) {
 			break
 		}
@@ -227,7 +229,7 @@ func sharedCodexHistory(ctx context.Context, config model.Provider, thread share
 	if err := rows.Err(); err != nil {
 		return state, nil, false, err
 	}
-	return state, page.messages(), page.more, nil
+	return state, applyCodexSharedCitations(page.messages(), turnCitations), page.more, nil
 }
 
 func readCodexSharedAPI(ctx context.Context, config model.Provider, thread sharedCodexThread, limit int) (codexSharedState, []model.SharedMessage, bool, error) {
@@ -238,6 +240,7 @@ func readCodexSharedAPI(ctx context.Context, config model.Provider, thread share
 	}
 	defer client.close()
 	page := sharedPage{remaining: limit}
+	turnCitations := map[string]codexCitationIndex{}
 	addTurns := func(turns []any) {
 		if state.turn == "" && len(turns) > 0 {
 			last := obj(turns[0])
@@ -249,10 +252,12 @@ func readCodexSharedAPI(ctx context.Context, config model.Provider, thread share
 		}
 		for _, value := range turns {
 			turn := obj(value)
+			turnID := str(turn["id"])
 			items := arr(turn["items"])
 			for index := len(items) - 1; index >= 0; index-- {
 				item := obj(items[index])
-				if entry, ok := codexSharedEntry(item, str(turn["id"]), str(item["id"]), ""); ok && !page.add(entry) {
+				recordCodexSharedCitations(turnCitations, turnID, item)
+				if entry, ok := codexSharedEntry(item, turnID, str(item["id"]), ""); ok && !page.add(entry) {
 					return
 				}
 			}
@@ -283,7 +288,30 @@ func readCodexSharedAPI(ctx context.Context, config model.Provider, thread share
 		slices.Reverse(turns)
 		addTurns(turns)
 	}
-	return state, page.messages(), page.more, nil
+	return state, applyCodexSharedCitations(page.messages(), turnCitations), page.more, nil
+}
+
+func recordCodexSharedCitations(turns map[string]codexCitationIndex, turnID string, item object) {
+	if !strings.EqualFold(str(item["type"]), "mcptoolcall") || item["result"] == nil {
+		return
+	}
+	index := turns[turnID]
+	if index == nil {
+		index = codexCitationIndex{}
+		turns[turnID] = index
+	}
+	index.addMCPResult(item["result"])
+}
+
+func applyCodexSharedCitations(messages []model.SharedMessage, turns map[string]codexCitationIndex) []model.SharedMessage {
+	for i := range messages {
+		msg := &messages[i]
+		if msg.Role != "assistant" || msg.Kind == "tool" || msg.Kind == "reasoning" {
+			continue
+		}
+		msg.Text, msg.Citations = resolveCodexCitations(msg.Text, turns[msg.TurnID], false)
+	}
+	return messages
 }
 
 func codexLegacySharedTurns(client *nativeClient, id string) ([]any, error) {

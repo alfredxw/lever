@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { defaultRehypePlugins, type Components } from "streamdown";
-import type { Root, Session } from "@/api/types.gen";
+import type { Citation, Item, Root, Session } from "@/api/types.gen";
 import { MessageResponse } from "@/components/ai-elements/message-response";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   absoluteFilePath,
   type FileSelection,
@@ -11,6 +12,13 @@ import {
   type AgentFileSource,
   type HostFileSource,
 } from "@/features/files/fileSource";
+import { ChatCitationsContext, InlineCitation } from "./InlineCitation";
+import {
+  CITATION_SENTINEL_PATTERN,
+  CITATION_SENTINEL_START,
+  insertCitationSentinels,
+  resolveDisplayCitations,
+} from "./chatCitations";
 import {
   chatFileTarget,
   chatHtmlPreview,
@@ -43,6 +51,8 @@ export type ChatFiles = {
 
 export function ChatResponse({
   text,
+  citations,
+  fallbackItems,
   running,
   session,
   agentRoots,
@@ -50,6 +60,8 @@ export function ChatResponse({
   runId,
 }: {
   text: string;
+  citations?: Citation[];
+  fallbackItems?: Item[];
   running: boolean;
   session: Session;
   agentRoots?: Root[];
@@ -86,6 +98,8 @@ export function ChatResponse({
   return (
     <ChatMarkdown
       text={text}
+      citations={citations}
+      fallbackItems={fallbackItems}
       running={running}
       endpoint={`/api/runs/${encodeURIComponent(runId)}/preview`}
       files={files}
@@ -94,6 +108,8 @@ export function ChatResponse({
 }
 
 type MarkdownNode = {
+  type?: string;
+  value?: string;
   tagName?: string;
   properties?: Record<string, unknown>;
   children?: MarkdownNode[];
@@ -133,23 +149,91 @@ function localURLs() {
   }
   return visit;
 }
+function restoreCitations() {
+  function visit(node: MarkdownNode, literal = false) {
+    if (!node.children) return;
+    const next: MarkdownNode[] = [];
+    for (const child of node.children) {
+      if (child.type === "element") {
+        visit(
+          child,
+          literal ||
+            child.tagName === "code" ||
+            child.tagName === "pre" ||
+            child.tagName === "a",
+        );
+        next.push(child);
+        continue;
+      }
+      if (
+        child.type !== "text" ||
+        typeof child.value !== "string" ||
+        !child.value.includes(CITATION_SENTINEL_START)
+      ) {
+        next.push(child);
+        continue;
+      }
+      if (literal) {
+        child.value = child.value.replace(CITATION_SENTINEL_PATTERN, "");
+        next.push(child);
+        continue;
+      }
+      let offset = 0;
+      for (const match of child.value.matchAll(CITATION_SENTINEL_PATTERN)) {
+        const start = match.index ?? 0;
+        if (start > offset) {
+          next.push({ type: "text", value: child.value.slice(offset, start) });
+        }
+        next.push({
+          type: "element",
+          tagName: "lever-citation",
+          properties: { index: Number(match[1]) },
+          children: [],
+        });
+        offset = start + match[0].length;
+      }
+      if (offset === 0) {
+        next.push(child);
+      } else if (offset < child.value.length) {
+        next.push({ type: "text", value: child.value.slice(offset) });
+      }
+    }
+    node.children = next;
+  }
+  return (tree: MarkdownNode) => visit(tree);
+}
+
 const rehypePlugins = [
   defaultRehypePlugins.raw,
   localURLs,
   defaultRehypePlugins.sanitize,
+  restoreCitations,
 ];
 
 export function ChatMarkdown({
   text,
+  citations,
+  fallbackItems,
   running = false,
   endpoint,
   files,
 }: {
   text: string;
+  citations?: Citation[];
+  fallbackItems?: Item[];
   running?: boolean;
   endpoint: string;
   files?: ChatFiles;
 }) {
+  const { markdown, citations: activeCitations } = useMemo(() => {
+    const resolved = resolveDisplayCitations(
+      text,
+      citations,
+      fallbackItems,
+      running,
+    );
+    return insertCitationSentinels(resolved.text, resolved.citations);
+  }, [text, citations, fallbackItems, running]);
   const components = useMemo<Components>(() => {
     const targetFor = (url?: string) =>
       chatFileTarget(url, window.location.origin);
@@ -229,20 +313,27 @@ export function ChatMarkdown({
           <span title={target?.path}>{children}</span>
         );
       },
+      "lever-citation": ({ node }) => (
+        <InlineCitation index={Number(node?.properties?.index)} />
+      ),
     };
   }, [endpoint, files]);
   return (
     <ChatPreviewEndpoint.Provider value={endpoint}>
-      <InlineHtmlPreview>
-        <MessageResponse
-          className="chat-response"
-          text={text}
-          running={running}
-          components={components}
-          rehypePlugins={rehypePlugins}
-          BlockComponent={VisualizationBlock}
-        />
-      </InlineHtmlPreview>
+      <ChatCitationsContext.Provider value={activeCitations}>
+        <TooltipProvider delayDuration={300}>
+          <InlineHtmlPreview>
+            <MessageResponse
+              className="chat-response"
+              text={markdown}
+              running={running}
+              components={components}
+              rehypePlugins={rehypePlugins}
+              BlockComponent={VisualizationBlock}
+            />
+          </InlineHtmlPreview>
+        </TooltipProvider>
+      </ChatCitationsContext.Provider>
     </ChatPreviewEndpoint.Provider>
   );
 }

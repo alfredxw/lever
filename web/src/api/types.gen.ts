@@ -1040,6 +1040,18 @@ export interface Item {
   exitCode?: number /* int */;
   message?: Message;
   subagent?: SubagentActivity;
+  citations?: Citation[];
+}
+/**
+ * Citation anchors one or more web sources at a UTF-16 offset in Item.Text.
+ */
+export interface Citation {
+  offset: number /* int */;
+  sources: CitationSource[];
+}
+export interface CitationSource {
+  title?: string;
+  url: string;
 }
 export const ToolActionCommand = "command";
 export const ToolActionEdit = "edit";

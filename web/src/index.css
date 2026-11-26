@@ -1707,6 +1707,49 @@ button:focus-visible,
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.message-body .chat-citation,
+.response-table .chat-citation,
+.chat-citation {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin-inline-start: 4px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 9999px;
+  background: var(--muted);
+  color: color-mix(in oklch, var(--foreground) 72%, transparent);
+  font-size: 0.785em;
+  font-weight: 500;
+  line-height: 1.35;
+  vertical-align: 0.08em;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
+}
+.message-body .chat-citation:hover,
+.response-table .chat-citation:hover,
+.chat-citation:hover {
+  background: var(--control-hover);
+  color: var(--foreground);
+}
+.message-body .chat-citation:focus-visible,
+.response-table .chat-citation:focus-visible,
+.chat-citation:focus-visible {
+  background: var(--control-focus);
+  color: var(--foreground);
+  outline: none;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-citation {
+    transition: none;
+  }
+}
 /* Center wide tables across the pane while prose and small tables retain the
    reading column. Container units follow each Chat/Topic pane, not the window. */
 .chat-response {

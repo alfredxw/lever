@@ -129,6 +129,8 @@ export function useRunResponse({
         key={part.id}
         runId={run.id}
         text={part.text}
+        citations={part.citations}
+        fallbackItems={run.items}
         running={isWorking(run.status) && part.status === "running"}
         session={session}
         agentRoots={agent?.profile.roots}

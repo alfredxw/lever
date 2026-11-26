@@ -93,9 +93,9 @@ type Scope struct {
 // Project is a named, shareable Scope (directories and worktree setup) that
 // multiple Agents and Sessions can reference.
 type Project struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Scope                           `tstype:",extends"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Scope         `tstype:",extends"`
 	WorktreeSetup map[string]string `json:"worktreeSetup,omitempty"` // Keyed by the Git common directory.
 	CreatedAt     string            `json:"createdAt"`
 	UpdatedAt     string            `json:"updatedAt"`
@@ -104,7 +104,7 @@ type Project struct {
 type Profile struct {
 	ProjectID                string `json:"projectId,omitempty"`
 	Description              string `json:"description,omitempty"`
-	Scope                           `tstype:",extends"`
+	Scope                    `tstype:",extends"`
 	Instructions             string            `json:"instructions"`
 	Provider                 string            `json:"provider"`
 	Model                    string            `json:"model"`
@@ -392,6 +392,18 @@ type Item struct {
 	ExitCode   *int              `json:"exitCode,omitempty"`
 	Message    *Message          `json:"message,omitempty"`
 	Subagent   *SubagentActivity `json:"subagent,omitempty"`
+	Citations  []Citation        `json:"citations,omitempty"`
+}
+
+// Citation anchors one or more web sources at a UTF-16 offset in Item.Text.
+type Citation struct {
+	Offset  int              `json:"offset"`
+	Sources []CitationSource `json:"sources"`
+}
+
+type CitationSource struct {
+	Title string `json:"title,omitempty"`
+	URL   string `json:"url"`
 }
 
 type ToolAction string
@@ -470,23 +482,23 @@ type Run struct {
 	FinishedAt              string         `json:"finishedAt,omitempty"`
 	// A nil native turn ID permits lookup by the original client message ID.
 	// An empty ID records a continuation whose delivery has yet to be confirmed.
-	NativeTurnID        *string         `json:"nativeTurnId,omitempty"`
-	CanPause            bool            `json:"canPause,omitempty"`
-	CanSteer            bool            `json:"canSteer,omitempty"`
-	SteerPending        bool            `json:"steerPending,omitempty"`
-	PauseRequested      bool            `json:"pauseRequested,omitempty"`
-	Continued           bool            `json:"continued,omitempty"`
-	ResumeAfterShutdown bool            `json:"resumeAfterShutdown,omitempty"`
-	Operation           string          `json:"operation,omitempty"`
-	Delivery            string          `json:"delivery,omitempty"`
-	SteerRunID          string          `json:"steerRunId,omitempty"`
-	AfterRunIDs         []string        `json:"afterRunIds,omitempty"`
-	WaitingOn           []RunDependency `json:"waitingOn,omitempty"`
-	ScopePaths          []string        `json:"scopePaths,omitempty"`
-	TurnDiff           *TurnPatch          `json:"turnDiff,omitempty"`
-	Changes            []RunChanges        `json:"changes,omitempty"`
-	Channel            *ChannelTurn        `json:"channel,omitempty"`
-	DelegationReceipts []DelegationReceipt `json:"delegationReceipts,omitempty"`
+	NativeTurnID        *string             `json:"nativeTurnId,omitempty"`
+	CanPause            bool                `json:"canPause,omitempty"`
+	CanSteer            bool                `json:"canSteer,omitempty"`
+	SteerPending        bool                `json:"steerPending,omitempty"`
+	PauseRequested      bool                `json:"pauseRequested,omitempty"`
+	Continued           bool                `json:"continued,omitempty"`
+	ResumeAfterShutdown bool                `json:"resumeAfterShutdown,omitempty"`
+	Operation           string              `json:"operation,omitempty"`
+	Delivery            string              `json:"delivery,omitempty"`
+	SteerRunID          string              `json:"steerRunId,omitempty"`
+	AfterRunIDs         []string            `json:"afterRunIds,omitempty"`
+	WaitingOn           []RunDependency     `json:"waitingOn,omitempty"`
+	ScopePaths          []string            `json:"scopePaths,omitempty"`
+	TurnDiff            *TurnPatch          `json:"turnDiff,omitempty"`
+	Changes             []RunChanges        `json:"changes,omitempty"`
+	Channel             *ChannelTurn        `json:"channel,omitempty"`
+	DelegationReceipts  []DelegationReceipt `json:"delegationReceipts,omitempty"`
 }
 
 // RunDependency is the live status projection of an upstream run this turn waits on.

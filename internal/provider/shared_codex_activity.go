@@ -59,7 +59,7 @@ func sharedCodexSummaries(ctx context.Context, dir string, threads []sharedCodex
 		var id string
 		var state codexSharedState
 		if rows.Scan(&id, &state.turn, &state.status, &state.startedAt, &state.preview) == nil {
-			state.preview = sharedSnippet(state.preview)
+			state.preview = sharedSnippet(stripCodexCitations(state.preview))
 			states[id] = state
 		}
 	}
@@ -129,9 +129,9 @@ func sharedCodexRolloutPreview(ctx context.Context, path string) string {
 		payload := event.Payload
 		switch payload.Type {
 		case "user_message", "agent_message":
-			preview = sharedSnippet(payload.Message)
+			preview = sharedSnippet(stripCodexCitations(payload.Message))
 		case "task_complete", "turn_complete":
-			preview = sharedSnippet(payload.LastAgentMessage)
+			preview = sharedSnippet(stripCodexCitations(payload.LastAgentMessage))
 		case "item_completed":
 			item := payload.Item
 			if item.Type != "UserMessage" && item.Type != "AgentMessage" {
@@ -143,7 +143,7 @@ func sharedCodexRolloutPreview(ctx context.Context, path string) string {
 					message.WriteString(part.Text)
 				}
 			}
-			preview = sharedSnippet(message.String())
+			preview = sharedSnippet(stripCodexCitations(message.String()))
 		case "thread_rolled_back":
 			return true
 		}

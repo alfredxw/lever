@@ -2359,6 +2359,7 @@ export const enUS = {
   "profile.archiveHint": "Keeps all conversations and settings.",
   "chat.image": "[Image: {{alt}}]",
   "chat.imageUnavailable": "Image unavailable",
+  "chat.citationSources": "Sources ({{count}})",
   "chat.reply": "Reply to topic",
   "chat.topicCreated": "Topic created",
   "chat.expandTopic": "Expand topic in this chat",

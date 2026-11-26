@@ -8,6 +8,7 @@ import {
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { ChatResponse, type OpenChatFile } from "./ChatResponse";
+import { stripCitationMarkers } from "./chatCitations";
 import { MessageActions, type MessageActionHandlers } from "./MessageActions";
 import { UserMessage } from "./UserMessage";
 
@@ -28,7 +29,7 @@ export function TopicSourceContent({
   const { message, items } = source;
   const output = items
     .filter((item) => item.kind === "text")
-    .map((item) => item.text)
+    .map((item) => stripCitationMarkers(item.text))
     .join("\n\n");
   const userMessage = (entry: TopicSource["message"]) => (
     <UserMessage
@@ -64,6 +65,7 @@ export function TopicSourceContent({
                     key={item.id}
                     runId={message.id}
                     text={item.text}
+                    citations={item.citations}
                     running={false}
                     session={session}
                     onOpenFile={onOpenFile}
