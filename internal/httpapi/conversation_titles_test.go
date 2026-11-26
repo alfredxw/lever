@@ -271,3 +271,93 @@ func TestAntigravityNativeConversationTitles(t *testing.T) {
 		})
 	}
 }
+
+func TestAntigravityNativeConversationTitlesToggle(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		open func(string) (*app.App, error)
+	}{
+		{"embedded", app.Open},
+		{"worker", app.OpenServer},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			f := openFixture(t, mode.open).withLocalProviders()
+
+			var providers []model.ProviderInfo
+			f.request("GET", "/providers", nil, 200, &providers)
+			findProvider := func(id string) model.Provider {
+				for _, item := range providers {
+					if item.ID == id {
+						return item.Provider
+					}
+				}
+				t.Fatalf("provider %q not found", id)
+				return model.Provider{}
+			}
+
+			// Non-ACP runtimes reject nativeTitles configuration; ACP runtimes accept it.
+			for _, id := range []string{"codex", "claude", "pi"} {
+				p := findProvider(id)
+				p.NativeTitles = new(false)
+				f.request("POST", "/providers", p, 400, nil)
+			}
+			dsh := findProvider("dsh")
+			dsh.NativeTitles = new(false)
+			f.request("POST", "/providers", dsh, 200, &dsh)
+			if dsh.UsesNativeTitles() {
+				t.Fatalf("acp provider nativeTitles did not save as disabled: %+v", dsh)
+			}
+
+			// Disabling nativeTitles on Antigravity is a mutable preference (no 409)
+			// and keeps the opening-message placeholder for both live and resume updates.
+			agy := findProvider("antigravity")
+			agy.NativeTitles = new(false)
+			f.request("POST", "/providers", agy, 200, &agy)
+			if agy.UsesNativeTitles() {
+				t.Fatalf("antigravity nativeTitles did not save as disabled: %+v", agy)
+			}
+
+			agent := f.acpAgent(model.Provider{ID: "antigravity", Name: "Antigravity"})
+			chat := f.chat(agent)
+			first := f.wait(f.send(chat.ID, "main", "", "Title fixture: English Summary").ID, "completed")
+			var chatView model.ChatView
+			f.request("GET", "/chats/"+chat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != store.ChatTitle(first) {
+				t.Fatalf("disabled native titles overwrote chat title: got %q, want %q", chatView.Chat.Title, store.ChatTitle(first))
+			}
+
+			topic := f.wait(f.send(chat.ID, "topic", "", "Title fixture: English Topic").ID, "completed")
+			var sessionView model.SessionView
+			f.request("GET", "/sessions/"+topic.SessionID, nil, 200, &sessionView)
+			if sessionView.Session.Title != "" {
+				t.Fatalf("disabled native titles overwrote topic title: %q", sessionView.Session.Title)
+			}
+
+			resumedChat := f.chat(agent)
+			resumedFirst := f.wait(f.send(resumedChat.ID, "main", "", "Resume title fixture: English Resume").ID, "completed")
+			followUpDisabled := f.wait(f.send(resumedChat.ID, "main", "", "Continue while disabled").ID, "completed")
+			if followUpDisabled.Handoff {
+				t.Fatalf("unexpected handoff while disabled: %+v", followUpDisabled)
+			}
+			f.request("GET", "/chats/"+resumedChat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != store.ChatTitle(resumedFirst) {
+				t.Fatalf("disabled native titles backfilled on resume: got %q, want %q", chatView.Chat.Title, store.ChatTitle(resumedFirst))
+			}
+
+			// Re-enabling nativeTitles preserves existing sessions and resumes applying native titles.
+			agy.NativeTitles = nil
+			f.request("POST", "/providers", agy, 200, &agy)
+			if !agy.UsesNativeTitles() {
+				t.Fatalf("antigravity nativeTitles did not re-enable: %+v", agy)
+			}
+			followUpEnabled := f.wait(f.send(resumedChat.ID, "main", "", "Continue after re-enabling").ID, "completed")
+			if followUpEnabled.Handoff {
+				t.Fatalf("toggling nativeTitles broke native session binding: %+v", followUpEnabled)
+			}
+			f.request("GET", "/chats/"+resumedChat.ID, nil, 200, &chatView)
+			if chatView.Chat.Title != "English Resume" {
+				t.Fatalf("re-enabled native titles did not backfill on resume: %q", chatView.Chat.Title)
+			}
+		})
+	}
+}

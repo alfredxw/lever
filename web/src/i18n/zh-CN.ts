@@ -1446,6 +1446,9 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "providers.autoCompact": "自动压缩阈值",
   "providers.autoCompactHint":
     "可填 100,000 至 1,000,000 个 token。留空沿用 Claude 的默认值。",
+  "providers.nativeTitles": "原生会话标题",
+  "providers.nativeTitlesHint":
+    "使用此运行时上报的会话摘要作为标题。关闭后保留首条消息作为标题。",
   "providers.nameRequired": "请输入连接名称。",
   "providers.invalidAutoCompact":
     "请输入 100,000 至 1,000,000 之间的整数，或留空。",

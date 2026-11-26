@@ -219,12 +219,18 @@ func (e *execution) Usage(windows []model.UsageWindow) error {
 
 func (e *execution) Title(title string) error {
 	e.mu.Lock()
-	run, providerID := e.run, e.provider.ID
+	run, providerConfig := e.run, e.provider
 	e.mu.Unlock()
 	ctx, cancel := context.WithTimeout(e.app.ctx, 2*time.Second)
 	defer cancel()
+	if current, err := store.Get[model.Provider](ctx, e.app.Store.DB, "SELECT data FROM providers WHERE id=?", providerConfig.ID); err == nil {
+		providerConfig = current
+	}
+	if !providerConfig.UsesNativeTitles() {
+		return nil
+	}
 	if err := e.app.Store.SaveSessionTitle(ctx, run, title); err != nil && e.app.ctx.Err() == nil {
-		slog.Debug("conversation title unavailable", "session", run.SessionID, "provider", providerID, "error", err)
+		slog.Debug("conversation title unavailable", "session", run.SessionID, "provider", providerConfig.ID, "error", err)
 	}
 	return nil
 }

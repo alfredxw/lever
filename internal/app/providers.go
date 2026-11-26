@@ -182,6 +182,9 @@ func validateProvider(config model.Provider) error {
 	if config.IdleCompaction != "" && !slices.Contains(definition[index].IdleCompactionModes, config.IdleCompaction) {
 		return invalid("Unsupported idle compaction setting")
 	}
+	if config.NativeTitles != nil && !definition[index].NativeTitles {
+		return invalid("This runtime does not support native session titles")
+	}
 	if config.AuthMethod != "" && (!slices.Contains(definition[index].AuthMethods, config.AuthMethod) || provider.IsAntigravityCLI(config, config.Command)) {
 		return invalid("Choose an authentication method supported by this runtime")
 	}

@@ -54,6 +54,7 @@ export const providerConfiguration = (p: ProviderInfo): Provider => ({
   shadowHome: p.shadowHome,
   autoCompactWindow: p.autoCompactWindow,
   idleCompaction: p.idleCompaction,
+  nativeTitles: p.nativeTitles,
   authMethod: p.authMethod,
   gcpProject: p.gcpProject,
   gcpLocation: p.gcpLocation,

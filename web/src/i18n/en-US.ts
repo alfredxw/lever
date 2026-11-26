@@ -1510,6 +1510,9 @@ export const enUS = {
   "providers.autoCompact": "Auto-compact after",
   "providers.autoCompactHint":
     "100,000–1,000,000 tokens. Leave empty to use Claude’s default.",
+  "providers.nativeTitles": "Native session titles",
+  "providers.nativeTitlesHint":
+    "Use session summaries reported by this runtime as conversation titles. When off, keep the opening message.",
   "providers.nameRequired": "Enter a connection name.",
   "providers.invalidAutoCompact":
     "Enter a whole number between 100,000 and 1,000,000, or leave blank.",

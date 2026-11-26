@@ -751,3 +751,83 @@ test("feishu add bot dialog defaults to QR registration with direct configurable
     plugins.getByRole("tab", { name: /直配测试机器人/ }),
   ).toBeVisible();
 });
+
+test("ACP runtimes toggle native session titles with immediate auto-save", async ({
+  page,
+}) => {
+  const { url } = JSON.parse(
+    readFileSync(
+      process.env.LEVER_TEST_CONTEXT ?? "../output/e2e/context.json",
+      "utf8",
+    ),
+  );
+  async function openRuntimes() {
+    await page.goto(url);
+    await page
+      .getByRole("navigation", { name: "主导航" })
+      .getByRole("button", { name: "设置", exact: true })
+      .click();
+    await page
+      .getByRole("navigation", { name: "设置分类" })
+      .getByRole("button", { name: "运行时", exact: true })
+      .click();
+    const panel = page.getByRole("region", { name: "运行时", exact: true });
+    const details = page.getByRole("region", { name: "运行时详情" });
+    const connected = panel.getByRole("region", { name: "已接入" });
+    return { details, connected };
+  }
+
+  const { details, connected } = await openRuntimes();
+  await connected.getByRole("button", { name: /^Codex/ }).click();
+  await expect(
+    details.getByRole("heading", { name: "Codex", exact: true }),
+  ).toBeVisible();
+  await expect(
+    details.getByRole("switch", { name: "原生会话标题", exact: true }),
+  ).toHaveCount(0);
+
+  await connected.getByRole("button", { name: /^DeepSeek Harness/ }).click();
+  await expect(
+    details.getByRole("switch", { name: "原生会话标题", exact: true }),
+  ).toBeChecked();
+
+  await connected.getByRole("button", { name: /^Antigravity/ }).click();
+  const toggle = details.getByRole("switch", {
+    name: "原生会话标题",
+    exact: true,
+  });
+  await expect(toggle).toBeChecked();
+
+  const disabledSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/providers") &&
+      response.request().postDataJSON()?.id === "antigravity" &&
+      response.request().postDataJSON()?.nativeTitles === false,
+  );
+  await toggle.click();
+  expect((await disabledSave).ok()).toBe(true);
+  await expect(toggle).not.toBeChecked();
+
+  // Persists across reload, then restores back to enabled.
+  const reloaded = await openRuntimes();
+  await reloaded.connected
+    .getByRole("button", { name: /^Antigravity/ })
+    .click();
+  const reloadedToggle = reloaded.details.getByRole("switch", {
+    name: "原生会话标题",
+    exact: true,
+  });
+  await expect(reloadedToggle).not.toBeChecked();
+
+  const enabledSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/providers") &&
+      response.request().postDataJSON()?.id === "antigravity" &&
+      response.request().postDataJSON()?.nativeTitles === undefined,
+  );
+  await reloadedToggle.click();
+  expect((await enabledSave).ok()).toBe(true);
+  await expect(reloadedToggle).toBeChecked();
+});

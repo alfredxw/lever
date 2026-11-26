@@ -258,11 +258,16 @@ type Provider struct {
 	ShadowHome        string   `json:"shadowHome,omitempty"`
 	AutoCompactWindow int      `json:"autoCompactWindow,omitempty"`
 	IdleCompaction    string   `json:"idleCompaction,omitempty"`
+	NativeTitles      *bool    `json:"nativeTitles,omitempty"`
 	AuthMethod        string   `json:"authMethod,omitempty"`
 	GCPProject        string   `json:"gcpProject,omitempty"`
 	GCPLocation       string   `json:"gcpLocation,omitempty"`
 	ManagedProfile    bool     `json:"managedProfile,omitempty"`
 	HiddenModels      []string `json:"hiddenModels,omitempty"`
+}
+
+func (p Provider) UsesNativeTitles() bool {
+	return p.NativeTitles == nil || *p.NativeTitles
 }
 
 type ProviderType struct {
@@ -273,6 +278,7 @@ type ProviderType struct {
 	ShadowHome          bool     `json:"shadowHome,omitempty"`
 	AutoCompactWindow   bool     `json:"autoCompactWindow,omitempty"`
 	IdleCompactionModes []string `json:"idleCompactionModes,omitempty"`
+	NativeTitles        bool     `json:"nativeTitles,omitempty"`
 	AuthMethods         []string `json:"authMethods,omitempty"`
 }
 

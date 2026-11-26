@@ -1027,6 +1027,7 @@ export interface Provider {
   shadowHome?: string;
   autoCompactWindow?: number /* int */;
   idleCompaction?: string;
+  nativeTitles?: boolean;
   authMethod?: string;
   gcpProject?: string;
   gcpLocation?: string;
@@ -1041,6 +1042,7 @@ export interface ProviderType {
   shadowHome?: boolean;
   autoCompactWindow?: boolean;
   idleCompactionModes?: string[];
+  nativeTitles?: boolean;
   authMethods?: string[];
 }
 /**

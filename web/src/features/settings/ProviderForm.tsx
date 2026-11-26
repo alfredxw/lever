@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { providerConfiguration } from "@/features/runtime/connections";
 import { providersQuery } from "@/features/runtime/queries";
 import { useAutoSave } from "@/hooks/useAutoSave";
@@ -56,6 +57,7 @@ type MutablePatch = {
   name: string;
   autoCompactWindow?: number;
   idleCompaction?: string;
+  nativeTitles?: boolean;
 };
 
 function parseAutoCompact(raw: string): { value?: number; valid: boolean } {
@@ -72,6 +74,7 @@ function mutableSignature(patch: MutablePatch) {
     patch.name.trim(),
     patch.autoCompactWindow ?? 0,
     patch.idleCompaction ?? "",
+    patch.nativeTitles !== false,
   ]);
 }
 
@@ -132,6 +135,9 @@ function ConnectionForm({
     existing?.autoCompactWindow?.toString() ?? "",
   );
   const [idle, setIdle] = useState(existing?.idleCompaction || "default");
+  const [nativeTitles, setNativeTitles] = useState(
+    existing?.nativeTitles !== false,
+  );
   const [command, setCommand] = useState(
     existing?.command ?? item.command ?? "",
   );
@@ -200,6 +206,7 @@ function ConnectionForm({
         name: existing.name,
         autoCompactWindow: existing.autoCompactWindow,
         idleCompaction: existing.idleCompaction,
+        nativeTitles: existing.nativeTitles,
       })
     : undefined;
   const prevExistingSig = useRef(existingMutableSig);
@@ -217,6 +224,7 @@ function ConnectionForm({
         name: saved.name,
         autoCompactWindow: saved.autoCompactWindow,
         idleCompaction: saved.idleCompaction,
+        nativeTitles: saved.nativeTitles,
       });
       if (sig !== prevExistingSig.current) pendingOwnEchoes.current.push(sig);
       queryClient.setQueryData<ProviderInfo[]>(
@@ -229,6 +237,7 @@ function ConnectionForm({
                   name: saved.name,
                   autoCompactWindow: saved.autoCompactWindow,
                   idleCompaction: saved.idleCompaction,
+                  nativeTitles: saved.nativeTitles,
                 }
               : row,
           ),
@@ -252,6 +261,7 @@ function ConnectionForm({
       setName(existing.name);
       setCompact(existing.autoCompactWindow?.toString() ?? "");
       setIdle(existing.idleCompaction || "default");
+      setNativeTitles(existing.nativeTitles !== false);
     }
   }, [
     existing,
@@ -268,7 +278,7 @@ function ConnectionForm({
     if (copy) {
       autoSave.cancelPending();
     } else if (prevCopy.current) {
-      scheduleMutable({ name, compact, idle }, "debounced");
+      scheduleMutable({ name, compact, idle, nativeTitles }, "debounced");
     }
     prevCopy.current = copy;
   });
@@ -280,7 +290,12 @@ function ConnectionForm({
   const compactInvalid = !!existing && !copy && !parsedCompact.valid;
 
   function scheduleMutable(
-    next: { name: string; compact: string; idle: string },
+    next: {
+      name: string;
+      compact: string;
+      idle: string;
+      nativeTitles: boolean;
+    },
     mode: AutoSaveMode,
   ) {
     if (!existing || copy) return;
@@ -296,6 +311,9 @@ function ConnectionForm({
       name: trimmedName,
       autoCompactWindow: compactResult.value,
       idleCompaction: next.idle === "default" ? undefined : next.idle,
+      ...(definition?.nativeTitles
+        ? { nativeTitles: next.nativeTitles ? undefined : false }
+        : {}),
     };
     autoSave.schedule(patch, mutableSignature(patch), mode);
   }
@@ -321,6 +339,7 @@ function ConnectionForm({
     setName(existing.name);
     setCompact(existing.autoCompactWindow?.toString() ?? "");
     setIdle(existing.idleCompaction || "default");
+    setNativeTitles(existing.nativeTitles !== false);
     save.reset();
     autoSave.cancelPending();
   }
@@ -341,6 +360,8 @@ function ConnectionForm({
         shadowHome: shadowHome || undefined,
         autoCompactWindow: Number(compact) || undefined,
         idleCompaction: idle === "default" ? undefined : idle,
+        nativeTitles:
+          definition?.nativeTitles && !nativeTitles ? false : undefined,
         authMethod: authMethod || undefined,
         apiKey: initialKey ? apiKey.trim() || undefined : undefined,
         gcpProject: gcpProject || undefined,
@@ -392,7 +413,10 @@ function ConnectionForm({
               onChange={(e) => {
                 const nextName = e.target.value;
                 setName(nextName);
-                scheduleMutable({ name: nextName, compact, idle }, "debounced");
+                scheduleMutable(
+                  { name: nextName, compact, idle, nativeTitles },
+                  "debounced",
+                );
               }}
               onBlur={() => autoSave.flush()}
               onKeyDown={flushOnEnter}
@@ -537,7 +561,7 @@ function ConnectionForm({
                   const nextCompact = e.target.value;
                   setCompact(nextCompact);
                   scheduleMutable(
-                    { name, compact: nextCompact, idle },
+                    { name, compact: nextCompact, idle, nativeTitles },
                     "debounced",
                   );
                 }}
@@ -559,13 +583,37 @@ function ConnectionForm({
             value={idle}
             onChange={(nextIdle) => {
               setIdle(nextIdle);
-              scheduleMutable({ name, compact, idle: nextIdle }, "immediate");
+              scheduleMutable(
+                { name, compact, idle: nextIdle, nativeTitles },
+                "immediate",
+              );
             }}
             disabled={disabled}
             options={["default", ...definition.idleCompactionModes].map(
               (value) => ({ value, label: t("providers.idle." + value) }),
             )}
           />
+        )}
+        {definition?.nativeTitles && (
+          <SettingsRow
+            id={id + "-native-titles"}
+            title={t("providers.nativeTitles")}
+            description={t("providers.nativeTitlesHint")}
+          >
+            <Switch
+              id={id + "-native-titles"}
+              aria-describedby={id + "-native-titles-description"}
+              checked={nativeTitles}
+              disabled={disabled}
+              onCheckedChange={(nextNativeTitles) => {
+                setNativeTitles(nextNativeTitles);
+                scheduleMutable(
+                  { name, compact, idle, nativeTitles: nextNativeTitles },
+                  "immediate",
+                );
+              }}
+            />
+          </SettingsRow>
         )}
         {managedAuth &&
           choice(

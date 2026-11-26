@@ -347,3 +347,40 @@ func TestACPSessionInfoUpdateTitles(t *testing.T) {
 	default:
 	}
 }
+
+func TestACPSessionInfoUpdateTitlesDisabled(t *testing.T) {
+	rt, sink := newTestACPRuntime("/workspace", true)
+	rt.provider.NativeTitles = new(false)
+	rt.session = "sess-1"
+
+	sendUpdate := func(payload map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, rpcErr := rt.handle(context.Background(), "session/update", raw); rpcErr != nil {
+			t.Fatalf("handle session/update: %+v", rpcErr)
+		}
+	}
+
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "English Summary"},
+	})
+	if len(rt.titles) != 0 || len(sink.titles) != 0 {
+		t.Fatalf("disabled native titles buffered or published pre-active title: titles=%+v sink=%v", rt.titles, sink.titles)
+	}
+
+	rt.active = true
+	sendUpdate(map[string]any{
+		"sessionId": "sess-1",
+		"update":    map[string]any{"sessionUpdate": "session_info_update", "title": "Another English Summary"},
+	})
+	if err := rt.publishTitle("Direct Title"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.titles) != 0 || len(sink.titles) != 0 {
+		t.Fatalf("disabled native titles published live title: titles=%+v sink=%v", rt.titles, sink.titles)
+	}
+}

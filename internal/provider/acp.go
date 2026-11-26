@@ -915,6 +915,9 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 			return nil, nil
 		}
 		if u := update.Update.SessionInfoUpdate; u != nil {
+			if !c.provider.UsesNativeTitles() {
+				return nil, nil
+			}
 			if c.session != "" && update.SessionId != c.session {
 				return nil, nil
 			}
@@ -970,7 +973,7 @@ func (c *acpRuntime) publishCommands(commands []model.NativeCommand) error {
 // publishTitle forwards a session summary title once per distinct value.
 // The caller holds c.mu.
 func (c *acpRuntime) publishTitle(title string) error {
-	if title == "" || c.sink == nil || c.publishedTitle == title {
+	if title == "" || c.sink == nil || c.publishedTitle == title || !c.provider.UsesNativeTitles() {
 		return nil
 	}
 	if err := c.sink.Title(title); err != nil {
