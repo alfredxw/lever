@@ -1790,7 +1790,10 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "agents.defaultAvatar": "恢复默认头像",
   "agents.openChat": "打开 {{name}} 的对话",
   "agents.openFiles": "打开 {{name}} 的文件",
+  "agents.openTerminal": "打开 {{name}} 的终端",
   "agents.openProfile": "打开 {{name}} 的配置",
+  "agents.moreActions": "{{name}} 的更多操作",
+  "agents.chat": "对话",
   "agents.pending": "待处理",
   "agents.working": "工作中",
   "agents.workingCount": "{{count}} 个任务运行中",
@@ -2003,6 +2006,11 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "settings.auth": "使用 CLI 已有登录状态；首次请求时由运行时验证。",
   "settings.dataDir": "数据目录",
   "settings.appearance": "外观",
+  "settings.agentListLayout": "Agent 列表样式",
+  "settings.agentListLayoutDescription":
+    "单行展示更紧凑，两行展示在第二行常驻常用操作。",
+  "settings.agentListLayout.single": "单行",
+  "settings.agentListLayout.two-line": "两行",
   "settings.agentActivity": "Agent 活动会话默认展开",
   "settings.agentActivityDescription":
     "在 Agent 下展示进行中和未读的对话 / 话题。",

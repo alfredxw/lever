@@ -670,6 +670,26 @@ button:focus-visible,
 .agent-group > .agent-contact {
   gap: 8px;
   padding: 4px 6px;
+  border-radius: calc(var(--radius) + 1px);
+}
+.agent-group > .agent-contact[data-layout="single"] {
+  min-height: 36px;
+  gap: 7px;
+  margin-bottom: 2px;
+}
+.agent-group > .agent-contact[data-layout="single"] .agent-avatar {
+  --avatar-size: 24px;
+  --avatar-text-size: 10px;
+}
+.agent-group
+  > .agent-contact[data-layout="single"]
+  .agent-avatar[data-kind="lucide"]
+  svg {
+  width: 14px;
+  height: 14px;
+}
+.agent-group > .agent-contact[data-layout="two-line"] {
+  padding: 6px;
   border-radius: calc(var(--radius) + 2px);
 }
 .agent-group.dragging {
@@ -866,18 +886,35 @@ button:focus-visible,
   }
 }
 .agent-contact-content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 4px;
+  display: flex;
   flex: 1;
   min-width: 0;
 }
+.agent-contact[data-layout="single"] .agent-contact-content {
+  position: relative;
+  align-items: center;
+  gap: 4px;
+}
+.agent-contact[data-layout="two-line"] .agent-contact-content {
+  flex-direction: column;
+  gap: 3px;
+}
+.agent-contact-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 20px;
+}
 .agent-select {
+  flex: 1;
   min-width: 0;
   min-height: 24px;
   text-align: left;
   border-radius: 4px;
+}
+.agent-contact[data-layout="two-line"] .agent-select {
+  min-height: 20px;
 }
 .agent-select:focus-visible {
   background: var(--control-focus);
@@ -895,9 +932,77 @@ button:focus-visible,
 .agent-profile-trigger:focus-visible .agent-avatar::after {
   opacity: 0.12;
 }
+.agent-contact-tail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
 .agent-quick-actions {
   display: flex;
+  align-items: center;
   gap: 1px;
+}
+.agent-contact[data-layout="single"] .agent-quick-actions {
+  transition:
+    opacity 130ms ease-out,
+    translate 130ms ease-out;
+}
+.agent-contact[data-layout="single"] .agent-contact-status {
+  transition: opacity 120ms ease-out;
+}
+@media (hover: hover) {
+  .agent-contact[data-layout="single"][data-has-status="true"]:not(
+      :hover,
+      :has(:focus-visible)
+    )
+    .agent-quick-actions,
+  .agent-group.dragging
+    > .agent-contact[data-layout="single"][data-has-status="true"]
+    .agent-quick-actions {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 22px;
+    opacity: 0;
+    translate: 3px 0;
+    pointer-events: none;
+  }
+  .agent-group:not(.dragging)
+    > .agent-contact[data-layout="single"][data-has-status="true"]:is(
+      :hover,
+      :has(:focus-visible)
+    )
+    .agent-contact-status {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 22px;
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+@media (hover: none) {
+  .agent-contact[data-layout="single"][data-has-status="true"]:not(
+      .selected,
+      :has(:focus-visible)
+    )
+    .agent-quick-actions {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 22px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .agent-contact[data-layout="single"][data-has-status="true"]:is(
+      .selected,
+      :has(:focus-visible)
+    )
+    .agent-contact-status {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 22px;
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 .agent-quick-actions [data-slot="button"] {
   width: 22px;
@@ -909,33 +1014,95 @@ button:focus-visible,
   width: 13px;
   height: 13px;
 }
-.agent-contact-meta {
-  grid-column: 1 / -1;
+.agent-clear-steady {
+  color: color-mix(in srgb, var(--foreground) 62%, var(--sidebar));
+}
+.agent-action-strip {
   display: flex;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
-  margin-top: 2px;
-  line-height: 18px;
+  gap: 1px;
+  height: 20px;
+  margin-inline-start: -3px;
+  opacity: 0.72;
+  transition: opacity 130ms ease-out;
 }
-.agent-contact-meta > .contact-preview {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
+.agent-contact[data-layout="two-line"]:is(:hover, .selected, :focus-within)
+  .agent-action-strip {
+  opacity: 1;
+}
+.agent-strip-btn {
+  height: 20px;
+  gap: 2.5px;
+  padding-inline: 4px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 450;
+  color: var(--muted-foreground);
+}
+.agent-strip-btn svg {
+  width: 11.5px;
+  height: 11.5px;
+}
+.agent-strip-icon {
+  width: 20px;
+  padding-inline: 0;
+}
+.agent-strip-more {
+  margin-inline-start: auto;
+}
+@media (hover: hover) {
+  .agent-contact[data-layout="two-line"]:not(:hover, :focus-within)
+    .agent-strip-more {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+@container secondary-sidebar (max-width: 232px) {
+  .agent-strip-label {
+    display: none;
+  }
+  .agent-strip-btn:not(.agent-strip-icon) {
+    padding-inline: 4.5px;
+  }
+}
+@container secondary-sidebar (max-width: 268px) {
+  :lang(en) .agent-strip-label {
+    display: none;
+  }
+  :lang(en) .agent-strip-btn:not(.agent-strip-icon) {
+    padding-inline: 4.5px;
+  }
 }
 .agent-activity-toggle-slot {
   display: flex;
-  width: 22px;
-  height: 18px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 .agent-activity-toggle {
-  width: 22px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 4px;
   color: var(--muted-foreground);
 }
 .agent-activity-toggle[data-state="closed"] svg {
+  transform: rotate(-90deg);
+}
+.agent-activity-toggle-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted-foreground);
+  opacity: 0.3;
+  pointer-events: none;
+}
+.agent-activity-toggle-empty svg {
+  width: 12px;
+  height: 12px;
   transform: rotate(-90deg);
 }
 .agent-activity-toggle:not(:hover):not(:focus-visible) {
@@ -945,6 +1112,16 @@ button:focus-visible,
 .agent-group[data-state="open"]:has(.agent-activity-list)
   .agent-contact-status {
   display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-action-strip,
+  .agent-contact[data-layout="single"] .agent-quick-actions,
+  .agent-contact[data-layout="single"] .agent-contact-status {
+    transition: none;
+  }
+  .agent-contact[data-layout="single"] .agent-quick-actions {
+    translate: none;
+  }
 }
 .avatar-option-grid {
   display: grid;
@@ -1098,9 +1275,14 @@ button:focus-visible,
 .agent-contact-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   margin-left: auto;
   flex-shrink: 0;
+}
+@container secondary-sidebar (max-width: 230px) {
+  .agent-contact-status {
+    gap: 4px;
+  }
 }
 .agent-draft {
   width: 12px;
@@ -1112,10 +1294,10 @@ button:focus-visible,
   display: inline-flex;
   height: 16px;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   color: var(--status-attention);
   font-size: 10px;
-  font-weight: 550;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -1129,15 +1311,15 @@ button:focus-visible,
 }
 .agent-working-count {
   display: inline-flex;
-  height: 16px;
+  height: 17px;
   align-items: center;
-  gap: 4px;
+  gap: 3.5px;
   padding-inline: 5px;
   border-radius: 5px;
   background: var(--control-hover);
-  color: color-mix(in srgb, var(--foreground) 72%, var(--sidebar));
+  color: color-mix(in srgb, var(--foreground) 74%, var(--sidebar));
   font-size: 10px;
-  font-weight: 550;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -1172,10 +1354,11 @@ button:focus-visible,
   }
 }
 .agent-unread {
-  width: 7px;
-  height: 7px;
+  width: 6.5px;
+  height: 6.5px;
   border-radius: 50%;
   background: var(--destructive);
+  flex-shrink: 0;
 }
 .contact-preview {
   display: block;
@@ -1187,9 +1370,24 @@ button:focus-visible,
   margin-top: 4px;
 }
 .pending-mark {
-  margin-left: auto;
+  display: inline-flex;
+  height: 16px;
+  align-items: center;
+  gap: 2.5px;
+  padding-inline: 4.5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--status-attention) 12%, transparent);
+  color: var(--status-attention);
   font-size: 10px;
-  color: #bb872f;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1;
+}
+.pending-mark svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
 }
 .sidebar-empty {
   font-size: 12px;

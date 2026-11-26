@@ -48,6 +48,7 @@ import {
 import { changeLanguage, languages } from "@/i18n";
 import type { Theme } from "@/hooks/useTheme";
 import {
+  agentSidebarLayouts,
   chatFontSizes,
   chatWidths,
   followUpBehaviors,
@@ -119,6 +120,10 @@ const sectionGroups = [
           "taskChatMode.newChat",
           "openNewTopicOnCreate",
           "openNewTopicOnCreateDescription",
+          "agentListLayout",
+          "agentListLayoutDescription",
+          "agentListLayout.single",
+          "agentListLayout.two-line",
           "agentActivity",
           "agentActivityDescription",
           "maxWorkspaceTabs",
@@ -533,6 +538,22 @@ export function SettingsPage({
                   }
                 />
               </SettingsRow>
+              <SettingsChoiceRow
+                title={t("settings.agentListLayout")}
+                description={t("settings.agentListLayoutDescription")}
+                value={preferences.agentSidebarLayout}
+                onChange={(value) => {
+                  const agentSidebarLayout = agentSidebarLayouts.find(
+                    (layout) => layout === value,
+                  );
+                  if (agentSidebarLayout)
+                    preference.mutate({ agentSidebarLayout });
+                }}
+                options={agentSidebarLayouts.map((value) => ({
+                  value,
+                  label: t(`settings.agentListLayout.${value}`),
+                }))}
+              />
               <SettingsRow
                 title={t("settings.agentActivity")}
                 description={t("settings.agentActivityDescription")}

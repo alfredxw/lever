@@ -2647,9 +2647,26 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(clear).toBeVisible();
   const contact = group.locator(".agent-contact");
   await expect(contact).toHaveCSS("padding", "4px 6px");
-  await expect(
-    group.getByRole("button", { name: "打开 活动列表 的文件", exact: true }),
-  ).toBeVisible();
+  await expect(contact).toHaveAttribute("data-layout", "single");
+  const filesButton = group.getByRole("button", {
+    name: "打开 活动列表 的文件",
+    exact: true,
+  });
+  const chatButton = group.getByRole("button", {
+    name: "打开 活动列表 的对话",
+    exact: true,
+  });
+  await expect(filesButton).toBeVisible();
+  await expect(chatButton).toBeVisible();
+  const clearBox = (await clear.boundingBox())!;
+  const filesBoxBeforeClear = (await filesButton.boundingBox())!;
+  const chatBoxBeforeClear = (await chatButton.boundingBox())!;
+  expect(clearBox.x + clearBox.width).toBeLessThanOrEqual(
+    filesBoxBeforeClear.x + 1,
+  );
+  expect(filesBoxBeforeClear.x + filesBoxBeforeClear.width).toBeLessThanOrEqual(
+    chatBoxBeforeClear.x + 1,
+  );
   await page.reload();
   await expect(mainRow).toBeVisible();
   await expect(mainRow.locator(".agent-unread")).toHaveCount(0);
@@ -2693,16 +2710,21 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(group.locator(".agent-activity-item")).toHaveCount(2);
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const toggleBox = (await toggle.boundingBox())!;
-  const chatActionBox = (await group
-    .getByRole("button", { name: "打开 活动列表 的对话", exact: true })
-    .boundingBox())!;
+  const filesBoxAfterClear = (await filesButton.boundingBox())!;
+  const chatActionBox = (await chatButton.boundingBox())!;
   expect(toggleBox.x).toBe(toggleSlotBox.x);
-  expect(toggleBox.x + toggleBox.width).toBe(
-    chatActionBox.x + chatActionBox.width,
+  expect(filesBoxAfterClear.x).toBeCloseTo(filesBoxBeforeClear.x, 1);
+  expect(chatActionBox.x).toBeCloseTo(chatBoxBeforeClear.x, 1);
+  expect(chatActionBox.x + chatActionBox.width).toBeLessThanOrEqual(
+    toggleBox.x + 1,
   );
-  expect(toggleBox.y).toBeGreaterThanOrEqual(
-    chatActionBox.y + chatActionBox.height,
-  );
+  expect(
+    Math.abs(
+      toggleBox.y +
+        toggleBox.height / 2 -
+        (chatActionBox.y + chatActionBox.height / 2),
+    ),
+  ).toBeLessThanOrEqual(2);
   expect((await group.locator(".agent-select").boundingBox())!.width).toBe(
     nameWidth,
   );
@@ -2739,8 +2761,14 @@ test("Agent activity stays compact, preserves navigation and supports default co
   const contentBox = (await group
     .locator(".agent-contact-content")
     .boundingBox())!;
-  expect(contentBox.y - headerBox.y).toBeCloseTo(4);
-  expect(headerBox.height - contentBox.height).toBeCloseTo(8);
+  expect(headerBox.height).toBeLessThanOrEqual(40);
+  expect(
+    Math.abs(
+      contentBox.y +
+        contentBox.height / 2 -
+        (headerBox.y + headerBox.height / 2),
+    ),
+  ).toBeLessThanOrEqual(1.5);
   const highlightBox = (await runningRow.boundingBox())!;
   const itemBox = (await runningRow.locator("..").boundingBox())!;
   expect(highlightBox.x).toBeGreaterThan(headerBox.x);
@@ -2752,9 +2780,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(page.locator(".topic-conversation:visible")).toContainText(
     running.input,
   );
-  await group
-    .getByRole("button", { name: "打开 活动列表 的对话", exact: true })
-    .click();
+  await chatButton.click();
   await expect(input).toHaveText("保留主会话草稿");
   await submit("再次回复", unread.sessionId);
   await expect(unreadRow.locator(".agent-unread")).toBeVisible();
@@ -2797,19 +2823,22 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(bars.first()).toHaveCSS("animation-name", "none");
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect(bars.first()).not.toHaveCSS("animation-name", "none");
-  expect((await group.locator(".agent-select").boundingBox())!.width).toBe(
-    nameWidth,
+  expect((await group.locator(".agent-select").boundingBox())!.width).toBeGreaterThan(
+    40,
   );
   await expect(otherGroup.locator(".agent-select")).toHaveAttribute(
     "aria-current",
     "true",
   );
   await group.locator(".agent-select").click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(input).toHaveText("保留主会话草稿");
-  await toggle.click();
+  await input.fill("");
   await expect(runningRow).toBeVisible();
   await expect(summary).toBeHidden();
+  expect((await group.locator(".agent-select").boundingBox())!.width).toBe(
+    nameWidth,
+  );
 
   const childBox = (await runningRow.boundingBox())!;
   await page.mouse.move(childBox.x + 25, childBox.y + 14);
@@ -2938,6 +2967,210 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(toggle).toHaveCount(0);
   await expect(group.locator(".agent-activity-list")).toHaveCount(0);
   await expect(clear).toHaveCount(0);
+});
+
+test("Agent sidebar supports single-row steady actions, whole-row toggle, steady child Clear, and two-line preference", async ({
+  page,
+}) => {
+  await createAgent(page, "侧栏布局实验");
+  const agentId = await page.evaluate(
+    () => localStorage.getItem("lever:agent")!,
+  );
+  await send(page, "主会话消息");
+  const overview = (await (
+    await page.request.get("/api/overview")
+  ).json()) as Overview;
+  const agent = overview.agents.find((item) => item.id === agentId)!;
+  const chat = overview.chats.find((item) => item.agentId === agentId)!;
+  const main = overview.conversations.find(
+    (item) => item.chatId === chat.id && item.kind === "main",
+  )!;
+  const submitTopic = async (text: string) => {
+    const response = await page.request.post("/api/messages", {
+      data: {
+        commandId: randomUUID(),
+        chatId: chat.id,
+        operation: "topic",
+        text,
+        selection: {
+          provider: agent.profile.provider,
+          model: agent.profile.model,
+        },
+        attachmentIds: [],
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+    return (await response.json()) as Run;
+  };
+  const topicA = await submitTopic("普通已读话题");
+  const topicB = await submitTopic("[hang] 运行中话题");
+
+  const sidebar = page.locator("#agent-sidebar");
+  const group = sidebar.locator(`[data-agent-id="${agentId}"]`);
+  const contact = group.locator(".agent-contact");
+  const toggle = group.getByRole("button", {
+    name: "展开或收起 侧栏布局实验 的活动会话",
+    exact: true,
+  });
+  const filesButton = group.getByRole("button", {
+    name: "打开 侧栏布局实验 的文件",
+    exact: true,
+  });
+  const chatButton = group.getByRole("button", {
+    name: "打开 侧栏布局实验 的对话",
+    exact: true,
+  });
+  const clear = group.getByRole("button", {
+    name: "清除 侧栏布局实验 的已读会话",
+    exact: true,
+  });
+  const mainRow = group.locator(`[data-session-id="${main.id}"]`);
+  const topicARow = group.locator(`[data-session-id="${topicA.sessionId}"]`);
+  const topicBRow = group.locator(`[data-session-id="${topicB.sessionId}"]`);
+
+  // Read topicA so it becomes clearable alongside main.
+  await topicARow.click();
+  await expect(topicARow.locator(".agent-unread")).toHaveCount(0);
+  await expect(clear).toBeVisible();
+
+  // Single-row default: Files & Chat are always visible, Clear sits to their LEFT.
+  await expect(contact).toHaveAttribute("data-layout", "single");
+  await expect(filesButton).toBeVisible();
+  await expect(chatButton).toBeVisible();
+  const clearBox = (await clear.boundingBox())!;
+  const filesBoxBefore = (await filesButton.boundingBox())!;
+  const chatBoxBefore = (await chatButton.boundingBox())!;
+  const toggleBoxBefore = (await toggle.boundingBox())!;
+  expect(clearBox.x + clearBox.width).toBeLessThanOrEqual(filesBoxBefore.x + 1);
+  expect(filesBoxBefore.x + filesBoxBefore.width).toBeLessThanOrEqual(
+    chatBoxBefore.x + 1,
+  );
+  expect(chatBoxBefore.x + chatBoxBefore.width).toBeLessThanOrEqual(
+    toggleBoxBefore.x + 1,
+  );
+
+  // Child list: clearable row reveals Clear on hover; no hover Pin button on unpinned rows.
+  await page.mouse.move(0, 0);
+  const topicAItem = topicARow.locator("..");
+  const topicAClear = topicAItem.locator(".agent-activity-clear");
+  await expect(topicAClear).toHaveCSS("opacity", "0");
+  await expect(topicAItem.locator(".agent-activity-pin")).toHaveCount(0);
+  const topicBItem = topicBRow.locator("..");
+  await expect(topicBItem.locator(".agent-activity-action")).toHaveCount(0);
+  // Agents without children still render a muted chevron placeholder for visual alignment.
+  await expect(
+    sidebar.locator(".agent-activity-toggle-empty").first(),
+  ).toBeVisible();
+  await page
+    .locator("#agent-sidebar")
+    .screenshot({ path: "../output/e2e/agent-sidebar-single-light.png" });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page
+    .locator("#agent-sidebar")
+    .screenshot({ path: "../output/e2e/agent-sidebar-single-dark.png" });
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // Whole-row click toggles collapse/expand cleanly, while clicking action buttons does not collapse.
+  const quickActions = contact.locator(".agent-quick-actions");
+  const collapsedStatus = contact.locator(".agent-contact-status");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(contact).not.toHaveAttribute("data-has-status", "true");
+  await expect(quickActions).toHaveCSS("opacity", "1");
+  await filesButton.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const expandedNameWidth = (await contact.locator(".agent-select").boundingBox())!
+    .width;
+  await contact.locator(".agent-select").click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(topicARow).not.toBeVisible();
+  await page.mouse.move(0, 0);
+  // Collapsed row with active status hides quick actions at rest so status does not crush the name,
+  // then swaps status for quick actions on hover.
+  await expect(contact).toHaveAttribute("data-has-status", "true");
+  await expect(collapsedStatus).toHaveCSS("opacity", "1");
+  await expect(collapsedStatus.locator(".agent-working-count")).toContainText("1");
+  await expect(quickActions).toHaveCSS("opacity", "0");
+  await expect(quickActions).toHaveCSS("pointer-events", "none");
+  const collapsedNameWidth = (await contact
+    .locator(".agent-select")
+    .boundingBox())!.width;
+  expect(collapsedNameWidth).toBeGreaterThan(expandedNameWidth + 20);
+  await contact.hover();
+  await expect(quickActions).toHaveCSS("opacity", "1");
+  await expect(quickActions).toHaveCSS("pointer-events", "auto");
+  await expect(collapsedStatus).toHaveCSS("opacity", "0");
+  await contact.locator(".agent-select").click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(topicARow).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(contact).not.toHaveAttribute("data-has-status", "true");
+  await expect(quickActions).toHaveCSS("opacity", "1");
+
+  // Hovering clearable child row reveals Clear and clicking removes topicA.
+  await topicARow.hover();
+  await expect(topicAClear).toHaveCSS("opacity", "1");
+  await topicAClear.click();
+  await expect(topicARow).toHaveCount(0);
+
+  // Agent-level Clear removes remaining mainRow; Files, Chat, Toggle stay spatially fixed!
+  await clear.click();
+  await expect(mainRow).toHaveCount(0);
+  await expect(clear).toHaveCount(0);
+  expect((await filesButton.boundingBox())!.x).toBeCloseTo(filesBoxBefore.x, 1);
+  expect((await chatButton.boundingBox())!.x).toBeCloseTo(chatBoxBefore.x, 1);
+  expect((await toggle.boundingBox())!.x).toBeCloseTo(toggleBoxBefore.x, 1);
+
+  // Switch preference to two-line layout (方案 D) in Settings and verify persistence.
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "设置分类" })
+    .getByRole("button", { name: "常规", exact: true })
+    .click();
+  const layoutGroup = page.getByRole("radiogroup", {
+    name: "Agent 列表样式",
+    exact: true,
+  });
+  await layoutGroup.getByRole("radio", { name: "两行", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("button", { name: "Agents", exact: true })
+    .click();
+
+  await expect(contact).toHaveAttribute("data-layout", "two-line");
+  await expect(chatButton).toBeVisible();
+  await expect(filesButton).toBeVisible();
+  await expect(
+    group.getByRole("button", { name: "打开 侧栏布局实验 的终端", exact: true }),
+  ).toBeVisible();
+  // Whole-row toggle also works in two-line mode.
+  await contact.locator(".agent-select").click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await contact.locator(".agent-select").click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await page
+    .locator("#agent-sidebar")
+    .screenshot({ path: "../output/e2e/agent-sidebar-two-line.png" });
+
+  // Reload preserves two-line preference; Terminal button opens a Terminal tab.
+  await page.reload();
+  await expect(contact).toHaveAttribute("data-layout", "two-line");
+  await group
+    .getByRole("button", { name: "打开 侧栏布局实验 的终端", exact: true })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "终端", selected: true }),
+  ).toBeVisible();
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page
+    .locator("#agent-sidebar")
+    .screenshot({ path: "../output/e2e/agent-sidebar-two-line-dark.png" });
+  await page.emulateMedia({ colorScheme: "light" });
+  expect(
+    (
+      await page.request.post(`/api/runs/${topicB.id}/stop`, { data: {} })
+    ).ok(),
+  ).toBeTruthy();
 });
 
 test("Recent shows the generated conversation title when it arrives after the reply", async ({
@@ -4480,9 +4713,9 @@ test("main and Topics execute independently with isolated queues, approvals and 
   await expect(topicB).toHaveAttribute("data-status", "running");
   await expect(mainRuns).toHaveAttribute("data-status", "running");
   await expect(topicA).toHaveAttribute("data-status", "waiting_user");
-  await expect(
-    page.locator(".agent-contact.selected .pending-mark"),
-  ).toHaveText("待处理 1");
+  const pendingMark = page.locator(".agent-contact.selected .pending-mark");
+  await expect(pendingMark).toHaveAttribute("aria-label", "待处理 1");
+  await expect(pendingMark).toHaveText("1");
   await expect(
     page.locator(".agent-contact.selected .agent-contact-status"),
   ).toContainText("2");
@@ -10928,8 +11161,11 @@ test("sidebar Chats fill main instead of side and side Topic details open opposi
   await mainStrip.getByRole("tab").first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "关闭所有标签页", exact: true }).click();
   await expect(mainStrip.getByRole("tab")).toHaveCount(0);
-  await sidebar
-    .locator(`[data-agent-id="${agent.id}"]`)
+  const contact = sidebar.locator(
+    `[data-agent-id="${agent.id}"] .agent-contact`,
+  );
+  await contact.hover();
+  await contact
     .getByRole("button", { name: `打开 ${agent.name} 的文件`, exact: true })
     .click();
   await expect(

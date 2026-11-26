@@ -16,6 +16,8 @@ export const chatFontSizes = [13, 14, 16, 18] as const;
 export const chatWidths = ["comfortable", "wide", "full"] as const;
 export const sendShortcuts = ["enter", "mod-enter"] as const;
 export const followUpBehaviors = ["queue", "steer"] as const;
+export const agentSidebarLayouts = ["single", "two-line"] as const;
+export type AgentSidebarLayout = (typeof agentSidebarLayouts)[number];
 export const workspaceTools = [
   "files",
   "diff",
@@ -41,6 +43,7 @@ type Preferences = {
   followUpBehavior: (typeof followUpBehaviors)[number];
   openNewTopicOnCreate: boolean;
   desktopNotifications: boolean;
+  agentSidebarLayout: AgentSidebarLayout;
   expandAgentActivity: boolean;
   secondarySidebarWidth: number | null;
   maxWorkspaceTabs: number | null;
@@ -56,6 +59,7 @@ const defaults: Preferences = {
   followUpBehavior: "steer",
   openNewTopicOnCreate: true,
   desktopNotifications: false,
+  agentSidebarLayout: "single",
   expandAgentActivity: true,
   secondarySidebarWidth: null,
   maxWorkspaceTabs: null,
@@ -99,6 +103,9 @@ function readPreferences(): Preferences {
           ? saved.openNewTopicOnCreate
           : defaults.openNewTopicOnCreate,
       desktopNotifications: saved?.desktopNotifications === true,
+      agentSidebarLayout: agentSidebarLayouts.includes(saved?.agentSidebarLayout)
+        ? saved.agentSidebarLayout
+        : defaults.agentSidebarLayout,
       expandAgentActivity:
         saved?.expandAgentActivity ?? defaults.expandAgentActivity,
       secondarySidebarWidth:

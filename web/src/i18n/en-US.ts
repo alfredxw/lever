@@ -1873,7 +1873,10 @@ export const enUS = {
   "agents.defaultAvatar": "Reset avatar",
   "agents.openChat": "Open {{name}} Chat",
   "agents.openFiles": "Open {{name}} files",
+  "agents.openTerminal": "Open {{name}} terminal",
   "agents.openProfile": "Open {{name}} Profile",
+  "agents.moreActions": "More actions for {{name}}",
+  "agents.chat": "Chat",
   "agents.pending": "Needs attention",
   "agents.working": "Working",
   "agents.workingCount": "Running tasks ({{count}})",
@@ -2090,6 +2093,11 @@ export const enUS = {
     "Uses the CLI’s existing sign-in. The runtime verifies it on the first request.",
   "settings.dataDir": "Data directory",
   "settings.appearance": "Appearance",
+  "settings.agentListLayout": "Agent list layout",
+  "settings.agentListLayoutDescription":
+    "Use a compact single-row list, or two rows with always-visible quick actions.",
+  "settings.agentListLayout.single": "Single row",
+  "settings.agentListLayout.two-line": "Two rows",
   "settings.agentActivity": "Expand Agent activity by default",
   "settings.agentActivityDescription":
     "Show ongoing and unread Chats / Topics under each Agent.",

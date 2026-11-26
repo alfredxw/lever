@@ -21,6 +21,7 @@ import {
   CircleHelp,
   CirclePause,
   Clock,
+  Ellipsis,
   Eraser,
   EyeOff,
   Folders,
@@ -32,15 +33,18 @@ import {
   Plus,
   RotateCcw,
   Search,
+  TerminalSquare,
 } from "lucide-react";
 import {
   closestCenter,
   DndContext,
   KeyboardSensor,
   MouseSensor,
+  rectIntersection,
   TouchSensor,
   useSensor,
   useSensors,
+  type CollisionDetection,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -91,8 +95,11 @@ import { cn } from "@/lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { RecentConversations } from "./RecentConversations";
 import { PressStableList } from "./PressStableList";
-import { useProviders } from "@/features/runtime/queries";
-import { usePreferences } from "@/features/settings/Preferences";
+import { toolTab } from "@/components/workbench/WorkspaceActions";
+import {
+  usePreferences,
+  type AgentSidebarLayout,
+} from "@/features/settings/Preferences";
 import {
   ariaShortcut,
   binding,
@@ -101,6 +108,16 @@ import {
 
 type AgentView = "all" | "recent";
 const clearedPageSize = 5;
+
+// Keyboard sorting moves the active rect onto the adjacent group's edge, where
+// closestCenter can skip an expanded group onto a compact single-row neighbor.
+const sidebarCollisionDetection: CollisionDetection = (args) => {
+  if (!args.pointerCoordinates) {
+    const hits = rectIntersection(args);
+    if (hits.length) return hits;
+  }
+  return closestCenter(args);
+};
 
 function formatClearedTime(timestamp: number, locale: string) {
   if (!timestamp) return "";
@@ -206,7 +223,6 @@ export function AgentSidebar({
     (anchor: MenuAnchor, target: MenuTarget) => setMenu({ anchor, target }),
     [],
   );
-  const providers = useProviders();
   const { preferences } = usePreferences();
   const searchShortcut = binding(preferences.shortcutOverrides, "search");
   const [filter, setFilter] = useState<AgentView>(() =>
@@ -364,11 +380,6 @@ export function AgentSidebar({
           clearable: agentConversations
             .filter(({ canClear }) => canClear)
             .map(({ conversation }) => conversation),
-          activity: agentActivity.reduce<Conversation | undefined>(
-            (latest, item) =>
-              item.messageAt > (latest?.messageAt ?? "") ? item : latest,
-            undefined,
-          ),
           unread: agentActivity.some(
             (item) => item.unreadSequence > (readCursors[item.id] ?? 0),
           ),
@@ -765,7 +776,7 @@ export function AgentSidebar({
         )}
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={sidebarCollisionDetection}
           accessibility={{
             screenReaderInstructions: {
               draggable: t("agents.dragInstructions"),
@@ -783,7 +794,6 @@ export function AgentSidebar({
               ({
                 agent,
                 chats,
-                activity,
                 unread,
                 waiting,
                 working,
@@ -809,6 +819,7 @@ export function AgentSidebar({
                   <AgentRow
                     key={agent.id}
                     agent={agent}
+                    layout={preferences.agentSidebarLayout}
                     selected={selected === agent.id}
                     open={lensActive ? !lensCollapsed[agent.id] : undefined}
                     onOpenChange={
@@ -835,83 +846,20 @@ export function AgentSidebar({
                     }
                     onChoose={() => onChoose(agent.id)}
                     onPreview={() => onPreview(agent.id)}
-                    onProfile={() =>
-                      onOpen(
-                        {
-                          id: "profile",
-                          kind: "profile",
-                          title: "profile",
-                        },
-                        agent.id,
-                      )
-                    }
-                    preview={
-                      activity?.preview ||
-                      (providers.data?.find(
-                        (provider) => provider.id === agent.profile.provider,
-                      )?.name ??
-                        agent.profile.provider)
+                    onProfile={() => onOpen(toolTab("profile"), agent.id)}
+                    onChat={() => onChat(agent)}
+                    onFiles={() => onOpen(toolTab("files"), agent.id)}
+                    onTerminal={() => onOpen(toolTab("terminal"), agent.id)}
+                    onClear={
+                      agentClearable.length > 0
+                        ? () => recent.clearConversations(agentClearable)
+                        : undefined
                     }
                     unread={unread}
                     waiting={waiting}
                     working={working}
                     draftCount={draftCount}
                     defaultExpanded={preferences.expandAgentActivity}
-                    actions={
-                      <>
-                        {agentClearable.length > 0 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={t("agents.clearAgentReadActivity", {
-                              name: agent.name,
-                            })}
-                            title={t("agents.clearAgentReadActivity", {
-                              name: agent.name,
-                            })}
-                            onClick={() =>
-                              recent.clearConversations(agentClearable)
-                            }
-                          >
-                            <Eraser data-icon="inline-start" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={t("agents.openFiles", {
-                            name: agent.name,
-                          })}
-                          title={t("agents.openFiles", {
-                            name: agent.name,
-                          })}
-                          onClick={() =>
-                            onOpen(
-                              {
-                                id: "files",
-                                kind: "files",
-                                title: "files",
-                              },
-                              agent.id,
-                            )
-                          }
-                        >
-                          <Folders />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={t("agents.openChat", {
-                            name: agent.name,
-                          })}
-                          title={t("agents.openChat", { name: agent.name })}
-                          onClick={() => onChat(agent)}
-                        >
-                          <MessageCircle />
-                        </Button>
-                      </>
-                    }
                   >
                     {hasChildren && (
                       <>
@@ -1178,7 +1126,7 @@ const AgentClearedRow = memo(function AgentClearedRow({
         type="button"
         variant="ghost"
         size="icon-xs"
-        className="agent-activity-action text-muted-foreground"
+        className="agent-activity-action agent-cleared-restore text-muted-foreground"
         aria-label={restoreLabel}
         title={restoreLabel}
         onClick={() => onRestore(conversation.id, conversation.agentId)}
@@ -1383,7 +1331,7 @@ const AgentActivityRow = memo(function AgentActivityRow({
           size="icon-xs"
           className={cn(
             "agent-activity-action text-muted-foreground",
-            pinned && "agent-activity-pin",
+            pinned ? "agent-activity-pin" : "agent-activity-clear",
           )}
           aria-label={actionLabel}
           title={actionLabel}
@@ -1398,46 +1346,66 @@ const AgentActivityRow = memo(function AgentActivityRow({
   );
 });
 
+const stopPropagation = {
+  onPointerDown: (event: React.SyntheticEvent) => event.stopPropagation(),
+  onMouseDown: (event: React.SyntheticEvent) => event.stopPropagation(),
+  onTouchStart: (event: React.SyntheticEvent) => event.stopPropagation(),
+  onKeyDown: (event: React.SyntheticEvent) => event.stopPropagation(),
+  onClick: (event: React.SyntheticEvent) => event.stopPropagation(),
+};
+
 function AgentRow({
   agent,
+  layout,
   selected,
   open: controlledOpen,
   onOpenChange: controlledOpenChange,
   clearedOnly,
-  preview,
   unread,
   waiting,
   working,
   draftCount,
   defaultExpanded,
   children,
-  actions,
   onChoose,
   onPreview,
   onProfile,
+  onChat,
+  onFiles,
+  onTerminal,
+  onClear,
   onMenu,
 }: {
   agent: Agent;
+  layout: AgentSidebarLayout;
   selected: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   clearedOnly?: boolean;
-  preview: string;
   unread: boolean;
   waiting: number;
   working: number;
   draftCount: number;
   defaultExpanded: boolean;
   children: React.ReactNode;
-  actions: React.ReactNode;
   onChoose: () => void;
   onPreview: () => void;
   onProfile: () => void;
+  onChat: () => void;
+  onFiles: () => void;
+  onTerminal: () => void;
+  onClear?: () => void;
   onMenu: (anchor: MenuAnchor) => void;
 }) {
   const { t } = useTranslation();
   const workingLabel = t("agents.workingCount", { count: working });
   const draftCountLabel = t("agents.draftCount", { count: draftCount });
+  const pendingLabel = `${t("agents.pending")} ${waiting}`;
+  const clearLabel = t("agents.clearAgentReadActivity", { name: agent.name });
+  const filesLabel = t("agents.openFiles", { name: agent.name });
+  const chatLabel = t("agents.openChat", { name: agent.name });
+  const terminalLabel = t("agents.openTerminal", { name: agent.name });
+  const moreLabel = t("agents.moreActions", { name: agent.name });
   const [localOpen, setLocalOpen] = useState(defaultExpanded);
   const [trackedDefault, setTrackedDefault] = useState(defaultExpanded);
   if (trackedDefault !== defaultExpanded) {
@@ -1446,6 +1414,9 @@ function AgentRow({
   }
   const open = controlledOpen ?? localOpen;
   const onOpenChange = controlledOpenChange ?? setLocalOpen;
+  const hasCollapsedStatus =
+    !(open && children) &&
+    (draftCount > 0 || waiting > 0 || working > 0 || unread);
   const {
     attributes,
     listeners,
@@ -1455,6 +1426,98 @@ function AgentRow({
     transition,
     isDragging,
   } = useSortable({ id: agent.id });
+
+  const statusNode = (
+    <span className="agent-contact-status">
+      {draftCount > 0 && (
+        <span
+          className="agent-draft-count"
+          role="img"
+          aria-label={draftCountLabel}
+          title={draftCountLabel}
+        >
+          <PencilLine className="agent-draft" aria-hidden="true" />
+          {draftCount > 1 && <span>{draftCount}</span>}
+        </span>
+      )}
+      {waiting > 0 && (
+        <span
+          className="pending-mark"
+          role="img"
+          aria-label={pendingLabel}
+          title={pendingLabel}
+        >
+          <CirclePause aria-hidden="true" />
+          <span>{waiting}</span>
+        </span>
+      )}
+      {working > 0 && (
+        <span
+          className="agent-working-count"
+          role="img"
+          aria-label={workingLabel}
+          title={workingLabel}
+        >
+          <span className="agent-working-bars" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span>{working}</span>
+        </span>
+      )}
+      {unread && (
+        <span
+          className="agent-unread"
+          role="img"
+          aria-label={t("agents.unread")}
+          title={t("agents.unread")}
+        />
+      )}
+    </span>
+  );
+
+  const toggleSlot = (
+    <span className="agent-activity-toggle-slot">
+      {children ? (
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="agent-activity-toggle"
+            aria-label={t("agents.toggleActivity", {
+              name: agent.name,
+            })}
+            title={t("agents.toggleActivity", { name: agent.name })}
+            {...stopPropagation}
+          >
+            <ChevronDown />
+          </Button>
+        </CollapsibleTrigger>
+      ) : (
+        <span className="agent-activity-toggle-empty" aria-hidden="true">
+          <ChevronDown />
+        </span>
+      )}
+    </span>
+  );
+
+  const selectButton = (
+    <button
+      className="agent-select"
+      data-menu-focus
+      ref={setActivatorNodeRef}
+      {...attributes}
+      aria-label={agent.name}
+      aria-current={selected ? "true" : undefined}
+      onFocus={onPreview}
+    >
+      <span className="contact-name">
+        <span className="truncate">{agent.name}</span>
+      </span>
+    </button>
+  );
+
   return (
     <Collapsible
       open={open}
@@ -1462,6 +1525,7 @@ function AgentRow({
       ref={setNodeRef}
       className={cn("agent-group", isDragging && "dragging")}
       data-agent-id={agent.id}
+      data-layout={layout}
       data-sortable="true"
       style={{
         transform: CSS.Translate.toString(transform && { ...transform, x: 0 }),
@@ -1470,9 +1534,15 @@ function AgentRow({
     >
       <div
         className={cn("agent-contact", selected && "selected")}
+        data-layout={layout}
+        data-has-status={hasCollapsedStatus ? "true" : undefined}
         {...listeners}
         {...rowMenuHandlers(onMenu)}
-        onClick={onChoose}
+        onClick={() => {
+          if (isDragging) return;
+          onChoose();
+          if (children) onOpenChange(!open);
+        }}
         onPointerEnter={() => {
           if (!isDragging) onPreview();
         }}
@@ -1482,10 +1552,7 @@ function AgentRow({
           className="agent-profile-trigger size-auto rounded-full border-0 p-0"
           aria-label={t("agents.openProfile", { name: agent.name })}
           title={t("agents.openProfile", { name: agent.name })}
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-          onTouchStart={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
+          {...stopPropagation}
           onClick={(event) => {
             event.stopPropagation();
             onProfile();
@@ -1493,97 +1560,129 @@ function AgentRow({
         >
           <AgentAvatar agent={agent} />
         </Button>
-        <div className="agent-contact-content">
-          <button
-            className="agent-select"
-            data-menu-focus
-            ref={setActivatorNodeRef}
-            {...attributes}
-            aria-label={agent.name}
-            aria-current={selected ? "true" : undefined}
-            onFocus={onPreview}
-          >
-            <span className="contact-name">
-              <span className="truncate">{agent.name}</span>
-            </span>
-          </button>
-          <div
-            className="agent-quick-actions"
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onTouchStart={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {actions}
-          </div>
-          <div className="agent-contact-meta">
-            <span className="contact-preview">{preview}</span>
-            <span className="agent-contact-status">
-              {draftCount > 0 && (
-                <span
-                  className="agent-draft-count"
-                  role="img"
-                  aria-label={draftCountLabel}
-                  title={draftCountLabel}
-                >
-                  <PencilLine className="agent-draft" aria-hidden="true" />
-                  {draftCount > 1 && <span>{draftCount}</span>}
-                </span>
-              )}
-              {waiting > 0 && (
-                <span className="pending-mark">
-                  {t("agents.pending")} {waiting}
-                </span>
-              )}
-              {working > 0 && (
-                <span
-                  className="agent-working-count"
-                  role="img"
-                  aria-label={workingLabel}
-                  title={workingLabel}
-                >
-                  <span className="agent-working-bars" aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                  <span>{working}</span>
-                </span>
-              )}
-              {unread && (
-                <span
-                  className="agent-unread"
-                  role="img"
-                  aria-label={t("agents.unread")}
-                  title={t("agents.unread")}
-                />
-              )}
-            </span>
-            <span className="agent-activity-toggle-slot">
-              {!!children && (
-                <CollapsibleTrigger asChild>
+        {layout === "single" ? (
+          <div className="agent-contact-content">
+            {selectButton}
+            <div className="agent-contact-tail">
+              {statusNode}
+              <div className="agent-quick-actions" {...stopPropagation}>
+                {onClear && (
                   <Button
+                    type="button"
                     variant="ghost"
-                    size="icon-xs"
-                    className="agent-activity-toggle"
-                    aria-label={t("agents.toggleActivity", {
-                      name: agent.name,
-                    })}
-                    title={t("agents.toggleActivity", { name: agent.name })}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onMouseDown={(event) => event.stopPropagation()}
-                    onTouchStart={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    onClick={(event) => event.stopPropagation()}
+                    size="icon-sm"
+                    className="agent-clear-steady"
+                    aria-label={clearLabel}
+                    title={clearLabel}
+                    onClick={onClear}
                   >
-                    <ChevronDown />
+                    <Eraser />
                   </Button>
-                </CollapsibleTrigger>
-              )}
-            </span>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={filesLabel}
+                  title={filesLabel}
+                  onClick={onFiles}
+                >
+                  <Folders />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={chatLabel}
+                  title={chatLabel}
+                  onClick={onChat}
+                >
+                  <MessageCircle />
+                </Button>
+              </div>
+              {toggleSlot}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="agent-contact-content">
+            <div className="agent-contact-header">
+              {selectButton}
+              {statusNode}
+              {toggleSlot}
+            </div>
+            <div className="agent-action-strip" {...stopPropagation}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="agent-strip-btn"
+                aria-label={chatLabel}
+                title={chatLabel}
+                onClick={onChat}
+              >
+                <MessageCircle aria-hidden="true" />
+                <span className="agent-strip-label">{t("agents.chat")}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="agent-strip-btn"
+                aria-label={filesLabel}
+                title={filesLabel}
+                onClick={onFiles}
+              >
+                <Folders aria-hidden="true" />
+                <span className="agent-strip-label">{t("workspace.files")}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="agent-strip-btn"
+                aria-label={terminalLabel}
+                title={terminalLabel}
+                onClick={onTerminal}
+              >
+                <TerminalSquare aria-hidden="true" />
+                <span className="agent-strip-label">
+                  {t("workspace.terminal")}
+                </span>
+              </Button>
+              {onClear && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="agent-strip-btn agent-strip-icon agent-clear-steady"
+                  aria-label={clearLabel}
+                  title={clearLabel}
+                  onClick={onClear}
+                >
+                  <Eraser aria-hidden="true" />
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                className="agent-strip-btn agent-strip-icon agent-strip-more"
+                aria-label={moreLabel}
+                title={moreLabel}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  onMenu({
+                    x: rect.left,
+                    y: rect.bottom + 4,
+                    trigger: event.currentTarget,
+                  });
+                }}
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
       {!!children && (
         <CollapsibleContent>
