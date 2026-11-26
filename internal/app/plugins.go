@@ -89,6 +89,9 @@ func (a *App) InstallPlugin(ctx context.Context, manifest model.PluginManifest, 
 	if len(manifest.Contributes.EventSources) != 0 && directory == "" {
 		return model.Plugin{}, invalid("Install an event source plugin from its package directory")
 	}
+	if len(manifest.Contributes.TaskSources) != 0 && directory == "" {
+		return model.Plugin{}, invalid("Install a task source plugin from its package directory")
+	}
 	if err := validatePluginProviders(manifest); err != nil {
 		return model.Plugin{}, err
 	}
@@ -140,6 +143,11 @@ func savePlugin(ctx context.Context, tx *sql.Tx, p model.Plugin) error {
 			return err
 		}
 	}
+	if len(p.Manifest.Contributes.TaskSources) != 0 {
+		if err := store.Event(tx, model.Event{Type: "task-sources"}); err != nil {
+			return err
+		}
+	}
 	return store.Event(tx, model.Event{Type: "plugins"})
 }
 
@@ -159,6 +167,7 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 	var configurations []model.Provider
 	removePersonal := false
 	removeEventSources := false
+	removeTaskSources := false
 	var removed model.Plugin
 	var waitPoll <-chan struct{}
 	err := a.Store.Write(ctx, func(tx *sql.Tx) error {
@@ -190,6 +199,7 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 			p.Enabled = false
 			removePersonal = len(p.Manifest.Contributes.Channels) != 0
 			removeEventSources = len(p.Manifest.Contributes.EventSources) != 0
+			removeTaskSources = len(p.Manifest.Contributes.TaskSources) != 0
 			if removePersonal {
 				config, err := store.Get[personalConfig](ctx, tx, "SELECT data FROM channel_connections WHERE kind=?", id)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -250,6 +260,9 @@ func (a *App) UpdatePlugin(ctx context.Context, id string, enabled, uninstall bo
 	}
 	if removeEventSources {
 		err = errors.Join(err, os.RemoveAll(a.eventSourceCacheDir(id)))
+	}
+	if removeTaskSources {
+		err = errors.Join(err, os.RemoveAll(a.taskSourceCacheDir(id)))
 	}
 	a.removePackage(removed.Current)
 	a.removePackage(removed.Previous)

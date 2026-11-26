@@ -179,7 +179,8 @@ func manifestsSafeForAutoUpdate(before, after model.PluginManifest) bool {
 		}
 	}
 	for i := range before.Contributes.TaskSources {
-		if before.Contributes.TaskSources[i].ID != after.Contributes.TaskSources[i].ID {
+		b, a := before.Contributes.TaskSources[i], after.Contributes.TaskSources[i]
+		if b.ID != a.ID || b.Driver != a.Driver || b.Command != a.Command || b.MultiInstance != a.MultiInstance || b.CustomName != a.CustomName {
 			return false
 		}
 	}

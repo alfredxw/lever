@@ -21,6 +21,7 @@ import (
 const ManifestFile = "lever-plugin.json"
 const PersonalChannelDriver = "personal-stdio-v1"
 const EventSourcePollDriver = "poll-stdio-v1"
+const TaskSourceStdioDriver = "task-stdio-v1"
 
 var identifier = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
@@ -69,6 +70,11 @@ func readDirectory(directory string, managed bool) (model.PluginManifest, string
 		}
 	}
 	for _, source := range manifest.Contributes.EventSources {
+		if _, err := PackageExecutable(directory, source.Command); err != nil {
+			return manifest, "", err
+		}
+	}
+	for _, source := range manifest.Contributes.TaskSources {
 		if _, err := PackageExecutable(directory, source.Command); err != nil {
 			return manifest, "", err
 		}
@@ -133,11 +139,8 @@ func Validate(manifest model.PluginManifest) error {
 	if len(manifest.Description) > 1000 {
 		return errors.New("Plugin description can be up to 1000 characters")
 	}
-	if len(manifest.Contributes.TaskSources) != 0 {
-		return errors.New("Task sources currently require a built-in adapter")
-	}
 	if channels := manifest.Contributes.Channels; len(channels) != 0 {
-		if len(channels) != 1 || len(manifest.Contributes.Providers) != 0 || len(manifest.Contributes.EventSources) != 0 ||
+		if len(channels) != 1 || len(manifest.Contributes.Providers) != 0 || len(manifest.Contributes.EventSources) != 0 || len(manifest.Contributes.TaskSources) != 0 ||
 			channels[0].Driver != PersonalChannelDriver ||
 			!identifier.MatchString(channels[0].ID) || strings.TrimSpace(channels[0].Name) == "" || len(channels[0].Name) > 100 ||
 			!filepath.IsLocal(channels[0].Command) {
@@ -147,8 +150,9 @@ func Validate(manifest model.PluginManifest) error {
 	}
 	providers := manifest.Contributes.Providers
 	eventSources := manifest.Contributes.EventSources
-	if (len(providers) == 0 && len(eventSources) == 0) || len(providers) > 32 || len(eventSources) > 32 {
-		return errors.New("Declare 1–32 providers or event sources, or one local personal channel")
+	taskSources := manifest.Contributes.TaskSources
+	if (len(providers) == 0 && len(eventSources) == 0 && len(taskSources) == 0) || len(providers) > 32 || len(eventSources) > 32 || len(taskSources) > 32 {
+		return errors.New("Declare 1–32 providers, event sources, or task sources, or one local personal channel")
 	}
 	seenProviders := map[string]bool{}
 	for _, item := range providers {
@@ -200,6 +204,19 @@ func Validate(manifest model.PluginManifest) error {
 			if len(field.Placeholder) > 200 || strings.ContainsAny(field.Placeholder, "\x00\r\n") {
 				return fmt.Errorf("Invalid placeholder for event source field %s", field.ID)
 			}
+		}
+	}
+	seenTaskSources := map[string]bool{}
+	for _, item := range taskSources {
+		if !identifier.MatchString(item.ID) || seenTaskSources[item.ID] || strings.TrimSpace(item.Name) == "" || len(item.Name) > 100 {
+			return errors.New("Task source contributions require unique IDs and names")
+		}
+		seenTaskSources[item.ID] = true
+		if item.Driver != TaskSourceStdioDriver {
+			return fmt.Errorf("Unsupported task source driver: %s", item.Driver)
+		}
+		if strings.TrimSpace(item.Command) == "" || !filepath.IsLocal(item.Command) {
+			return errors.New("Task source contributions require a package-relative command")
 		}
 	}
 	return nil

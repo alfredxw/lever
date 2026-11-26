@@ -994,7 +994,11 @@ export function BoardTaskDetail({
                         className="size-3.5 shrink-0 text-muted-foreground"
                         aria-hidden="true"
                       />
-                      <span>{t("tasks.kind." + external.kind)}</span>
+                      <span>
+                        {t("tasks.kind." + external.kind, {
+                          defaultValue: external.kind,
+                        })}
+                      </span>
                     </div>
                   </div>
                   <div className="task-detail-prop-cell">

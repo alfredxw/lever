@@ -598,24 +598,122 @@ export interface LarkTaskScope {
   excludedTaskIds: string[];
   filters?: LarkTaskFilters;
 }
+export interface TaskSourceOption {
+  value: string;
+  label: string;
+  sub?: string;
+  group?: string;
+}
+export interface TaskSourceAction {
+  label: string;
+  command?: string;
+  retry?: boolean;
+}
+export interface TaskSourceNotice {
+  tone: 'info' | 'attention' | 'error';
+  title?: string;
+  message: string;
+  actions?: TaskSourceAction[];
+}
+export interface TaskSourceFieldPreset {
+  label: string;
+  value: string;
+}
+export interface TaskSourceParsedBadge {
+  tone?: 'neutral' | 'positive' | 'attention' | 'error';
+  badge?: string;
+  title?: string;
+  code?: string;
+  detail?: string;
+  invalid?: boolean;
+}
+export interface TaskSourceField {
+  key: string;
+  label: string;
+  description?: string;
+  kind: 'toggle' | 'multiToggle' | 'switch' | 'text' | 'textarea' | 'select' | 'multiSelect' | 'code';
+  section?: string;
+  joined?: boolean;
+  stacked?: boolean;
+  advanced?: boolean;
+  placeholder?: string;
+  options?: TaskSourceOption[];
+  presets?: TaskSourceFieldPreset[];
+  parsed?: TaskSourceParsedBadge;
+  searchable?: boolean;
+  readOnly?: boolean;
+  value?: unknown;
+}
+export interface TaskSourceInspectRequest {
+  pluginId: string;
+  contributionId: string;
+  sourceId?: string;
+  config?: { [key: string]: unknown };
+  searchField?: string;
+  searchQuery?: string;
+  refresh?: boolean;
+}
+export interface TaskSourceInspect {
+  ready: boolean;
+  account?: string;
+  target?: string;
+  suggestedName?: string;
+  summary?: string;
+  config?: { [key: string]: unknown };
+  fields?: TaskSourceField[];
+  advancedLabel?: string;
+  notices?: TaskSourceNotice[];
+  canSave: boolean;
+}
+export interface TaskSourcePreviewRequest {
+  pluginId: string;
+  contributionId: string;
+  sourceId?: string;
+  config?: { [key: string]: unknown };
+  refresh?: boolean;
+}
+export interface TaskSourcePreviewItem {
+  externalId: string;
+  title: string;
+  url?: string;
+  badge?: string;
+  badgeTone?: '' | 'danger' | 'attention' | 'neutral';
+  meta?: string[];
+  dueText?: string;
+  overdue?: boolean;
+  dueAt?: number /* int64 */;
+  dueDate?: string;
+  updatedAt?: number /* int64 */;
+}
+export interface TaskSourcePreview {
+  asOf: number /* int64 */;
+  total: number /* int */;
+  limit?: number /* int */;
+  truncated?: boolean;
+  items: TaskSourcePreviewItem[];
+  notices?: TaskSourceNotice[];
+}
 export interface TaskSourceCreate {
   pluginId: string;
   contributionId: string;
   target?: string;
   /**
-   * Name overrides the default display name. Only Lark Todos sources accept it.
+   * Name overrides the default display name for sources that support renaming.
    */
   name?: string;
   syncKind?: TaskSourceKind;
   larkScope?: LarkTaskScope;
+  config?: { [key: string]: unknown };
 }
 export interface TaskSource {
   id: string;
   pluginId: string;
   contributionId: string;
   name: string;
+  summary?: string;
   syncKind: TaskSourceKind;
   larkScope?: LarkTaskScope;
+  config?: { [key: string]: unknown };
   enabled: boolean;
   pluginEnabled: boolean;
   syncPending: boolean;
@@ -627,6 +725,7 @@ export interface TaskSourceUpdate {
   enabled?: boolean;
   syncKind?: TaskSourceKind;
   larkScope?: LarkTaskScope;
+  config?: { [key: string]: unknown };
 }
 export interface ExternalTask {
   id: string;
@@ -1456,6 +1555,10 @@ export interface ChannelContribution {
 export interface TaskSourceContribution {
   id: string;
   name: string;
+  driver?: string;
+  command?: string;
+  multiInstance?: boolean;
+  customName?: boolean;
 }
 export interface ProviderContribution {
   id: string;

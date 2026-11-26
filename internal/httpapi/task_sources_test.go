@@ -2,8 +2,12 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -426,5 +430,143 @@ func TestExternalTaskDispatchGroupsBySourceChatAndKeepsOpenTopicOutOfScope(t *te
 		if !exec.Topic {
 			t.Fatalf("expected external task execution to be a Topic: %+v", exec)
 		}
+	}
+}
+
+func TestExternalStdioTaskSourceLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture")
+	}
+	dir := t.TempDir()
+	manifest := `{
+  "manifestVersion": 1,
+  "id": "inhouse.demo-tracker",
+  "name": "Demo Tracker",
+  "version": "0.1.0",
+  "contributes": {
+    "taskSources": [
+      {
+        "id": "tracker",
+        "name": "Demo Tracker",
+        "driver": "task-stdio-v1",
+        "command": "bridge",
+        "multiInstance": true,
+        "customName": true
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "lever-plugin.json"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+input="$(cat)"
+touch "$LEVER_TASK_SOURCE_CACHE/marker"
+case "$input" in
+  *'"action":"inspect"'*)
+    case "$input" in
+      *'"mode":"view"'*)
+        printf '{"ready":true,"canSave":true,"suggestedName":"Team View","summary":"View mode","config":{"mode":"view"},"fields":[{"key":"mode","label":"Mode","kind":"toggle"}]}'
+        ;;
+      *)
+        printf '{"ready":true,"canSave":true,"suggestedName":"My Todos","summary":"Todo mode","config":{"mode":"todo"},"fields":[{"key":"mode","label":"Mode","kind":"toggle"}]}'
+        ;;
+    esac
+    ;;
+  *'"action":"preview"'*)
+    printf '{"asOf":1700000000000,"total":2,"limit":200,"items":[{"externalId":"p:1","title":"Item one","badge":"P0","badgeTone":"danger"},{"externalId":"p:2","title":"Item two"}]}'
+    ;;
+  *'"action":"pull"'*)
+    case "$input" in
+      *'"mode":"view"'*)
+        printf '{"summary":"View mode","items":[{"externalId":"p:2","reference":"#2","kind":"story","state":"open","title":"Item two","url":"https://example.invalid/2","body":"Details 2"}],"visibleIds":["p:2"]}'
+        ;;
+      *)
+        printf '{"summary":"Todo mode","items":[{"externalId":"p:1","reference":"#1","kind":"issue","state":"open","title":"Item one","url":"https://example.invalid/1","body":"Details 1"}],"visibleIds":["p:1"]}'
+        ;;
+    esac
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "bridge"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFixture(t)
+	var installed model.Plugin
+	f.request("POST", "/plugins", map[string]any{"directory": dir}, 200, &installed)
+
+	var inspected model.TaskSourceInspect
+	f.request("POST", "/tasks/sources/inspect", model.TaskSourceInspectRequest{
+		PluginID: installed.ID, ContributionID: "tracker", Config: json.RawMessage(`{"mode":"todo"}`),
+	}, 200, &inspected)
+	if !inspected.Ready || !inspected.CanSave || inspected.SuggestedName != "My Todos" {
+		t.Fatalf("unexpected inspect response: %+v", inspected)
+	}
+
+	var preview model.TaskSourcePreview
+	f.request("POST", "/tasks/sources/preview", model.TaskSourcePreviewRequest{
+		PluginID: installed.ID, ContributionID: "tracker", Config: json.RawMessage(`{"mode":"todo"}`),
+	}, 200, &preview)
+	if preview.Total != 2 || len(preview.Items) != 2 {
+		t.Fatalf("unexpected preview response: %+v", preview)
+	}
+
+	// Create two independent named instances under the same plugin (multiInstance + customName).
+	var first, second model.TaskSource
+	f.request("POST", "/tasks/sources", model.TaskSourceCreate{
+		PluginID: installed.ID, ContributionID: "tracker", Name: "My Queue", Config: json.RawMessage(`{"mode":"todo"}`),
+	}, 200, &first)
+	f.request("POST", "/tasks/sources", model.TaskSourceCreate{
+		PluginID: installed.ID, ContributionID: "tracker", Name: "Sprint View", Config: json.RawMessage(`{"mode":"view"}`),
+	}, 200, &second)
+	if first.ID == second.ID || first.Name != "My Queue" || second.Name != "Sprint View" || first.Summary != "Todo mode" || second.Summary != "View mode" {
+		t.Fatalf("multi-instance task sources failed: first=%+v second=%+v", first, second)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var tasks []model.ExternalTask
+		f.request("GET", "/tasks/external", nil, 200, &tasks)
+		if len(tasks) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected 2 synced external tasks, got %+v", tasks)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Updating config switches mode, updates summary, and refreshes in_scope tasks.
+	renamed := "My Renamed Queue"
+	f.request("PUT", "/tasks/sources/"+first.ID, model.TaskSourceUpdate{
+		Name: &renamed, Config: json.RawMessage(`{"mode":"view"}`),
+	}, 200, nil)
+	for {
+		var sources []model.TaskSource
+		f.request("GET", "/tasks/sources", nil, 200, &sources)
+		var updated model.TaskSource
+		for _, s := range sources {
+			if s.ID == first.ID {
+				updated = s
+			}
+		}
+		if updated.Name == renamed && updated.Summary == "View mode" && !updated.SyncPending && updated.LastSyncedAt != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("source update did not sync: %+v", updated)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Uninstalling removes the plugin's task-source cache directory.
+	cacheMarker := filepath.Join(f.a.Store.Dir, "task-sources", installed.ID, "marker")
+	if _, err := os.Stat(cacheMarker); err != nil {
+		t.Fatalf("expected task-source cache marker to exist before uninstall: %v", err)
+	}
+	f.request("DELETE", "/plugins/"+installed.ID, nil, 200, nil)
+	if _, err := os.Stat(filepath.Dir(cacheMarker)); !os.IsNotExist(err) {
+		t.Fatalf("expected task-source cache directory to be removed on uninstall, err=%v", err)
 	}
 }

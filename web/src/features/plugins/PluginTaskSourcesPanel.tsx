@@ -157,10 +157,20 @@ export function PluginTaskSourcesPanel({
                                 {t(`tasks.syncKind.${source.syncKind}`)}
                               </Badge>
                             )}
+                          {source.summary && (
+                            <Badge
+                              variant="outline"
+                              className="h-5 max-w-56 truncate px-1.5 text-[11px] font-normal text-muted-foreground"
+                            >
+                              {source.summary}
+                            </Badge>
+                          )}
                         </span>
                         <span className="mt-0.5 block truncate text-xs text-muted-foreground tabular-nums">
                           {source.error
-                            ? t(`tasks.sourceError.${source.error}`)
+                            ? t(`tasks.sourceError.${source.error}`, {
+                                defaultValue: source.error,
+                              })
                             : !source.enabled
                               ? t("tasks.sourcePaused")
                               : syncedAt

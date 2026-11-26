@@ -548,6 +548,22 @@ export const enUS = {
   "tasks.sourceSyncStatus": "Sync status",
   "tasks.sourceAutoSync": "Auto-sync",
   "tasks.sourceScope": "Sync rules",
+  "tasks.sourceAdvanced": "Advanced",
+  "tasks.externalSourceHint":
+    "Configure filter rules, preview matching items, and choose what to import now.",
+  "tasks.externalExistingItems": "Existing items",
+  "tasks.externalSelectionCountTruncated":
+    "{{total}} matched (showing first {{limit}}), {{count}} selected",
+  "tasks.externalRefreshPreview": "Refresh preview",
+  "tasks.externalOpenItem": "Open {{name}}",
+  "tasks.externalImportHint":
+    "Choose which existing items to import now, or start with none. With auto-sync on, new matching items are added automatically.",
+  "tasks.externalDialogSummary": "{{total}} matched · importing {{count}}",
+  "tasks.externalWaitingAuth": "Waiting for authentication",
+  "tasks.externalCopiedCommand": "Copied: {{command}}",
+  "tasks.externalAnyOption": "Any",
+  "tasks.externalSearch": "Search…",
+  "tasks.externalSelectedCount": "{{count}} selected",
   "tasks.sourceTarget": "Target",
   "tasks.sourceTargetHint": "Enter the location to track.",
   "tasks.syncedAt": "Synced {{time}}",

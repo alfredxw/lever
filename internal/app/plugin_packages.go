@@ -351,6 +351,13 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 	if a.eventPoll != nil && a.eventPoll.pluginID == id {
 		a.eventPoll.cancel()
 	}
+	if a.taskSync != nil && a.taskSync.pluginID == id {
+		a.taskSync.cancel()
+		a.taskSync = nil
+	}
+	if p.Enabled && len(m.Contributes.TaskSources) != 0 {
+		a.wakeTaskSources()
+	}
 	if p.Enabled && len(m.Contributes.Channels) != 0 {
 		a.resumePersonalLocked(id)
 	}
@@ -399,6 +406,24 @@ func pluginBlockers(ctx context.Context, q store.Queryer, p model.Plugin, m mode
 		})
 		if newIdx < 0 || (oldIdx >= 0 && m.Contributes.EventSources[newIdx].Driver != p.Manifest.Contributes.EventSources[oldIdx].Driver) {
 			blockers = append(blockers, fmt.Sprintf("%s (%s)", item.Name, source.ContributionID))
+		}
+	}
+	taskSources, err := store.List[struct {
+		Name           string `json:"name"`
+		ContributionID string `json:"contributionId"`
+	}](ctx, q, "SELECT json_object('name',name,'contributionId',contribution_id) FROM task_sources WHERE plugin_id=? AND status<>'removed' ORDER BY rowid", p.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range taskSources {
+		oldIdx := slices.IndexFunc(p.Manifest.Contributes.TaskSources, func(v model.TaskSourceContribution) bool {
+			return v.ID == item.ContributionID
+		})
+		newIdx := slices.IndexFunc(m.Contributes.TaskSources, func(v model.TaskSourceContribution) bool {
+			return v.ID == item.ContributionID
+		})
+		if newIdx < 0 || (oldIdx >= 0 && m.Contributes.TaskSources[newIdx].Driver != p.Manifest.Contributes.TaskSources[oldIdx].Driver) {
+			blockers = append(blockers, fmt.Sprintf("%s (%s)", item.Name, item.ContributionID))
 		}
 	}
 	return blockers, nil

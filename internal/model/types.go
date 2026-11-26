@@ -836,8 +836,12 @@ type ChannelContribution struct {
 }
 
 type TaskSourceContribution struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Driver        string `json:"driver,omitempty"`
+	Command       string `json:"command,omitempty"`
+	MultiInstance bool   `json:"multiInstance,omitempty"`
+	CustomName    bool   `json:"customName,omitempty"`
 }
 
 type ProviderContribution struct {

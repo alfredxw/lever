@@ -228,6 +228,24 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 		preview, err := s.App.LarkTaskPreview(r.Context(), r.URL.Query().Get("sourceId"))
 		respond(w, preview, err)
 	})
+	mux.HandleFunc("POST /api/tasks/sources/inspect", func(w http.ResponseWriter, r *http.Request) {
+		var input model.TaskSourceInspectRequest
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		result, err := s.App.InspectTaskSource(r.Context(), input)
+		respond(w, result, err)
+	})
+	mux.HandleFunc("POST /api/tasks/sources/preview", func(w http.ResponseWriter, r *http.Request) {
+		var input model.TaskSourcePreviewRequest
+		if err := read(w, r, &input); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		result, err := s.App.PreviewTaskSource(r.Context(), input)
+		respond(w, result, err)
+	})
 	mux.HandleFunc("PUT /api/tasks/sources/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var input model.TaskSourceUpdate
 		if err := read(w, r, &input); err != nil {

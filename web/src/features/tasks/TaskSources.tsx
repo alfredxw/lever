@@ -46,9 +46,12 @@ import {
   SettingsGroup,
   SettingsRow,
 } from "@/features/settings/SettingsControls";
+import { ExternalSourceScope } from "./ExternalSourceScope";
 import { LarkSourceScope } from "./LarkSourceScope";
 
 const scopeDialog = "max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg";
+const externalScopeDialog =
+  "flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden p-0 sm:max-w-2xl";
 const taskSourcesKey = ["task-sources"] as const;
 const syncKinds = [
   TaskSourceKindIssue,
@@ -94,20 +97,25 @@ export function TaskSourceDetail({
     if (visible && !embedded) heading.current?.focus({ preventScroll: true });
   }, [source.id, visible, embedded]);
   const plugins = useQuery({ ...pluginsQuery, enabled: visible });
+  const contribution = plugins.data
+    ?.find((plugin) => plugin.id === source.pluginId)
+    ?.manifest.contributes.taskSources?.find(
+      (type) => type.id === source.contributionId,
+    );
+  const externalStdio = contribution?.driver === "task-stdio-v1";
+  const allowCustomName =
+    source.contributionId === "lark-todos" || !!contribution?.customName;
   const typeName =
-    plugins.data
-      ?.find((plugin) => plugin.id === source.pluginId)
-      ?.manifest.contributes.taskSources?.find(
-        (type) => type.id === source.contributionId,
-      )?.name ??
+    contribution?.name ??
     t("tasks.source." + source.contributionId, {
       defaultValue: source.contributionId,
     });
+  const [accountLabel, setAccountLabel] = useState("");
   const change = useMutation({
     mutationFn: (update: TaskSourceUpdate) =>
       api("/tasks/sources/" + source.id, update, "PUT"),
     onSuccess: (_result, update) =>
-      update.syncKind || update.larkScope || update.name
+      update.syncKind || update.larkScope || update.config || update.name
         ? refreshSourceFeed()
         : refreshTaskSources(),
     onError: (error) => toast.error(error.message),
@@ -147,11 +155,13 @@ export function TaskSourceDetail({
             <h2 ref={heading} id={titleId} tabIndex={-1}>
               {source.name}
             </h2>
-            <p className="text-xs text-muted-foreground">{typeName}</p>
+            <p className="text-xs text-muted-foreground">
+              {accountLabel ? `${typeName} · ${accountLabel}` : typeName}
+            </p>
           </header>
         )}
         <div className="flex flex-col gap-5">
-          {source.contributionId === "lark-todos" && (
+          {allowCustomName && (
             <SettingsGroup title={t("tasks.sourceGeneral")}>
               <SourceNameRow
                 key={source.id}
@@ -207,6 +217,18 @@ export function TaskSourceDetail({
               visible={visible}
               pending={change.isPending}
               onSave={(_, larkScope) => change.mutate({ larkScope })}
+            />
+          )}
+          {externalStdio && (
+            <ExternalSourceScope
+              key={source.id}
+              pluginId={source.pluginId}
+              contributionId={source.contributionId}
+              source={source}
+              visible={visible}
+              pending={change.isPending}
+              onAccountChange={setAccountLabel}
+              onSave={(config) => change.mutate({ config })}
             />
           )}
           <Dialog
@@ -323,7 +345,7 @@ function TaskSourceStatus({ source }: { source: TaskSource }) {
       {status && <p role={pending ? "status" : undefined}>{t(status)}</p>}
       {error && (
         <p className="task-source-error" role="status">
-          {t("tasks.sourceError." + error)}
+          {t("tasks.sourceError." + error, { defaultValue: error })}
         </p>
       )}
       {lastSynced && (
@@ -396,16 +418,20 @@ export function AddTaskSourceDialog({
         pluginId: plugin.id,
         contributionId: type.id,
         name: type.name,
+        driver: type.driver,
+        customName: !!type.customName,
       })),
     );
   const [selection, setSelection] = useState("");
   const [target, setTarget] = useState("");
   const [name, setName] = useState<string>();
+  const [suggestedName, setSuggestedName] = useState<string>();
   const [syncKind, setSyncKind] = useState<TaskSourceKind>(TaskSourceKindBoth);
   const type =
     types.find((item) => sourceTypeKey(item) === selection) ?? types[0];
   const github = type?.contributionId === "github";
   const lark = type?.contributionId === "lark-todos";
+  const externalStdio = type?.driver === "task-stdio-v1";
   const add = useMutation({
     mutationFn: (input: TaskSourceCreate) =>
       api<TaskSource>("/tasks/sources", input),
@@ -419,8 +445,120 @@ export function AddTaskSourceDialog({
       onClose();
     },
   });
-  const canAdd = type && !lark && target.trim() && !add.isPending;
+  const canAdd =
+    type && !lark && !externalStdio && target.trim() && !add.isPending;
   const addError = add.error;
+  const errorNotice = (plugins.error || addError) && (
+    <ErrorNotice
+      error={
+        addError instanceof APIError &&
+        addError.code?.startsWith("task_source_")
+          ? t(
+              "tasks.sourceError." +
+                addError.code.slice("task_source_".length),
+              { defaultValue: addError.message },
+            )
+          : (addError ?? plugins.error)
+      }
+    />
+  );
+
+  const typeAndNameFields = type && (
+    <FieldGroup
+      className={
+        externalStdio && types.length > 1 && type.customName
+          ? "grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]"
+          : "gap-4"
+      }
+    >
+      {types.length > 1 && (
+        <Field>
+          <FieldLabel htmlFor="task-source-type">
+            {t("tasks.filterSource")}
+          </FieldLabel>
+          <Select
+            value={sourceTypeKey(type)}
+            onValueChange={(value) => {
+              setSelection(value);
+              setTarget("");
+              setName(undefined);
+              setSuggestedName(undefined);
+              setSyncKind(TaskSourceKindBoth);
+              add.reset();
+            }}
+            disabled={add.isPending}
+          >
+            <SelectTrigger id="task-source-type" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {types.map((item) => (
+                  <SelectItem
+                    key={sourceTypeKey(item)}
+                    value={sourceTypeKey(item)}
+                  >
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      {!lark && !externalStdio && (
+        <Field>
+          <FieldLabel htmlFor="task-source-target">
+            {t(github ? "tasks.githubRepository" : "tasks.sourceTarget")}
+          </FieldLabel>
+          <Input
+            id="task-source-target"
+            placeholder={github ? "owner/repo" : undefined}
+            autoFocus
+            required
+            value={target}
+            disabled={add.isPending}
+            onChange={(event) => {
+              setTarget(event.target.value);
+              add.reset();
+            }}
+          />
+        </Field>
+      )}
+      {(lark || (externalStdio && type.customName)) && (
+        <Field>
+          <FieldLabel htmlFor="task-source-name">
+            {t("tasks.sourceName")}
+          </FieldLabel>
+          <Input
+            id="task-source-name"
+            maxLength={100}
+            placeholder={suggestedName || type.name}
+            value={name ?? (externalStdio ? (suggestedName ?? type.name) : type.name)}
+            disabled={add.isPending}
+            onChange={(event) => {
+              setName(event.target.value);
+              add.reset();
+            }}
+          />
+        </Field>
+      )}
+      {github && (
+        <Field data-disabled={add.isPending || undefined}>
+          <FieldTitle id="task-source-sync-kind">
+            {t("tasks.syncKind")}
+          </FieldTitle>
+          <SyncKindPicker
+            labelId="task-source-sync-kind"
+            value={syncKind}
+            disabled={add.isPending}
+            onChange={setSyncKind}
+          />
+        </Field>
+      )}
+    </FieldGroup>
+  );
+
   return (
     <Dialog
       open
@@ -429,10 +567,20 @@ export function AddTaskSourceDialog({
       }}
     >
       <DialogContent
-        className={lark ? scopeDialog : undefined}
+        className={
+          externalStdio
+            ? externalScopeDialog
+            : lark
+              ? scopeDialog
+              : undefined
+        }
         onCloseAutoFocus={onCloseAutoFocus}
       >
-        <DialogHeader>
+        <DialogHeader
+          className={
+            externalStdio ? "shrink-0 border-b border-border/60 px-6 py-4" : undefined
+          }
+        >
           <DialogTitle>{t("tasks.addSource")}</DialogTitle>
           <DialogDescription>
             {t(
@@ -440,160 +588,87 @@ export function AddTaskSourceDialog({
                 ? "tasks.githubSourceHint"
                 : lark
                   ? "tasks.larkSourceHint"
-                  : type
-                    ? "tasks.sourceTargetHint"
-                    : plugins.isPending
-                      ? "common.loading"
-                      : "tasks.noSourcePlugins",
+                  : externalStdio
+                    ? "tasks.externalSourceHint"
+                    : type
+                      ? "tasks.sourceTargetHint"
+                      : plugins.isPending
+                        ? "common.loading"
+                        : "tasks.noSourcePlugins",
             )}
           </DialogDescription>
         </DialogHeader>
-        <form
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (canAdd)
-              add.mutate({
-                pluginId: type.pluginId,
-                contributionId: type.contributionId,
-                target: target.trim(),
-                ...(github && { syncKind }),
-              });
-          }}
-        >
-          {type && (
-            <FieldGroup className="gap-4">
-              {types.length > 1 && (
-                <Field>
-                  <FieldLabel htmlFor="task-source-type">
-                    {t("tasks.filterSource")}
-                  </FieldLabel>
-                  <Select
-                    value={sourceTypeKey(type)}
-                    onValueChange={(value) => {
-                      setSelection(value);
-                      setTarget("");
-                      setName(undefined);
-                      setSyncKind(TaskSourceKindBoth);
-                      add.reset();
-                    }}
-                    disabled={add.isPending}
-                  >
-                    <SelectTrigger id="task-source-type" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {types.map((item) => (
-                          <SelectItem
-                            key={sourceTypeKey(item)}
-                            value={sourceTypeKey(item)}
-                          >
-                            {item.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
-              {!lark && (
-                <Field>
-                  <FieldLabel htmlFor="task-source-target">
-                    {t(
-                      github ? "tasks.githubRepository" : "tasks.sourceTarget",
-                    )}
-                  </FieldLabel>
-                  <Input
-                    id="task-source-target"
-                    placeholder={github ? "owner/repo" : undefined}
-                    autoFocus
-                    required
-                    value={target}
-                    disabled={add.isPending}
-                    onChange={(event) => {
-                      setTarget(event.target.value);
-                      add.reset();
-                    }}
-                  />
-                </Field>
-              )}
-              {lark && (
-                <Field>
-                  <FieldLabel htmlFor="task-source-name">
-                    {t("tasks.sourceName")}
-                  </FieldLabel>
-                  <Input
-                    id="task-source-name"
-                    maxLength={100}
-                    placeholder={type.name}
-                    value={name ?? type.name}
-                    disabled={add.isPending}
-                    onChange={(event) => {
-                      setName(event.target.value);
-                      add.reset();
-                    }}
-                  />
-                </Field>
-              )}
-              {github && (
-                <Field data-disabled={add.isPending || undefined}>
-                  <FieldTitle id="task-source-sync-kind">
-                    {t("tasks.syncKind")}
-                  </FieldTitle>
-                  <SyncKindPicker
-                    labelId="task-source-sync-kind"
-                    value={syncKind}
-                    disabled={add.isPending}
-                    onChange={setSyncKind}
-                  />
-                </Field>
-              )}
-            </FieldGroup>
-          )}
-          {(plugins.error || addError) && (
-            <ErrorNotice
-              error={
-                addError instanceof APIError &&
-                addError.code?.startsWith("task_source_")
-                  ? t(
-                      "tasks.sourceError." +
-                        addError.code.slice("task_source_".length),
-                    )
-                  : (addError ?? plugins.error)
-              }
-            />
-          )}
-          {lark ? (
-            <LarkSourceScope
+        {externalStdio && type ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 space-y-3 px-6 pt-4">
+              {typeAndNameFields}
+              {errorNotice}
+            </div>
+            <ExternalSourceScope
+              key={sourceTypeKey(type)}
+              pluginId={type.pluginId}
+              contributionId={type.contributionId}
               pending={add.isPending}
+              inDialog
+              onSuggestedName={setSuggestedName}
               onCancel={onClose}
-              onSave={(target, larkScope) =>
+              onSave={(config) =>
                 add.mutate({
                   pluginId: type.pluginId,
                   contributionId: type.contributionId,
-                  target,
-                  name: name?.trim() || undefined,
-                  larkScope,
+                  name: (name ?? suggestedName)?.trim() || undefined,
+                  config,
                 })
               }
             />
-          ) : (
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={add.isPending}
-                onClick={onClose}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button type="submit" disabled={!canAdd}>
-                {t(add.isPending ? "tasks.addingSource" : "tasks.addSource")}
-              </Button>
-            </DialogFooter>
-          )}
-        </form>
+          </div>
+        ) : (
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (canAdd)
+                add.mutate({
+                  pluginId: type.pluginId,
+                  contributionId: type.contributionId,
+                  target: target.trim(),
+                  ...(github && { syncKind }),
+                });
+            }}
+          >
+            {typeAndNameFields}
+            {errorNotice}
+            {lark ? (
+              <LarkSourceScope
+                pending={add.isPending}
+                onCancel={onClose}
+                onSave={(target, larkScope) =>
+                  add.mutate({
+                    pluginId: type.pluginId,
+                    contributionId: type.contributionId,
+                    target,
+                    name: name?.trim() || undefined,
+                    larkScope,
+                  })
+                }
+              />
+            ) : (
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={add.isPending}
+                  onClick={onClose}
+                >
+                  {t("common.cancel")}
+                </Button>
+                <Button type="submit" disabled={!canAdd}>
+                  {t(add.isPending ? "tasks.addingSource" : "tasks.addSource")}
+                </Button>
+              </DialogFooter>
+            )}
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

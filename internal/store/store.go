@@ -374,6 +374,8 @@ func addStoreColumns(db *sql.DB) error {
 		{"task_sources", "lark_section_ids", "TEXT NOT NULL DEFAULT '[]'"},
 		{"task_sources", "lark_excluded_task_ids", "TEXT NOT NULL DEFAULT '[]'"},
 		{"task_sources", "lark_filters", "TEXT NOT NULL DEFAULT 'null'"},
+		{"task_sources", "config_json", "TEXT NOT NULL DEFAULT 'null'"},
+		{"task_sources", "summary", "TEXT NOT NULL DEFAULT ''"},
 		{"external_tasks", "in_scope", "INTEGER NOT NULL DEFAULT 1"},
 		{"personal_channel_turns", "reaction", "TEXT NOT NULL DEFAULT ''"},
 		{"personal_channel_turns", "reaction_status", "TEXT NOT NULL DEFAULT ''"},

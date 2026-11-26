@@ -273,28 +273,137 @@ type LarkTaskScope struct {
 	Filters         *LarkTaskFilters `json:"filters,omitempty"`
 }
 
+type TaskSourceOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Sub   string `json:"sub,omitempty"`
+	Group string `json:"group,omitempty"`
+}
+
+type TaskSourceAction struct {
+	Label   string `json:"label"`
+	Command string `json:"command,omitempty"`
+	Retry   bool   `json:"retry,omitempty"`
+}
+
+type TaskSourceNotice struct {
+	Tone    string             `json:"tone" tstype:"'info' | 'attention' | 'error'"`
+	Title   string             `json:"title,omitempty"`
+	Message string             `json:"message"`
+	Actions []TaskSourceAction `json:"actions,omitempty"`
+}
+
+type TaskSourceFieldPreset struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type TaskSourceParsedBadge struct {
+	Tone    string `json:"tone,omitempty" tstype:"'neutral' | 'positive' | 'attention' | 'error'"`
+	Badge   string `json:"badge,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Invalid bool   `json:"invalid,omitempty"`
+}
+
+type TaskSourceField struct {
+	Key         string                  `json:"key"`
+	Label       string                  `json:"label"`
+	Description string                  `json:"description,omitempty"`
+	Kind        string                  `json:"kind" tstype:"'toggle' | 'multiToggle' | 'switch' | 'text' | 'textarea' | 'select' | 'multiSelect' | 'code'"`
+	Section     string                  `json:"section,omitempty"`
+	Joined      bool                    `json:"joined,omitempty"`
+	Stacked     bool                    `json:"stacked,omitempty"`
+	Advanced    bool                    `json:"advanced,omitempty"`
+	Placeholder string                  `json:"placeholder,omitempty"`
+	Options     []TaskSourceOption      `json:"options,omitempty"`
+	Presets     []TaskSourceFieldPreset `json:"presets,omitempty"`
+	Parsed      *TaskSourceParsedBadge  `json:"parsed,omitempty"`
+	Searchable  bool                    `json:"searchable,omitempty"`
+	ReadOnly    bool                    `json:"readOnly,omitempty"`
+	Value       any                     `json:"value,omitempty" tstype:"unknown"`
+}
+
+type TaskSourceInspectRequest struct {
+	PluginID       string          `json:"pluginId"`
+	ContributionID string          `json:"contributionId"`
+	SourceID       string          `json:"sourceId,omitempty"`
+	Config         json.RawMessage `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
+	SearchField    string          `json:"searchField,omitempty"`
+	SearchQuery    string          `json:"searchQuery,omitempty"`
+	Refresh        bool            `json:"refresh,omitempty"`
+}
+
+type TaskSourceInspect struct {
+	Ready         bool               `json:"ready"`
+	Account       string             `json:"account,omitempty"`
+	Target        string             `json:"target,omitempty"`
+	SuggestedName string             `json:"suggestedName,omitempty"`
+	Summary       string             `json:"summary,omitempty"`
+	Config        json.RawMessage    `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
+	Fields        []TaskSourceField  `json:"fields,omitempty"`
+	AdvancedLabel string             `json:"advancedLabel,omitempty"`
+	Notices       []TaskSourceNotice `json:"notices,omitempty"`
+	CanSave       bool               `json:"canSave"`
+}
+
+type TaskSourcePreviewRequest struct {
+	PluginID       string          `json:"pluginId"`
+	ContributionID string          `json:"contributionId"`
+	SourceID       string          `json:"sourceId,omitempty"`
+	Config         json.RawMessage `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
+	Refresh        bool            `json:"refresh,omitempty"`
+}
+
+type TaskSourcePreviewItem struct {
+	ExternalID string   `json:"externalId"`
+	Title      string   `json:"title"`
+	URL        string   `json:"url,omitempty"`
+	Badge      string   `json:"badge,omitempty"`
+	BadgeTone  string   `json:"badgeTone,omitempty" tstype:"'' | 'danger' | 'attention' | 'neutral'"`
+	Meta       []string `json:"meta,omitempty"`
+	DueText    string   `json:"dueText,omitempty"`
+	Overdue    bool     `json:"overdue,omitempty"`
+	DueAt      int64    `json:"dueAt,omitempty"`
+	DueDate    string   `json:"dueDate,omitempty"`
+	UpdatedAt  int64    `json:"updatedAt,omitempty"`
+}
+
+type TaskSourcePreview struct {
+	AsOf      int64                   `json:"asOf"`
+	Total     int                     `json:"total"`
+	Limit     int                     `json:"limit,omitempty"`
+	Truncated bool                    `json:"truncated,omitempty"`
+	Items     []TaskSourcePreviewItem `json:"items"`
+	Notices   []TaskSourceNotice      `json:"notices,omitempty"`
+}
+
 type TaskSourceCreate struct {
 	PluginID       string `json:"pluginId"`
 	ContributionID string `json:"contributionId"`
 	Target         string `json:"target,omitempty"`
-	// Name overrides the default display name. Only Lark Todos sources accept it.
-	Name      string         `json:"name,omitempty"`
-	SyncKind  TaskSourceKind `json:"syncKind,omitempty"`
-	LarkScope *LarkTaskScope `json:"larkScope,omitempty"`
+	// Name overrides the default display name for sources that support renaming.
+	Name      string          `json:"name,omitempty"`
+	SyncKind  TaskSourceKind  `json:"syncKind,omitempty"`
+	LarkScope *LarkTaskScope  `json:"larkScope,omitempty"`
+	Config    json.RawMessage `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
 }
 
 type TaskSource struct {
-	ID             string         `json:"id"`
-	PluginID       string         `json:"pluginId"`
-	ContributionID string         `json:"contributionId"`
-	Name           string         `json:"name"`
-	SyncKind       TaskSourceKind `json:"syncKind"`
-	LarkScope      *LarkTaskScope `json:"larkScope,omitempty"`
-	Enabled        bool           `json:"enabled"`
-	PluginEnabled  bool           `json:"pluginEnabled"`
-	SyncPending    bool           `json:"syncPending"`
-	LastSyncedAt   int64          `json:"lastSyncedAt,omitempty"`
-	Error          string         `json:"error,omitempty"`
+	ID             string          `json:"id"`
+	PluginID       string          `json:"pluginId"`
+	ContributionID string          `json:"contributionId"`
+	Name           string          `json:"name"`
+	Summary        string          `json:"summary,omitempty"`
+	SyncKind       TaskSourceKind  `json:"syncKind"`
+	LarkScope      *LarkTaskScope  `json:"larkScope,omitempty"`
+	Config         json.RawMessage `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
+	Enabled        bool            `json:"enabled"`
+	PluginEnabled  bool            `json:"pluginEnabled"`
+	SyncPending    bool            `json:"syncPending"`
+	LastSyncedAt   int64           `json:"lastSyncedAt,omitempty"`
+	Error          string          `json:"error,omitempty"`
 }
 
 type TaskSourceUpdate struct {
@@ -302,6 +411,7 @@ type TaskSourceUpdate struct {
 	Enabled   *bool           `json:"enabled,omitempty"`
 	SyncKind  *TaskSourceKind `json:"syncKind,omitempty"`
 	LarkScope *LarkTaskScope  `json:"larkScope,omitempty"`
+	Config    json.RawMessage `json:"config,omitempty" tstype:"{ [key: string]: unknown }"`
 }
 
 type ExternalTask struct {

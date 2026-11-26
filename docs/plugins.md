@@ -50,7 +50,7 @@ example-agent/
 | `version` | 显示版本，最多 100 字符 |
 | `description` | 可选说明，最多 1000 字符 |
 | `contributes.providers` | 最多 32 个 Provider 贡献，贡献 ID 在同一插件内唯一 |
-| `contributes.taskSources` | 内置任务来源。每项包含 `id` 和 `name`，由宿主注册读取适配器 |
+| `contributes.taskSources` | 任务来源。内置来源包含 `id` 和 `name`；外部任务来源（最多 32 个）须从包目录安装，指定 `driver: "task-stdio-v1"`、包内相对可执行文件 `command`，可选声明 `multiInstance`（允许同一插件添加多个实例）与 `customName`（允许自定义名称） |
 | `contributes.channels` | 内置渠道使用 `id`、`name`；本地个人渠道还须指定 `driver: "personal-stdio-v1"` 和包内相对可执行文件 `command`，不能混合声明 Provider 或事件源 |
 | `contributes.eventSources` | 内置事件源使用 `id`、`name`、`fields`；外部事件源（最多 32 个）须从包目录安装，指定 `driver: "poll-stdio-v1"`、包内相对可执行文件 `command` 与最多 32 个字段（`kind` 为 `text` 或 `secret`，`secret` 不能设 `default`） |
 | Provider 的 `driver` | `codex`、`claude`、`pi`、`antigravity` 或 `acp` |
