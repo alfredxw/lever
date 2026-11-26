@@ -429,6 +429,60 @@ func TestAntigravityBackgroundNeverReportsUnconfirmedSuccess(t *testing.T) {
 	}
 }
 
+func TestAntigravityBackgroundCommandHoldExpiryAndScope(t *testing.T) {
+	t.Run("orphaned command finishes after silence timeout and resets on activity", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			peer := startAntigravityPrompt(t)
+			peer.command("hung-rg", "in_progress", false)
+			peer.command("vet", "in_progress", false)
+			peer.usage()
+			peer.endPrompt()
+			peer.checkRunning()
+
+			// Activity after 20m resets the silence window.
+			time.Sleep(20 * time.Minute)
+			peer.checkRunning()
+			peer.exitCommand("vet")
+			peer.update(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "Final answer."}})
+			peer.usage()
+
+			// Still held until a full quiet window elapses after the last activity.
+			time.Sleep(antigravityCommandHoldTimeout - time.Minute)
+			peer.checkRunning()
+			time.Sleep(2 * time.Minute)
+			peer.checkResult(nil)
+
+			if last := peer.sink.items[len(peer.sink.items)-1]; last.Text != "Final answer." || last.Status != "completed" {
+				t.Fatalf("final reply not completed on command-hold expiry: %+v", last)
+			}
+		})
+	})
+
+	t.Run("schedule and foreground tools follow outliving rules", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// Foreground read/edit tools left in_progress before end_turn must not hold the turn.
+			peer := startAntigravityPrompt(t)
+			peer.tool("read-1", "read", "Running read_file", "in_progress")
+			peer.usage()
+			peer.endPrompt()
+			peer.checkResult(nil)
+
+			// Schedule tools outlive end_turn and are not expired by the command-hold timeout.
+			sched := startAntigravityPrompt(t)
+			sched.tool("timer-1", "other", "Running schedule", "in_progress")
+			sched.usage()
+			sched.endPrompt()
+			time.Sleep(antigravityCommandHoldTimeout + time.Minute)
+			sched.checkRunning()
+			sched.completeTool("timer-1")
+			sched.update(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "Timer fired."}})
+			sched.usage()
+			sched.settle()
+			sched.checkResult(nil)
+		})
+	})
+}
+
 func TestAntigravitySessionDBBackgroundProbe(t *testing.T) {
 	geminiHome := t.TempDir()
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")

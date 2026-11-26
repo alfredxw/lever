@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -8,13 +9,15 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	"lever/internal/model"
 )
 
 const (
-	antigravityReplyTimeout      = 5 * time.Minute
-	antigravityChildReplyTimeout = 2 * time.Minute
-	antigravitySettleTimeout     = time.Second
-	antigravityChildIdleGrace    = 3 * time.Second
+	antigravityReplyTimeout       = 5 * time.Minute
+	antigravityChildReplyTimeout  = 2 * time.Minute
+	antigravityCommandHoldTimeout = 30 * time.Minute
+	antigravitySettleTimeout      = time.Second
+	antigravityChildIdleGrace     = 3 * time.Second
 )
 
 type antigravityProbeState int
@@ -65,6 +68,46 @@ func isAntigravityDaemon(tool *acpToolState) bool {
 	return daemon
 }
 
+func isAntigravitySchedule(tool *acpToolState) bool {
+	return tool != nil && acpNormalizedToolName(tool.Title) == "schedule"
+}
+
+func isAntigravityBackgroundCommand(tool *acpToolState) bool {
+	if tool == nil || isAntigravityDaemon(tool) || isAntigravitySchedule(tool) {
+		return false
+	}
+	if tool.Kind == acp.ToolKindExecute {
+		return true
+	}
+	if tool.Kind != "" {
+		return false
+	}
+	input := obj(tool.RawInput)
+	command := strings.TrimSpace(cmp.Or(
+		str(input["CommandLine"]),
+		str(input["command_line"]),
+		str(input["commandLine"]),
+		str(input["command"]),
+	))
+	return inferACPToolAction(tool.Title, command) == model.ToolActionCommand
+}
+
+func antigravityToolOutlivesPrompt(tool *acpToolState) bool {
+	return isAntigravityBackgroundCommand(tool) || isAntigravitySchedule(tool) || isAntigravitySubagentCall(tool)
+}
+
+func (background *antigravityBackground) heldOnlyByCommands(tools map[string]*acpToolState) bool {
+	if len(background.runningPastUsage) == 0 || background.requests > 0 || len(background.childCalls) > 0 {
+		return false
+	}
+	for id := range background.runningPastUsage {
+		if !isAntigravityBackgroundCommand(tools[id]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (background *antigravityBackground) observe(update acp.SessionUpdate, tools map[string]*acpToolState) {
 	switch {
 	case update.ToolCall != nil:
@@ -101,8 +144,12 @@ func (background *antigravityBackground) observe(update acp.SessionUpdate, tools
 		replyText := background.replyText
 		background.replyText = false
 		if background.waiting {
-			if replyText && len(background.runningPastUsage) == 0 && background.requests == 0 {
-				background.settling = true
+			if replyText {
+				if len(background.runningPastUsage) == 0 && background.requests == 0 {
+					background.settling = true
+				} else {
+					background.replyPending = false
+				}
 			}
 			background.signal()
 		} else if replyText {
@@ -118,7 +165,8 @@ func (background *antigravityBackground) observeTool(tool *acpToolState, created
 	}
 	pastUsage, running := background.runningPastUsage[tool.ID]
 	daemon := isAntigravityDaemon(tool)
-	if tool.Status == acp.ToolCallStatusInProgress && !daemon {
+	hold := !daemon && (background.waiting || antigravityToolOutlivesPrompt(tool))
+	if tool.Status == acp.ToolCallStatusInProgress && hold {
 		if !running {
 			background.runningPastUsage[tool.ID] = false
 		}
@@ -183,6 +231,9 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 	settleTimer := time.NewTimer(antigravitySettleTimeout)
 	settleTimer.Stop()
 	defer settleTimer.Stop()
+	commandHoldTimer := time.NewTimer(antigravityCommandHoldTimeout)
+	commandHoldTimer.Stop()
+	defer commandHoldTimer.Stop()
 
 	var generatingSince, childIdleSince, childReplySince time.Time
 	for c.err == nil && (len(background.runningPastUsage) > 0 || background.requests > 0 || background.replyPending || background.settling || len(background.childCalls) > 0) {
@@ -190,7 +241,7 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 		if queued && c.ctx.Err() == nil {
 			return true, nil
 		}
-		var replyTimeout, settleTimeout <-chan time.Time
+		var replyTimeout, settleTimeout, commandHoldTimeout <-chan time.Time
 		if len(background.runningPastUsage) == 0 && background.requests == 0 {
 			if background.settling || len(background.childCalls) > 0 {
 				settleTimer.Reset(antigravitySettleTimeout)
@@ -206,11 +257,17 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 			generatingSince = time.Time{}
 			childIdleSince = time.Time{}
 			childReplySince = time.Time{}
+			if background.heldOnlyByCommands(c.tools) {
+				commandHoldTimer.Reset(antigravityCommandHoldTimeout)
+				commandHoldTimeout = commandHoldTimer.C
+			}
 		}
+		gen := background.generation
 		c.mu.Unlock()
 		var err error
 		settled := false
 		changed := false
+		commandHoldExpired := false
 		select {
 		case <-wake:
 			queued = true
@@ -224,10 +281,13 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 			settled = true
 		case <-replyTimeout:
 			err = errors.Join(ErrUnconfirmed, errors.New("Antigravity did not report back after its background command exited"))
+		case <-commandHoldTimeout:
+			commandHoldExpired = true
 		}
 		c.mu.Lock()
 		replyTimer.Stop()
 		settleTimer.Stop()
+		commandHoldTimer.Stop()
 		if changed {
 			generatingSince = time.Time{}
 			childIdleSince = time.Time{}
@@ -235,6 +295,16 @@ func (c *acpRuntime) awaitPromptBoundary(result acp.PromptResponse, wake <-chan 
 		}
 		if err != nil {
 			return false, err
+		}
+		if commandHoldExpired {
+			if c.err != nil || background.generation != gen || !background.heldOnlyByCommands(c.tools) {
+				continue
+			}
+			clear(background.runningPastUsage)
+			background.settling = false
+			background.replyPending = false
+			background.replyText = false
+			continue
 		}
 		if !settled {
 			continue
