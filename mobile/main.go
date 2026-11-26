@@ -1,4 +1,4 @@
-// Lever Mobile serves only the bundled workbench in the native WebView.
+// Lever mobile app serves only the bundled workbench in the native WebView.
 // Device tokens and signing keys stay inside the native credential store.
 package main
 
@@ -89,7 +89,7 @@ func (m *Mobile) Pair(link string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	st, err := p.Pair(ctx, base, p.PairInput{Code: code, Identity: p.Identity{ID: p.NewID(), PublicKey: pub}, Platform: runtime.GOOS, Name: "Lever Mobile", Role: p.Controller}, key)
+	st, err := p.Pair(ctx, base, p.PairInput{Code: code, Identity: p.Identity{ID: p.NewID(), PublicKey: pub}, Platform: runtime.GOOS, Name: "Lever", Role: p.Controller}, key)
 	if err != nil {
 		return err
 	}

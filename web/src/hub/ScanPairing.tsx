@@ -1,19 +1,36 @@
 import { useState } from "react";
 import jsQR from "jsqr";
+import { QrCode } from "lucide-react";
+
 export function ScanPairing({ onLink }: { onLink: (v: string) => void }) {
   const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
+
   return (
-    <>
-      <label>
-        扫描配对二维码
+    <div className="flex flex-col gap-2">
+      <label className="hub-scan-trigger">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <QrCode className="size-5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col text-left">
+          <span className="text-[14px] font-medium text-foreground">
+            {scanning ? "正在识别二维码…" : "扫描配对二维码"}
+          </span>
+          <span className="text-xs font-normal text-muted-foreground">
+            打开电脑 Lever「设置 → 远程与设备」点击配对新设备
+          </span>
+        </span>
         <input
           type="file"
           accept="image/*"
           capture="environment"
+          className="sr-only"
           onChange={async (e) => {
             const file = e.target.files?.[0];
+            e.target.value = "";
             if (!file) return;
             setError("");
+            setScanning(true);
             const url = URL.createObjectURL(file);
             try {
               const img = new Image();
@@ -37,14 +54,19 @@ export function ScanPairing({ onLink }: { onLink: (v: string) => void }) {
                 throw Error();
               onLink(qr.data);
             } catch {
-              setError("未识别到配对二维码，请重拍或粘贴链接。");
+              setError("未识别到配对二维码，请重拍或直接粘贴配对链接。");
             } finally {
+              setScanning(false);
               URL.revokeObjectURL(url);
             }
           }}
         />
       </label>
-      {error && <p role="alert">{error}</p>}
-    </>
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

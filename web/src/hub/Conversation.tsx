@@ -1,16 +1,40 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  FileDiff,
+  Hash,
+  History,
+  ListPlus,
+  Lock,
+  MessageSquarePlus,
+  SendHorizontal,
+  ShieldAlert,
+  Square,
+  X,
+} from "lucide-react";
 import { fetchArchive, savedArchive } from "./archive";
-import type { Answer, Device, Intent, Record as Shared } from "@/api/hub.gen";
+import type {
+  Answer,
+  Device,
+  InboxItem,
+  Intent,
+  Record as Shared,
+} from "@/api/hub.gen";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import type { InboxItem } from "@/api/hub.gen";
+import { Textarea } from "@/components/ui/textarea";
 import { label, submit, type Workspace } from "./HubApp";
 import { readLocal, saveLocal } from "./client";
 import { taskDraftKey } from "./Tasks";
+import { formatChatTime, HubAgentAvatar } from "./ui";
 
 export type Command = Omit<Intent, "id">;
+
 function Card({
   q,
   onAnswer,
@@ -21,27 +45,53 @@ function Card({
   disabled: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const isPending = q.status === "pending";
   return (
-    <section className="hub-card" id={"hub-record-" + q.id}>
-      <h3>{q.title}</h3>
-      <p>{q.text}</p>
-      {q.status !== "pending" ? (
-        <p>
-          {label(q.status)}{" "}
-          {q.answeredByUserId && <small>{q.answeredByUserId} · </small>}
+    <section
+      className={`hub-approval-card ${isPending ? "hub-approval-pending" : "hub-approval-done"}`}
+      id={"hub-record-" + q.id}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+          {isPending ? (
+            <ShieldAlert className="size-4 shrink-0 text-amber-500" />
+          ) : (
+            <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+          )}
+          <span>{q.title || (q.type === "question" ? "需要回答" : "请求审批")}</span>
+        </div>
+        <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+          {label(q.status)}
+        </span>
+      </div>
+      {q.text && (
+        <p className="mt-1.5 text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+          {q.text}
+        </p>
+      )}
+      {!isPending ? (
+        <div className="mt-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">{label(q.status)}</span>
+          {q.answeredByUserId && <span> · {q.answeredByUserId}</span>}
+          {" · "}
           {q.type === "question" && q.answer?.answers
             ? Object.values(q.answer.answers).flat().join("，")
             : (q.answer?.optionId ??
               (q.answer?.allow ? "已允许" : q.answer ? "已拒绝" : ""))}
-        </p>
+        </div>
       ) : (
-        <>
+        <div className="mt-3 flex flex-col gap-3">
           {q.questions?.map((v) => (
-            <fieldset key={v.id}>
-              <legend>{v.text}</legend>
+            <fieldset key={v.id} className="flex flex-col gap-1.5">
+              <legend className="mb-1 text-[13px] font-medium text-foreground">
+                {v.text}
+              </legend>
               {v.options?.length ? (
                 v.options.map((o) => (
-                  <label className="hub-check" key={o.id}>
+                  <label
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-[13px] hover:bg-control-hover"
+                    key={o.id}
+                  >
                     <input
                       type={v.multiple ? "checkbox" : "radio"}
                       name={v.id}
@@ -58,11 +108,12 @@ function Card({
                         })
                       }
                     />
-                    {o.name}
+                    <span>{o.name}</span>
                   </label>
                 ))
               ) : (
                 <Input
+                  placeholder="输入回答…"
                   onChange={(e) =>
                     setAnswers({ ...answers, [v.id]: [e.target.value] })
                   }
@@ -70,9 +121,10 @@ function Card({
               )}
             </fieldset>
           ))}
-          <div className="hub-actions">
+          <div className="flex flex-wrap items-center gap-2">
             {q.type === "question" ? (
               <Button
+                size="sm"
                 disabled={
                   disabled ||
                   q.questions?.some((v) => !answers[v.id]?.some(Boolean))
@@ -87,8 +139,9 @@ function Card({
                   q.options.map((v) => (
                     <Button
                       key={v.id}
+                      size="sm"
                       disabled={disabled}
-                      variant="outline"
+                      variant={v.allow ? "default" : "outline"}
                       onClick={() =>
                         onAnswer({ allow: !!v.allow, optionId: v.id })
                       }
@@ -99,12 +152,14 @@ function Card({
                 ) : (
                   <>
                     <Button
+                      size="sm"
                       disabled={disabled}
                       onClick={() => onAnswer({ allow: true })}
                     >
                       允许一次
                     </Button>
                     <Button
+                      size="sm"
                       variant="outline"
                       disabled={disabled}
                       onClick={() => onAnswer({ allow: false })}
@@ -115,6 +170,7 @@ function Card({
                 )}
                 {q.allowOnce && (
                   <Button
+                    size="sm"
                     disabled={disabled}
                     variant="ghost"
                     onClick={() => onAnswer("allow_run")}
@@ -125,11 +181,12 @@ function Card({
               </>
             )}
           </div>
-        </>
+        </div>
       )}
     </section>
   );
 }
+
 export function Conversation({
   ws,
   device,
@@ -139,6 +196,7 @@ export function Conversation({
   session,
   target,
   index,
+  otherUnreadCount = 0,
 }: {
   ws: Workspace;
   device: Device;
@@ -148,6 +206,7 @@ export function Conversation({
   session?: string;
   target?: string;
   index: Shared[];
+  otherUnreadCount?: number;
 }) {
   const base =
     "devices/" + device.id + (privateChat ? "/private/" : "/chats/") + chat;
@@ -155,6 +214,10 @@ export function Conversation({
     ws.key + (privateChat ? ":private:" : ":archive:") + device.id + ":" + chat;
   const qc = useQueryClient();
   const native = ws.transport.kind !== "web";
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const threadRef = useRef<HTMLDivElement>(null);
+
   const query = useQuery({
     queryKey: [ws.key, "chat", device.id, chat, privateChat],
     enabled: !!chat,
@@ -180,6 +243,7 @@ export function Conversation({
       return { records: result, at: Date.now(), cursor: undefined };
     },
   });
+
   const saved =
     !query.data && native && !privateChat
       ? savedArchive(ws.key, device.id, chat)
@@ -190,6 +254,7 @@ export function Conversation({
     (native && !privateChat
       ? (saved?.records ?? readLocal<Shared[]>(cached, []))
       : []);
+
   const viewed = useRef("");
   const awaitingNotice =
     !!target && (!query.isFetchedAfterMount || query.isError);
@@ -201,6 +266,49 @@ export function Conversation({
       viewed.current = target;
     }
   }, [target, query.dataUpdatedAt, query.isFetching]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHistoryOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [historyOpen]);
+
+  const chatRecord =
+    records.find((v) => v.kind === "chat") ??
+    (chat ? index.find((v) => v.kind === "chat" && v.id === chat) : undefined);
+
+  const resolvedAgentId = agent ?? chatRecord?.agentId ?? "";
+  const agentRecord = index.find(
+    (v) => v.kind === "agent" && v.id === resolvedAgentId,
+  );
+  const agentName = agentRecord?.title || "Agent";
+
+  // All historical chats and their topics belonging to this Agent on this device.
+  const agentChats = useMemo(() => {
+    const list = index.filter(
+      (v) => v.kind === "chat" && (!resolvedAgentId || v.agentId === resolvedAgentId),
+    );
+    return [...list].sort((x, y) => {
+      const tx = Date.parse(x.updatedAt || x.createdAt || "") || 0;
+      const ty = Date.parse(y.updatedAt || y.createdAt || "") || 0;
+      return ty - tx;
+    });
+  }, [index, resolvedAgentId]);
+
+  const sessionsByChat = useMemo(() => {
+    const map = new Map<string, Shared[]>();
+    for (const s of index) {
+      if (s.kind !== "session" || !s.chatId) continue;
+      const arr = map.get(s.chatId) ?? [];
+      arr.push(s);
+      map.set(s.chatId, arr);
+    }
+    return map;
+  }, [index]);
+
   const sessions = records.filter((v) => v.kind === "session");
   const current = sessions.find((v) =>
     session ? v.id === session : v.type === "main",
@@ -211,6 +319,7 @@ export function Conversation({
     )
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
   const canSteer = runs.some((v) => v.canSteer && v.status === "running");
+
   const draftKey =
     ws.key +
     ":draft:" +
@@ -262,7 +371,7 @@ export function Conversation({
       (known.intent.operation === "topic" &&
         known.receipt.sessionId !== session)
     ) {
-      const target =
+      const next =
         "devices/" +
         device.id +
         (privateChat ? "/private/" : "/chats/") +
@@ -271,269 +380,755 @@ export function Conversation({
           ? "/topics/" + known.receipt.sessionId
           : "");
       localStorage.removeItem(receiptKey);
-      ws.go(target);
+      ws.go(next);
     }
   }, [known, chat, session, device.id, privateChat, receiptKey, ws]);
+
   const [delivery, setDelivery] = useState("queue");
   const [group, setGroup] = useState("");
-  const a = index.find(
-    (v) =>
-      v.kind === "agent" &&
-      v.id === (agent ?? records.find((v) => v.kind === "chat")?.agentId),
-  );
-  const title = (
-    chat ? index.find((v) => v.kind === "chat" && v.id === chat) : a
-  )?.title;
+
   const canSend =
-    (!!a || privateChat) &&
+    (!!agentRecord || privateChat) &&
     (device.online || ws.transport.kind !== "web") &&
     !device.revoked &&
     (!device.draining || !!chat);
+
   useEffect(() => {
     if (current?.unreadSequence)
       saveLocal(ws.key + device.id + current.id, current.unreadSequence);
   }, [current?.id, current?.unreadSequence, device.id, ws.key]);
+
   const enqueue = (cmd: Command) =>
     ws.act(async () => {
       remember(await submit(ws, { ...cmd, private: privateChat || undefined }));
     });
+
+  const routeLabel = privateChat
+    ? "仅设备 · 局域网"
+    : query.isError
+      ? "离线缓存"
+      : query.data?.cursor?.stream === "lan"
+        ? "局域网直连"
+        : "Hub 共享";
+
+  const chatTitle = chat ? chatRecord?.title || "共享对话" : "新对话";
+
+  const sendDraft = () => {
+    if (!draft.trim() || !canSend) return;
+    void ws.act(async () => {
+      remember(
+        await submit(ws, {
+          private: privateChat || undefined,
+          kind: "send",
+          deviceId: device.id,
+          chatId: chat,
+          agentId: agent,
+          sessionId: topic ? undefined : session,
+          workingCopyId: group || undefined,
+          operation: topic ? "topic" : session ? "reply" : "main",
+          delivery: runs.some((v) =>
+            ["starting", "running", "waiting_user"].includes(v.status ?? ""),
+          )
+            ? canSteer
+              ? delivery
+              : "queue"
+            : undefined,
+          text: draft,
+        }),
+      );
+      setDraft("");
+      localStorage.removeItem(draftKey);
+    });
+  };
+
+  const filteredHistoryChats = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return agentChats;
+    return agentChats.filter((c) => {
+      if ((c.title ?? "").toLowerCase().includes(q)) return true;
+      const ts = sessionsByChat.get(c.id) ?? [];
+      return ts.some((s) => (s.title ?? "").toLowerCase().includes(q));
+    });
+  }, [agentChats, historySearch, sessionsByChat]);
+
   return (
-    <>
-      <h1>{title ?? "共享对话"}</h1>
-      <p>
-        {device.name} ·{" "}
-        {privateChat
-          ? "仅设备 · 局域网"
-          : query.isError
-            ? "上次同步"
-            : query.data?.cursor?.stream === "lan"
-              ? "局域网直连"
-              : "Hub 共享"}
-      </p>
-      {chat && (
-        <div className="hub-actions">
-          {records.find((v) => v.kind === "chat")?.taskId && (
-            <Button
-              variant="ghost"
-              onClick={() =>
-                ws.go("tasks/" + records.find((v) => v.kind === "chat")?.taskId)
-              }
-            >
-              打开关联任务
-            </Button>
-          )}
+    <div className="hub-chat-view">
+      {/* Top IM Chat Header */}
+      <header className="hub-chat-header">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <Button
+            type="button"
             variant="ghost"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const id = crypto.randomUUID();
-              const selected = window.getSelection()?.toString() ?? "";
-              saveLocal(taskDraftKey(ws.key, id), {
-                id,
-                title: privateChat ? "" : (title ?? ""),
-                body: selected,
-                source: privateChat
-                  ? undefined
-                  : { deviceId: device.id, chatId: chat, sessionId: session },
-              });
-              ws.go("tasks/new/" + id);
-            }}
+            size="sm"
+            className="hub-mobile-only -ml-1.5 h-8 gap-1 px-2"
+            onClick={() => ws.go("agents")}
+            aria-label="返回对话列表"
           >
-            从对话创建任务
+            <ArrowLeft className="size-4" />
+            {otherUnreadCount > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium tabular-nums">
+                {otherUnreadCount > 99 ? "99+" : otherUnreadCount}
+              </span>
+            )}
+          </Button>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-colors outline-none hover:bg-control-hover focus-visible:bg-control-focus"
+          >
+            <HubAgentAvatar
+              id={resolvedAgentId || device.id}
+              name={agentName}
+              avatar={agentRecord?.avatar}
+              size="sm"
+            />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="flex items-center gap-1 text-[15px] leading-tight font-semibold">
+                <span className="truncate">{agentName}</span>
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              </span>
+              <span className="truncate text-[11.5px] text-muted-foreground">
+                {chatTitle} · {device.name} · {routeLabel}
+              </span>
+            </span>
+          </button>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setHistoryOpen(true)}
+            aria-label="历史对话与话题"
+            title="历史对话与话题"
+          >
+            <History data-icon="inline-start" />
+            <span className="hidden sm:inline">历史</span>
+            {agentChats.length > 0 && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {agentChats.length}
+              </span>
+            )}
           </Button>
         </div>
-      )}
-      {sessions.length > 0 && (
-        <div className="hub-actions">
+      </header>
+
+      {/* Topic, History & Task Quick Ribbon */}
+      {(sessions.length > 0 || agentChats.length > 0 || !!chat) && (
+        <div className="hub-topic-ribbon">
           {sessions.map((s) => (
-            <Button
+            <button
+              type="button"
               key={s.id}
-              variant={s.id === current?.id ? "secondary" : "ghost"}
+              data-active={s.id === current?.id || undefined}
+              className="hub-topic-pill"
               onClick={() =>
                 ws.go(base + (s.type === "main" ? "" : "/topics/" + s.id))
               }
             >
-              {s.type === "main" ? "主会话" : s.title || "Topic"}
-            </Button>
+              {s.type === "topic" && <Hash className="size-3 opacity-70" />}
+              <span className="max-w-36 truncate">
+                {s.type === "main" ? "主会话" : s.title || "Topic"}
+              </span>
+            </button>
           ))}
-        </div>
-      )}
-      {query.error && (
-        <p role="alert">
-          {String(query.error)}{" "}
-          {records.length > 0 &&
-            lastSync &&
-            "上次同步 " + new Date(lastSync).toLocaleString()}
-        </p>
-      )}
-      {target && !awaitingNotice && !records.some((r) => r.id === target) && (
-        <p role="status">这条提醒对应的记录已移除。</p>
-      )}
-      {runs.map((r) => (
-        <section className="hub-turn" key={r.id} id={"hub-record-" + r.id}>
-          <small>{label(r.status)}</small>
-          <p className="hub-user">{r.text}</p>
-          {r.items?.map((v, j) => (
-            <div key={v.id + ":" + j}>
-              {v.title && <strong>{v.title}</strong>}
-              <p>{v.text}</p>
-              {v.truncated && <small>输出已截断</small>}
-            </div>
-          ))}
-          {r.error && <p role="alert">{r.error}</p>}
-          {r.files?.map((f, i) => (
-            <div key={i}>
-              <code>{f.name}</code> +{f.additions} −{f.deletions}
-            </div>
-          ))}
-          {records
-            .filter((q) => q.kind === "request" && q.runId === r.id)
-            .map((q) => (
-              <Card
-                key={q.id}
-                q={q}
-                disabled={
-                  !canSend ||
-                  awaitingNotice ||
-                  (q.id === target && query.isFetching)
-                }
-                onAnswer={(answer) =>
-                  void enqueue({
-                    kind: answer === "allow_run" ? "allow_run" : "answer",
-                    deviceId: device.id,
-                    chatId: chat,
-                    runId: r.id,
-                    requestId: q.id,
-                    answer: answer === "allow_run" ? undefined : answer,
-                  })
-                }
-              />
-            ))}
-          {["starting", "running", "waiting_user", "unknown"].includes(
-            r.status ?? "",
-          ) && (
-            <Button
-              variant="outline"
-              disabled={
-                device.revoked ||
-                (!device.online && ws.transport.kind === "web")
+          {agentChats.length > 0 && (
+            <button
+              type="button"
+              className="hub-topic-pill"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <Clock className="size-3 opacity-70" />
+              <span>历史对话 ({agentChats.length})</span>
+            </button>
+          )}
+          {chat && resolvedAgentId && agentRecord && (
+            <button
+              type="button"
+              className="hub-topic-pill"
+              onClick={() =>
+                ws.go("devices/" + device.id + "/agents/" + resolvedAgentId)
               }
+            >
+              <MessageSquarePlus className="size-3 opacity-70" />
+              <span>新对话</span>
+            </button>
+          )}
+          {chatRecord?.taskId && (
+            <button
+              type="button"
+              className="hub-topic-pill"
+              onClick={() => ws.go("tasks/" + chatRecord.taskId)}
+            >
+              打开关联任务
+            </button>
+          )}
+          {chat && (
+            <button
+              type="button"
+              className="hub-topic-pill ml-auto"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                if (r.status !== "unknown" || confirm("已核实原执行停止？"))
-                  void enqueue({
-                    kind: r.status === "unknown" ? "resolve_unknown" : "stop",
-                    deviceId: device.id,
-                    chatId: chat,
-                    runId: r.id,
-                  });
+                const id = crypto.randomUUID();
+                const selected = window.getSelection()?.toString() ?? "";
+                saveLocal(taskDraftKey(ws.key, id), {
+                  id,
+                  title: privateChat ? "" : (chatRecord?.title ?? ""),
+                  body: selected,
+                  source: privateChat
+                    ? undefined
+                    : { deviceId: device.id, chatId: chat, sessionId: session },
+                });
+                ws.go("tasks/new/" + id);
               }}
             >
-              {r.status === "unknown" ? "确认执行已停止" : "停止执行"}
-            </Button>
+              <ListPlus className="size-3 opacity-70" />
+              从对话创建任务
+            </button>
           )}
-        </section>
-      ))}
-      {current?.queuePaused && (
-        <Button
-          onClick={() =>
-            void enqueue({
-              kind: "resume_queue",
-              deviceId: device.id,
-              chatId: chat,
-              sessionId: current.id,
-            })
-          }
-        >
-          恢复队列
-        </Button>
+        </div>
       )}
+
+      {/* Scrollable Message Thread */}
+      <div className="hub-chat-thread" ref={threadRef}>
+        <div className="mx-auto flex w-full max-w-[780px] flex-col gap-4">
+          {query.error && (
+            <div
+              role="alert"
+              className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {String(query.error)}
+              {records.length > 0 &&
+                lastSync &&
+                " · 上次同步 " + new Date(lastSync).toLocaleString()}
+            </div>
+          )}
+
+          {target &&
+            !awaitingNotice &&
+            !records.some((r) => r.id === target) && (
+              <div
+                role="status"
+                className="rounded-xl border border-border bg-muted/50 px-3 py-2 text-center text-xs text-muted-foreground"
+              >
+                这条提醒对应的记录已移除。
+              </div>
+            )}
+
+          {runs.length === 0 && !query.isLoading && (
+            <div className="flex flex-col items-center gap-3 py-14 text-center">
+              <HubAgentAvatar
+                id={resolvedAgentId || device.id}
+                name={agentName}
+                avatar={agentRecord?.avatar}
+                size="lg"
+              />
+              <div className="flex flex-col gap-1">
+                <div className="text-[15px] font-semibold">{agentName}</div>
+                <p className="text-xs text-muted-foreground">
+                  {chat
+                    ? "该会话暂无消息记录，在下方输入指令即可开始。"
+                    : `在 ${device.name} 上开启新对话${agentRecord?.model ? ` · ${agentRecord.model}` : ""}`}
+                </p>
+              </div>
+              {agentChats.length > 0 && !chat && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  <History data-icon="inline-start" />
+                  查看 {agentChats.length} 个历史对话
+                </Button>
+              )}
+            </div>
+          )}
+
+          {runs.map((r) => {
+            const requests = records.filter(
+              (q) => q.kind === "request" && q.runId === r.id,
+            );
+            const isActive = [
+              "starting",
+              "running",
+              "waiting_user",
+              "unknown",
+            ].includes(r.status ?? "");
+            return (
+              <section
+                className="flex flex-col gap-2.5"
+                key={r.id}
+                id={"hub-record-" + r.id}
+              >
+                {/* User message bubble */}
+                {r.text && (
+                  <div className="flex justify-end">
+                    <div className="hub-bubble-user">{r.text}</div>
+                  </div>
+                )}
+
+                {/* Agent response bubble */}
+                {(r.items?.length ||
+                  r.error ||
+                  r.files?.length ||
+                  requests.length > 0 ||
+                  isActive) && (
+                  <div className="flex items-start gap-2.5">
+                    <HubAgentAvatar
+                      id={resolvedAgentId || device.id}
+                      name={agentName}
+                      avatar={agentRecord?.avatar}
+                      size="sm"
+                    />
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                        <span className="font-medium text-foreground/80">
+                          {agentName}
+                        </span>
+                        {r.status && (
+                          <Badge
+                            variant={
+                              r.status === "waiting_user" ||
+                              r.status === "running"
+                                ? "secondary"
+                                : "outline"
+                            }
+                            className="h-4 px-1.5 text-[10px]"
+                          >
+                            {label(r.status)}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {(r.items?.length || r.error) && (
+                        <div className="hub-bubble-agent">
+                          {r.items?.map((v, j) => (
+                            <div
+                              key={v.id + ":" + j}
+                              className={
+                                v.kind === "text"
+                                  ? "leading-relaxed whitespace-pre-wrap"
+                                  : "rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2 text-xs"
+                              }
+                            >
+                              {v.title && (
+                                <div className="mb-0.5 font-medium text-foreground">
+                                  {v.title}
+                                </div>
+                              )}
+                              {v.text && (
+                                <div className="whitespace-pre-wrap break-words">
+                                  {v.text}
+                                </div>
+                              )}
+                              {v.truncated && (
+                                <span className="mt-1 inline-block text-[11px] text-muted-foreground">
+                                  输出已截断
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                          {r.error && (
+                            <p
+                              role="alert"
+                              className="rounded-lg bg-destructive/10 px-2.5 py-2 text-xs text-destructive"
+                            >
+                              {r.error}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {!!r.files?.length && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {r.files.map((f, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-0.5 font-mono text-[11px]"
+                            >
+                              <FileDiff className="size-3 text-muted-foreground" />
+                              <span>{f.name}</span>
+                              <span className="text-emerald-600 tabular-nums dark:text-emerald-400">
+                                +{f.additions}
+                              </span>
+                              <span className="text-destructive tabular-nums">
+                                −{f.deletions}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {requests.map((q) => (
+                        <Card
+                          key={q.id}
+                          q={q}
+                          disabled={
+                            !canSend ||
+                            awaitingNotice ||
+                            (q.id === target && query.isFetching)
+                          }
+                          onAnswer={(answer) =>
+                            void enqueue({
+                              kind:
+                                answer === "allow_run" ? "allow_run" : "answer",
+                              deviceId: device.id,
+                              chatId: chat,
+                              runId: r.id,
+                              requestId: q.id,
+                              answer: answer === "allow_run" ? undefined : answer,
+                            })
+                          }
+                        />
+                      ))}
+
+                      {isActive && (
+                        <div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              device.revoked ||
+                              (!device.online && ws.transport.kind === "web")
+                            }
+                            onClick={() => {
+                              if (
+                                r.status !== "unknown" ||
+                                confirm("已核实原执行停止？")
+                              )
+                                void enqueue({
+                                  kind:
+                                    r.status === "unknown"
+                                      ? "resolve_unknown"
+                                      : "stop",
+                                  deviceId: device.id,
+                                  chatId: chat,
+                                  runId: r.id,
+                                });
+                            }}
+                          >
+                            <Square data-icon="inline-start" />
+                            {r.status === "unknown"
+                              ? "确认执行已停止"
+                              : "停止执行"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+
+          {current?.queuePaused && (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() =>
+                  void enqueue({
+                    kind: "resume_queue",
+                    deviceId: device.id,
+                    chatId: chat,
+                    sessionId: current.id,
+                  })
+                }
+              >
+                恢复队列
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Sticky IM Composer */}
       <form
-        className="hub-compose"
+        className="hub-chat-composer"
         onSubmit={(e) => {
           e.preventDefault();
-          void ws.act(async () => {
-            remember(
-              await submit(ws, {
-                private: privateChat || undefined,
-                kind: "send",
-                deviceId: device.id,
-                chatId: chat,
-                agentId: agent,
-                sessionId: topic ? undefined : session,
-                workingCopyId: group || undefined,
-                operation: topic ? "topic" : session ? "reply" : "main",
-                delivery: runs.some((v) =>
-                  ["starting", "running", "waiting_user"].includes(
-                    v.status ?? "",
-                  ),
-                )
-                  ? canSteer
-                    ? delivery
-                    : "queue"
-                  : undefined,
-                text: draft,
-              }),
-            );
-            setDraft("");
-            localStorage.removeItem(draftKey);
-          });
+          sendDraft();
         }}
       >
-        <Textarea
-          aria-label="消息"
-          placeholder="输入消息…"
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            saveLocal(draftKey, e.target.value);
-          }}
-        />
-        <div className="hub-actions">
-          {chat && (
-            <label className="hub-check">
-              <input
-                type="checkbox"
-                checked={topic}
-                onChange={(e) => {
-                  setTopic(e.target.checked);
-                  setGroup("");
-                }}
-              />
-              新建 Topic
-            </label>
+        <div className="mx-auto flex w-full max-w-[780px] flex-col gap-2">
+          {(chat || ((!chat || topic) && !!agentRecord?.groups?.length) || canSteer || known) && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {chat && (
+                <label
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors select-none ${
+                    topic
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-background text-muted-foreground hover:bg-control-hover hover:text-foreground"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={topic}
+                    onChange={(e) => {
+                      setTopic(e.target.checked);
+                      setGroup("");
+                    }}
+                  />
+                  <Hash className="size-3" />
+                  <span>新建 Topic</span>
+                </label>
+              )}
+              {(!chat || topic) && !!agentRecord?.groups?.length && (
+                <select
+                  aria-label="目录组"
+                  className="hub-mini-select"
+                  value={group}
+                  onChange={(e) => setGroup(e.target.value)}
+                >
+                  <option value="">默认目录组</option>
+                  {agentRecord.groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {canSteer && (
+                <select
+                  aria-label="发送方式"
+                  className="hub-mini-select"
+                  value={delivery}
+                  onChange={(e) => setDelivery(e.target.value)}
+                >
+                  <option value="queue">加入队列</option>
+                  <option value="steer">引导当前回复</option>
+                </select>
+              )}
+              {known && (
+                <span
+                  role="status"
+                  className="ml-auto text-xs text-muted-foreground"
+                >
+                  {label(known.receipt.status)} {known.receipt.detail}
+                </span>
+              )}
+            </div>
           )}
-          {(!chat || topic) && !!a?.groups?.length && (
-            <select
-              aria-label="目录组"
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
+
+          <div className="flex items-end gap-2">
+            <Textarea
+              aria-label="消息"
+              placeholder={
+                canSend
+                  ? `发消息给 ${agentName}…`
+                  : "当前设备离线或不可发送"
+              }
+              rows={1}
+              className="max-h-36 min-h-[40px] flex-1 resize-none rounded-xl bg-background py-2.5 text-[14px]"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                saveLocal(draftKey, e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  sendDraft();
+                }
+              }}
+            />
+            <Button
+              type="submit"
+              className="h-10 shrink-0 rounded-xl px-4"
+              disabled={!draft.trim() || !canSend}
             >
-              <option value="">默认目录组</option>
-              {a.groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {canSteer && (
-            <select
-              aria-label="发送方式"
-              value={delivery}
-              onChange={(e) => setDelivery(e.target.value)}
-            >
-              <option value="queue">加入队列</option>
-              <option value="steer">引导当前回复</option>
-            </select>
-          )}
-          <Button disabled={!draft.trim() || !canSend}>发送</Button>
+              <SendHorizontal data-icon="inline-start" />
+              发送
+            </Button>
+          </div>
         </div>
       </form>
-      {known && (
-        <p role="status">
-          {label(known.receipt.status)} {known.receipt.detail}
-        </p>
+
+      {/* Slide-up History Chats & Topics Sheet */}
+      {historyOpen && (
+        <div
+          className="hub-sheet-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="历史对话与话题"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHistoryOpen(false);
+          }}
+        >
+          <div className="hub-sheet">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <HubAgentAvatar
+                  id={resolvedAgentId || device.id}
+                  name={agentName}
+                  avatar={agentRecord?.avatar}
+                  size="sm"
+                />
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold">
+                    {agentName}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    历史 Chat 与话题 · {device.name}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {resolvedAgentId && agentRecord && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      setHistoryOpen(false);
+                      ws.go(
+                        "devices/" + device.id + "/agents/" + resolvedAgentId,
+                      );
+                    }}
+                  >
+                    <MessageSquarePlus data-icon="inline-start" />
+                    新对话
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="关闭"
+                  onClick={() => setHistoryOpen(false)}
+                >
+                  <X />
+                </Button>
+              </div>
+            </div>
+
+            {agentChats.length > 4 && (
+              <div className="border-b border-border px-4 py-2.5">
+                <Input
+                  aria-label="筛选历史对话"
+                  placeholder="搜索历史对话或话题…"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto p-3">
+              {filteredHistoryChats.length === 0 ? (
+                <div className="py-10 text-center text-xs text-muted-foreground">
+                  暂无历史对话记录
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {filteredHistoryChats.map((c) => {
+                    const topics = (sessionsByChat.get(c.id) ?? []).filter(
+                      (s) => s.type === "topic",
+                    );
+                    const isCurrentChat = c.id === chat;
+                    return (
+                      <div
+                        key={c.id}
+                        className={`rounded-xl border transition-colors ${
+                          isCurrentChat
+                            ? "border-foreground/25 bg-muted/50"
+                            : "border-border bg-card"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left outline-none hover:bg-control-hover focus-visible:bg-control-focus"
+                          onClick={() => {
+                            setHistoryOpen(false);
+                            ws.go(
+                              "devices/" +
+                                device.id +
+                                (c.private ? "/private/" : "/chats/") +
+                                c.id,
+                            );
+                          }}
+                        >
+                          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate text-[14px] font-medium">
+                                {c.title || "未命名对话"}
+                              </span>
+                              {c.private && (
+                                <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                                  <Lock className="size-2.5" />
+                                  仅局域网
+                                </Badge>
+                              )}
+                              {isCurrentChat && !session && (
+                                <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                                  当前
+                                </Badge>
+                              )}
+                            </div>
+                            <span className="text-[11.5px] text-muted-foreground">
+                              主会话
+                              {topics.length > 0
+                                ? ` · ${topics.length} 个话题`
+                                : ""}
+                            </span>
+                          </div>
+                          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                            {formatChatTime(c.updatedAt || c.createdAt)}
+                          </span>
+                        </button>
+
+                        {topics.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 border-t border-border/70 px-3 py-2">
+                            {topics.map((t) => {
+                              const isCurrentTopic =
+                                isCurrentChat && session === t.id;
+                              const isTopicUnread =
+                                (t.unreadSequence ?? 0) >
+                                readLocal(ws.key + device.id + t.id, 0);
+                              return (
+                                <button
+                                  type="button"
+                                  key={t.id}
+                                  className={`inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors outline-none ${
+                                    isCurrentTopic
+                                      ? "border-foreground/30 bg-foreground text-background"
+                                      : "border-border bg-background text-foreground hover:bg-control-hover"
+                                  }`}
+                                  onClick={() => {
+                                    setHistoryOpen(false);
+                                    ws.go(
+                                      "devices/" +
+                                        device.id +
+                                        (c.private ? "/private/" : "/chats/") +
+                                        c.id +
+                                        "/topics/" +
+                                        t.id,
+                                    );
+                                  }}
+                                >
+                                  <Hash className="size-3 shrink-0 opacity-70" />
+                                  <span className="truncate">
+                                    {t.title || "Topic"}
+                                  </span>
+                                  {isTopicUnread && !isCurrentTopic && (
+                                    <span className="size-1.5 shrink-0 rounded-full bg-red-500" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
-    </>
+    </div>
   );
 }

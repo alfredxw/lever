@@ -1,9 +1,9 @@
 {
-  "name":"Lever Mobile",
+  "name":"Lever",
   "slug":"lever-mobile",
   "identifier":"app.lever.mobile",
   "version":"0.1.0",
-  "icon":"../cmd/lever-desktop/icon.png",
+  "icon":"icon.png",
   "main":".",
   "out":"dist",
   "urlSchemes":["leverdevice"],

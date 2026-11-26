@@ -1,4 +1,4 @@
-# Lever Mobile
+# Lever 移动端
 
 手机端连接已部署的 Lever Hub。管理员在「设置 → 设备」选择「控制端」并生成一次性配对码。在 App 中扫描二维码或粘贴配对链接。手机与执行机需要能访问同一个 HTTPS Hub 地址。
 
@@ -17,13 +17,13 @@ xcrun --sdk iphoneos --show-sdk-version
 make mobile-ios
 ```
 
-从仓库根目录运行。设备包输出到 `mobile/dist/ios-arm64/`。将描述文件包含的 iPhone 解锁并连接到 Mac，在手机上信任这台电脑并启用开发者模式。解压 IPA 后，用 `xcrun devicectl list devices` 查看设备标识，在解压目录中运行 `xcrun devicectl device install app --device DEVICE_ID "Payload/Lever Mobile.app"`。
+从仓库根目录运行。设备包输出到 `mobile/dist/ios-arm64/`。将描述文件包含的 iPhone 解锁并连接到 Mac，在手机上信任这台电脑并启用开发者模式。解压 IPA 后，用 `xcrun devicectl list devices` 查看设备标识，在解压目录中运行 `xcrun devicectl device install app --device DEVICE_ID "Payload/Lever.app"`。
 
 在 Apple Silicon Mac 上测试模拟器版时，先在 Xcode 的 Components 设置中安装 iOS 模拟器运行时并启动一个 iPhone 模拟器，然后从仓库根目录运行。
 
 ```sh
 make mobile-ios-simulator
-xcrun simctl install booted "mobile/dist/ios-simulator/Lever Mobile.app"
+xcrun simctl install booted "mobile/dist/ios-simulator/Lever.app"
 xcrun simctl launch booted app.lever.mobile
 ```
 
