@@ -1723,7 +1723,9 @@ export const enUS = {
   "usage.backendUpdate":
     "This backend cannot read agy usage. After active runs finish, quit and reopen Lever with an up-to-date agy CLI.",
   "usage.loading": "Reading usage…",
-  "usage.readFailed": "Could not read agy usage. Check /usage in the CLI.",
+  "usage.readFailed":
+    "Could not read subscription usage. Will retry automatically.",
+  "usage.readFailedAgy": "Could not read agy usage. Check /usage in the CLI.",
   "usage.noAllowance": "agy returned no subscription limits for this account.",
   "usage.lastReading": "Last successful reading",
   "usage.navigation": "Usage",

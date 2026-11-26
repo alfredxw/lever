@@ -25,6 +25,7 @@ func newRecordingSink() *recordingSink {
 func (s *recordingSink) Bind(string) error                                           { return nil }
 func (s *recordingSink) BindTurn(string) error                                       { return nil }
 func (s *recordingSink) UpdateRuntime(func(*model.SessionRuntime)) error             { return nil }
+func (s *recordingSink) Usage([]model.UsageWindow) error                             { return nil }
 func (s *recordingSink) Title(title string) error                                    { s.titles = append(s.titles, title); return nil }
 func (s *recordingSink) TurnDiff(string) error                                       { return nil }
 func (s *recordingSink) EnablePermissionChanges(func(context.Context, string) error) {}

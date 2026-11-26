@@ -1351,6 +1351,11 @@ export interface UsageWindow {
   usedPercent: number /* float64 */;
   resetsAt?: string;
 }
+export interface ProviderUsage {
+  windows: UsageWindow[];
+  sampledAt?: string;
+  stale?: boolean; // The reading is older than the freshness threshold or the latest refresh failed.
+}
 /**
  * Plugin installations retain their identity after uninstall so conversations
  * can display their original provider without executing uninstalled code.

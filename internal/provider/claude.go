@@ -258,6 +258,7 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	goalActive := in.Session.Runtime != nil && in.Session.Runtime.Goal != nil && in.Session.Runtime.Goal.Status == "active"
 	goalSawModel := false
 	var lastModelMessage object
+	var lastUsage []model.UsageWindow
 	var requestedAt time.Time
 	refreshContext := command == "context" || command == "compact"
 	pendingSteers := map[string]bool{}
@@ -387,6 +388,12 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 			f, err := decode(b)
 			if err != nil {
 				return err
+			}
+			if windows := claudeRateLimitEvent(f); len(windows) > 0 && !slices.Equal(windows, lastUsage) {
+				lastUsage = windows
+				if err := sink.Usage(windows); err != nil {
+					return err
+				}
 			}
 			if err := subagents.frame(f, sink); err != nil {
 				return err

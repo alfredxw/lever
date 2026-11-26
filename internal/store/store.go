@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS provider_catalogs(
   config_dir TEXT NOT NULL, cwd TEXT NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY(provider_id,config_dir,cwd)
 );
+CREATE TABLE IF NOT EXISTS provider_usage(
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  config_dir TEXT NOT NULL, data TEXT NOT NULL,
+  PRIMARY KEY(provider_id,config_dir)
+);
 CREATE TABLE IF NOT EXISTS plugins(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), data TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS chat_task ON chats(json_extract(data,'$.taskId')) WHERE json_type(data,'$.taskId') = 'text';

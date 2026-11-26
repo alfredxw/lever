@@ -224,20 +224,21 @@ func TestNativeAntigravityUsageReportsAccountQuota(t *testing.T) {
 	if info := find(); info.Auth != "cli" || !info.ReportsUsage {
 		t.Fatal("supported CLI did not advertise subscription usage", info)
 	}
-	var windows []model.UsageWindow
-	f.request("GET", "/providers/antigravity/usage", nil, 200, &windows)
+	var usage model.ProviderUsage
+	f.request("GET", "/providers/antigravity/usage", nil, 200, &usage)
+	windows := usage.Windows
 	if len(windows) != 3 || windows[0].Group != "Gemini Models" || windows[0].Minutes != 7*24*60 || windows[0].UsedPercent != 25 ||
 		windows[1].UsedPercent != 0 || windows[1].Minutes != 5*60 || windows[1].ResetsAt == "" ||
 		windows[2].Group != "Claude and GPT models" || windows[2].UsedPercent != 50 {
-		t.Fatal("unexpected subscription usage", windows)
+		t.Fatal("unexpected subscription usage", usage)
 	}
 	t.Setenv("LEVER_FIXTURE_AGY_VERSION", "1.1.10")
 	if info := find(); info.ReportsUsage {
 		t.Fatal("older CLI advertised subscription usage", info)
 	}
-	f.request("GET", "/providers/antigravity/usage", nil, 200, &windows)
-	if len(windows) != 0 {
-		t.Fatal("older CLI's print mode was invoked for /usage", windows)
+	f.request("GET", "/providers/antigravity/usage", nil, 200, &usage)
+	if len(usage.Windows) != 0 {
+		t.Fatal("older CLI's print mode was invoked for /usage", usage)
 	}
 }
 
@@ -343,13 +344,13 @@ func TestProviderConfigurationDirectoryIsConsistentAndImmutable(t *testing.T) {
 			if len(catalog.Models) == 0 {
 				t.Fatal("catalog discovery did not use the configured directory")
 			}
-			var usage []model.UsageWindow
+			var usage model.ProviderUsage
 			f.request("GET", "/providers/"+config.ID+"/usage", nil, 200, &usage)
-			if len(usage) != 2 || usage[0].Minutes != 300 || usage[1].Minutes != 10080 {
+			if len(usage.Windows) != 2 || usage.Windows[0].Minutes != 300 || usage.Windows[1].Minutes != 10080 {
 				t.Fatalf("usage discovery did not read the configured subscription: %+v", usage)
 			}
-			if reset, err := time.Parse(time.RFC3339, usage[0].ResetsAt); err != nil || !reset.After(time.Now()) {
-				t.Fatalf("invalid subscription reset: %q", usage[0].ResetsAt)
+			if reset, err := time.Parse(time.RFC3339, usage.Windows[0].ResetsAt); err != nil || !reset.After(time.Now()) {
+				t.Fatalf("invalid subscription reset: %q", usage.Windows[0].ResetsAt)
 			}
 			skills, err := provider.Skills(context.Background(), config, model.Scope{
 				PrimaryRootID: "root", Roots: []model.Root{{ID: "root", Path: f.root}},

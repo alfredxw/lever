@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,19 @@ func fixtureSignedIn() bool {
 	return err == nil
 }
 
+func recordFixtureUsageProbe(kind string) {
+	path := os.Getenv("LEVER_FIXTURE_USAGE_COUNT_FILE")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(f, kind)
+	_ = f.Close()
+}
+
 func main() {
 	name := filepath.Base(os.Args[0])
 	nativeAGY := strings.TrimSuffix(name, filepath.Ext(name)) == "agy"
@@ -153,10 +167,24 @@ func main() {
 		if os.Getenv("AGY_CLI_DISABLE_AUTO_UPDATE") != "true" {
 			os.Exit(2)
 		}
+		recordFixtureUsageProbe("agy")
+		if os.Getenv("LEVER_FIXTURE_USAGE_ERROR") == "1" {
+			fmt.Fprintln(os.Stderr, "fixture agy usage error")
+			os.Exit(1)
+		}
+		if delayMs, _ := strconv.Atoi(os.Getenv("LEVER_FIXTURE_USAGE_DELAY_MS")); delayMs > 0 {
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
 		reset := time.Now().UTC().Add(4 * time.Hour).Format(time.RFC3339)
+		geminiRemaining := 0.75
+		if raw := os.Getenv("LEVER_FIXTURE_USAGE_PERCENT"); raw != "" {
+			if used, err := strconv.ParseFloat(raw, 64); err == nil {
+				geminiRemaining = max(0, min(1, 1-used/100))
+			}
+		}
 		send(object{"status": "SUCCESS", "command": object{"name": "usage", "data": object{"groups": []object{
 			{"name": "Gemini Models", "buckets": []object{
-				{"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.75},
+				{"id": "gemini-weekly", "window": "weekly", "remaining_fraction": geminiRemaining},
 				{"id": "gemini-5h", "window": "5h", "remaining_fraction": 1, "reset_time": reset},
 			}},
 			{"name": "Claude and GPT models", "buckets": []object{
@@ -259,7 +287,13 @@ func main() {
 		case "account/read":
 			var account object
 			if fixtureSignedIn() {
-				account = object{"type": "chatgpt"}
+				kind := os.Getenv("LEVER_FIXTURE_CODEX_ACCOUNT_TYPE")
+				if kind == "" {
+					kind = "chatgpt"
+				}
+				if kind != "none" {
+					account = object{"type": kind}
+				}
 			}
 			send(object{"id": frame["id"], "result": object{"account": account, "requiresOpenaiAuth": true}})
 		case "experimentalFeature/list":
@@ -320,9 +354,23 @@ func main() {
 			}
 			send(object{"id": frame["id"], "result": result})
 		case "account/rateLimits/read":
+			recordFixtureUsageProbe("codex")
+			if os.Getenv("LEVER_FIXTURE_USAGE_ERROR") == "1" {
+				send(object{"id": frame["id"], "error": object{"code": -32000, "message": "rate limit probe failed"}})
+				continue
+			}
+			if delayMs, _ := strconv.Atoi(os.Getenv("LEVER_FIXTURE_USAGE_DELAY_MS")); delayMs > 0 {
+				time.Sleep(time.Duration(delayMs) * time.Millisecond)
+			}
+			usedPrimary := 0.0
+			if raw := os.Getenv("LEVER_FIXTURE_USAGE_PERCENT"); raw != "" {
+				if v, err := strconv.ParseFloat(raw, 64); err == nil {
+					usedPrimary = v
+				}
+			}
 			limits := object{
 				"limitId": "codex",
-				"primary": object{"usedPercent": 0, "windowDurationMins": 300,
+				"primary": object{"usedPercent": usedPrimary, "windowDurationMins": 300,
 					"resetsAt": time.Now().Add(2 * time.Hour).Unix()},
 				"secondary": object{"usedPercent": 22, "windowDurationMins": 10080,
 					"resetsAt": time.Now().Add(3 * 24 * time.Hour).Unix()},
@@ -621,6 +669,14 @@ func main() {
 				send(object{"method": "item/agentMessage/delta", "params": object{"threadId": native, "turnId": turn, "itemId": "partial-answer", "delta": partialReply}})
 			case strings.Contains(commands, "[hang]") || strings.Contains(commands, "[finish-on-steer]") || strings.Contains(commands, "[disconnect-steer]"):
 				send(object{"method": "turn/completed", "params": object{"threadId": "different-child-thread", "turn": object{"id": turn, "status": "completed"}}})
+			case strings.Contains(commands, "[usage-update]"):
+				send(object{"method": "account/rateLimits/updated", "params": object{
+					"rateLimits": object{
+						"limitId": "codex",
+						"primary": object{"usedPercent": 64, "windowDurationMins": 300, "resetsAt": time.Now().Add(3 * time.Hour).Unix()},
+					},
+				}})
+				complete("Usage updated.")
 			case strings.Contains(commands, "[disconnect]"):
 				os.Exit(1)
 			case strings.HasPrefix(commands, "[delegate:"):
@@ -809,10 +865,26 @@ func claude() {
 				send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": f["request_id"], "response": object{"totalTokens": 2000, "maxTokens": 10000}}})
 			}
 			if str(r["subtype"]) == "get_usage" {
+				recordFixtureUsageProbe("claude")
+				if os.Getenv("LEVER_FIXTURE_USAGE_ERROR") == "1" {
+					send(object{"type": "control_response", "response": object{
+						"subtype": "error", "request_id": f["request_id"], "error": "usage request failed",
+					}})
+					continue
+				}
+				if delayMs, _ := strconv.Atoi(os.Getenv("LEVER_FIXTURE_USAGE_DELAY_MS")); delayMs > 0 {
+					time.Sleep(time.Duration(delayMs) * time.Millisecond)
+				}
+				fiveHourUsed := 68.5
+				if raw := os.Getenv("LEVER_FIXTURE_USAGE_PERCENT"); raw != "" {
+					if v, err := strconv.ParseFloat(raw, 64); err == nil {
+						fiveHourUsed = v
+					}
+				}
 				usage := object{
 					"rate_limits_available": true,
 					"rate_limits": object{
-						"five_hour": object{"utilization": 68.5,
+						"five_hour": object{"utilization": fiveHourUsed,
 							"resets_at": time.Now().UTC().Add(4 * time.Hour).Format(time.RFC3339)},
 						"seven_day": object{"utilization": 24, "resets_at": nil},
 					},
@@ -933,6 +1005,14 @@ func claude() {
 			send(object{"type": "stream_event", "event": object{"type": "content_block_start", "index": index, "content_block": object{"type": "text", "text": ""}}})
 			send(object{"type": "stream_event", "event": object{"type": "content_block_delta", "index": index, "delta": object{"type": "text_delta", "text": text}}})
 			send(object{"type": "assistant", "message": object{"id": "msg-1", "content": []object{{"type": "text", "text": text}}}})
+			if strings.Contains(fixtureCommands(text), "[usage-update]") {
+				send(object{"type": "rate_limit_event", "rate_limit_info": object{
+					"status":        "allowed",
+					"rateLimitType": "five_hour",
+					"utilization":   0.42,
+					"resetsAt":      time.Now().Add(3 * time.Hour).Unix(),
+				}})
+			}
 			send(object{"type": "result", "parent_tool_use_id": "child-1", "subtype": "success", "result": "child-only"})
 			send(object{"type": "result", "subtype": "success", "session_id": native, "result": text})
 		}

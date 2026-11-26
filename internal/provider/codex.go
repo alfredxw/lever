@@ -96,6 +96,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 	terminal := false
 	var outcome error
 	var initialTurnID string
+	var lastUsage []model.UsageWindow
 	// turn/start can deliver a patch or completion before it returns its turn
 	// ID. Retain the latest of each until the response identifies our turn.
 	var startingEvents map[[2]string]object
@@ -107,6 +108,13 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		tid, turn := threadID, turnID
 		stateMu.Unlock()
 		owner := str(q["threadId"])
+		if frame["id"] == nil && method == "account/rateLimits/updated" {
+			if windows := codexUsage(q); len(windows) > 0 && !slices.Equal(windows, lastUsage) {
+				lastUsage = windows
+				return sink.Usage(windows)
+			}
+			return nil
+		}
 		if frame["id"] != nil && method != "" {
 			if ctx.Err() != nil {
 				return nil

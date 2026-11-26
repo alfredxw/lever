@@ -1643,7 +1643,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "usage.backendUpdate":
     "当前后端无法读取 agy 用量。待运行中的任务结束后，退出并重新打开 Lever，并确认 agy 已更新。",
   "usage.loading": "正在读取额度…",
-  "usage.readFailed": "读取额度失败，可在 agy 中运行 /usage 检查。",
+  "usage.readFailed": "暂时无法读取订阅额度，将自动重试。",
+  "usage.readFailedAgy": "读取额度失败，可在 agy 中运行 /usage 检查。",
   "usage.noAllowance": "agy 未返回此账号的订阅额度。",
   "usage.lastReading": "上次成功读取的额度",
   "usage.navigation": "用量",

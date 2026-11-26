@@ -212,6 +212,11 @@ func (e *execution) UpdateRuntime(update func(*model.SessionRuntime)) error {
 	return err
 }
 
+func (e *execution) Usage(windows []model.UsageWindow) error {
+	e.app.recordProviderUsage(e.provider, windows)
+	return nil
+}
+
 func (e *execution) Title(title string) error {
 	e.mu.Lock()
 	run, providerID := e.run, e.provider.ID

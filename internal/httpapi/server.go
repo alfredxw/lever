@@ -305,7 +305,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/providers/{id}/terminal/{terminal}", s.providerTerminal)
 	mux.HandleFunc("DELETE /api/providers/{id}/terminal/{terminal}", s.closeProviderTerminal)
 	mux.HandleFunc("GET /api/providers/{id}/usage", func(w http.ResponseWriter, r *http.Request) {
-		value, err := a.ProviderUsage(r.Context(), r.PathValue("id"))
+		value, err := a.ProviderUsage(r.Context(), r.PathValue("id"), r.URL.Query().Get("refresh") == "true")
 		respond(w, value, err)
 	})
 	mux.HandleFunc("PUT /api/providers/{id}/api-key", func(w http.ResponseWriter, r *http.Request) {

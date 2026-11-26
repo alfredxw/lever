@@ -101,15 +101,11 @@ func (a *App) Providers(ctx context.Context, checkLogin bool) ([]model.ProviderI
 			return nil
 		})
 	}
-	return result, group.Wait()
-}
-
-func (a *App) ProviderUsage(ctx context.Context, id string) ([]model.UsageWindow, error) {
-	config, err := configuredProvider(ctx, a.Store.DB, id)
-	if err != nil {
+	if err := group.Wait(); err != nil {
 		return nil, err
 	}
-	return provider.Usage(provider.WithStateDir(ctx, a.Store.Dir), config)
+	a.observeProviderProbes(result)
+	return result, nil
 }
 
 func (a *App) SetProviderAPIKey(ctx context.Context, id, key string) error {
@@ -127,8 +123,12 @@ func (a *App) SetProviderAPIKey(ctx context.Context, id, key string) error {
 		return err
 	}
 	a.invalidateProviderCatalogsLocked(id, true)
+	a.invalidateProviderUsageLocked(id, true)
 	return a.Store.Write(ctx, func(tx *sql.Tx) error {
-		return store.Event(tx, model.Event{Type: "providers"})
+		if err := store.Event(tx, model.Event{Type: "providers"}); err != nil {
+			return err
+		}
+		return store.Event(tx, model.Event{Type: "provider-usage"})
 	})
 }
 
@@ -323,6 +323,7 @@ func (a *App) saveProviderLocked(ctx context.Context, input ProviderInput, creat
 	if err == nil && !config.Enabled {
 		a.cancelProviderSetupLocked(config.ID)
 		a.invalidateProviderCatalogsLocked(config.ID, false)
+		a.invalidateProviderUsageLocked(config.ID, true)
 	}
 	return config, err
 }
@@ -390,6 +391,7 @@ func (a *App) DeleteProvider(ctx context.Context, id string) error {
 	if err == nil {
 		a.cancelProviderSetupLocked(id)
 		a.invalidateProviderCatalogsLocked(id, false)
+		a.invalidateProviderUsageLocked(id, true)
 		err = provider.SetAntigravityKey(provider.WithStateDir(ctx, a.Store.Dir), id, "")
 		a.stopIdleClaudeSessions()
 	}

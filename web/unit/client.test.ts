@@ -198,3 +198,34 @@ test("a streamed run updates its loaded page and leaves unseen history invalidat
     stream.close();
   }
 });
+
+test("provider-usage events invalidate usage queries independently of providers and overview", () => {
+  const stream = mockRunStream();
+  queryClient.setQueryData(["overview"], { cursor: 1 });
+  queryClient.setQueryData(["providers"], []);
+  queryClient.setQueryData(["provider-usage", "codex"], { windows: [] });
+  try {
+    stream.send({ type: "providers", sequence: 2 });
+    assert.equal(
+      queryClient.getQueryState(["providers"])?.isInvalidated,
+      true,
+    );
+    assert.equal(
+      queryClient.getQueryState(["provider-usage", "codex"])?.isInvalidated,
+      false,
+    );
+
+    queryClient.setQueryData(["overview"], { cursor: 2 });
+    stream.send({ type: "provider-usage", sequence: 3 });
+    assert.equal(
+      queryClient.getQueryState(["provider-usage", "codex"])?.isInvalidated,
+      true,
+    );
+    assert.equal(
+      queryClient.getQueryState(["overview"])?.isInvalidated,
+      false,
+    );
+  } finally {
+    stream.close();
+  }
+});

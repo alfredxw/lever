@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -217,6 +218,7 @@ type worker struct {
 	steers     chan struct{}
 	mu         sync.Mutex
 	runtime    model.SessionRuntime
+	lastUsage  []model.UsageWindow
 	lastTitle  string
 	items      []model.Item
 	positions  map[string]int
@@ -419,10 +421,11 @@ func (w *worker) controls() error {
 }
 
 // Keep the runtime snapshot readable by older backends that may reattach to
-// this worker. Steering is a turn-local hint added to the mailbox payload.
+// this worker. Steering and usage are turn-local hints added to the mailbox payload.
 type RuntimeUpdate struct {
 	model.SessionRuntime
 	SteerState provider.SteerState `json:"steerState,omitempty"`
+	Usage      []model.UsageWindow `json:"usage,omitempty"`
 	Title      string              `json:"title,omitempty"`
 }
 
@@ -430,6 +433,19 @@ func (w *worker) SetSteerState(state provider.SteerState) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.emitLocked("runtime", RuntimeUpdate{SessionRuntime: w.runtime, SteerState: state})
+}
+
+func (w *worker) Usage(windows []model.UsageWindow) error {
+	if len(windows) == 0 {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if slices.Equal(w.lastUsage, windows) {
+		return nil
+	}
+	w.lastUsage = slices.Clone(windows)
+	return w.emitLocked("runtime", RuntimeUpdate{SessionRuntime: w.runtime, Usage: w.lastUsage})
 }
 
 func (w *worker) Title(title string) error {

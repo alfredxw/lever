@@ -6,8 +6,15 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { api } from "@/api/client";
 import type { ProviderInfo, UsageWindow } from "@/api/types.gen";
+import {
+  resolveSubscriptions,
+  usageSources,
+  type Subscription,
+  type UsageResponse,
+} from "./subscriptionUsageModel";
 
 const minuteMs = 60_000;
+const usageStaleMs = 30_000;
 const minutesPerHour = 60;
 const hoursPerDay = 24;
 const minutesPerDay = hoursPerDay * minutesPerHour;
@@ -16,40 +23,6 @@ const summaryColors = [
   "var(--subscription-usage-clay)",
   "var(--subscription-usage-violet)",
 ];
-
-type Subscription = {
-  provider: ProviderInfo;
-  windows: UsageWindow[];
-  notice?: string;
-};
-
-function usageSources(providers: ProviderInfo[]) {
-  const seen = new Set<string>();
-  return providers.filter((provider) => {
-    const localAgy = provider.type === "antigravity" && provider.auth === "cli";
-    if (
-      !provider.available ||
-      !provider.installed ||
-      !(
-        provider.reportsUsage ||
-        (localAgy && provider.reportsUsage === undefined)
-      )
-    )
-      return false;
-    // Multiple runtime entries can launch exactly the same native profile.
-    const profile = JSON.stringify([
-      provider.type,
-      provider.path,
-      provider.configPath ||
-        (provider.type === "antigravity" && provider.auth === "cli"
-          ? "local"
-          : provider.id),
-    ]);
-    if (seen.has(profile)) return false;
-    seen.add(profile);
-    return true;
-  });
-}
 
 function UsageIndicator({ subscriptions }: { subscriptions: Subscription[] }) {
   if (!subscriptions.length) return <Gauge aria-hidden="true" />;
@@ -136,42 +109,22 @@ export function SubscriptionUsage({
   const sources = usageSources(providers);
   const samples = useQueries({
     queries: sources.map(({ id, reportsUsage }) => ({
-      queryKey: ["providers", "usage", id],
+      queryKey: ["provider-usage", id],
       enabled: !!reportsUsage,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api<UsageWindow[] | null>(
+        api<UsageResponse>(
           `/providers/${encodeURIComponent(id)}/usage`,
           undefined,
           "GET",
           signal,
         ),
-      staleTime: minuteMs,
+      staleTime: usageStaleMs,
       refetchInterval: minuteMs,
       refetchOnWindowFocus: true,
       retry: false,
     })),
   });
-  const subscriptions = sources.flatMap<Subscription>((provider, i) => {
-    const sample = samples[i];
-    const windows = sample.data ?? [];
-    if (windows.length)
-      return [
-        {
-          provider,
-          windows,
-          notice: sample.isError ? "usage.lastReading" : undefined,
-        },
-      ];
-    if (provider.type !== "antigravity") return [];
-    const notice = !provider.reportsUsage
-      ? "usage.backendUpdate"
-      : sample.isPending
-        ? "usage.loading"
-        : sample.isError
-          ? "usage.readFailed"
-          : "usage.noAllowance";
-    return [{ provider, windows, notice }];
-  });
+  const subscriptions = resolveSubscriptions(sources, samples);
   return subscriptions.length ? (
     <UsageDetails subscriptions={subscriptions} />
   ) : null;
@@ -244,7 +197,11 @@ function UsageDetails({ subscriptions }: { subscriptions: Subscription[] }) {
             </div>
             <div className="divide-y divide-border/70">
               {subscriptions.map((subscription) => {
-                const { provider, windows, notice } = subscription;
+                const { provider, windows, sampledAt, notice } = subscription;
+                const sampled = sampledAt ? Date.parse(sampledAt) : NaN;
+                const sampledTitle = Number.isFinite(sampled)
+                  ? resetFormat.format(sampled)
+                  : undefined;
                 const color =
                   summary.length > 1
                     ? summaryColors[summary.indexOf(subscription)]
@@ -258,7 +215,18 @@ function UsageDetails({ subscriptions }: { subscriptions: Subscription[] }) {
                       {provider.name}
                     </div>
                     {notice && (
-                      <p className="text-xs text-muted-foreground">
+                      <p
+                        title={
+                          notice === "usage.lastReading"
+                            ? sampledTitle
+                            : undefined
+                        }
+                        className={
+                          windows.length
+                            ? "mb-1.5 text-xs text-muted-foreground"
+                            : "text-xs text-muted-foreground"
+                        }
+                      >
                         {t(notice)}
                       </p>
                     )}

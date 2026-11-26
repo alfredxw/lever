@@ -323,6 +323,9 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 		if _, err = tx.ExecContext(ctx, "DELETE FROM provider_catalogs WHERE provider_id IN (SELECT id FROM providers WHERE json_extract(data,'$.pluginId')=?)", id); err != nil {
 			return err
 		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM provider_usage WHERE provider_id IN (SELECT id FROM providers WHERE json_extract(data,'$.pluginId')=?)", id); err != nil {
+			return err
+		}
 		if len(m.Contributes.EventSources) != 0 {
 			if err = resetEventSourcePolls(ctx, tx, id); err != nil {
 				return err
@@ -337,6 +340,11 @@ func (a *App) switchPluginLocked(ctx context.Context, id string, revision int64,
 	for key, entry := range a.catalogs {
 		if entry.pluginID == id {
 			delete(a.catalogs, key)
+		}
+	}
+	for key, entry := range a.usages {
+		if entry.pluginID == id {
+			delete(a.usages, key)
 		}
 	}
 	a.stopPersonalLocked(id)

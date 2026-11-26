@@ -187,6 +187,11 @@ func finishClaude(ctx context.Context, r *claudeResident, sink Sink, checkGoal, 
 			if err != nil {
 				return false, err
 			}
+			if windows := claudeRateLimitEvent(f); len(windows) > 0 {
+				if err := sink.Usage(windows); err != nil {
+					return false, err
+				}
+			}
 			if checkGoal {
 				if goal, ok := claudeGoalReply(f); ok {
 					if err := sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Goal = goal }); err != nil {

@@ -63,6 +63,8 @@ type App struct {
 	scopeUsers           map[string]int
 	initializing         map[string]bool // Physical checkouts leased for setup.
 	catalogs             map[catalogKey]*catalogEntry
+	usages               map[usageKey]*usageEntry
+	usageVersions        map[string]string
 	setups               map[string]*providerSetup
 	agyLogin             terminal.Key
 	sharedSending        sync.Map

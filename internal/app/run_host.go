@@ -264,6 +264,11 @@ func (e *execution) applyHostEvent(v hostEvent) error {
 		if err := e.UpdateRuntime(func(s *model.SessionRuntime) { *s = update.SessionRuntime }); err != nil {
 			return err
 		}
+		if len(update.Usage) > 0 {
+			if err := e.Usage(update.Usage); err != nil {
+				return err
+			}
+		}
 		if update.Title != "" {
 			if err := e.Title(update.Title); err != nil {
 				return err

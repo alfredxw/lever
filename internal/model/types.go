@@ -726,6 +726,12 @@ type UsageWindow struct {
 	ResetsAt    string  `json:"resetsAt,omitempty"`
 }
 
+type ProviderUsage struct {
+	Windows   []UsageWindow `json:"windows"`
+	SampledAt string        `json:"sampledAt,omitempty"`
+	Stale     bool          `json:"stale,omitempty"` // The reading is older than the freshness threshold or the latest refresh failed.
+}
+
 // Plugin installations retain their identity after uninstall so conversations
 // can display their original provider without executing uninstalled code.
 type Plugin struct {

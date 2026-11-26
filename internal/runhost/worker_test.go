@@ -58,6 +58,43 @@ func TestOutcomeErrDoesNotDuplicateSentinel(t *testing.T) {
 	}
 }
 
+func TestUsageUsesCompatibleRuntimeSnapshot(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE runtime_events(run_id, kind, data)"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := model.SessionRuntime{Context: &model.ContextUsage{Used: 42, Window: 100}}
+	w := worker{db: db, id: "turn", runtime: runtime}
+	windows := []model.UsageWindow{{ID: "primary", Minutes: 300, UsedPercent: 55}}
+	if err := w.Usage(windows); err != nil {
+		t.Fatal(err)
+	}
+	// Identical repeat is deduplicated.
+	if err := w.Usage(windows); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=?", w.id).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expected 1 deduplicated event, got %d (%v)", count, err)
+	}
+	var kind, data string
+	if err := db.QueryRow("SELECT kind, data FROM runtime_events WHERE run_id=?", w.id).Scan(&kind, &data); err != nil {
+		t.Fatal(err)
+	}
+	var legacy model.SessionRuntime
+	if kind != "runtime" || json.Unmarshal([]byte(data), &legacy) != nil || !reflect.DeepEqual(legacy, runtime) {
+		t.Fatalf("incompatible runtime snapshot: %s %s", kind, data)
+	}
+	var update RuntimeUpdate
+	if err := json.Unmarshal([]byte(data), &update); err != nil || !reflect.DeepEqual(update.Usage, windows) {
+		t.Fatalf("missing usage windows in %s: %v", data, err)
+	}
+}
+
 func TestTitleUsesCompatibleRuntimeSnapshot(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

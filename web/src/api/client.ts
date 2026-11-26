@@ -376,6 +376,8 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
             ],
           },
       );
+    } else if (event.type === "provider-usage") {
+      void queryClient.invalidateQueries({ queryKey: ["provider-usage"] });
     } else {
       if (
         event.type === "agents" ||

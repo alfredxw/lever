@@ -49,12 +49,17 @@ func (a *App) StartProviderLogin(ctx context.Context, key terminal.Key) error {
 			return
 		}
 		a.mu.Lock()
-		defer a.mu.Unlock()
 		if agy {
 			a.agyLogin = terminal.Key{}
 		}
-		if success && !a.closed {
+		notifyUsage := success && !a.closed
+		if notifyUsage {
 			a.invalidateProviderCatalogsLocked(config.ID, true)
+			a.invalidateProviderUsageLocked(config.ID, true)
+		}
+		a.mu.Unlock()
+		if notifyUsage {
+			a.notifyProviderUsage()
 		}
 	})
 	if started && agy {
@@ -134,8 +139,8 @@ func (a *App) SetupProvider(ctx context.Context, id, action string) (model.Provi
 				}
 			})
 		}
+		var notifyUsage bool
 		a.mu.Lock()
-		defer a.mu.Unlock()
 		setup.cancel = nil
 		setup.state = model.ProviderSetup{Phase: "authenticated"}
 		if action == "install" {
@@ -149,6 +154,12 @@ func (a *App) SetupProvider(ctx context.Context, id, action string) (model.Provi
 			setup.state = model.ProviderSetup{Phase: "failed", Error: err.Error()}
 		} else {
 			a.invalidateProviderCatalogsLocked(id, action == "signin")
+			a.invalidateProviderUsageLocked(id, action == "signin")
+			notifyUsage = !a.closed
+		}
+		a.mu.Unlock()
+		if notifyUsage {
+			a.notifyProviderUsage()
 		}
 	}()
 	return setup.state, nil
