@@ -137,7 +137,7 @@ func (a *App) addDelegationTools(ctx context.Context, server *mcp.Server, owner 
 	for _, rule := range owner.profile.Delegations {
 		if target, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", rule.AgentID); err == nil && !target.Archived {
 			var visible bool
-			if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM hub_exposed_agents WHERE hub=json_extract(c.data,'$.sharedScope.hubId') AND space=json_extract(c.data,'$.sharedScope.spaceId') AND agent_id=?) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err == nil && visible {
+			if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM remote_memberships m WHERE m.hub=json_extract(c.data,'$.sharedScope.hubId') AND m.space=json_extract(c.data,'$.sharedScope.spaceId') AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=?))) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err == nil && visible {
 				targets = append(targets, delegateTargetInfo{
 					ID:          target.ID,
 					Name:        target.Name,

@@ -18,7 +18,9 @@ type remoteOrigin struct {
 
 func checkExposed(tx *sql.Tx, scope model.SharedScope, agent string) error {
 	var ok bool
-	err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM hub_exposed_agents WHERE hub=? AND space=? AND agent_id=?)", scope.HubID, scope.SpaceID, agent).Scan(&ok)
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=? AND m.space=?
+WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
+AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`, scope.HubID, scope.SpaceID, agent).Scan(&ok)
 	if err == nil && !ok {
 		return &Error{Status: 403, Message: "Agent is not shared with this space"}
 	}

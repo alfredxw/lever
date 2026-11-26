@@ -24,7 +24,10 @@ export function NewChatComposer({
 }: NewChatProps & { autoFocus?: boolean }) {
   const bindings = useRemoteBindings();
   const scopes =
-    bindings.data?.filter((b) => b.agents.includes(agent.id)) ?? [];
+    bindings.data?.filter(
+      (b) =>
+        b.role !== "controller" && (b.exposeAll || b.agents.includes(agent.id)),
+    ) ?? [];
   const [scopeKey, setScope] = useState("");
   const scope = scopes.find((b) => b.hubId + "/" + b.spaceId === scopeKey);
   return (

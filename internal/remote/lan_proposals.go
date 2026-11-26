@@ -36,7 +36,9 @@ func (h *Host) propose(ctx context.Context, g p.Grant, cmd p.LANCommand) (p.Inbo
 			if i.Private || g.Draining || i.Kind != "send" {
 				return errors.New("chat required")
 			}
-			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM hub_exposed_agents WHERE hub=? AND space=? AND agent_id=?)", g.HubID, g.SpaceID, i.AgentID).Scan(&visible); err != nil {
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=? AND m.space=?
+WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
+AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`, g.HubID, g.SpaceID, i.AgentID).Scan(&visible); err != nil {
 				return err
 			}
 		} else {

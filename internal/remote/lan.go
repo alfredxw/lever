@@ -202,7 +202,8 @@ func readLANArchive(ctx context.Context, tx *sql.Tx, m p.Membership, chat, contr
 	if chat != "" {
 		query += " UNION ALL SELECT 'run',id FROM runs WHERE chat_id IN allowed UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN allowed"
 	} else if controller == "" {
-		query += " UNION ALL SELECT 'agent',agent_id FROM hub_exposed_agents WHERE hub=? AND space=?"
+		query += ` UNION ALL SELECT 'agent',a.id FROM agents a JOIN remote_memberships m ON m.hub=? AND m.space=?
+WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))`
 		args = append(args, m.Hub.ID, m.SpaceID)
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)

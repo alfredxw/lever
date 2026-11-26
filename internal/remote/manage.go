@@ -22,6 +22,9 @@ type Management struct {
 	ControllerID string            `json:"controllerId,omitempty"`
 	NoteVersion  string            `json:"noteVersion,omitempty"`
 	Enabled      bool              `json:"enabled,omitempty"`
+	AllAgents    bool              `json:"allAgents,omitempty"`
+	AgentIDs     []string          `json:"agentIds,omitempty"`
+	Operations   []string          `json:"operations,omitempty"`
 	Action       string            `json:"action"`
 	Scope        model.SharedScope `json:"scope"`
 	Pair         PairConfig        `json:"pair,omitempty"`
@@ -63,12 +66,29 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		return nil, err
 	}
 	switch in.Action {
-	case "trust", "untrust", "permission", "trusted":
+	case "trust", "untrust", "permission", "set_permissions", "trusted":
 		return h.manageController(ctx, st, in)
 	case "login":
 		return true, device.SetLogin(h.App.Store.Dir, in.Enabled)
 	case "share_note", "preview_note":
 		return h.note(ctx, st, in)
+	case "expose_all":
+		if !st.Membership.Role.Executes() {
+			return nil, errors.New("device has no executor role")
+		}
+		h.configMu.Lock()
+		defer h.configMu.Unlock()
+		err = h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.Exec("UPDATE remote_memberships SET expose_all=?,version=version+1 WHERE hub=? AND space=?", in.Enabled, in.Scope.HubID, in.Scope.SpaceID); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`INSERT INTO shared_sync_log(hub,space,kind,object_id,version,chat_id)
+SELECT m.hub,m.space,'agent',a.id,m.version,'' FROM remote_memberships m CROSS JOIN agents a
+WHERE m.hub=? AND m.space=?
+ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,chat_id=''`, in.Scope.HubID, in.Scope.SpaceID)
+			return err
+		})
+		return true, err
 	case "expose", "hide":
 		if !st.Membership.Role.Executes() {
 			return nil, errors.New("device has no executor role")

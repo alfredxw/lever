@@ -40,7 +40,8 @@ func projectBatch(ctx context.Context, s *store.Store, m p.Membership, base int6
 	var rows *sql.Rows
 	if b.full {
 		rows, err = tx.QueryContext(ctx, `WITH shared AS(SELECT id FROM chats WHERE json_extract(data,'$.sharedScope.hubId')=?1 AND json_extract(data,'$.sharedScope.spaceId')=?2)
-SELECT 'agent',agent_id FROM hub_exposed_agents WHERE hub=?1 AND space=?2
+SELECT 'agent',a.id FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
+WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))
 UNION ALL SELECT 'chat',id FROM shared UNION ALL SELECT 'session',id FROM sessions WHERE chat_id IN shared
 UNION ALL SELECT 'run',id FROM runs WHERE chat_id IN shared UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN shared`, m.Hub.ID, m.SpaceID)
 	} else {
@@ -100,7 +101,9 @@ func project(ctx context.Context, tx *sql.Tx, m p.Membership, o object, privateC
 	}
 	switch o.kind {
 	case "agent":
-		a, err := store.Get[model.Agent](ctx, tx, "SELECT a.data FROM agents a JOIN hub_exposed_agents e ON e.agent_id=a.id WHERE a.id=? AND e.hub=? AND e.space=? AND coalesce(json_extract(a.data,'$.archived'),0)=0", args...)
+		a, err := store.Get[model.Agent](ctx, tx, `SELECT a.data FROM agents a JOIN remote_memberships m ON m.hub=?2 AND m.space=?3
+WHERE a.id=?1 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))`, args...)
 		if err != nil {
 			return r, err
 		}

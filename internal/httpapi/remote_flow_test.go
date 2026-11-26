@@ -330,6 +330,64 @@ func TestRemoteTaskAndArchive(t *testing.T) {
 			t.Fatal("permissions survived revocation", count, err)
 		}
 	})
+	t.Run("expose_all and device wildcard scope include newly created agents automatically", func(t *testing.T) {
+		phonePub, phoneKey, _ := ed25519.GenerateKey(rand.Reader)
+		phone, err := p.Pair(ctx, server.URL, p.PairInput{Code: ticket(p.Controller), Role: p.Controller, Name: "Lever", Platform: "ios", Identity: p.Identity{ID: p.NewID(), PublicKey: phonePub}}, phoneKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manage(remote.Management{Action: "expose_all", Scope: scope, Enabled: true})
+		manage(remote.Management{Action: "trust", Scope: scope, ControllerID: phone.Membership.DeviceID})
+		manage(remote.Management{Action: "set_permissions", Scope: scope, ControllerID: phone.Membership.DeviceID, AllAgents: true, Operations: []string{"send", "answer"}})
+		// Create a brand new Agent AFTER configuring expose_all and device wildcard permissions.
+		fresh := f.agent("codex")
+		wait(func() bool {
+			var rec []p.Record
+			request("GET", archive, nil, 200, &rec)
+			for _, v := range rec {
+				if v.Kind == "agent" && v.ID == fresh.ID {
+					return true
+				}
+			}
+			return false
+		})
+		// Phone can immediately send to the new Agent without touching settings again.
+		cmd := p.Intent{ID: p.NewID(), Kind: "send", Operation: "main", DeviceID: f.a.Store.DeviceID, AgentID: fresh.ID, Text: "auto exposed hello"}
+		if err := phone.Do(ctx, "POST", root+"/commands", cmd, nil); err != nil {
+			t.Fatal(err)
+		}
+		wait(func() bool {
+			var item p.InboxItem
+			return phone.Do(ctx, "GET", root+"/commands/"+f.a.Store.DeviceID+"/"+cmd.ID, nil, &item) == nil && item.Receipt.Status == "accepted"
+		})
+		// Narrow phone scope to ONLY original `agent.ID`; `fresh.ID` must require manual confirmation.
+		manage(remote.Management{Action: "set_permissions", Scope: scope, ControllerID: phone.Membership.DeviceID, AllAgents: false, AgentIDs: []string{agent.ID}, Operations: []string{"send"}})
+		cmd2 := p.Intent{ID: p.NewID(), Kind: "send", Operation: "main", DeviceID: f.a.Store.DeviceID, AgentID: fresh.ID, Text: "should stay pending"}
+		if err := phone.Do(ctx, "POST", root+"/commands", cmd2, nil); err != nil {
+			t.Fatal(err)
+		}
+		wait(func() bool {
+			var item p.InboxItem
+			return phone.Do(ctx, "GET", root+"/commands/"+f.a.Store.DeviceID+"/"+cmd2.ID, nil, &item) == nil && item.Receipt.Status == "pending"
+		})
+		// Turn off expose_all: `fresh` (not in hub_exposed_agents) disappears from archive while `agent` remains.
+		manage(remote.Management{Action: "expose_all", Scope: scope, Enabled: false})
+		wait(func() bool {
+			var rec []p.Record
+			request("GET", archive, nil, 200, &rec)
+			hasOrig, hasFresh := false, false
+			for _, v := range rec {
+				if v.Kind == "agent" && v.ID == agent.ID {
+					hasOrig = true
+				}
+				if v.Kind == "agent" && v.ID == fresh.ID {
+					hasFresh = true
+				}
+			}
+			return hasOrig && !hasFresh
+		})
+		manage(remote.Management{Action: "untrust", Scope: scope, ControllerID: phone.Membership.DeviceID})
+	})
 	manage(remote.Management{Scope: scope, Action: "hide", AgentID: agent.ID})
 	wait(func() bool {
 		var rec []p.Record

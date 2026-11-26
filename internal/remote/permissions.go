@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"errors"
 	"net/url"
 
@@ -58,10 +59,11 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 		_, err := h.App.Store.DB.ExecContext(ctx, "DELETE FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?", args...)
 		return true, err
 	case "permission":
-		switch in.Operation {
-		case "send", "answer", "stop", "dispatch_task":
-		default:
+		if !validRemoteOperation(in.Operation) {
 			return nil, errors.New("unsupported remote permission")
+		}
+		if in.AgentID == "" {
+			return nil, errors.New("select an agent")
 		}
 		args = append(args, in.AgentID, in.Operation)
 		query := "DELETE FROM remote_control_permissions WHERE hub=? AND space=? AND controller=? AND agent_id=? AND action=?"
@@ -70,8 +72,55 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 		}
 		_, err := h.App.Store.DB.ExecContext(ctx, query, args...)
 		return true, err
+	case "set_permissions":
+		for _, op := range in.Operations {
+			if !validRemoteOperation(op) {
+				return nil, errors.New("unsupported remote permission")
+			}
+		}
+		err := h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+			var trusted bool
+			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?)", m.Hub.ID, m.SpaceID, in.ControllerID).Scan(&trusted); err != nil {
+				return err
+			}
+			if !trusted {
+				return errors.New("controller is not trusted")
+			}
+			if _, err := tx.Exec("DELETE FROM remote_control_permissions WHERE hub=? AND space=? AND controller=?", m.Hub.ID, m.SpaceID, in.ControllerID); err != nil {
+				return err
+			}
+			if in.AllAgents {
+				for _, op := range in.Operations {
+					if _, err := tx.Exec("INSERT OR IGNORE INTO remote_control_permissions VALUES(?,?,?,'*',?)", m.Hub.ID, m.SpaceID, in.ControllerID, op); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			for _, agentID := range in.AgentIDs {
+				if agentID == "" || agentID == "*" {
+					continue
+				}
+				for _, op := range in.Operations {
+					if _, err := tx.Exec("INSERT OR IGNORE INTO remote_control_permissions VALUES(?,?,?,?,?)", m.Hub.ID, m.SpaceID, in.ControllerID, agentID, op); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		return true, err
 	}
 	return nil, errors.New("unknown controller setting")
+}
+
+func validRemoteOperation(op string) bool {
+	switch op {
+	case "send", "answer", "stop", "dispatch_task":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Intent) (bool, error) {
@@ -79,11 +128,20 @@ func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Inten
 		return false, nil
 	}
 	// For existing chats the owning Agent comes from the local database.
+	// Wildcard agent_id='*' follows whichever non-archived Agents are exposed to this space.
 	var ok bool
-	err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_control_permissions p JOIN remote_memberships m USING(hub,space)
-		WHERE p.hub=? AND p.space=? AND p.controller=? AND p.action=? AND json_extract(m.credential,'$.userId')=?
-		AND p.agent_id=CASE WHEN ?='' THEN ? ELSE (SELECT agent_id FROM chats WHERE id=? AND json_extract(data,'$.sharedScope.hubId')=p.hub AND json_extract(data,'$.sharedScope.spaceId')=p.space) END)`,
-		scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ActorUserID, i.ChatID, i.AgentID, i.ChatID).Scan(&ok)
+	err := h.App.Store.DB.QueryRowContext(ctx, `WITH target(agent_id) AS (
+			SELECT CASE WHEN ?='' THEN ? ELSE (SELECT agent_id FROM chats WHERE id=? AND json_extract(data,'$.sharedScope.hubId')=? AND json_extract(data,'$.sharedScope.spaceId')=?) END
+		)
+		SELECT EXISTS(SELECT 1 FROM remote_control_permissions p
+			JOIN remote_memberships m USING(hub,space)
+			JOIN target t ON (p.agent_id='*' OR p.agent_id=t.agent_id)
+			JOIN agents a ON a.id=t.agent_id
+			WHERE p.hub=? AND p.space=? AND p.controller=? AND p.action=? AND json_extract(m.credential,'$.userId')=?
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+		i.ChatID, i.AgentID, i.ChatID, scope.HubID, scope.SpaceID,
+		scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ActorUserID).Scan(&ok)
 	return ok, err
 }
 

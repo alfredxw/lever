@@ -14,10 +14,10 @@ import (
 // versioned tombstone until ACK. Full rebuilds also work after either DB rolls back.
 const remoteSchema = `
 CREATE TABLE IF NOT EXISTS remote_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),id TEXT NOT NULL,key BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS remote_memberships(hub TEXT NOT NULL,space TEXT NOT NULL,origin TEXT NOT NULL,credential TEXT NOT NULL,epoch TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,acked INTEGER NOT NULL DEFAULT 0,lan INTEGER NOT NULL DEFAULT 0,policy INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(hub,space));
+CREATE TABLE IF NOT EXISTS remote_memberships(hub TEXT NOT NULL,space TEXT NOT NULL,origin TEXT NOT NULL,credential TEXT NOT NULL,epoch TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,acked INTEGER NOT NULL DEFAULT 0,lan INTEGER NOT NULL DEFAULT 0,policy INTEGER NOT NULL DEFAULT 0,expose_all INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(hub,space));
 CREATE TABLE IF NOT EXISTS hub_exposed_agents(hub TEXT NOT NULL,space TEXT NOT NULL,agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,PRIMARY KEY(hub,space,agent_id),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS remote_trusted_controllers(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,pub BLOB NOT NULL,name TEXT NOT NULL,PRIMARY KEY(hub,space,controller),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS remote_control_permissions(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,PRIMARY KEY(hub,space,controller,agent_id,action),FOREIGN KEY(hub,space,controller) REFERENCES remote_trusted_controllers ON DELETE CASCADE,FOREIGN KEY(hub,space,agent_id) REFERENCES hub_exposed_agents ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS remote_control_permissions(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,PRIMARY KEY(hub,space,controller,agent_id,action),FOREIGN KEY(hub,space,controller) REFERENCES remote_trusted_controllers ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS shared_sync_log(hub TEXT NOT NULL,space TEXT NOT NULL,kind TEXT NOT NULL,object_id TEXT NOT NULL,version INTEGER NOT NULL,chat_id TEXT NOT NULL DEFAULT '',PRIMARY KEY(hub,space,kind,object_id),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS remote_commands(hub TEXT NOT NULL,space TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(hub,space,id));
 CREATE TABLE IF NOT EXISTS remote_private_chats(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,chat TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,PRIMARY KEY(hub,space,controller,chat),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
@@ -49,6 +49,32 @@ func (s *Store) initRemote() error {
 			return err
 		}
 	}
+	var hasExposeAll bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('remote_memberships') WHERE name='expose_all')").Scan(&hasExposeAll); err != nil {
+		return err
+	}
+	if !hasExposeAll {
+		if _, err = tx.Exec("ALTER TABLE remote_memberships ADD COLUMN expose_all INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var legacyPermFK bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_control_permissions' AND instr(sql,'hub_exposed_agents')>0)").Scan(&legacyPermFK); err != nil {
+		return err
+	}
+	if legacyPermFK {
+		if _, err = tx.Exec(`
+CREATE TABLE remote_control_permissions_new(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,PRIMARY KEY(hub,space,controller,agent_id,action),FOREIGN KEY(hub,space,controller) REFERENCES remote_trusted_controllers ON DELETE CASCADE);
+INSERT INTO remote_control_permissions_new SELECT hub,space,controller,agent_id,action FROM remote_control_permissions;
+DROP TABLE remote_control_permissions;
+ALTER TABLE remote_control_permissions_new RENAME TO remote_control_permissions;`); err != nil {
+			return err
+		}
+	}
+	var hasExposeAllTrigger bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='share_agents_INSERT' AND instr(sql,'expose_all')>0)").Scan(&hasExposeAllTrigger); err != nil {
+		return err
+	}
 	var id string
 	err = tx.QueryRow("SELECT id FROM remote_identity").Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -71,8 +97,8 @@ func (s *Store) initRemote() error {
 		{"sessions", "session", "id", chatScope},
 		{"runs", "run", "id", chatScope},
 		{"requests", "request", "id", chatScope},
-		{"agents", "agent", "id", `(hub,space) IN (SELECT hub,space FROM hub_exposed_agents WHERE agent_id=%[1]s.id)`},
-		{"working_copies", "agent", "agent_id", `(hub,space) IN (SELECT hub,space FROM hub_exposed_agents WHERE agent_id=%[1]s.agent_id)`},
+		{"agents", "agent", "id", `expose_all=1 OR (hub,space) IN (SELECT hub,space FROM hub_exposed_agents WHERE agent_id=%[1]s.id)`},
+		{"working_copies", "agent", "agent_id", `expose_all=1 OR (hub,space) IN (SELECT hub,space FROM hub_exposed_agents WHERE agent_id=%[1]s.agent_id)`},
 		{"hub_exposed_agents", "agent", "agent_id", `hub=%[1]s.hub AND space=%[1]s.space`},
 	} {
 		for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
@@ -88,7 +114,7 @@ func (s *Store) initRemote() error {
 			case "session", "run", "request":
 				parent = ref + ".chat_id"
 			}
-			if !hasParent {
+			if !hasParent || (!hasExposeAllTrigger && (spec.table == "agents" || spec.table == "working_copies")) {
 				if _, err = tx.Exec("DROP TRIGGER IF EXISTS share_" + spec.table + "_" + op); err != nil {
 					return err
 				}
