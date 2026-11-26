@@ -14,7 +14,7 @@ import (
 // versioned tombstone until ACK. Full rebuilds also work after either DB rolls back.
 const remoteSchema = `
 CREATE TABLE IF NOT EXISTS remote_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),id TEXT NOT NULL,key BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS remote_memberships(hub TEXT NOT NULL,space TEXT NOT NULL,origin TEXT NOT NULL,credential TEXT NOT NULL,epoch TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,acked INTEGER NOT NULL DEFAULT 0,lan INTEGER NOT NULL DEFAULT 0,policy INTEGER NOT NULL DEFAULT 0,expose_all INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(hub,space));
+CREATE TABLE IF NOT EXISTS remote_memberships(hub TEXT NOT NULL,space TEXT NOT NULL,origin TEXT NOT NULL,credential TEXT NOT NULL,epoch TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,acked INTEGER NOT NULL DEFAULT 0,lan INTEGER NOT NULL DEFAULT 0,policy INTEGER NOT NULL DEFAULT 0,expose_all INTEGER NOT NULL DEFAULT 0,allow_delegation INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(hub,space));
 CREATE TABLE IF NOT EXISTS hub_exposed_agents(hub TEXT NOT NULL,space TEXT NOT NULL,agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,PRIMARY KEY(hub,space,agent_id),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS remote_trusted_controllers(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,pub BLOB NOT NULL,name TEXT NOT NULL,PRIMARY KEY(hub,space,controller),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS remote_control_permissions(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,PRIMARY KEY(hub,space,controller,agent_id,action),FOREIGN KEY(hub,space,controller) REFERENCES remote_trusted_controllers ON DELETE CASCADE);
@@ -55,6 +55,15 @@ func (s *Store) initRemote() error {
 	}
 	if !hasExposeAll {
 		if _, err = tx.Exec("ALTER TABLE remote_memberships ADD COLUMN expose_all INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var hasAllowDelegation bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('remote_memberships') WHERE name='allow_delegation')").Scan(&hasAllowDelegation); err != nil {
+		return err
+	}
+	if !hasAllowDelegation {
+		if _, err = tx.Exec("ALTER TABLE remote_memberships ADD COLUMN allow_delegation INTEGER NOT NULL DEFAULT 1"); err != nil {
 			return err
 		}
 	}

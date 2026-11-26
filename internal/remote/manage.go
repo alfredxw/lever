@@ -103,6 +103,14 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		return h.manageController(ctx, st, in)
 	case "share_note", "preview_note":
 		return h.note(ctx, st, in)
+	case "allow_delegation":
+		if !st.Membership.Role.Executes() {
+			return nil, errors.New("device has no executor role")
+		}
+		h.configMu.Lock()
+		defer h.configMu.Unlock()
+		_, err = h.App.Store.DB.ExecContext(ctx, "UPDATE remote_memberships SET allow_delegation=? WHERE hub=? AND space=?", in.Enabled, in.Scope.HubID, in.Scope.SpaceID)
+		return true, err
 	case "expose_all":
 		if !st.Membership.Role.Executes() {
 			return nil, errors.New("device has no executor role")

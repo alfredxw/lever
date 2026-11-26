@@ -26,6 +26,7 @@ import (
 	"lever/internal/plugin/builtin"
 	larkbot "lever/internal/plugin/builtin/lark-bot"
 	"lever/internal/provider"
+	p "lever/internal/remoteproto"
 	"lever/internal/runhost"
 	"lever/internal/store"
 	"lever/internal/terminal"
@@ -80,8 +81,12 @@ type App struct {
 	eventPoll            *activeEventPoll
 	automationStarted    bool
 	feishu               feishuChannel
-	personal             map[string]*personalWorker
-	pluginPreviews       map[string]*packagePreview
+	personal                map[string]*personalWorker
+	pluginPreviews          map[string]*packagePreview
+	remoteCollab            RemoteCollaborator
+	remoteDelegationWake    chan struct{}
+	remoteDelegationNotify  chan struct{}
+	remoteDelegationStarted bool
 }
 
 // Open embeds provider execution in the caller. The standalone hosts use
@@ -99,6 +104,7 @@ func open(dir string, independent bool) (*App, error) {
 		Store: s, ctx: ctx, cancel: cancel, independentProviders: independent, active: map[string]*execution{},
 		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1), taskReminderWake: make(chan struct{}, 1),
 		eventAdapters: builtin.EventSourceAdapters(), personal: make(map[string]*personalWorker), pluginPreviews: make(map[string]*packagePreview),
+		remoteDelegationWake: make(chan struct{}, 1),
 	}
 	if err = a.migrateWorkingCopies(ctx); err != nil {
 		cancel()
@@ -266,6 +272,10 @@ WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','q
 	if err != nil {
 		return o, err
 	}
+	o.DelegationSettings, err = delegationSettings(ctx, tx)
+	if err != nil {
+		return o, err
+	}
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&o.Cursor); err != nil {
 		return o, err
 	}
@@ -330,6 +340,9 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		}
 	}
 	p := &agent.Profile
+	if !p.DelegationPolicy.Valid() {
+		return agent, invalid("Invalid delegation policy")
+	}
 	p.Description = strings.TrimSpace(p.Description)
 	if len([]rune(p.Description)) > 240 {
 		return agent, invalid("Agent description must be at most 240 characters")
@@ -422,19 +435,28 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		if checkAvatarImage && !a.hasAvatarImage(agent.Avatar.Value) {
 			return invalid("Select a valid avatar")
 		}
-		seen := map[string]bool{}
-		for _, rule := range p.Delegations {
-			if rule.AgentID == agent.ID || seen[rule.AgentID] {
+		seen := map[[2]string]bool{}
+		for i := range p.Delegations {
+			rule := &p.Delegations[i]
+			rule.DeviceID = strings.TrimSpace(rule.DeviceID)
+			rule.AgentID = strings.TrimSpace(rule.AgentID)
+			key := [2]string{rule.DeviceID, rule.AgentID}
+			if rule.AgentID == "" || len(rule.AgentID) > 128 || len(rule.DeviceID) > 128 || seen[key] {
 				return invalid("Delegation targets must be distinct other agents")
 			}
-			seen[rule.AgentID] = true
-			target, err := store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", rule.AgentID)
-			if err != nil {
-				return invalid("Delegation target does not exist")
+			if rule.DeviceID == "" {
+				if rule.AgentID == agent.ID {
+					return invalid("Delegation targets must be distinct other agents")
+				}
+				target, err := store.Get[model.Agent](ctx, tx, "SELECT data FROM agents WHERE id=?", rule.AgentID)
+				if err != nil {
+					return invalid("Delegation target does not exist")
+				}
+				if target.Archived {
+					return invalid("Delegation target is archived")
+				}
 			}
-			if target.Archived {
-				return invalid("Delegation target is archived")
-			}
+			seen[key] = true
 		}
 		agent.UpdatedAt = now()
 		if len(p.Skills) > 0 {
@@ -551,19 +573,21 @@ func (a *App) Send(ctx context.Context, input model.SendInput) (model.Run, error
 }
 
 type sendOrigin struct {
-	remote          *remoteOrigin
-	idleCompaction  bool
-	parentRunID     string
-	delegationScope *delegationWorkspace
-	delegationWake  *delegationReceiptWake
-	task            *model.TaskDispatch
-	taskRecord      model.TaskRecord
-	taskQueue       *queuedTask
-	retry           *model.Run
-	channel         *channelInput
-	feishu          *feishuTurn
-	personal        *personalTurn
-	automation      *automationFire
+	remote            *remoteOrigin
+	remoteDelegation  *p.DelegationOrigin
+	idleCompaction    bool
+	parentRunID       string
+	maxPermissionMode string
+	delegationScope   *delegationWorkspace
+	delegationWake    *delegationReceiptWake
+	task              *model.TaskDispatch
+	taskRecord        model.TaskRecord
+	taskQueue         *queuedTask
+	retry             *model.Run
+	channel           *channelInput
+	feishu            *feishuTurn
+	personal          *personalTurn
+	automation        *automationFire
 }
 
 var errCommandConflict = conflict("commandId already belongs to a different message")
@@ -714,6 +738,14 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 					chat.Source, chat.TaskID = "task", fire.id
 				}
 			}
+			if origin.remoteDelegation != nil {
+				chat.Source = "delegation"
+				if title := truncateRunes(strings.TrimSpace(input.Text), 48); title != "" {
+					chat.Title = title
+				} else {
+					chat.Title = "Delegated task"
+				}
+			}
 		}
 		if input.SharedScope != nil {
 			if !newChat {
@@ -743,6 +775,9 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		}
 		if agent.Archived {
 			return conflict("Agent is archived")
+		}
+		if newChat && origin.remoteDelegation != nil && !agent.Profile.CanAcceptDelegations() {
+			return &Error{Status: 403, Message: "Agent does not accept delegated tasks"}
 		}
 		if newChat {
 			if _, err = tx.Exec("INSERT INTO chats(id,agent_id,data) VALUES(?,?,?)", chat.ID, agent.ID, store.JSON(chat)); err != nil {
@@ -887,6 +922,23 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				session.WorkingCopyID = origin.delegationScope.workingCopyID
 				session.WorkingCopyName = origin.delegationScope.workingCopyName
 			}
+			if rd := origin.remoteDelegation; rd != nil {
+				session.ParentRunID = "remote:" + rd.DeviceID + ":" + rd.RunID
+				src := &model.RemoteDelegationSource{
+					DeviceID:   rd.DeviceID,
+					DeviceName: rd.DeviceName,
+					AgentID:    rd.AgentID,
+					AgentName:  rd.AgentName,
+					ChatID:     rd.ChatID,
+					SessionID:  rd.SessionID,
+					RunID:      rd.RunID,
+				}
+				if origin.remote != nil {
+					src.HubID = origin.remote.scope.HubID
+					src.SpaceID = origin.remote.scope.SpaceID
+				}
+				session.DelegatedFrom = src
+			}
 			if origin.personal != nil {
 				session.Channel = origin.personal.channelOrigin()
 				if kind == "topic" && personalDest.sessionTitle != "" {
@@ -904,7 +956,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 		}
 		if input.WorkingCopyID != "" {
-			if !create || origin.parentRunID != "" || (!newChat && input.Operation != "topic" && origin.task == nil && origin.automation == nil) {
+			if !create || (origin.parentRunID != "" && origin.remoteDelegation == nil) || (!newChat && input.Operation != "topic" && origin.task == nil && origin.automation == nil) {
 				return invalid("A directory group can only be selected for a new Chat, Topic or task")
 			}
 			copy, err := a.selectGroupForTarget(ctx, tx, agent, session.ProjectID, input.WorkingCopyID)
@@ -954,6 +1006,14 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		selection, config, err := resolveSelection(ctx, tx, selection, session.Selection)
 		if err != nil {
 			return err
+		}
+		if origin.maxPermissionMode != "" {
+			if capped := provider.CapPermission(config.Type, selection.Permission, origin.maxPermissionMode); capped != "" {
+				selection.Permission = capped
+				if create {
+					session.Selection.Permission = capped
+				}
+			}
 		}
 		if delivery.origin != nil && a.supportsMCP(session, config) {
 			originRef, err := originConversationReference(ctx, tx, delivery.origin)
@@ -1271,7 +1331,8 @@ func (a *App) launchLocked(run model.Run, session model.Session, profile model.P
 func (a *App) newExecution(run model.Run, session model.Session, profile model.Profile, config model.Provider, recovery *provider.Recovery) *execution {
 	runCtx, cancel := context.WithCancel(a.ctx)
 	runtimeCtx, interrupt := context.WithCancelCause(runCtx)
-	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
+	defaults, _ := delegationSettings(a.ctx, a.Store.DB)
+	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, delegationPolicy: profile.EffectiveDelegationPolicy(defaults), provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
 	if config.Type == "pi" {
 		execution.contextToken = ID() + ID()
 	}
@@ -1347,6 +1408,7 @@ func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 	}
 	if !pause {
 		a.cancelParentDelegationWakesLocked(ctx, runID)
+		a.stopRemoteDelegationsForParentLocked(ctx, runID)
 	}
 	childRunIDs := a.delegationChildRunsForParent(ctx, runID)
 	for id, child := range a.active {

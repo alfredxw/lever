@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, MessageCircle, Minimize2 } from "lucide-react";
+import { ArrowLeft, MessageCircle, Minimize2, Monitor } from "lucide-react";
 import { toast } from "sonner";
 import { active, api, queryClient } from "@/api/client";
 import type {
@@ -425,19 +425,31 @@ function ChatContent(props: ChatProps) {
           <>
             {source && (
               <div className="flex shrink-0 items-center border-b px-3 py-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="min-w-0"
-                  onClick={() => onOpenRun(source, source.title)}
-                >
-                  <ArrowLeft data-icon="inline-start" />
-                  <span className="truncate">
-                    {sender
-                      ? t("chat.backToDelegationBy", { agent: sender.name })
-                      : t("chat.backToDelegation")}
+                {source.deviceId ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5 py-1 text-xs text-muted-foreground">
+                    <Monitor className="size-3.5 shrink-0" aria-hidden />
+                    <span className="truncate">
+                      {t("chat.delegatedFromRemote", {
+                        device: source.deviceName || source.deviceId,
+                        agent: source.agentName || t("chat.delegationAgent"),
+                      })}
+                    </span>
                   </span>
-                </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-w-0"
+                    onClick={() => onOpenRun(source, source.title)}
+                  >
+                    <ArrowLeft data-icon="inline-start" />
+                    <span className="truncate">
+                      {sender
+                        ? t("chat.backToDelegationBy", { agent: sender.name })
+                        : t("chat.backToDelegation")}
+                    </span>
+                  </Button>
+                )}
               </div>
             )}
             {taskId && (

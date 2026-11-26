@@ -34,10 +34,12 @@ export function RequestCard({
   request,
   title = request.title,
   source,
+  onSubmit,
 }: {
   request: Request;
   title?: string;
   source?: string;
+  onSubmit?: (value: Answer | "allow-run") => Promise<unknown>;
 }) {
   const { t } = useTranslation();
   const keepOpen = useContext(KeepConversationOpen);
@@ -56,11 +58,16 @@ export function RequestCard({
   const answer = useMutation({
     onMutate: () => keepOpen?.(),
     mutationFn: (value: Answer | "allow-run") =>
-      value === "allow-run"
-        ? api(`/runs/${request.runId}/approvals`, { allow: true })
-        : api(`/requests/${request.id}/answer`, value),
+      onSubmit
+        ? onSubmit(value)
+        : value === "allow-run"
+          ? api(`/runs/${request.runId}/approvals`, { allow: true })
+          : api(`/requests/${request.id}/answer`, value),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      if (onSubmit) {
+        void queryClient.invalidateQueries({ queryKey: ["delegations"] });
+      }
     },
   });
   const approval = request.kind === "approval";

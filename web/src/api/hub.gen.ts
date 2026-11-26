@@ -27,6 +27,7 @@ export interface PairInput extends Identity {
 export interface Membership {
   hub: Identity;
   spaceId: string;
+  spaceKind?: string;
   userId: string;
   deviceId: string;
   role: Role;
@@ -92,6 +93,9 @@ export interface Record {
   workingCopyName?: string;
   answeredByUserId?: string;
   avatar?: string;
+  description?: string;
+  permission?: string;
+  acceptDelegations?: boolean;
   private?: boolean;
   kind: string;
   id: string;
@@ -175,6 +179,7 @@ export interface ReadSync {
 }
 export interface Frame {
   controllerId?: string;
+  delegation?: boolean;
   digest?: string;
   receipt?: Receipt;
   completed?: boolean;
@@ -227,6 +232,17 @@ export interface Dispatch {
   sessionId?: string;
   runId?: string;
 }
+export interface DelegationOrigin {
+  deviceId: string;
+  deviceName?: string;
+  agentId: string;
+  agentName?: string;
+  chatId: string;
+  sessionId: string;
+  runId: string;
+  delegationId: string;
+  maxPermissionMode?: string;
+}
 /**
  * Intent is a proposed user action. Execution credentials, providers and paths
  * are never chosen by a controller. Only the owning Host can record a receipt.
@@ -247,6 +263,7 @@ export interface Intent {
   delivery?: string;
   text?: string;
   answer?: Answer;
+  delegation?: DelegationOrigin;
   actorUserId?: string;
   originDeviceId?: string;
 }

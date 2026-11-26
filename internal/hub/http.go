@@ -410,6 +410,9 @@ func (h *Hub) pair(w http.ResponseWriter, r *http.Request, _ principal) error {
 			}
 			return err
 		}
+		if err := tx.QueryRow("SELECT kind FROM spaces WHERE id=?", m.SpaceID).Scan(&m.SpaceKind); err != nil {
+			return err
+		}
 		if cap != in.Role && cap != p.Workstation {
 			return denied
 		}

@@ -168,6 +168,60 @@ func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Inten
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 		i.ChatID, i.AgentID, i.ChatID, scope.HubID, scope.SpaceID,
 		scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ActorUserID).Scan(&ok)
+	if err != nil || ok {
+		return ok, err
+	}
+	return h.delegationPermitted(ctx, scope, i)
+}
+
+func (h *Host) delegationPermitted(ctx context.Context, scope model.SharedScope, i p.Intent) (bool, error) {
+	if i.Private || i.OriginDeviceID == "" || i.ActorUserID == "" {
+		return false, nil
+	}
+	var allowedMembership bool
+	err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_memberships
+		WHERE hub=? AND space=? AND allow_delegation=1
+		AND json_extract(credential,'$.userId')=?
+		AND coalesce(nullif(json_extract(credential,'$.spaceKind'),''),'personal')='personal')`,
+		scope.HubID, scope.SpaceID, i.ActorUserID).Scan(&allowedMembership)
+	if err != nil || !allowedMembership {
+		return false, err
+	}
+	if i.Kind == "send" && i.ChatID == "" {
+		if i.Delegation == nil || i.Delegation.DeviceID != i.OriginDeviceID {
+			return false, nil
+		}
+		var ok bool
+		err = h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a
+			JOIN remote_memberships m ON m.hub=? AND m.space=?
+			WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND coalesce(json_extract(a.data,'$.profile.acceptDelegations'),1)=1
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			scope.HubID, scope.SpaceID, i.AgentID).Scan(&ok)
+		return ok, err
+	}
+	if i.ChatID == "" {
+		return false, nil
+	}
+	switch i.Kind {
+	case "send":
+		if i.Delegation == nil || i.Delegation.DeviceID != i.OriginDeviceID {
+			return false, nil
+		}
+	case "stop", "answer", "allow_run":
+	default:
+		return false, nil
+	}
+	var ok bool
+	err = h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chats c
+		JOIN sessions s ON s.chat_id=c.id AND s.kind='main'
+		JOIN agents a ON a.id=c.agent_id
+		JOIN remote_memberships m ON m.hub=? AND m.space=?
+		WHERE c.id=? AND json_extract(c.data,'$.sharedScope.hubId')=? AND json_extract(c.data,'$.sharedScope.spaceId')=?
+		AND json_extract(s.data,'$.delegatedFrom.deviceId')=?
+		AND (?='stop' OR (coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))))`,
+		scope.HubID, scope.SpaceID, i.ChatID, scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind).Scan(&ok)
 	return ok, err
 }
 
@@ -176,8 +230,10 @@ func (h *Host) acceptOffer(ctx context.Context, st p.ClientState, f p.Frame) {
 	// the settings action and recheck the actual intent fetched from the Hub.
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	var id string
-	if err := h.App.Store.DB.QueryRowContext(ctx, "SELECT controller FROM remote_control_permissions WHERE hub=? AND space=? AND controller=? LIMIT 1", st.Membership.Hub.ID, st.Membership.SpaceID, f.ControllerID).Scan(&id); err != nil {
+	var eligible bool
+	if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_control_permissions WHERE hub=? AND space=? AND controller=?)
+		OR (?=1 AND EXISTS(SELECT 1 FROM remote_memberships WHERE hub=? AND space=? AND allow_delegation=1 AND coalesce(nullif(json_extract(credential,'$.spaceKind'),''),'personal')='personal'))`,
+		st.Membership.Hub.ID, st.Membership.SpaceID, f.ControllerID, f.Delegation, st.Membership.Hub.ID, st.Membership.SpaceID).Scan(&eligible); err != nil || !eligible {
 		return
 	}
 	_, _ = h.review(ctx, st, Management{Action: "authorized", Scope: model.SharedScope{HubID: st.Membership.Hub.ID, SpaceID: st.Membership.SpaceID}, ID: f.RPCID})

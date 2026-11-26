@@ -388,9 +388,12 @@ func claudeLaunchFingerprint(in Input, executablePath, cwd, entrypoint string, a
 		Model                string
 		Effort               string
 		Fast                 bool
-		Instructions         string
-		Delegations          []model.DelegationRule
-		SkillsAssets         string
+		Instructions          string
+		Delegations           []model.DelegationRule
+		DelegationEnabled     bool
+		DelegationPolicy      model.DelegationPolicy
+		AllowRemoteDelegation bool
+		SkillsAssets          string
 		SkillsBundled        []string
 		SkillsDisabled       []string
 		SkillsClaudeDirs     []string
@@ -410,9 +413,12 @@ func claudeLaunchFingerprint(in Input, executablePath, cwd, entrypoint string, a
 		Model:                in.Selection.Model,
 		Effort:               in.Selection.Effort,
 		Fast:                 in.Selection.Fast,
-		Instructions:         in.Profile.Instructions,
-		Delegations:          in.Profile.Delegations,
-		SkillsAssets:         in.Skills.Assets,
+		Instructions:          in.Profile.Instructions,
+		Delegations:           in.Profile.Delegations,
+		DelegationEnabled:     in.DelegationEnabled,
+		DelegationPolicy:      in.Profile.DelegationPolicy,
+		AllowRemoteDelegation: in.Profile.AllowsRemoteDelegation(),
+		SkillsAssets:          in.Skills.Assets,
 		SkillsBundled:        bundledDigest,
 		SkillsDisabled:       disabled,
 		SkillsClaudeDirs:     in.Skills.ClaudeDirectories,

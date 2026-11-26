@@ -21,6 +21,9 @@ func (h *Host) propose(ctx context.Context, g p.Grant, cmd p.LANCommand) (p.Inbo
 	if _, err := uuid.Parse(i.ID); err != nil || cmd.HubID != g.HubID || cmd.SpaceID != g.SpaceID || i.ActorUserID != g.UserID || i.OriginDeviceID != g.Controller.ID || i.DeviceID != g.Host.ID || !cmd.Verify(g.Controller.PublicKey) || i.TaskID != "" {
 		return out, errors.New("invalid signed action")
 	}
+	if i.Delegation != nil && (i.Kind != "send" || i.Delegation.DeviceID != g.Controller.ID || i.Delegation.AgentID == "" || i.Delegation.RunID == "" || i.Delegation.DelegationID == "") {
+		return out, errors.New("invalid delegation origin")
+	}
 	switch i.Kind {
 	case "send", "answer", "stop", "resolve_unknown", "resume_queue", "allow_run":
 	default:
@@ -38,7 +41,8 @@ func (h *Host) propose(ctx context.Context, g p.Grant, cmd p.LANCommand) (p.Inbo
 			}
 			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=? AND m.space=?
 WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
-AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`, g.HubID, g.SpaceID, i.AgentID).Scan(&visible); err != nil {
+AND (?=0 OR coalesce(json_extract(a.data,'$.profile.acceptDelegations'),1)=1)
+AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`, g.HubID, g.SpaceID, i.AgentID, i.Delegation != nil).Scan(&visible); err != nil {
 				return err
 			}
 		} else {

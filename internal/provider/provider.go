@@ -45,6 +45,7 @@ type Input struct {
 	ContextToken                                   string `json:",omitempty"`
 	HistoryContext                                 string
 	RequireMCP                                     bool
+	DelegationEnabled                              bool
 	Recovery                                       *Recovery
 }
 
@@ -117,7 +118,15 @@ func (in Input) Message() string {
 		case "chat", "topic":
 			text += fmt.Sprintf("\n\n[Referenced %s %q: use read_chat_context with target %q for dialogue.]", ref.Kind, ref.Name, ref.ID)
 		case "agent":
-			text += fmt.Sprintf("\n\n[Collaborate with Agent %q using delegate_start with agentId %q (or delegate_reply to continue an existing delegation). Use delegate_wait to collect results or end your turn to receive an automatic receipt.]", ref.Name, ref.ID)
+			if ref.DeviceID != "" {
+				deviceLabel := ref.DeviceName
+				if deviceLabel == "" {
+					deviceLabel = ref.DeviceID
+				}
+				text += fmt.Sprintf("\n\n[Collaborate with remote Agent %q on device %q using delegate_start with deviceId %q and agentId %q (or delegate_reply to continue an existing delegation). Use delegate_wait to collect results or end your turn to receive an automatic receipt.]", ref.Name, deviceLabel, ref.DeviceID, ref.ID)
+			} else {
+				text += fmt.Sprintf("\n\n[Collaborate with Agent %q using delegate_start with agentId %q (or delegate_reply to continue an existing delegation). Use delegate_wait to collect results or end your turn to receive an automatic receipt.]", ref.Name, ref.ID)
+			}
 		case "note", "workItem", "noteTask", "externalTask", "automationTask":
 			text += fmt.Sprintf("\n\n[Referenced %s %q: use read_reference with kind %q and id %q for its current content.]", ref.Kind, ref.Name, ref.Kind, ref.ID)
 		}

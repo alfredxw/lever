@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"lever/internal/model"
+	"lever/internal/provider"
 	p "lever/internal/remoteproto"
 	"lever/internal/store"
 )
@@ -112,8 +113,16 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		if a.Avatar != nil && (a.Avatar.Kind == "emoji" || a.Avatar.Kind == "monogram") {
 			r.Avatar, _ = clipped(a.Avatar.Value, 32)
 		}
+		r.Description, _ = clipped(a.Profile.Description, 512)
 		r.Provider = a.Profile.Provider
 		r.Model = a.Profile.Model
+		var providerType string
+		_ = tx.QueryRowContext(ctx, "SELECT coalesce(json_extract(data,'$.type'),'') FROM providers WHERE id=?", a.Profile.Provider).Scan(&providerType)
+		r.Permission = provider.NormalizePermissionMode(providerType, a.Profile.Permission)
+		if !a.Profile.CanAcceptDelegations() {
+			accept := false
+			r.AcceptDelegations = &accept
+		}
 		groups, err := store.List[model.DirectoryGroup](ctx, tx, "SELECT data FROM working_copies WHERE agent_id=? ORDER BY id", a.ID)
 		if err != nil {
 			return r, err

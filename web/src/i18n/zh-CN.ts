@@ -2914,6 +2914,45 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.delegationRound": "第 {{turn}}/{{turns}} 轮",
   "chat.delegationTurnNumber": "第 {{turn}} 轮",
   "chat.requestFromCollaborator": "来自协作者 · {{agent}}",
+  "chat.requestFromRemoteCollaborator": "来自远程协作者 · {{device}} / {{agent}}",
   "chat.delegationReceiptGroup": "协作者回执",
   "chat.delegationReceiptLabel": "回执",
+  "chat.delegatedFromRemote": "来自远程委派 · {{device}} / {{agent}}",
+  "chat.openRemoteDelegation": "查看远程会话",
+  "chat.remoteDelegationTitle": "{{device}} · {{agent}}",
+  "chat.remoteDelegationLoading": "正在加载远程会话…",
+  "chat.remoteDelegationWaitingAccept": "等待远程设备接单…",
+  "chat.remoteDelegationEmpty": "远程设备暂未同步消息内容。",
+  "chat.remoteDelegationStop": "停止远程任务",
+  "settings.defaultDelegationPolicy": "新建 Agent 默认委派协作",
+  "settings.defaultDelegationPolicyDescription":
+    "控制未单独配置的 Agent（含新建 Agent）是否默认开启委派协作。各 Agent 仍可在「配置」中独立覆盖。",
+  "settings.defaultDelegationPolicy.none": "默认关闭",
+  "settings.defaultDelegationPolicy.all": "全部 Agent（含新增）",
+  "profile.delegationPolicy": "委派模式",
+  "profile.delegationPolicy.none": "关闭",
+  "profile.delegationPolicy.all": "全部 Agent（含新增）",
+  "profile.delegationPolicy.selected": "仅选定 Agent",
+  "profile.delegationPolicy.noneHint":
+    "关闭委派协作；此 Agent 不会向其他 Agent 派发任务。",
+  "profile.delegationPolicy.allHint":
+    "可委派给所有允许接受委派的 Agent（含今后新增的 Agent），无需逐次确认，权限自动不超过当前会话权限。",
+  "profile.delegationPolicy.allGlobalNote":
+    "当前遵循全局默认策略（全部 Agent），可在下方单独覆盖。",
+  "profile.delegationPolicy.selectedHint":
+    "仅向下方勾选的 Agent 委派任务。默认直接执行，也可按目标单独开启「执行前确认」。",
+  "profile.delegationAllEmpty":
+    "当前暂无其他可委派的 Agent；创建新 Agent 后会自动加入。",
+  "profile.delegationAllCount":
+    "当前可委派 {{local}} 个本地 Agent{{remotePart}}。",
+  "profile.delegationAllRemotePart": "、{{remote}} 个在线远程 Agent",
+  "profile.delegationRemoteGroup": "跨设备 Agent",
+  "profile.delegationRemoteOffline": "离线",
+  "profile.delegationAccept": "允许被其他 Agent 委派",
+  "profile.delegationAcceptHint":
+    "关闭后，其他 Agent（含「全部 Agent」策略与跨设备委派）无法向此 Agent 发起委派。",
+  "profile.delegationNotAccepting": "不接受委派",
+  "profile.delegationAllowRemote": "允许跨设备委派",
+  "profile.delegationAllowRemoteHint":
+    "允许此 Agent 在「全部 Agent」模式下委派给同一 Hub 个人空间中在线的其他设备 Agent。",
 };

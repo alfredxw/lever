@@ -349,11 +349,11 @@ func (h *Hub) dispatch(w http.ResponseWriter, r *http.Request, a principal) erro
 		return err
 	}
 	h.notify(space)
-	h.offer(space, d.DeviceID, d.OriginDeviceID, d.ID)
+	h.offer(space, d.DeviceID, d.OriginDeviceID, d.ID, false)
 	return send(w, d)
 }
 
-func (h *Hub) offer(space, host, controller, id string) {
+func (h *Hub) offer(space, host, controller, id string, delegation bool) {
 	if controller == "" {
 		return
 	}
@@ -361,7 +361,7 @@ func (h *Hub) offer(space, host, controller, id string) {
 	l := h.links[deviceKey{space, host}]
 	h.mu.Unlock()
 	if l != nil {
-		_ = l.send(p.Frame{Type: "offer_command", SpaceID: space, DeviceID: host, ControllerID: controller, RPCID: id})
+		_ = l.send(p.Frame{Type: "offer_command", SpaceID: space, DeviceID: host, ControllerID: controller, Delegation: delegation, RPCID: id})
 	}
 }
 func insertIntent(tx *sql.Tx, space string, i p.Intent) (p.InboxItem, error) {
@@ -395,8 +395,14 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 	}
 	i.ActorUserID = a.user
 	i.OriginDeviceID = a.device
+	if i.Delegation != nil {
+		if i.Kind != "send" || a.device == "" || i.Delegation.DeviceID != a.device || i.Delegation.AgentID == "" || i.Delegation.RunID == "" || i.Delegation.DelegationID == "" {
+			return invalid("invalid delegation origin")
+		}
+	}
 	space := r.PathValue("space")
 	var item p.InboxItem
+	isDelegation := i.Delegation != nil
 	err := write(h.db, func(tx *sql.Tx) error {
 		if old, err := get[p.InboxItem](tx, "SELECT data FROM receipts WHERE space_id=? AND device_id=? AND id=?", space, i.DeviceID, i.ID); err == nil {
 			if encoded(old.Intent) != encoded(i) {
@@ -414,6 +420,15 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 			if err := h.target(tx, space, i.DeviceID, i.AgentID, i.WorkingCopyID); err != nil {
 				return err
 			}
+			if i.Delegation != nil {
+				rec, err := get[p.Record](tx, "SELECT data FROM archive WHERE space_id=? AND device_id=? AND kind='agent' AND id=?", space, i.DeviceID, i.AgentID)
+				if err != nil {
+					return err
+				}
+				if rec.AcceptDelegations != nil && !*rec.AcceptDelegations {
+					return denied
+				}
+			}
 		} else {
 			chat, err := get[p.Record](tx, "SELECT data FROM archive WHERE space_id=? AND device_id=? AND kind='chat' AND id=?", space, i.DeviceID, i.ChatID)
 			if err != nil {
@@ -421,6 +436,9 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 			}
 			if i.AgentID != "" && i.AgentID != chat.AgentID {
 				return denied
+			}
+			if chat.Type == "delegation" {
+				isDelegation = true
 			}
 		}
 		switch i.Kind {
@@ -451,7 +469,7 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 		return err
 	}
 	h.notify(space)
-	h.offer(space, i.DeviceID, a.device, i.ID)
+	h.offer(space, i.DeviceID, a.device, i.ID, isDelegation)
 	return send(w, item)
 }
 func (h *Hub) lookup(w http.ResponseWriter, r *http.Request, _ principal) error {

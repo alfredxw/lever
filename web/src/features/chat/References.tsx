@@ -70,20 +70,31 @@ export function InlineReference({
 }) {
   const composer = useContext(ComposerContext);
   const editorScope = useContext(ReferenceScopeContext);
+  const isRemoteAgent = reference.kind === "agent" && !!reference.deviceId;
   const openReference =
     reference.kind === "file" && reference.path
       ? composer?.openFileReference
-      : reference.kind === "skill" || isLeverReference(reference)
+      : !isRemoteAgent &&
+          (reference.kind === "skill" || isLeverReference(reference))
         ? composer?.openReference
         : undefined;
   const title =
     reference.kind === "browserElement" && reference.element
       ? `${reference.element.url}\n${reference.element.selector}`
-      : reference.path || reference.name;
+      : isRemoteAgent
+        ? `${reference.deviceName || reference.deviceId} · ${reference.name}`
+        : reference.path || reference.name;
   const content = (
     <>
       <ReferenceIcon kind={reference.kind} />
-      <span>{referenceLabel(reference)}</span>
+      <span>
+        {referenceLabel(reference)}
+        {isRemoteAgent && reference.deviceName && (
+          <span className="ml-1 text-muted-foreground">
+            ({reference.deviceName})
+          </span>
+        )}
+      </span>
     </>
   );
   return openReference ? (

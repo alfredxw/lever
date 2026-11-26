@@ -21,13 +21,14 @@ import {
   type KeyboardEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   FolderOpen,
   Folder,
   FolderPlus,
   Ellipsis,
   ExternalLink,
+  Monitor,
   Trash2,
   Terminal,
   Archive,
@@ -36,9 +37,15 @@ import {
 } from "lucide-react";
 import { isMyGo, runtime } from "mygo-runtime";
 import { toast } from "sonner";
-import type { Agent, Overview, Project } from "@/api/types.gen";
+import type {
+  Agent,
+  DelegationPolicy,
+  Overview,
+  Project,
+} from "@/api/types.gen";
 import { api, queryClient } from "@/api/client";
 import { Dialogs } from "@/api/desktop.gen";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -127,6 +134,14 @@ import { AgentAvatar } from "./AgentAvatar";
 import { CreateAgentOptions } from "./CreateAgentOptions";
 import { defaultAvatar } from "./avatarPalette";
 import {
+  allowsRemoteDelegation,
+  canAcceptDelegations,
+  defaultDelegationSettings,
+  effectiveDelegationPolicy,
+  useDelegationSettings,
+  useRemoteDelegationTargets,
+} from "./delegationPolicy";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -153,7 +168,14 @@ function profileContentSignature(agent: Agent, homeDir: string) {
       })),
       skills: rest.profile.skills ?? [],
       disabledSkills: rest.profile.disabledSkills ?? [],
-      delegations: rest.profile.delegations ?? [],
+      delegationPolicy: rest.profile.delegationPolicy || "",
+      acceptDelegations: rest.profile.acceptDelegations !== false,
+      allowRemoteDelegation: rest.profile.allowRemoteDelegation !== false,
+      delegations: (rest.profile.delegations ?? []).map((rule) => ({
+        deviceId: rule.deviceId || "",
+        agentId: rule.agentId,
+        confirm: !!rule.confirm,
+      })),
       taskConcurrency: rest.profile.taskConcurrency || 0,
       taskStartIntervalMinutes: rest.profile.taskStartIntervalMinutes || 0,
       taskQueuePaused: !!rest.profile.taskQueuePaused,
@@ -617,9 +639,78 @@ export function Profile({
         (target) =>
           target.id !== agent.id &&
           (!target.archived ||
-            delegations.some(({ agentId }) => agentId === target.id)),
+            delegations.some(
+              ({ deviceId, agentId }) => !deviceId && agentId === target.id,
+            )),
       )
     : [];
+  const delegationSettingsQuery = useDelegationSettings(showOptions);
+  const delegationDefaults =
+    delegationSettingsQuery.data ?? defaultDelegationSettings;
+  const effectivePolicy = effectiveDelegationPolicy(p, delegationDefaults);
+  const remoteTargetsQuery = useRemoteDelegationTargets({
+    enabled: showOptions,
+  });
+  const remoteTargets = remoteTargetsQuery.data ?? [];
+  const remoteBindingsQuery = useQuery({
+    queryKey: ["remote", "bindings", "probe"],
+    queryFn: () => api<{ hubId: string }[]>("/remote", { action: "status" }),
+    enabled: showOptions,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const hasRemoteSpaces =
+    (remoteBindingsQuery.data?.length ?? 0) > 0 ||
+    remoteTargets.length > 0 ||
+    p.allowRemoteDelegation === false ||
+    delegations.some((rule) => !!rule.deviceId);
+  const eligibleLocalAll = collaborators.filter(
+    (target) => !target.archived && canAcceptDelegations(target.profile),
+  );
+  const onlineRemoteTargets = remoteTargets.filter(
+    (target) => target.online && !target.draining,
+  );
+  const remoteSelectionTargets = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        deviceId: string;
+        deviceName: string;
+        agentId: string;
+        name: string;
+        description?: string;
+        online: boolean;
+      }
+    >();
+    for (const target of remoteTargets) {
+      map.set(`${target.deviceId}:${target.agentId}`, {
+        deviceId: target.deviceId,
+        deviceName: target.deviceName,
+        agentId: target.agentId,
+        name: target.name,
+        description: target.description,
+        online: target.online && !target.draining,
+      });
+    }
+    for (const rule of delegations) {
+      if (!rule.deviceId) continue;
+      const key = `${rule.deviceId}:${rule.agentId}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          deviceId: rule.deviceId,
+          deviceName: rule.deviceId.slice(0, 8),
+          agentId: rule.agentId,
+          name: rule.agentId.slice(0, 8),
+          online: false,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => {
+      if (a.deviceName !== b.deviceName)
+        return a.deviceName.localeCompare(b.deviceName);
+      return a.name.localeCompare(b.name);
+    });
+  }, [remoteTargets, delegations]);
   const savedScope = JSON.stringify([
     savedProfile.profile.primaryRootId,
     savedProfile.profile.roots.map((r) => ({
@@ -1452,81 +1543,359 @@ export function Profile({
       onChange={(skills) => change({ skills }, "immediate")}
     />
   );
-  const delegationFields =
-    collaborators.length === 0 ? (
-      <Empty className="profile-empty">
-        <EmptyDescription>{t("profile.delegationsHint")}</EmptyDescription>
-      </Empty>
-    ) : (
-      <FieldGroup className="profile-delegations">
-        {collaborators.map((target) => {
-          const rule = delegations.find((d) => d.agentId === target.id);
-          return (
-            <Field
-              key={target.id}
-              orientation="horizontal"
-              className="profile-delegation"
-            >
-              <Checkbox
-                id={`${scopeId}-delegate-${target.id}`}
-                checked={!!rule}
-                onCheckedChange={(checked) =>
-                  change(
-                    {
-                      delegations: checked
-                        ? [
-                            ...delegations,
-                            { agentId: target.id, confirm: true },
-                          ]
-                        : delegations.filter((d) => d.agentId !== target.id),
-                    },
-                    "immediate",
-                  )
+  const delegationFields = (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          spacing={0}
+          value={effectivePolicy}
+          aria-label={t("profile.delegationPolicy")}
+          disabled={busy}
+          onValueChange={(value) => {
+            if (value !== "none" && value !== "all" && value !== "selected")
+              return;
+            change(
+              { delegationPolicy: value as DelegationPolicy },
+              "immediate",
+            );
+          }}
+        >
+          <ToggleGroupItem value="none">
+            {t("profile.delegationPolicy.none")}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="all">
+            {t("profile.delegationPolicy.all")}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="selected">
+            {t("profile.delegationPolicy.selected")}
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(`profile.delegationPolicy.${effectivePolicy}Hint`)}
+          {effectivePolicy === "all" &&
+            !p.delegationPolicy &&
+            delegationDefaults.defaultPolicy === "all" && (
+              <> {t("profile.delegationPolicy.allGlobalNote")}</>
+            )}
+        </p>
+      </div>
+
+      {effectivePolicy === "all" && (
+        <div className="flex flex-col gap-3">
+          {eligibleLocalAll.length === 0 &&
+          (!allowsRemoteDelegation(p) || onlineRemoteTargets.length === 0) ? (
+            <Empty className="profile-empty">
+              <EmptyDescription>
+                {t("profile.delegationAllEmpty")}
+              </EmptyDescription>
+            </Empty>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {eligibleLocalAll.map((target) => (
+                  <span
+                    key={target.id}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs"
+                    title={target.profile.description || target.name}
+                  >
+                    <AgentAvatar agent={target} size="xs" />
+                    <span className="max-w-36 truncate">{target.name}</span>
+                  </span>
+                ))}
+                {allowsRemoteDelegation(p) &&
+                  onlineRemoteTargets.map((target) => (
+                    <span
+                      key={`${target.deviceId}:${target.agentId}`}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs"
+                      title={
+                        [target.deviceName, target.description]
+                          .filter(Boolean)
+                          .join(" · ") || target.name
+                      }
+                    >
+                      <Monitor
+                        className="size-3 shrink-0 text-muted-foreground"
+                        aria-hidden
+                      />
+                      <span className="max-w-24 truncate text-muted-foreground">
+                        {target.deviceName}
+                      </span>
+                      <span aria-hidden className="text-muted-foreground">
+                        ·
+                      </span>
+                      <span className="max-w-36 truncate">{target.name}</span>
+                    </span>
+                  ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("profile.delegationAllCount", {
+                  local: eligibleLocalAll.length,
+                  remotePart:
+                    allowsRemoteDelegation(p) && onlineRemoteTargets.length > 0
+                      ? t("profile.delegationAllRemotePart", {
+                          remote: onlineRemoteTargets.length,
+                        })
+                      : "",
+                })}
+              </p>
+            </div>
+          )}
+          {hasRemoteSpaces && (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-border/70 px-3 py-2.5">
+              <div className="min-w-0">
+                <label
+                  htmlFor={`${scopeId}-allow-remote-delegation`}
+                  className="text-xs font-medium"
+                >
+                  {t("profile.delegationAllowRemote")}
+                </label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {t("profile.delegationAllowRemoteHint")}
+                </p>
+              </div>
+              <Switch
+                id={`${scopeId}-allow-remote-delegation`}
+                size="sm"
+                disabled={busy}
+                checked={allowsRemoteDelegation(p)}
+                onCheckedChange={(allowRemoteDelegation) =>
+                  change({ allowRemoteDelegation }, "immediate")
                 }
               />
-              <FieldLabel
-                htmlFor={`${scopeId}-delegate-${target.id}`}
-                className="profile-collaborator"
-              >
-                <AgentAvatar agent={target} />
-                <span className="truncate" title={target.name}>
-                  {target.name}
-                  {target.archived && ` (${t("common.archived")})`}
+            </div>
+          )}
+        </div>
+      )}
+
+      {effectivePolicy === "selected" &&
+        (collaborators.length === 0 && remoteSelectionTargets.length === 0 ? (
+          <Empty className="profile-empty">
+            <EmptyDescription>{t("profile.delegationsHint")}</EmptyDescription>
+          </Empty>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {collaborators.length > 0 && (
+              <FieldGroup className="profile-delegations">
+                {collaborators.map((target) => {
+                  const rule = delegations.find(
+                    (d) => !d.deviceId && d.agentId === target.id,
+                  );
+                  const accepting = canAcceptDelegations(target.profile);
+                  return (
+                    <Field
+                      key={target.id}
+                      orientation="horizontal"
+                      className="profile-delegation"
+                    >
+                      <Checkbox
+                        id={`${scopeId}-delegate-${target.id}`}
+                        checked={!!rule}
+                        onCheckedChange={(checked) =>
+                          change(
+                            {
+                              delegationPolicy: "selected",
+                              delegations: checked
+                                ? [
+                                    ...delegations,
+                                    { agentId: target.id, confirm: false },
+                                  ]
+                                : delegations.filter(
+                                    (d) =>
+                                      !!d.deviceId || d.agentId !== target.id,
+                                  ),
+                            },
+                            "immediate",
+                          )
+                        }
+                      />
+                      <FieldLabel
+                        htmlFor={`${scopeId}-delegate-${target.id}`}
+                        className="profile-collaborator"
+                      >
+                        <AgentAvatar agent={target} />
+                        <span className="truncate" title={target.name}>
+                          {target.name}
+                          {target.archived && ` (${t("common.archived")})`}
+                        </span>
+                        {!accepting && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 text-[10px]"
+                          >
+                            {t("profile.delegationNotAccepting")}
+                          </Badge>
+                        )}
+                      </FieldLabel>
+                      {target.profile.description && (
+                        <span
+                          className="max-w-64 truncate text-xs text-muted-foreground"
+                          title={target.profile.description}
+                        >
+                          {target.profile.description}
+                        </span>
+                      )}
+                      {rule && (
+                        <label className="profile-confirm">
+                          <Switch
+                            size="sm"
+                            disabled={target.archived}
+                            checked={rule.confirm}
+                            onCheckedChange={(confirm) =>
+                              change(
+                                {
+                                  delegationPolicy: "selected",
+                                  delegations: delegations.map((d) =>
+                                    !d.deviceId && d.agentId === target.id
+                                      ? { ...d, confirm }
+                                      : d,
+                                  ),
+                                },
+                                "immediate",
+                              )
+                            }
+                          />
+                          {t("profile.confirm")}
+                        </label>
+                      )}
+                    </Field>
+                  );
+                })}
+              </FieldGroup>
+            )}
+            {remoteSelectionTargets.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("profile.delegationRemoteGroup")}
                 </span>
-              </FieldLabel>
-              {target.profile.description && (
-                <span
-                  className="max-w-64 truncate text-xs text-muted-foreground"
-                  title={target.profile.description}
-                >
-                  {target.profile.description}
-                </span>
-              )}
-              {rule && (
-                <label className="profile-confirm">
-                  <Switch
-                    size="sm"
-                    disabled={target.archived}
-                    checked={rule.confirm}
-                    onCheckedChange={(confirm) =>
-                      change(
-                        {
-                          delegations: delegations.map((d) =>
-                            d.agentId === target.id ? { ...d, confirm } : d,
-                          ),
-                        },
-                        "immediate",
-                      )
-                    }
-                  />
-                  {t("profile.confirm")}
-                </label>
-              )}
-            </Field>
-          );
-        })}
-      </FieldGroup>
-    );
+                <FieldGroup className="profile-delegations">
+                  {remoteSelectionTargets.map((target) => {
+                    const rule = delegations.find(
+                      (d) =>
+                        d.deviceId === target.deviceId &&
+                        d.agentId === target.agentId,
+                    );
+                    const key = `${target.deviceId}:${target.agentId}`;
+                    return (
+                      <Field
+                        key={key}
+                        orientation="horizontal"
+                        className="profile-delegation"
+                      >
+                        <Checkbox
+                          id={`${scopeId}-delegate-remote-${key}`}
+                          checked={!!rule}
+                          onCheckedChange={(checked) =>
+                            change(
+                              {
+                                delegationPolicy: "selected",
+                                delegations: checked
+                                  ? [
+                                      ...delegations,
+                                      {
+                                        deviceId: target.deviceId,
+                                        agentId: target.agentId,
+                                        confirm: false,
+                                      },
+                                    ]
+                                  : delegations.filter(
+                                      (d) =>
+                                        d.deviceId !== target.deviceId ||
+                                        d.agentId !== target.agentId,
+                                    ),
+                              },
+                              "immediate",
+                            )
+                          }
+                        />
+                        <FieldLabel
+                          htmlFor={`${scopeId}-delegate-remote-${key}`}
+                          className="profile-collaborator"
+                        >
+                          <Monitor
+                            className="size-4 shrink-0 text-muted-foreground"
+                            aria-hidden
+                          />
+                          <span className="truncate" title={target.name}>
+                            {target.name}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 text-[10px]"
+                          >
+                            {target.deviceName}
+                          </Badge>
+                          {!target.online && (
+                            <span className="text-[11px] text-muted-foreground">
+                              {t("profile.delegationRemoteOffline")}
+                            </span>
+                          )}
+                        </FieldLabel>
+                        {target.description && (
+                          <span
+                            className="max-w-64 truncate text-xs text-muted-foreground"
+                            title={target.description}
+                          >
+                            {target.description}
+                          </span>
+                        )}
+                        {rule && (
+                          <label className="profile-confirm">
+                            <Switch
+                              size="sm"
+                              checked={rule.confirm}
+                              onCheckedChange={(confirm) =>
+                                change(
+                                  {
+                                    delegationPolicy: "selected",
+                                    delegations: delegations.map((d) =>
+                                      d.deviceId === target.deviceId &&
+                                      d.agentId === target.agentId
+                                        ? { ...d, confirm }
+                                        : d,
+                                    ),
+                                  },
+                                  "immediate",
+                                )
+                              }
+                            />
+                            {t("profile.confirm")}
+                          </label>
+                        )}
+                      </Field>
+                    );
+                  })}
+                </FieldGroup>
+              </div>
+            )}
+          </div>
+        ))}
+
+      <div className="flex items-start justify-between gap-3 border-t border-border/70 pt-3">
+        <div className="min-w-0">
+          <label
+            htmlFor={`${scopeId}-accept-delegations`}
+            className="text-xs font-medium"
+          >
+            {t("profile.delegationAccept")}
+          </label>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t("profile.delegationAcceptHint")}
+          </p>
+        </div>
+        <Switch
+          id={`${scopeId}-accept-delegations`}
+          size="sm"
+          disabled={busy}
+          checked={canAcceptDelegations(p)}
+          onCheckedChange={(acceptDelegations) =>
+            change({ acceptDelegations }, "immediate")
+          }
+        />
+      </div>
+    </div>
+  );
 
   const editError = archiveSave.error ?? autoSave.error;
 

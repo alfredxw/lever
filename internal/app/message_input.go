@@ -173,10 +173,41 @@ func (a *App) validateReferences(ctx context.Context, q store.Queryer, reference
 			case "topic":
 				query = "SELECT 1 FROM sessions WHERE id=? AND kind='topic'"
 			case "agent":
-				if _, allowed := delegationRule(session.ParentRunID, agent.Profile.Delegations, ref.ID); !allowed {
+				if session.ParentRunID != "" || session.DelegatedFrom != nil {
 					return invalid("The referenced Agent is not a configured collaborator for this conversation")
 				}
-				query = "SELECT 1 FROM agents WHERE id=? AND NOT json_extract(data,'$.archived')"
+				defaults, err := delegationSettings(ctx, q)
+				if err != nil {
+					return err
+				}
+				policy := agent.Profile.EffectiveDelegationPolicy(defaults)
+				if ref.DeviceID != "" {
+					if !notes.IDPattern.MatchString(ref.DeviceID) {
+						return invalid("Invalid Lever reference")
+					}
+					allowed := false
+					switch policy {
+					case model.DelegationPolicyAll:
+						allowed = agent.Profile.AllowsRemoteDelegation()
+					case model.DelegationPolicySelected:
+						_, allowed = findDelegationRule(agent.Profile.Delegations, ref.DeviceID, ref.ID)
+					}
+					if !allowed {
+						return invalid("The referenced Agent is not a configured collaborator for this conversation")
+					}
+					continue
+				}
+				allowed := false
+				switch policy {
+				case model.DelegationPolicyAll:
+					allowed = ref.ID != agent.ID
+				case model.DelegationPolicySelected:
+					_, allowed = findDelegationRule(agent.Profile.Delegations, "", ref.ID)
+				}
+				if !allowed {
+					return invalid("The referenced Agent is not a configured collaborator for this conversation")
+				}
+				query = "SELECT 1 FROM agents WHERE id=? AND NOT json_extract(data,'$.archived') AND coalesce(json_extract(data,'$.profile.acceptDelegations'),1)=1"
 			case "workItem":
 				query = "SELECT 1 FROM work_items WHERE id=?"
 			case "externalTask":

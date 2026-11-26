@@ -182,7 +182,9 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 // A restored Hub can have an older receipt than the Host. Ask only about its
 // own known command hashes. A query can never start an execution.
 func (h *Hub) reconcile(ctx context.Context, k deviceKey, l *link) error {
-	rows, err := h.db.QueryContext(ctx, `SELECT id,digest,json_extract(data,'$.receipt.status'),coalesce(json_extract(data,'$.intent.originDeviceId'),'') FROM receipts WHERE space_id=? AND device_id=? AND (json_extract(data,'$.receipt.status') IN ('pending','reviewing') OR (json_extract(data,'$.receipt.status')='cancelled' AND json_extract(data,'$.receipt.detail') IS NULL))`, k.space, k.device)
+	rows, err := h.db.QueryContext(ctx, `SELECT id,digest,json_extract(data,'$.receipt.status'),coalesce(json_extract(data,'$.intent.originDeviceId'),''),
+		(coalesce(json_type(data,'$.intent.delegation'),'')='object' OR EXISTS(SELECT 1 FROM archive a WHERE a.space_id=receipts.space_id AND a.device_id=receipts.device_id AND a.kind='chat' AND a.id=coalesce(json_extract(receipts.data,'$.intent.chatId'),'') AND json_extract(a.data,'$.type')='delegation'))
+		FROM receipts WHERE space_id=? AND device_id=? AND (json_extract(data,'$.receipt.status') IN ('pending','reviewing') OR (json_extract(data,'$.receipt.status')='cancelled' AND json_extract(data,'$.receipt.detail') IS NULL))`, k.space, k.device)
 	if err != nil {
 		return err
 	}
@@ -191,7 +193,8 @@ func (h *Hub) reconcile(ctx context.Context, k deviceKey, l *link) error {
 	for rows.Next() {
 		f := p.Frame{SpaceID: k.space, DeviceID: k.device, Type: "query_command"}
 		var status, controller string
-		if err = rows.Scan(&f.RPCID, &f.Digest, &status, &controller); err != nil {
+		var isDelegation bool
+		if err = rows.Scan(&f.RPCID, &f.Digest, &status, &controller, &isDelegation); err != nil {
 			return err
 		}
 		if status == "cancelled" {
@@ -199,7 +202,7 @@ func (h *Hub) reconcile(ctx context.Context, k deviceKey, l *link) error {
 		}
 		probes = append(probes, f)
 		if status != "cancelled" && controller != "" {
-			probes = append(probes, p.Frame{Type: "offer_command", SpaceID: k.space, DeviceID: k.device, RPCID: f.RPCID, ControllerID: controller})
+			probes = append(probes, p.Frame{Type: "offer_command", SpaceID: k.space, DeviceID: k.device, RPCID: f.RPCID, ControllerID: controller, Delegation: isDelegation})
 		}
 	}
 	if err = rows.Err(); err != nil {

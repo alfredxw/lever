@@ -87,6 +87,7 @@ func New(a *app.App, address, devOrigin string, assets fs.FS) (*Server, error) {
 		return nil, err
 	}
 	s.Remote = remote.Start(a)
+	a.SetRemoteCollaborator(s.Remote)
 	s.URL, s.listener = "http://"+l.Addr().String(), l
 	a.URL = s.URL
 	a.StartChannels()
@@ -150,6 +151,7 @@ func New(a *app.App, address, devOrigin string, assets fs.FS) (*Server, error) {
 func (s *Server) Serve() error {
 	s.App.StartRestartRecovery()
 	s.App.StartAutomations()
+	s.App.StartRemoteDelegationFollower()
 	return s.HTTP.Serve(s.listener)
 }
 func (s *Server) Close(ctx context.Context) error {
@@ -487,6 +489,41 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chats/{id}/delegations", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Store.ChatDelegations(r.Context(), r.PathValue("id"))
 		respond(w, v, err)
+	})
+	mux.HandleFunc("GET /api/settings/delegation", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.DelegationSettings(r.Context())
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/settings/delegation", func(w http.ResponseWriter, r *http.Request) {
+		var in model.DelegationSettings
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SaveDelegationSettings(r.Context(), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("GET /api/delegation/remote-targets", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		v, err := a.RemoteDelegationTargets(ctx, q.Get("chatId"), q.Get("agentId"))
+		respond(w, v, err)
+	})
+	mux.HandleFunc("POST /api/delegations/remote/{id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			RequestID string        `json:"requestId"`
+			Answer    *model.Answer `json:"answer,omitempty"`
+			AllowRun  bool          `json:"allowRun,omitempty"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]bool{"accepted": true}, a.AnswerRemoteDelegationRequest(r.Context(), r.PathValue("id"), in.RequestID, in.Answer, in.AllowRun))
+	})
+	mux.HandleFunc("POST /api/delegations/remote/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"accepted": true}, a.StopRemoteDelegation(r.Context(), r.PathValue("id")))
 	})
 	mux.HandleFunc("GET /api/chats/{id}/topics", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Store.ChatTopics(r.Context(), r.PathValue("id"), -1)

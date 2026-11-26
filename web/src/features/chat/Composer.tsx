@@ -78,6 +78,12 @@ import {
 import { useComposerModel } from "./useComposerModel";
 import { useComparisonModels } from "./useComparisonModels";
 import {
+  allowsRemoteDelegation,
+  canAcceptDelegations,
+  effectiveDelegationPolicy,
+  useRemoteDelegationTargets,
+} from "@/features/agents/delegationPolicy";
+import {
   isLeverReference,
   messagePrompt,
   serializePrompt,
@@ -455,24 +461,86 @@ export function Composer({
   const afterError = blockedAfterRun ? t("after.blockedDraft") : "";
   const capabilities = catalog.data?.capabilities ?? runtime?.capabilities;
   const hasLeverReferences = prompt.references.some(isLeverReference);
+  const delegationDefaults = overview.data?.delegationSettings;
+  const senderDelegationPolicy = effectiveDelegationPolicy(
+    profile,
+    delegationDefaults,
+  );
+  const canQueryRemoteCollaborators =
+    visible !== false &&
+    !archived &&
+    !comparisonAgents &&
+    (topicMode || (!session?.parentRunId && !session?.delegatedFrom)) &&
+    (senderDelegationPolicy === "all"
+      ? allowsRemoteDelegation(profile)
+      : senderDelegationPolicy === "selected" &&
+        (profile.delegations?.some((rule) => !!rule.deviceId) ?? false));
+  const remoteCollaboratorsQuery = useRemoteDelegationTargets({
+    chatId: draftAgentId ? undefined : chatId,
+    agentId,
+    enabled: canQueryRemoteCollaborators,
+  });
+  const remoteCollaborators = useMemo(
+    () =>
+      canQueryRemoteCollaborators ? (remoteCollaboratorsQuery.data ?? []) : [],
+    [canQueryRemoteCollaborators, remoteCollaboratorsQuery.data],
+  );
   const collaboratorIds = useMemo(() => {
-    if (!topicMode && session?.parentRunId) return [];
+    if (!topicMode && (session?.parentRunId || session?.delegatedFrom))
+      return [];
     const senders = comparisonAgents
-      ? agents
-          .filter((agent) => comparisonAgents.includes(agent.id))
-          .map((agent) => agent.profile)
-      : [profile];
+      ? agents.filter((agent) => comparisonAgents.includes(agent.id))
+      : [{ id: agentId, profile }];
     return agents
       .filter(
-        (agent) =>
-          !agent.archived &&
+        (target) =>
+          !target.archived &&
+          canAcceptDelegations(target.profile) &&
           senders.length > 0 &&
-          senders.every((sender) =>
-            sender.delegations?.some((rule) => rule.agentId === agent.id),
-          ),
+          senders.every((sender) => {
+            const pol = effectiveDelegationPolicy(
+              sender.profile,
+              delegationDefaults,
+            );
+            if (pol === "all") return target.id !== sender.id;
+            if (pol === "selected") {
+              return sender.profile.delegations?.some(
+                (rule) => !rule.deviceId && rule.agentId === target.id,
+              );
+            }
+            return false;
+          }),
       )
       .map((agent) => agent.id);
-  }, [topicMode, session?.parentRunId, comparisonAgents, agents, profile]);
+  }, [
+    topicMode,
+    session?.parentRunId,
+    session?.delegatedFrom,
+    comparisonAgents,
+    agents,
+    agentId,
+    profile,
+    delegationDefaults,
+  ]);
+  const isRemoteAgentAllowed = (deviceId: string, targetAgentId: string) => {
+    if (!topicMode && (session?.parentRunId || session?.delegatedFrom))
+      return false;
+    const senders = comparisonAgents
+      ? agents.filter((agent) => comparisonAgents.includes(agent.id))
+      : [{ id: agentId, profile }];
+    if (!senders.length) return false;
+    return senders.every((sender) => {
+      const pol = effectiveDelegationPolicy(sender.profile, delegationDefaults);
+      if (pol === "all") return allowsRemoteDelegation(sender.profile);
+      if (pol === "selected") {
+        return sender.profile.delegations?.some(
+          (rule) =>
+            rule.deviceId === deviceId && rule.agentId === targetAgentId,
+        );
+      }
+      return false;
+    });
+  };
   const referenceError =
     hasLeverReferences &&
     (comparisonAgents
@@ -482,10 +550,13 @@ export function Composer({
         )
       : capabilities?.mcp === false)
       ? t("composer.unsupportedReferences")
-      : prompt.references.some(
-            (ref) =>
-              ref.kind === "agent" && !collaboratorIds.includes(ref.id ?? ""),
-          )
+      : prompt.references.some((ref) => {
+            if (ref.kind !== "agent") return false;
+            if (ref.deviceId) {
+              return !isRemoteAgentAllowed(ref.deviceId, ref.id ?? "");
+            }
+            return !collaboratorIds.includes(ref.id ?? "");
+          })
         ? t("composer.unavailableCollaborator")
         : "";
   const sessionRuntime =
@@ -869,9 +940,7 @@ export function Composer({
                 ? t("composer.unsupportedRoots")
                 : (profile.skills?.length ?? 0) > 0 && !capabilities.skills
                   ? t("composer.unsupportedSkills")
-                  : (profile.delegations?.length ?? 0) > 0 && !capabilities.mcp
-                    ? t("composer.unsupportedDelegation")
-                    : ""
+                  : ""
           : ""));
   const scopePath = (path: string) =>
     path.replace(/\\/g, "/").replace(/\/$/, "");
@@ -1398,6 +1467,7 @@ export function Composer({
           canStartAfter={canStartAfter}
           waitingForRuns={afterRunIds !== undefined}
           collaboratorIds={collaboratorIds}
+          remoteCollaborators={remoteCollaborators}
           onCommand={chooseCommand}
           label={t(
             reply

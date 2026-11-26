@@ -392,3 +392,209 @@ func TestDelegationAsyncReceiptDeliversAfterBusyParentFinishes(t *testing.T) {
 	// Ensure unused app import doesn't happen; verify topic receipt delivery too.
 	_ = app.ID()
 }
+
+func TestDelegationPolicyModesPermissionCeilingAndConcurrency(t *testing.T) {
+	f := newFixture(t)
+
+	// 1. Newly created Agent defaults to delegation OFF ("none").
+	var initialSettings model.DelegationSettings
+	f.request("GET", "/settings/delegation", nil, 200, &initialSettings)
+	if initialSettings.DefaultPolicy != model.DelegationPolicyNone {
+		t.Fatalf("expected default global delegation policy 'none', got %+v", initialSettings)
+	}
+	lead := f.agent("codex")
+	worker := f.agent("codex")
+	worker.Name = "Backend Worker"
+	worker.Profile.Description = "Implements Go APIs"
+	worker.Profile.Permission = "full_access"
+	f.request("PUT", "/agents/"+worker.ID, worker, 200, &worker)
+
+	chat := f.chat(lead)
+	_, rOff := runMCPTurn(f, chat.ID, "main", "")
+	if slices.Contains(rOff.Tools, "delegate_start") || slices.Contains(rOff.Tools, "delegate_targets") {
+		t.Fatalf("newly created agent should not have delegation tools by default: %v", rOff.Tools)
+	}
+
+	// 2. Global DefaultPolicy = "all" enables unconfigured agents while honoring explicit "none".
+	var updatedSettings model.DelegationSettings
+	f.request("PUT", "/settings/delegation", model.DelegationSettings{DefaultPolicy: model.DelegationPolicyAll}, 200, &updatedSettings)
+	if updatedSettings.DefaultPolicy != model.DelegationPolicyAll {
+		t.Fatalf("unexpected saved settings: %+v", updatedSettings)
+	}
+	explicitOff := f.agent("codex")
+	explicitOff.Profile.DelegationPolicy = model.DelegationPolicyNone
+	f.request("PUT", "/agents/"+explicitOff.ID, explicitOff, 200, &explicitOff)
+	offChat := f.chat(explicitOff)
+	_, rExplicitOff := runMCPTurn(f, offChat.ID, "main", "")
+	if slices.Contains(rExplicitOff.Tools, "delegate_start") {
+		t.Fatalf("explicit delegationPolicy=none must override global default: %v", rExplicitOff.Tools)
+	}
+
+	// Reset global back to "none" and explicitly configure lead with delegationPolicy="all".
+	f.request("PUT", "/settings/delegation", model.DelegationSettings{DefaultPolicy: model.DelegationPolicyNone}, 200, &updatedSettings)
+	lead.Profile.DelegationPolicy = model.DelegationPolicyAll
+	lead.Profile.Permission = "ask"
+	f.request("PUT", "/agents/"+lead.ID, lead, 200, &lead)
+
+	// 3. Newly added Agent is auto-discovered by "all"; acceptDelegations=false is excluded.
+	late := f.agent("codex")
+	late.Name = "Late Joiner"
+	late.Profile.Description = "Added after lead was configured"
+	f.request("PUT", "/agents/"+late.ID, late, 200, &late)
+
+	acceptFalse := false
+	privateAgent := f.agent("codex")
+	privateAgent.Name = "Private Vault"
+	privateAgent.Profile.AcceptDelegations = &acceptFalse
+	f.request("PUT", "/agents/"+privateAgent.ID, privateAgent, 200, &privateAgent)
+
+	// Verify @mention of privateAgent is rejected, while @mention of late is allowed.
+	f.request("POST", "/messages", model.SendInput{
+		CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Text: "ask @" + privateAgent.Name,
+		References: []model.Reference{{Kind: "agent", ID: privateAgent.ID, Name: privateAgent.Name}},
+	}, 400, nil)
+
+	_, rTargets := runMCPTurn(f, chat.ID, "main", "",
+		mcpCall{Name: "delegate_targets", Arguments: map[string]any{}},
+		mcpCall{Name: "delegate_start", Arguments: map[string]any{
+			"agentId": privateAgent.ID, "requestKey": "blocked-private", "task": "should be rejected",
+		}},
+		mcpCall{Name: "delegate_start", Arguments: map[string]any{
+			"agentId": worker.ID, "requestKey": "ceiling-check", "task": "check permission ceiling", "autoWake": false,
+		}},
+	)
+	if !slices.Contains(rTargets.Tools, "delegate_targets") {
+		t.Fatalf("missing delegate_targets tool in %v", rTargets.Tools)
+	}
+	var targetList struct {
+		Targets []struct {
+			ID          string `json:"id"`
+			DeviceID    string `json:"deviceId"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(rTargets.Results[0].Body, &targetList); err != nil {
+		t.Fatalf("parse delegate_targets: %v", err)
+	}
+	foundLate, foundPrivate := false, false
+	for _, item := range targetList.Targets {
+		if item.ID == late.ID && item.DeviceID == "" {
+			foundLate = true
+		}
+		if item.ID == privateAgent.ID {
+			foundPrivate = true
+		}
+	}
+	if !foundLate || foundPrivate {
+		t.Fatalf("unexpected delegate_targets list: %+v", targetList.Targets)
+	}
+	if !strings.Contains(rTargets.Results[1].Error, "does not accept") {
+		t.Fatalf("expected privateAgent delegation rejection, got %+v", rTargets.Results[1])
+	}
+	if rTargets.Results[2].Error != "" {
+		t.Fatalf("worker delegation failed: %+v", rTargets.Results[2])
+	}
+	var dCeil model.Delegation
+	_ = json.Unmarshal(rTargets.Results[2].Body, &dCeil)
+	childRun := f.wait(dCeil.RunID, "completed")
+	if childRun.Selection.Permission != "ask" {
+		t.Fatalf("expected child full_access permission capped to parent's 'ask', got %q", childRun.Selection.Permission)
+	}
+
+	// 4. Explicit confirm: true asks on delegate_start but does NOT re-confirm on delegate_reply.
+	lead.Profile.DelegationPolicy = model.DelegationPolicySelected
+	lead.Profile.Delegations = []model.DelegationRule{{AgentID: worker.ID, Confirm: true}}
+	f.request("PUT", "/agents/"+lead.ID, lead, 200, &lead)
+
+	confirmPayload, _ := json.Marshal([]mcpCall{{
+		Name: "delegate_start",
+		Arguments: map[string]any{
+			"agentId": worker.ID, "requestKey": "confirm-once", "task": "round 1", "autoWake": false,
+		},
+	}})
+	pRun := f.send(chat.ID, "main", "", "[chat-context] "+string(confirmPayload))
+	f.wait(pRun.ID, "waiting_user")
+	var ov model.Overview
+	f.request("GET", "/overview", nil, 200, &ov)
+	answeredConfirm := false
+	for _, req := range ov.Requests {
+		if req.RunID == pRun.ID && req.DelegationAgentID == worker.ID {
+			f.request("POST", "/requests/"+req.ID+"/answer", model.Answer{Allow: true}, 200, nil)
+			answeredConfirm = true
+		}
+	}
+	if !answeredConfirm {
+		t.Fatal("expected confirmation request for confirm=true delegate_start")
+	}
+	pRun = f.wait(pRun.ID, "completed")
+	var confirmTurn mcpTurnReceipt
+	_ = json.Unmarshal([]byte(strings.TrimPrefix(pRun.Items[0].Text, "context:")), &confirmTurn)
+	var dConfirmed model.Delegation
+	_ = json.Unmarshal(confirmTurn.Results[0].Body, &dConfirmed)
+	f.wait(dConfirmed.RunID, "completed")
+
+	// Round 2 delegate_reply must complete immediately without prompting for confirmation.
+	_, replyTurn := runMCPTurn(f, chat.ID, "main", "", mcpCall{
+		Name: "delegate_reply",
+		Arguments: map[string]any{
+			"id": dConfirmed.ID, "requestKey": "confirm-round-2", "message": "round 2", "autoWake": false,
+		},
+	})
+	if replyTurn.Results[0].Error != "" {
+		t.Fatalf("delegate_reply failed: %+v", replyTurn.Results[0])
+	}
+	var dRound2 model.Delegation
+	_ = json.Unmarshal(replyTurn.Results[0].Body, &dRound2)
+	f.wait(dRound2.RunID, "completed")
+
+	// 5. Concurrency cap (maxActiveDelegations = 5) blocks the 6th active delegation in a session.
+	lead.Profile.DelegationPolicy = model.DelegationPolicyAll
+	f.request("PUT", "/agents/"+lead.ID, lead, 200, &lead)
+	capChat := f.chat(lead)
+	var calls []mcpCall
+	for i := range 6 {
+		calls = append(calls, mcpCall{
+			Name: "delegate_start",
+			Arguments: map[string]any{
+				"agentId": worker.ID, "requestKey": "cap-" + string(rune('a'+i)),
+				"task": "[approval] hold slot", "autoWake": false,
+			},
+		})
+	}
+	_, capTurn := runMCPTurn(f, capChat.ID, "main", "", calls...)
+	for i := range 5 {
+		if capTurn.Results[i].Error != "" {
+			t.Fatalf("expected slot %d to succeed, got error: %s", i+1, capTurn.Results[i].Error)
+		}
+	}
+	if !strings.Contains(capTurn.Results[5].Error, "At most 5 active") {
+		t.Fatalf("expected 6th concurrent delegation to be rejected by concurrency cap, got %+v", capTurn.Results[5])
+	}
+	// Cleanly answer the 5 waiting children so fixture shutdown is immediate.
+	f.request("GET", "/overview", nil, 200, &ov)
+	for _, req := range ov.Requests {
+		f.request("POST", "/requests/"+req.ID+"/answer", model.Answer{Allow: false}, 200, nil)
+	}
+	for i := range 5 {
+		var d model.Delegation
+		_ = json.Unmarshal(capTurn.Results[i].Body, &d)
+		f.wait(d.RunID, "completed")
+	}
+
+	// 6. Non-MCP provider (pi --no-tools) is NOT blocked from normal chat when delegationPolicy="all".
+	noMCP := model.Provider{
+		PluginID: "lever.pi", ContributionID: "pi", Type: "pi",
+		Name: "Pi No Tools", Command: "pi", Args: []string{"--no-tools"}, Enabled: true,
+	}
+	f.request("POST", "/providers", noMCP, 200, &noMCP)
+	piAgent := f.piAgent()
+	piAgent.ID = ""
+	piAgent.Name = "Limited Pi"
+	piAgent.Profile.Provider = noMCP.ID
+	piAgent.Profile.DelegationPolicy = model.DelegationPolicyAll
+	f.request("POST", "/agents", piAgent, 200, &piAgent)
+	piChat := f.chat(piAgent)
+	normalRun := f.send(piChat.ID, "main", "", "ordinary chat without mentions")
+	f.wait(normalRun.ID, "completed")
+}

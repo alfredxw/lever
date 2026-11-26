@@ -286,6 +286,45 @@ CREATE TABLE IF NOT EXISTS delegation_runs(
 );
 CREATE INDEX IF NOT EXISTS delegation_runs_parent_session ON delegation_runs(parent_session_id, created_at);
 CREATE INDEX IF NOT EXISTS delegation_runs_delegation ON delegation_runs(delegation_id, turn);
+CREATE TABLE IF NOT EXISTS remote_delegation_runs(
+  id TEXT PRIMARY KEY,
+  delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE,
+  parent_session_id TEXT NOT NULL,
+  parent_run_id TEXT NOT NULL REFERENCES runs(id),
+  command_id TEXT NOT NULL UNIQUE,
+  request_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  turn INTEGER NOT NULL,
+  hub_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  device_name TEXT NOT NULL DEFAULT '',
+  agent_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  chat_id TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
+  run_id TEXT NOT NULL DEFAULT '',
+  provider TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  working_copy_id TEXT NOT NULL DEFAULT '',
+  working_copy_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'starting',
+  output TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  requests TEXT NOT NULL DEFAULT '[]',
+  auto_wake INTEGER NOT NULL DEFAULT 1,
+  receipt_consumed INTEGER NOT NULL DEFAULT 0,
+  wake_run_id TEXT NOT NULL DEFAULT '',
+  pending_cancel INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(parent_run_id, request_key)
+);
+CREATE INDEX IF NOT EXISTS remote_delegation_runs_parent_session ON remote_delegation_runs(parent_session_id, created_at);
+CREATE INDEX IF NOT EXISTS remote_delegation_runs_delegation ON remote_delegation_runs(delegation_id, turn);
+CREATE INDEX IF NOT EXISTS remote_delegation_runs_active ON remote_delegation_runs(status, pending_cancel);
 CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
 UPDATE agents SET data = CASE
   WHEN json_extract(data, '$.avatar') = '' THEN json_remove(data, '$.avatar')

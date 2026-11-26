@@ -856,7 +856,15 @@ export interface SkillSource {
   scopeRootId?: string;
   skills: Skill[];
 }
+export const DelegationPolicyNone = "none";
+export const DelegationPolicyAll = "all";
+export const DelegationPolicySelected = "selected";
+export type DelegationPolicy = typeof DelegationPolicyNone | typeof DelegationPolicyAll | typeof DelegationPolicySelected;
+export interface DelegationSettings {
+  defaultPolicy: 'none' | 'all';
+}
 export interface DelegationRule {
+  deviceId?: string;
   agentId: string;
   confirm: boolean;
 }
@@ -884,7 +892,10 @@ export interface Profile extends Scope {
   permission: string;
   skills: string[];
   disabledSkills?: string[];
+  delegationPolicy?: '' | 'none' | 'all' | 'selected';
   delegations: DelegationRule[];
+  acceptDelegations?: boolean;
+  allowRemoteDelegation?: boolean;
   worktreeSetup?: { [key: string]: string}; // Keyed by the Git common directory.
   taskConcurrency?: number /* int */;
   taskStartIntervalMinutes?: number /* int */;
@@ -1104,6 +1115,8 @@ export interface Reference {
   kind: string;
   name: string;
   id?: string;
+  deviceId?: string;
+  deviceName?: string;
   path: string;
   provider?: string;
   description?: string;
@@ -1116,6 +1129,17 @@ export interface BrowserElement {
   tag: string;
   text: string;
   selector: string;
+}
+export interface RemoteDelegationSource {
+  hubId?: string;
+  spaceId?: string;
+  deviceId: string;
+  deviceName?: string;
+  agentId: string;
+  agentName?: string;
+  chatId: string;
+  sessionId: string;
+  runId: string;
 }
 export interface Session extends Scope {
   runtime?: SessionRuntime;
@@ -1132,6 +1156,7 @@ export interface Session extends Scope {
   nativeId: string;
   selection: Selection;
   parentRunId?: string;
+  delegatedFrom?: RemoteDelegationSource;
   sourceRunId?: string;
   comparison?: ComparisonOrigin;
   queuePaused?: boolean;
@@ -1583,6 +1608,7 @@ export interface Overview {
   conversations: Conversation[];
   runs: Run[];
   requests: Request[];
+  delegationSettings: DelegationSettings;
   dataDir: string;
   homeDir: string;
   deviceId: string;
@@ -1643,23 +1669,35 @@ export interface Delegation {
   id: string;
   parentSessionId?: string;
   parentRunId: string;
+  hubId?: string;
+  spaceId?: string;
+  deviceId?: string;
+  deviceName?: string;
   agentId?: string;
+  agentName?: string;
   sessionId: string;
   chatId: string;
   runId: string;
   runIds?: string[];
   turn?: number /* int */;
   workspace?: string;
+  workingCopyId?: string;
   workingCopyName?: string;
   autoWake?: boolean;
 }
 export const DelegationCommandPrefix = "delegate:";
 export interface DelegationTarget extends RunLocation {
+  hubId?: string;
+  spaceId?: string;
+  deviceId?: string;
+  deviceName?: string;
   agentId: string;
+  agentName?: string;
   title: string;
 }
 export interface DelegatedRun extends DelegationTarget {
   delegationId?: string;
+  remoteRowId?: string;
   status: string;
   turn?: number /* int */;
   turns?: number /* int */;
@@ -1668,9 +1706,14 @@ export interface DelegatedRun extends DelegationTarget {
   workspace?: string;
   workingCopyName?: string;
   summary?: string;
+  remoteRequests?: Request[];
 }
 export interface DelegationReceipt {
   delegationId: string;
+  hubId?: string;
+  spaceId?: string;
+  deviceId?: string;
+  deviceName?: string;
   agentId: string;
   agentName: string;
   chatId: string;
@@ -1681,6 +1724,28 @@ export interface DelegationReceipt {
   title?: string;
   summary?: string;
   error?: string;
+}
+export interface RemoteWorkingCopy {
+  id: string;
+  name: string;
+  state?: string;
+}
+export interface RemoteAgentTarget {
+  hubId: string;
+  spaceId: string;
+  spaceKind?: string;
+  deviceId: string;
+  deviceName: string;
+  online: boolean;
+  draining?: boolean;
+  agentId: string;
+  name: string;
+  avatar?: string;
+  description?: string;
+  provider?: string;
+  model?: string;
+  permissionMode?: string;
+  workingCopies?: RemoteWorkingCopy[];
 }
 export interface ChatDelegations {
   outgoing: { [key: string]: DelegatedRun[]};

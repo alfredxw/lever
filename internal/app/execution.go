@@ -30,6 +30,7 @@ type execution struct {
 	run               model.Run
 	session           model.Session
 	profile           model.Profile
+	delegationPolicy  model.DelegationPolicy
 	provider          model.Provider
 	recovery          *provider.Recovery
 	hosted            bool
@@ -422,7 +423,8 @@ func (e *execution) execute() error {
 		input.MCPURL = e.app.URL + "/mcp"
 		input.MCPToken = e.token
 		input.ContextToken = e.contextToken
-		input.RequireMCP = e.canDelegate() || slices.ContainsFunc(run.References, model.Reference.RequiresMCP)
+		input.DelegationEnabled = e.canDelegate()
+		input.RequireMCP = slices.ContainsFunc(run.References, model.Reference.RequiresMCP)
 		if err == nil && input.Provider.Type == "antigravity" {
 			err = e.app.prepareAntigravitySkillReferences(e.ctx, &input)
 		}

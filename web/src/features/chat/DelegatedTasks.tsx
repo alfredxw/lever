@@ -1,7 +1,16 @@
-import { ArrowUpRight, CircleUser, GitBranch, Sparkles } from "lucide-react";
+import { useState } from "react";
+import {
+  ArrowUpRight,
+  CircleUser,
+  GitBranch,
+  Monitor,
+  Sparkles,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { api } from "@/api/client";
 import type {
   Agent,
+  Answer,
   DelegatedRun,
   DelegationReceipt,
   Request,
@@ -10,6 +19,10 @@ import type {
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { RequestCard } from "./RequestCard";
+import {
+  RemoteDelegationDialog,
+  type RemoteDelegationTarget,
+} from "./RemoteDelegationDialog";
 
 export type OpenRun = (
   run: RunLocation & { agentId: string },
@@ -43,6 +56,8 @@ export function DelegatedTasks({
   onOpenRun: OpenRun;
 }) {
   const { t } = useTranslation();
+  const [remoteTarget, setRemoteTarget] =
+    useState<RemoteDelegationTarget | null>(null);
   if (!runs?.length && !approvals.length) return null;
   return (
     <div
@@ -54,28 +69,54 @@ export function DelegatedTasks({
         {t("chat.delegatedTasks")}
       </span>
       {runs?.map((run) => {
-        const agent = agents.find((item) => item.id === run.agentId);
-        const agentName = agent?.name ?? t("chat.delegationAgent");
+        const isRemote = Boolean(run.deviceId);
+        const agent = isRemote
+          ? undefined
+          : agents.find((item) => item.id === run.agentId);
+        const agentName =
+          agent?.name ?? run.agentName ?? t("chat.delegationAgent");
         const turns = Math.max(run.turn ?? 1, run.turns ?? 1);
-        const childRequests = requests.filter(
-          (request) => request.runId === run.runId,
-        );
+        const childRequests = isRemote
+          ? (run.remoteRequests ?? [])
+          : requests.filter((request) => request.runId === run.runId);
+        const key = run.remoteRowId || run.runId || `${run.delegationId}:${turns}`;
         return (
-          <div key={run.runId} className="flex min-w-0 flex-col gap-2">
+          <div key={key} className="flex min-w-0 flex-col gap-2">
             <Button
               type="button"
               variant="outline"
               className="h-auto min-h-14 w-full items-start justify-start gap-3 bg-(--panel-background) px-3 py-2.5 text-left whitespace-normal"
-              onClick={() =>
+              onClick={() => {
+                if (isRemote) {
+                  setRemoteTarget({
+                    remoteRowId: run.remoteRowId,
+                    hubId: run.hubId ?? "",
+                    spaceId: run.spaceId ?? "",
+                    deviceId: run.deviceId ?? "",
+                    deviceName: run.deviceName || run.deviceId || "",
+                    agentName,
+                    chatId: run.chatId,
+                    title: run.title,
+                    status: run.status,
+                  });
+                  return;
+                }
                 onOpenRun(run, run.title, {
                   sideBySide: true,
                   sourceSessionId,
-                })
-              }
+                });
+              }}
             >
               <span className="mt-0.5 shrink-0">
                 {agent ? (
                   <AgentAvatar agent={agent} />
+                ) : isRemote ? (
+                  <span className="flex size-6 items-center justify-center rounded-full border border-border bg-muted/60">
+                    <Monitor
+                      className="size-3.5 text-muted-foreground"
+                      aria-hidden
+                    />
+                  </span>
                 ) : (
                   <CircleUser
                     className="size-6 text-muted-foreground"
@@ -88,6 +129,17 @@ export function DelegatedTasks({
                   {run.title}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-normal text-muted-foreground">
+                  {isRemote && (
+                    <>
+                      <span className="inline-flex min-w-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-foreground">
+                        <Monitor className="size-3 shrink-0" aria-hidden />
+                        <span className="max-w-28 truncate">
+                          {run.deviceName || run.deviceId}
+                        </span>
+                      </span>
+                      <span aria-hidden>·</span>
+                    </>
+                  )}
                   <span className="min-w-0 wrap-break-word">{agentName}</span>
                   <span aria-hidden>·</span>
                   <span
@@ -130,7 +182,11 @@ export function DelegatedTasks({
                 )}
               </span>
               <span className="mt-0.5 flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-normal text-muted-foreground">
-                {t("chat.openDelegation")}
+                {t(
+                  isRemote
+                    ? "chat.openRemoteDelegation"
+                    : "chat.openDelegation",
+                )}
                 <ArrowUpRight className="size-3.5" aria-hidden />
               </span>
             </Button>
@@ -140,9 +196,27 @@ export function DelegatedTasks({
                   <RequestCard
                     key={request.id}
                     request={request}
-                    source={t("chat.requestFromCollaborator", {
-                      agent: agentName,
-                    })}
+                    source={
+                      isRemote
+                        ? t("chat.requestFromRemoteCollaborator", {
+                            device: run.deviceName || run.deviceId,
+                            agent: agentName,
+                          })
+                        : t("chat.requestFromCollaborator", {
+                            agent: agentName,
+                          })
+                    }
+                    onSubmit={
+                      isRemote && run.remoteRowId
+                        ? (value: Answer | "allow-run") =>
+                            api(
+                              `/delegations/remote/${run.remoteRowId}/answer`,
+                              value === "allow-run"
+                                ? { requestId: request.id, allowRun: true }
+                                : { requestId: request.id, answer: value },
+                            )
+                        : undefined
+                    }
                   />
                 ))}
               </div>
@@ -161,6 +235,12 @@ export function DelegatedTasks({
           })}
         />
       ))}
+      <RemoteDelegationDialog
+        target={remoteTarget}
+        onOpenChange={(open) => {
+          if (!open) setRemoteTarget(null);
+        }}
+      />
     </div>
   );
 }
@@ -177,6 +257,8 @@ export function DelegationReceiptsBanner({
   onOpenRun: OpenRun;
 }) {
   const { t } = useTranslation();
+  const [remoteTarget, setRemoteTarget] =
+    useState<RemoteDelegationTarget | null>(null);
   return (
     <div
       className="flex min-w-0 flex-col gap-2"
@@ -184,17 +266,33 @@ export function DelegationReceiptsBanner({
       aria-label={t("chat.delegationReceiptGroup")}
     >
       {receipts.map((receipt) => {
-        const agent = agents.find((item) => item.id === receipt.agentId);
+        const isRemote = Boolean(receipt.deviceId);
+        const agent = isRemote
+          ? undefined
+          : agents.find((item) => item.id === receipt.agentId);
         const name =
           agent?.name ?? receipt.agentName ?? t("chat.delegationAgent");
         const title = receipt.title || name;
         return (
           <Button
-            key={`${receipt.delegationId}:${receipt.runId}`}
+            key={`${receipt.delegationId}:${receipt.runId || receipt.turn || 0}`}
             type="button"
             variant="outline"
             className="h-auto min-h-12 w-full items-start justify-start gap-2.5 border-dashed bg-muted/30 px-3 py-2 text-left whitespace-normal"
-            onClick={() =>
+            onClick={() => {
+              if (isRemote) {
+                setRemoteTarget({
+                  hubId: receipt.hubId ?? "",
+                  spaceId: receipt.spaceId ?? "",
+                  deviceId: receipt.deviceId ?? "",
+                  deviceName: receipt.deviceName || receipt.deviceId || "",
+                  agentName: name,
+                  chatId: receipt.chatId,
+                  title,
+                  status: receipt.status,
+                });
+                return;
+              }
               onOpenRun(
                 {
                   runId: receipt.runId,
@@ -204,12 +302,17 @@ export function DelegationReceiptsBanner({
                 },
                 title,
                 { sideBySide: true, sourceSessionId },
-              )
-            }
+              );
+            }}
           >
             <span className="mt-0.5 shrink-0">
               {agent ? (
                 <AgentAvatar agent={agent} size="sm" />
+              ) : isRemote ? (
+                <Monitor
+                  className="size-4 text-muted-foreground"
+                  aria-hidden
+                />
               ) : (
                 <Sparkles
                   className="size-4 text-muted-foreground"
@@ -219,6 +322,16 @@ export function DelegationReceiptsBanner({
             </span>
             <span className="grid min-w-0 flex-1 gap-0.5">
               <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+                {isRemote && (
+                  <>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground">
+                      {receipt.deviceName || receipt.deviceId}
+                    </span>
+                    <span aria-hidden className="text-muted-foreground">
+                      ·
+                    </span>
+                  </>
+                )}
                 <span className="font-medium text-foreground">{name}</span>
                 <span className="text-muted-foreground">
                   {t("chat.delegationReceiptLabel")}
@@ -250,12 +363,22 @@ export function DelegationReceiptsBanner({
               )}
             </span>
             <span className="mt-0.5 flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-normal text-muted-foreground">
-              {t("chat.openDelegation")}
+              {t(
+                isRemote
+                  ? "chat.openRemoteDelegation"
+                  : "chat.openDelegation",
+              )}
               <ArrowUpRight className="size-3.5" aria-hidden />
             </span>
           </Button>
         );
       })}
+      <RemoteDelegationDialog
+        target={remoteTarget}
+        onOpenChange={(open) => {
+          if (!open) setRemoteTarget(null);
+        }}
+      />
     </div>
   );
 }

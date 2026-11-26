@@ -123,6 +123,45 @@ FROM (
 		return view, err
 	}
 
+	remoteRows, err := tx.QueryContext(ctx, `SELECT dr.parent_run_id, dr.delegation_id, dr.id, dr.run_id, dr.session_id, dr.chat_id,
+  dr.hub_id, dr.space_id, dr.device_id, dr.device_name, dr.agent_id, dr.agent_name, dr.title, dr.status,
+  dr.turn, (SELECT COUNT(*) FROM remote_delegation_runs x WHERE x.delegation_id=dr.delegation_id) AS turns,
+  dr.provider, dr.model, dr.working_copy_name, dr.summary, dr.error, dr.requests
+FROM runs parent
+JOIN remote_delegation_runs dr ON dr.parent_run_id=parent.id
+WHERE parent.chat_id=?
+ORDER BY dr.created_at, dr.turn`, chatID)
+	if err != nil {
+		return view, err
+	}
+	defer remoteRows.Close()
+	for remoteRows.Next() {
+		var parentID, errText, rawReqs string
+		var child model.DelegatedRun
+		child.Workspace = "agent"
+		if err := remoteRows.Scan(
+			&parentID, &child.DelegationID, &child.RemoteRowID, &child.RunID, &child.SessionID, &child.ChatID,
+			&child.HubID, &child.SpaceID, &child.DeviceID, &child.DeviceName, &child.AgentID, &child.AgentName,
+			&child.Title, &child.Status, &child.Turn, &child.Turns,
+			&child.Provider, &child.Model, &child.WorkingCopyName, &child.Summary, &errText, &rawReqs,
+		); err != nil {
+			return view, err
+		}
+		if child.Summary == "" && errText != "" {
+			child.Summary = errText
+		}
+		if rawReqs != "" && rawReqs != "[]" {
+			_ = json.Unmarshal([]byte(rawReqs), &child.RemoteRequests)
+		}
+		view.Outgoing[parentID] = append(view.Outgoing[parentID], child)
+	}
+	if err := remoteRows.Err(); err != nil {
+		return view, err
+	}
+	if err := remoteRows.Close(); err != nil {
+		return view, err
+	}
+
 	var source model.DelegationTarget
 	err = tx.QueryRowContext(ctx, `SELECT parent.id, parent.session_id, parent.chat_id,
   parent.agent_id, json_extract(chat.data,'$.title'), owner.kind='topic'
@@ -131,7 +170,29 @@ JOIN chats chat ON chat.id=parent.chat_id JOIN sessions owner ON owner.id=parent
 WHERE child.chat_id=? AND child.kind='main'`, chatID).Scan(&source.RunID, &source.SessionID, &source.ChatID, &source.AgentID, &source.Title, &source.Topic)
 	if err == nil {
 		view.Source = &source
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if errors.Is(err, sql.ErrNoRows) {
+		var rawFrom string
+		if fromErr := tx.QueryRowContext(ctx, `SELECT json_extract(data,'$.delegatedFrom') FROM sessions WHERE chat_id=? AND kind='main' AND json_type(data,'$.delegatedFrom')='object'`, chatID).Scan(&rawFrom); fromErr == nil && rawFrom != "" {
+			var from model.RemoteDelegationSource
+			if json.Unmarshal([]byte(rawFrom), &from) == nil && from.DeviceID != "" {
+				view.Source = &model.DelegationTarget{
+					RunLocation: model.RunLocation{
+						RunID:     from.RunID,
+						SessionID: from.SessionID,
+						ChatID:    from.ChatID,
+					},
+					HubID:      from.HubID,
+					SpaceID:    from.SpaceID,
+					DeviceID:   from.DeviceID,
+					DeviceName: from.DeviceName,
+					AgentID:    from.AgentID,
+					AgentName:  from.AgentName,
+				}
+			}
+		} else if fromErr != nil && !errors.Is(fromErr, sql.ErrNoRows) {
+			return view, fromErr
+		}
+	} else {
 		return view, err
 	}
 	return view, tx.Commit()

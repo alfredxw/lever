@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api/client";
-import type { Overview, Reference } from "@/api/types.gen";
+import type { Overview, Reference, RemoteAgentTarget } from "@/api/types.gen";
 import { displayChatTitle } from "./conversationTitle";
 import { searchComposerOptions } from "./composerSearch";
 
@@ -17,6 +17,7 @@ export function useMentionSources(
   query: string,
   sessionId?: string,
   collaboratorIds?: string[],
+  remoteCollaborators?: RemoteAgentTarget[],
 ) {
   const { t } = useTranslation();
   const overview = useQuery({
@@ -71,19 +72,35 @@ export function useMentionSources(
             .join(" · "),
         };
       });
-    const collaborators = (data?.agents ?? [])
-      .filter((agent) => !agent.archived && collaboratorIds?.includes(agent.id))
-      .map(
-        (agent): Reference => ({
-          id: agent.id,
+    const collaborators: Reference[] = [
+      ...(data?.agents ?? [])
+        .filter((agent) => !agent.archived && collaboratorIds?.includes(agent.id))
+        .map(
+          (agent): Reference => ({
+            id: agent.id,
+            path: "",
+            kind: "agent",
+            name: agent.name,
+            description: agent.profile.description || undefined,
+          }),
+        ),
+      ...(remoteCollaborators ?? []).map(
+        (target): Reference => ({
+          id: target.agentId,
+          deviceId: target.deviceId,
+          deviceName: target.deviceName,
           path: "",
           kind: "agent",
-          name: agent.name,
+          name: target.name,
+          description: [target.deviceName, target.description]
+            .filter(Boolean)
+            .join(" · "),
         }),
-      );
+      ),
+    ];
     function group(label: string, refs: Reference[]) {
       const options = refs.map((reference) => ({
-        id: `${reference.kind}:${reference.id}`,
+        id: `${reference.kind}:${reference.deviceId ? `${reference.deviceId}:` : ""}${reference.id}`,
         name: reference.name || t("tasks.note"),
         description:
           reference.description ||
@@ -112,6 +129,7 @@ export function useMentionSources(
     query,
     sessionId,
     collaboratorIds,
+    remoteCollaborators,
     overview.data,
     board.data,
     notes.data,

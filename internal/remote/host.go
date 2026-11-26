@@ -55,15 +55,17 @@ type Binding struct {
 	LANError       string `json:"lanError,omitempty"`
 	Direct         bool   `json:"direct,omitempty"`
 	model.SharedScope
-	Origin   string   `json:"origin"`
-	Role     p.Role   `json:"role"`
-	DeviceID string   `json:"deviceId"`
-	Online    bool     `json:"online"`
-	Error     string   `json:"error,omitempty"`
-	ExposeAll bool     `json:"exposeAll"`
-	Agents    []string `json:"agents"`
-	Acked     int64    `json:"acked"`
-	Version   int64    `json:"version"`
+	Origin          string   `json:"origin"`
+	SpaceKind       string   `json:"spaceKind,omitempty"`
+	Role            p.Role   `json:"role"`
+	DeviceID        string   `json:"deviceId"`
+	Online          bool     `json:"online"`
+	Error           string   `json:"error,omitempty"`
+	ExposeAll       bool     `json:"exposeAll"`
+	AllowDelegation bool     `json:"allowDelegation"`
+	Agents          []string `json:"agents"`
+	Acked           int64    `json:"acked"`
+	Version         int64    `json:"version"`
 }
 
 func Start(a *app.App) *Host {
@@ -92,14 +94,14 @@ func stateFor(ctx context.Context, s *store.Store, scope model.SharedScope) (p.C
 	return st, err
 }
 func (h *Host) Bindings(ctx context.Context) ([]Binding, error) {
-	rows, err := h.App.Store.DB.QueryContext(ctx, "SELECT hub,space,origin,json_extract(credential,'$.role'),acked,version,lan,expose_all FROM remote_memberships ORDER BY origin,space")
+	rows, err := h.App.Store.DB.QueryContext(ctx, "SELECT hub,space,origin,coalesce(json_extract(credential,'$.spaceKind'),'personal'),json_extract(credential,'$.role'),acked,version,lan,expose_all,allow_delegation FROM remote_memberships ORDER BY origin,space")
 	if err != nil {
 		return nil, err
 	}
 	list := []Binding{}
 	for rows.Next() {
 		var v Binding
-		if err = rows.Scan(&v.HubID, &v.SpaceID, &v.Origin, &v.Role, &v.Acked, &v.Version, &v.LAN, &v.ExposeAll); err != nil {
+		if err = rows.Scan(&v.HubID, &v.SpaceID, &v.Origin, &v.SpaceKind, &v.Role, &v.Acked, &v.Version, &v.LAN, &v.ExposeAll, &v.AllowDelegation); err != nil {
 			rows.Close()
 			return nil, err
 		}

@@ -13,7 +13,12 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api/client";
-import type { NativeCommand, Reference, SessionGoal } from "@/api/types.gen";
+import type {
+  NativeCommand,
+  Reference,
+  RemoteAgentTarget,
+  SessionGoal,
+} from "@/api/types.gen";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { JSONContent } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
@@ -83,6 +88,7 @@ export function ComposerInput({
   canStartAfter,
   waitingForRuns,
   collaboratorIds,
+  remoteCollaborators,
   value,
   empty,
   onChange,
@@ -116,6 +122,7 @@ export function ComposerInput({
   canStartAfter?: boolean;
   waitingForRuns?: boolean;
   collaboratorIds?: string[];
+  remoteCollaborators?: RemoteAgentTarget[];
   value: JSONContent;
   empty: boolean;
   onChange: (content: JSONContent) => void;
@@ -160,6 +167,7 @@ export function ComposerInput({
     query,
     sessionId,
     collaboratorIds,
+    remoteCollaborators,
   );
   const searchKey = JSON.stringify([
     chatId,

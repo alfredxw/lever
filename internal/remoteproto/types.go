@@ -32,6 +32,7 @@ type PairInput struct {
 type Membership struct {
 	Hub       Identity `json:"hub"`
 	SpaceID   string   `json:"spaceId"`
+	SpaceKind string   `json:"spaceKind,omitempty"`
 	UserID    string   `json:"userId"`
 	DeviceID  string   `json:"deviceId"`
 	Role      Role     `json:"role"`
@@ -97,6 +98,9 @@ type Record struct {
 	WorkingCopyName   string     `json:"workingCopyName,omitempty"`
 	AnsweredByUserID  string     `json:"answeredByUserId,omitempty"`
 	Avatar            string     `json:"avatar,omitempty"`
+	Description       string     `json:"description,omitempty"`
+	Permission        string     `json:"permission,omitempty"`
+	AcceptDelegations *bool      `json:"acceptDelegations,omitempty"`
 	Private           bool       `json:"private,omitempty"`
 	Kind              string     `json:"kind"`
 	ID               string     `json:"id"`
@@ -181,6 +185,7 @@ type ReadSync struct {
 }
 type Frame struct {
 	ControllerID string     `json:"controllerId,omitempty"`
+	Delegation   bool       `json:"delegation,omitempty"`
 	Digest       string     `json:"digest,omitempty"`
 	Receipt      *Receipt   `json:"receipt,omitempty"`
 	Completed    bool       `json:"completed,omitempty"`
@@ -234,6 +239,18 @@ type Dispatch struct {
 	RunID          string `json:"runId,omitempty"`
 }
 
+type DelegationOrigin struct {
+	DeviceID          string `json:"deviceId"`
+	DeviceName        string `json:"deviceName,omitempty"`
+	AgentID           string `json:"agentId"`
+	AgentName         string `json:"agentName,omitempty"`
+	ChatID            string `json:"chatId"`
+	SessionID         string `json:"sessionId"`
+	RunID             string `json:"runId"`
+	DelegationID      string `json:"delegationId"`
+	MaxPermissionMode string `json:"maxPermissionMode,omitempty"`
+}
+
 // Intent is a proposed user action. Execution credentials, providers and paths
 // are never chosen by a controller. Only the owning Host can record a receipt.
 type Intent struct {
@@ -252,6 +269,7 @@ type Intent struct {
 	Delivery       string            `json:"delivery,omitempty"`
 	Text           string            `json:"text,omitempty"`
 	Answer         *Answer           `json:"answer,omitempty"`
+	Delegation     *DelegationOrigin `json:"delegation,omitempty"`
 	ActorUserID    string            `json:"actorUserId,omitempty"`
 	OriginDeviceID string            `json:"originDeviceId,omitempty"`
 }

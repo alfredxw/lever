@@ -3052,6 +3052,47 @@ export const enUS = {
   "chat.delegationRound": "Round {{turn}}/{{turns}}",
   "chat.delegationTurnNumber": "Round {{turn}}",
   "chat.requestFromCollaborator": "From collaborator · {{agent}}",
+  "chat.requestFromRemoteCollaborator":
+    "From remote collaborator · {{device}} / {{agent}}",
   "chat.delegationReceiptGroup": "Collaborator receipt",
   "chat.delegationReceiptLabel": "reported back",
+  "chat.delegatedFromRemote": "Delegated from {{device}} · {{agent}}",
+  "chat.openRemoteDelegation": "View remote chat",
+  "chat.remoteDelegationTitle": "{{device}} · {{agent}}",
+  "chat.remoteDelegationLoading": "Loading remote conversation…",
+  "chat.remoteDelegationWaitingAccept": "Waiting for remote device to accept…",
+  "chat.remoteDelegationEmpty":
+    "No remote conversation records synced yet.",
+  "chat.remoteDelegationStop": "Stop remote task",
+  "settings.defaultDelegationPolicy": "Default delegation for new Agents",
+  "settings.defaultDelegationPolicyDescription":
+    "Choose whether unconfigured and newly created Agents enable delegation by default. Individual Agents can still override this in Profile.",
+  "settings.defaultDelegationPolicy.none": "Off by default",
+  "settings.defaultDelegationPolicy.all": "All Agents (including new)",
+  "profile.delegationPolicy": "Delegation mode",
+  "profile.delegationPolicy.none": "Off",
+  "profile.delegationPolicy.all": "All Agents (including new)",
+  "profile.delegationPolicy.selected": "Selected Agents",
+  "profile.delegationPolicy.noneHint":
+    "Delegation is off; this Agent will not delegate tasks to other Agents.",
+  "profile.delegationPolicy.allHint":
+    "Can delegate to any Agent that accepts delegations (including newly created ones) without per-call confirmation, capped at the caller’s permission level.",
+  "profile.delegationPolicy.allGlobalNote":
+    "Inheriting the global default (All Agents). Choose a mode above to override for this Agent.",
+  "profile.delegationPolicy.selectedHint":
+    "Delegate only to the Agents selected below. Runs without confirmation by default; toggle “Confirm before running” per target if needed.",
+  "profile.delegationAllEmpty":
+    "No other eligible Agents yet; new Agents will be included automatically.",
+  "profile.delegationAllCount":
+    "{{local}} local Agent(s){{remotePart}} currently eligible.",
+  "profile.delegationAllRemotePart": " and {{remote}} online remote Agent(s)",
+  "profile.delegationRemoteGroup": "Remote device Agents",
+  "profile.delegationRemoteOffline": "Offline",
+  "profile.delegationAccept": "Allow other Agents to delegate here",
+  "profile.delegationAcceptHint":
+    "When off, other Agents (including “All Agents” mode and cross-device delegation) cannot delegate tasks to this Agent.",
+  "profile.delegationNotAccepting": "Not accepting delegations",
+  "profile.delegationAllowRemote": "Allow cross-device delegation",
+  "profile.delegationAllowRemoteHint":
+    "Allow this Agent in “All Agents” mode to delegate to online Agents on other devices in the same Hub personal space.",
 } as const;

@@ -7,13 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"lever/internal/model"
+	"lever/internal/provider"
 	"lever/internal/store"
 )
+
+const maxActiveDelegations = 5
 
 type delegationWorkspace struct {
 	projectID       string
@@ -27,20 +31,34 @@ type delegationReceiptWake struct {
 }
 
 type delegateTargetInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Provider    string `json:"provider,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Permission  string `json:"permission,omitempty"`
+	DeviceID      string                    `json:"deviceId,omitempty"`
+	DeviceName    string                    `json:"deviceName,omitempty"`
+	ID            string                    `json:"id"`
+	Name          string                    `json:"name"`
+	Description   string                    `json:"description,omitempty"`
+	Provider      string                    `json:"provider,omitempty"`
+	Model         string                    `json:"model,omitempty"`
+	Permission    string                    `json:"permission,omitempty"`
+	WorkingCopies []model.RemoteWorkingCopy `json:"workingCopies,omitempty"`
+}
+
+type delegateTargetsInput struct {
+	Query    string `json:"query,omitempty" jsonschema:"Optional search text matching agent name, description, or device name"`
+	DeviceID string `json:"deviceId,omitempty" jsonschema:"Optional device filter: 'local' for this device, or a remote device ID"`
+}
+
+type delegateTargetsResult struct {
+	Targets []delegateTargetInfo `json:"targets"`
 }
 
 type delegateInput struct {
-	AgentID    string `json:"agentId" jsonschema:"Target Agent ID from the configured delegation list"`
-	RequestKey string `json:"requestKey" jsonschema:"Stable key for this task within the current turn; reuse it when retrying the same task"`
-	Task       string `json:"task" jsonschema:"Self-contained task and necessary context; parent transcript is not shared"`
-	Workspace  string `json:"workspace,omitempty" jsonschema:"Workspace scope: 'inherit' (default, share current conversation scope/worktree) or 'agent' (use target Agent's own scope)"`
-	AutoWake   *bool  `json:"autoWake,omitempty" jsonschema:"When true (default), automatically wake this conversation with a receipt if the child finishes after this turn ends without its result being collected via delegate_wait"`
+	DeviceID      string `json:"deviceId,omitempty" jsonschema:"Optional remote device ID from delegate_targets; omit for an Agent on this device"`
+	AgentID       string `json:"agentId" jsonschema:"Target Agent ID from delegate_targets or the available delegation list"`
+	WorkingCopyID string `json:"workingCopyId,omitempty" jsonschema:"Optional directory group ID exposed by a remote target Agent"`
+	RequestKey    string `json:"requestKey" jsonschema:"Stable key for this task within the current turn; reuse it when retrying the same task"`
+	Task          string `json:"task" jsonschema:"Self-contained task and necessary context; parent transcript is not shared"`
+	Workspace     string `json:"workspace,omitempty" jsonschema:"Workspace scope for local delegations: 'inherit' (default, share current conversation scope/worktree) or 'agent' (use target Agent's own scope). Remote delegations always use 'agent'."`
+	AutoWake      *bool  `json:"autoWake,omitempty" jsonschema:"When true (default), automatically wake this conversation with a receipt if the child finishes after this turn ends without its result being collected via delegate_wait"`
 }
 
 type delegateReplyInput struct {
@@ -78,6 +96,8 @@ type delegationWaitResult struct {
 
 type delegationSummaryItem struct {
 	ID              string `json:"id"`
+	DeviceID        string `json:"deviceId,omitempty"`
+	DeviceName      string `json:"deviceName,omitempty"`
 	AgentID         string `json:"agentId"`
 	AgentName       string `json:"agentName"`
 	ChatID          string `json:"chatId"`
@@ -94,19 +114,47 @@ type delegationListResult struct {
 	Delegations []delegationSummaryItem `json:"delegations"`
 }
 
-func (e *execution) canDelegate() bool {
-	return e.session.ParentRunID == "" && len(e.profile.Delegations) > 0
-}
-
-func delegationRule(parentRunID string, rules []model.DelegationRule, agentID string) (model.DelegationRule, bool) {
-	if parentRunID == "" {
-		for _, rule := range rules {
-			if rule.AgentID == agentID {
-				return rule, true
-			}
+func findDelegationRule(rules []model.DelegationRule, deviceID, agentID string) (model.DelegationRule, bool) {
+	for _, rule := range rules {
+		if rule.DeviceID == deviceID && rule.AgentID == agentID {
+			return rule, true
 		}
 	}
 	return model.DelegationRule{}, false
+}
+
+func (e *execution) canDelegate() bool {
+	if e.session.ParentRunID != "" || e.session.DelegatedFrom != nil {
+		return false
+	}
+	switch e.delegationPolicy {
+	case model.DelegationPolicyAll:
+		return true
+	case model.DelegationPolicySelected:
+		return len(e.profile.Delegations) > 0
+	default:
+		return false
+	}
+}
+
+func (e *execution) delegationRuleFor(deviceID, agentID string) (model.DelegationRule, bool) {
+	if e.session.ParentRunID != "" || e.session.DelegatedFrom != nil || agentID == "" {
+		return model.DelegationRule{}, false
+	}
+	if deviceID == "" && agentID == e.session.AgentID {
+		return model.DelegationRule{}, false
+	}
+	switch e.delegationPolicy {
+	case model.DelegationPolicySelected:
+		return findDelegationRule(e.profile.Delegations, deviceID, agentID)
+	case model.DelegationPolicyAll:
+		if deviceID != "" && !e.profile.AllowsRemoteDelegation() {
+			return model.DelegationRule{}, false
+		}
+		return model.DelegationRule{DeviceID: deviceID, AgentID: agentID, Confirm: false}, true
+	default:
+		return model.DelegationRule{}, false
+	}
 }
 
 func runOutputText(run model.Run) string {
@@ -132,59 +180,176 @@ func isDelegationFinished(status string) bool {
 	return !model.Active(status) && status != "queued"
 }
 
-func (a *App) addDelegationTools(ctx context.Context, server *mcp.Server, owner *execution) {
+func (a *App) checkDelegationConcurrency(ctx context.Context, parentSessionID string) error {
+	var localActive, remoteActive int
+	if err := a.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM delegation_runs dr
+JOIN runs child ON child.id=dr.child_run_id
+WHERE dr.parent_session_id=? AND child.status IN ('queued','starting','running','waiting_user','cancelling')`, parentSessionID).Scan(&localActive); err != nil {
+		return err
+	}
+	if err := a.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_delegation_runs
+WHERE parent_session_id=? AND status IN ('queued','starting','running','waiting_user','cancelling')`, parentSessionID).Scan(&remoteActive); err != nil {
+		return err
+	}
+	if localActive+remoteActive >= maxActiveDelegations {
+		return conflict(fmt.Sprintf("At most %d active delegated tasks may run concurrently in one session; wait for or cancel an existing delegation first", maxActiveDelegations))
+	}
+	return nil
+}
+
+func (a *App) listEligibleTargets(ctx context.Context, owner *execution, query, deviceFilter string) []delegateTargetInfo {
 	targets := []delegateTargetInfo{}
-	for _, rule := range owner.profile.Delegations {
-		if target, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", rule.AgentID); err == nil && !target.Archived {
-			var visible bool
-			if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM remote_memberships m WHERE m.hub=json_extract(c.data,'$.sharedScope.hubId') AND m.space=json_extract(c.data,'$.sharedScope.spaceId') AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=?))) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err == nil && visible {
-				targets = append(targets, delegateTargetInfo{
+	q := strings.ToLower(strings.TrimSpace(query))
+	deviceFilter = strings.TrimSpace(deviceFilter)
+	matchesQuery := func(t delegateTargetInfo) bool {
+		if q == "" {
+			return true
+		}
+		return strings.Contains(strings.ToLower(t.Name), q) ||
+			strings.Contains(strings.ToLower(t.Description), q) ||
+			strings.Contains(strings.ToLower(t.DeviceName), q) ||
+			strings.Contains(strings.ToLower(t.ID), q)
+	}
+	wantLocal := deviceFilter == "" || deviceFilter == "local" || deviceFilter == a.Store.DeviceID
+	if wantLocal {
+		agents, err := store.List[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id<>? AND coalesce(json_extract(data,'$.archived'),0)=0 ORDER BY json_extract(data,'$.createdAt')", owner.session.AgentID)
+		if err == nil {
+			for _, target := range agents {
+				if !target.Profile.CanAcceptDelegations() {
+					continue
+				}
+				if _, ok := owner.delegationRuleFor("", target.ID); !ok {
+					continue
+				}
+				var visible bool
+				if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM remote_memberships m WHERE m.hub=json_extract(c.data,'$.sharedScope.hubId') AND m.space=json_extract(c.data,'$.sharedScope.spaceId') AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=?))) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err != nil || !visible {
+					continue
+				}
+				info := delegateTargetInfo{
 					ID:          target.ID,
 					Name:        target.Name,
 					Description: target.Profile.Description,
 					Provider:    target.Profile.Provider,
 					Model:       target.Profile.Model,
 					Permission:  target.Profile.Permission,
-				})
+				}
+				if matchesQuery(info) {
+					targets = append(targets, info)
+				}
 			}
 		}
 	}
+	wantRemote := deviceFilter != "local" && deviceFilter != a.Store.DeviceID
+	if wantRemote && owner.delegationPolicy == model.DelegationPolicySelected {
+		hasRemoteRule := slices.ContainsFunc(owner.profile.Delegations, func(r model.DelegationRule) bool { return r.DeviceID != "" })
+		wantRemote = hasRemoteRule
+	}
+	if wantRemote && owner.delegationPolicy == model.DelegationPolicyAll && !owner.profile.AllowsRemoteDelegation() {
+		wantRemote = false
+	}
+	if wantRemote {
+		if rc := a.remoteCollaborator(); rc != nil {
+			var sharedScope *model.SharedScope
+			if chat, err := store.Get[model.Chat](ctx, a.Store.DB, "SELECT data FROM chats WHERE id=?", owner.session.ChatID); err == nil {
+				sharedScope = chat.SharedScope
+			}
+			if remotes, err := rc.ListRemoteTargets(ctx, sharedScope); err == nil {
+				for _, rt := range remotes {
+					if !rt.Online || rt.Draining {
+						continue
+					}
+					if deviceFilter != "" && rt.DeviceID != deviceFilter {
+						continue
+					}
+					if _, ok := owner.delegationRuleFor(rt.DeviceID, rt.AgentID); !ok {
+						continue
+					}
+					info := delegateTargetInfo{
+						DeviceID:      rt.DeviceID,
+						DeviceName:    rt.DeviceName,
+						ID:            rt.AgentID,
+						Name:          rt.Name,
+						Description:   rt.Description,
+						Provider:      rt.Provider,
+						Model:         rt.Model,
+						Permission:    rt.PermissionMode,
+						WorkingCopies: rt.WorkingCopies,
+					}
+					if matchesQuery(info) {
+						targets = append(targets, info)
+					}
+				}
+			}
+		}
+	}
+	return targets
+}
+
+func (a *App) addDelegationTools(ctx context.Context, server *mcp.Server, owner *execution) {
+	targets := a.listEligibleTargets(ctx, owner, "", "")
+	hasRemote := slices.ContainsFunc(targets, func(t delegateTargetInfo) bool { return t.DeviceID != "" })
+	var startTargetNote string
+	if len(targets) <= 8 && !hasRemote {
+		startTargetNote = " Available targets: " + store.JSON(targets)
+	} else {
+		devices := []string{}
+		for _, t := range targets {
+			if t.DeviceName != "" && !slices.Contains(devices, t.DeviceName) {
+				devices = append(devices, t.DeviceName)
+			}
+		}
+		if len(devices) > 0 {
+			startTargetNote = fmt.Sprintf(" %d available targets across this device and remote devices (%s). Call delegate_targets to inspect target IDs, descriptions, and remote workingCopies before starting.", len(targets), strings.Join(devices, ", "))
+		} else {
+			startTargetNote = fmt.Sprintf(" %d available targets. Call delegate_targets to inspect target IDs and descriptions.", len(targets))
+		}
+	}
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "delegate_targets",
+		Description: "Discover available collaborator Agents on this device and connected remote devices, including their IDs, deviceIds, descriptions, models, and remote workingCopies.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateTargetsInput) (*mcp.CallToolResult, *delegateTargetsResult, error) {
+		return nil, &delegateTargetsResult{Targets: a.listEligibleTargets(ctx, owner, in.Query, in.DeviceID)}, nil
+	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "delegate_start",
-		Description: "Start a task on another configured collaborator Agent (one hop only). Defaults to workspace='inherit' (shares this conversation's scope/worktree); pass workspace='agent' for the collaborator's own scope. You may start multiple tasks in parallel, wait with delegate_wait, continue an existing delegation with delegate_reply, or finish your turn to automatically receive a receipt when autoWake is true (default). Available targets: " + store.JSON(targets),
+		Description: "Start a task on another collaborator Agent (one hop only; child permissions are capped to this turn's permission level). Omit deviceId for a local Agent (defaults to workspace='inherit'; pass workspace='agent' for its own scope), or pass deviceId (and optional workingCopyId) for a remote device Agent. You may start multiple tasks in parallel, wait with delegate_wait, continue an existing delegation with delegate_reply, or finish your turn to automatically receive a receipt when autoWake is true (default)." + startTargetNote,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateInput) (*mcp.CallToolResult, *model.Delegation, error) {
 		d, err := a.delegate(ctx, owner, in)
 		return nil, &d, err
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delegate_reply",
-		Description: "Send a follow-up message to an existing delegated conversation owned by this session (including delegations started in earlier turns). Preserves the collaborator's conversation memory and workspace.",
+		Description: "Send a follow-up message to an existing delegated conversation (local or remote) owned by this session. Preserves the collaborator's conversation memory and workspace.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateReplyInput) (*mcp.CallToolResult, *model.Delegation, error) {
 		d, err := a.delegateReply(ctx, owner, in)
 		return nil, &d, err
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delegate_wait",
-		Description: "Wait for one (id) or multiple (ids) delegated tasks owned by this session and return their current status and output. Defaults to waiting up to 30 seconds (max 120s). For long-running work you can also end your turn and rely on automatic receipt wakeups.",
+		Description: "Wait for one (id) or multiple (ids) delegated tasks (local or remote) owned by this session and return their current status and output. Defaults to waiting up to 30 seconds (max 120s). For long-running work you can also end your turn and rely on automatic receipt wakeups.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateWaitInput) (*mcp.CallToolResult, *delegationWaitResult, error) {
 		res, err := a.delegateWait(ctx, owner, in)
 		return nil, res, err
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delegate_list",
-		Description: "List all delegated conversations started in this session across turns, with their IDs, target Agents, turn counts, statuses, and summaries.",
+		Description: "List all delegated conversations (local and remote) started in this session across turns, with their IDs, target Agents/devices, turn counts, statuses, and summaries.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, *delegationListResult, error) {
 		res, err := a.delegateList(ctx, owner)
 		return nil, res, err
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delegate_cancel",
-		Description: "Stop an active delegated task owned by this session.",
+		Description: "Stop an active delegated task (local or remote) owned by this session.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegationID) (*mcp.CallToolResult, *model.Delegation, error) {
 		d, err := a.ownedDelegation(ctx, owner.session.ID, in.ID)
 		if err == nil {
-			_, _ = a.Store.DB.ExecContext(ctx, "UPDATE delegation_runs SET receipt_consumed=1 WHERE delegation_id=? AND child_run_id=?", d.ID, d.RunID)
-			err = a.Stop(ctx, d.RunID)
+			if d.DeviceID != "" {
+				err = a.cancelRemoteDelegation(ctx, d)
+			} else {
+				_, _ = a.Store.DB.ExecContext(ctx, "UPDATE delegation_runs SET receipt_consumed=1 WHERE delegation_id=? AND child_run_id=?", d.ID, d.RunID)
+				err = a.Stop(ctx, d.RunID)
+			}
 		}
 		return nil, &d, err
 	})
@@ -200,7 +365,7 @@ WHERE d.id=? AND (COALESCE(json_extract(d.data,'$.parentSessionId'),'')=? OR par
 	if err != nil {
 		return d, err
 	}
-	if d.AgentID == "" && d.ChatID != "" {
+	if d.AgentID == "" && d.ChatID != "" && d.DeviceID == "" {
 		if chat, chatErr := store.Get[model.Chat](ctx, a.Store.DB, "SELECT data FROM chats WHERE id=?", d.ChatID); chatErr == nil {
 			d.AgentID = chat.AgentID
 		}
@@ -224,6 +389,13 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 	if strings.TrimSpace(in.Task) == "" {
 		return d, invalid("task is required")
 	}
+	in.DeviceID = strings.TrimSpace(in.DeviceID)
+	if in.DeviceID == "local" || in.DeviceID == a.Store.DeviceID {
+		in.DeviceID = ""
+	}
+	if in.DeviceID != "" {
+		return a.delegateRemote(ctx, parent, in)
+	}
 	wsMode := strings.TrimSpace(in.Workspace)
 	if wsMode == "" {
 		wsMode = "inherit"
@@ -235,7 +407,7 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 	if in.AutoWake != nil {
 		autoWake = *in.AutoWake
 	}
-	rule, permitted := delegationRule(parent.session.ParentRunID, parent.profile.Delegations, in.AgentID)
+	rule, permitted := parent.delegationRuleFor("", in.AgentID)
 	if !permitted {
 		return d, invalid("Target is not allowed by this session's delegation rules")
 	}
@@ -255,6 +427,21 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 		d = existing
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return d, err
+	}
+	if d.ID == "" {
+		if err := a.checkDelegationConcurrency(ctx, parent.session.ID); err != nil {
+			return d, err
+		}
+		target, err := store.Get[model.Agent](ctx, a.Store.DB, "SELECT data FROM agents WHERE id=?", in.AgentID)
+		if err != nil {
+			return d, invalid("Target agent does not exist")
+		}
+		if target.Archived {
+			return d, conflict("Target agent is archived")
+		}
+		if !target.Profile.CanAcceptDelegations() {
+			return d, invalid("Target agent does not accept delegated tasks")
+		}
 	}
 	if d.ID == "" && rule.Confirm {
 		answer, err := parent.Ask(ctx, model.Request{Kind: "approval", Title: "Delegate task", Detail: in.Task, DelegationAgentID: in.AgentID})
@@ -300,6 +487,10 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 			if target.Archived {
 				return conflict("Target agent is archived")
 			}
+			if !target.Profile.CanAcceptDelegations() {
+				return invalid("Target agent does not accept delegated tasks")
+			}
+			d.AgentName = target.Name
 			title := []rune(strings.TrimSpace(in.Task))
 			if len(title) > 48 {
 				title = title[:48]
@@ -325,12 +516,15 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 			return d, err
 		}
 	}
+	parent.mu.Lock()
+	maxPerm := provider.NormalizePermissionMode(parent.provider.Type, parent.run.Selection.Permission)
+	parent.mu.Unlock()
 	run, err := a.sendLocked(ctx, model.SendInput{
 		CommandID: model.DelegationCommandPrefix + d.ID,
 		ChatID:    d.ChatID,
 		Operation: "main",
 		Text:      in.Task,
-	}, sendOrigin{parentRunID: parent.run.ID, delegationScope: inherited})
+	}, sendOrigin{parentRunID: parent.run.ID, delegationScope: inherited, maxPermissionMode: maxPerm})
 	if err != nil {
 		return d, err
 	}
@@ -373,9 +567,11 @@ func (a *App) delegateReply(ctx context.Context, parent *execution, in delegateR
 	if err != nil {
 		return d, err
 	}
-	rule, permitted := delegationRule(parent.session.ParentRunID, parent.profile.Delegations, d.AgentID)
-	if !permitted {
+	if _, permitted := parent.delegationRuleFor(d.DeviceID, d.AgentID); !permitted {
 		return d, invalid("Target is not allowed by this session's delegation rules")
+	}
+	if d.DeviceID != "" {
+		return a.delegateReplyRemote(ctx, parent, d, in)
 	}
 	digest := hash(in)
 	var existingChildRunID, existingHash string
@@ -392,14 +588,8 @@ func (a *App) delegateReply(ctx context.Context, parent *execution, in delegateR
 	if !errors.Is(err, sql.ErrNoRows) {
 		return d, err
 	}
-	if rule.Confirm {
-		answer, err := parent.Ask(ctx, model.Request{Kind: "approval", Title: "Delegate follow-up", Detail: in.Message, DelegationAgentID: d.AgentID})
-		if err != nil {
-			return d, err
-		}
-		if !answer.Allow {
-			return d, errors.New("delegation declined")
-		}
+	if err := a.checkDelegationConcurrency(ctx, parent.session.ID); err != nil {
+		return d, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -413,6 +603,9 @@ func (a *App) delegateReply(ctx context.Context, parent *execution, in delegateR
 	if target.Archived {
 		return d, conflict("Target agent is archived")
 	}
+	if !target.Profile.CanAcceptDelegations() {
+		return d, invalid("Target agent does not accept delegated tasks")
+	}
 	// Reload fresh delegation metadata under lock so turn numbers serialize cleanly.
 	d, err = a.ownedDelegation(ctx, parent.session.ID, in.ID)
 	if err != nil {
@@ -422,13 +615,16 @@ func (a *App) delegateReply(ctx context.Context, parent *execution, in delegateR
 	if nextTurn < 2 {
 		nextTurn = 2
 	}
+	parent.mu.Lock()
+	maxPerm := provider.NormalizePermissionMode(parent.provider.Type, parent.run.Selection.Permission)
+	parent.mu.Unlock()
 	cmdID := fmt.Sprintf("%s%s:%d:%s", model.DelegationCommandPrefix, d.ID, nextTurn, ID())
 	run, err := a.sendLocked(ctx, model.SendInput{
 		CommandID: cmdID,
 		ChatID:    d.ChatID,
 		Operation: "main",
 		Text:      in.Message,
-	}, sendOrigin{parentRunID: parent.run.ID})
+	}, sendOrigin{parentRunID: parent.run.ID, maxPermissionMode: maxPerm})
 	if err != nil {
 		return d, err
 	}
@@ -491,19 +687,50 @@ func (a *App) delegateWait(ctx context.Context, owner *execution, in delegateWai
 	deadline := time.NewTimer(time.Duration(timeout) * time.Second)
 	defer deadline.Stop()
 
-	loadAll := func() ([]delegationWaitItem, []*execution, bool, bool, error) {
+	loadAll := func() ([]delegationWaitItem, []*execution, bool, bool, bool, error) {
 		items := make([]delegationWaitItem, 0, len(ids))
 		var activeExecs []*execution
 		allFinished := true
 		anyFinished := false
+		hasRemote := false
 		for _, id := range ids {
 			d, err := a.ownedDelegation(ctx, owner.session.ID, id)
 			if err != nil {
-				return nil, nil, false, false, err
+				return nil, nil, false, false, false, err
+			}
+			if d.DeviceID != "" {
+				hasRemote = true
+				var row remoteDelegationRow
+				if err := a.loadLatestRemoteDelegationRow(ctx, d.ID, &row); err != nil {
+					return nil, nil, false, false, false, err
+				}
+				d.ChatID, d.SessionID, d.RunID = row.ChatID, row.SessionID, row.RunID
+				finished := isDelegationFinished(row.Status)
+				if finished {
+					anyFinished = true
+				} else {
+					allFinished = false
+				}
+				run := model.Run{
+					ID:        row.RunID,
+					SessionID: row.SessionID,
+					ChatID:    row.ChatID,
+					AgentID:   row.AgentID,
+					Status:    row.Status,
+					Error:     row.Error,
+					CreatedAt: row.CreatedAt,
+				}
+				items = append(items, delegationWaitItem{
+					Delegation: d,
+					Run:        run,
+					Output:     row.Output,
+					Finished:   finished,
+				})
+				continue
 			}
 			run, err := store.Get[model.Run](ctx, a.Store.DB, "SELECT data FROM runs WHERE id=?", d.RunID)
 			if err != nil {
-				return nil, nil, false, false, err
+				return nil, nil, false, false, false, err
 			}
 			finished := isDelegationFinished(run.Status)
 			if finished {
@@ -523,7 +750,7 @@ func (a *App) delegateWait(ctx context.Context, owner *execution, in delegateWai
 				Finished:   finished,
 			})
 		}
-		return items, activeExecs, allFinished, anyFinished, nil
+		return items, activeExecs, allFinished, anyFinished, hasRemote, nil
 	}
 
 	var items []delegationWaitItem
@@ -532,21 +759,29 @@ func (a *App) delegateWait(ctx context.Context, owner *execution, in delegateWai
 	defer poll.Stop()
 	for {
 		var activeExecs []*execution
-		var anyFinished bool
+		var anyFinished, hasRemote bool
 		var err error
-		items, activeExecs, allFinished, anyFinished, err = loadAll()
+		items, activeExecs, allFinished, anyFinished, hasRemote, err = loadAll()
 		if err != nil {
 			return nil, err
 		}
 		if (waitFor == "all" && allFinished) || (waitFor == "any" && anyFinished) {
 			break
 		}
+		if hasRemote {
+			a.wakeRemoteDelegations()
+		}
 		var firstDone <-chan struct{}
-		if len(activeExecs) == 1 {
+		if len(activeExecs) == 1 && !hasRemote {
 			firstDone = activeExecs[0].done
+		}
+		var remoteSig <-chan struct{}
+		if hasRemote {
+			remoteSig = a.remoteDelegationSignal()
 		}
 		select {
 		case <-firstDone:
+		case <-remoteSig:
 		case <-poll.C:
 		case <-deadline.C:
 			goto done
@@ -559,7 +794,7 @@ func (a *App) delegateWait(ctx context.Context, owner *execution, in delegateWai
 done:
 	// Reload once after waking so returned run state is completely fresh.
 	var err error
-	items, _, allFinished, _, err = loadAll()
+	items, _, allFinished, _, _, err = loadAll()
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +802,11 @@ done:
 	// duplicate async wakeup turn after the Lead has already read the result.
 	for _, item := range items {
 		if item.Finished {
-			_, _ = a.Store.DB.ExecContext(ctx, "UPDATE delegation_runs SET receipt_consumed=1 WHERE child_run_id=?", item.Run.ID)
+			if item.Delegation.DeviceID != "" {
+				_, _ = a.Store.DB.ExecContext(ctx, "UPDATE remote_delegation_runs SET receipt_consumed=1 WHERE delegation_id=? AND status IN ('completed','failed','interrupted','unknown')", item.Delegation.ID)
+			} else {
+				_, _ = a.Store.DB.ExecContext(ctx, "UPDATE delegation_runs SET receipt_consumed=1 WHERE child_run_id=?", item.Run.ID)
+			}
 		}
 	}
 	result := &delegationWaitResult{
@@ -585,18 +824,22 @@ done:
 }
 
 func (a *App) delegateList(ctx context.Context, owner *execution) (*delegationListResult, error) {
+	type timedSummary struct {
+		createdAt string
+		item      delegationSummaryItem
+	}
+	collected := []timedSummary{}
 	rows, err := a.Store.DB.QueryContext(ctx, `SELECT d.data, r.data, COALESCE(json_extract(ag.data,'$.name'),'')
 FROM delegations d
 JOIN runs parent ON parent.id=d.parent_run_id
 JOIN runs r ON r.id=json_extract(d.data,'$.runId')
 LEFT JOIN agents ag ON ag.id=r.agent_id
-WHERE COALESCE(json_extract(d.data,'$.parentSessionId'),'')=? OR parent.session_id=?
+WHERE COALESCE(json_extract(d.data,'$.deviceId'),'')='' AND (COALESCE(json_extract(d.data,'$.parentSessionId'),'')=? OR parent.session_id=?)
 ORDER BY COALESCE(json_extract(r.data,'$.createdAt'),'')`, owner.session.ID, owner.session.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []delegationSummaryItem{}
 	for rows.Next() {
 		var rawD, rawRun, agentName string
 		if err := rows.Scan(&rawD, &rawRun, &agentName); err != nil {
@@ -615,28 +858,66 @@ ORDER BY COALESCE(json_extract(r.data,'$.createdAt'),'')`, owner.session.ID, own
 		if summary == "" && run.Error != "" {
 			summary = truncateRunes(run.Error, 240)
 		}
-		items = append(items, delegationSummaryItem{
-			ID:              d.ID,
-			AgentID:         run.AgentID,
-			AgentName:       agentName,
-			ChatID:          d.ChatID,
-			SessionID:       d.SessionID,
-			RunID:           run.ID,
-			Turn:            turn,
-			Status:          run.Status,
-			Workspace:       d.Workspace,
-			WorkingCopyName: d.WorkingCopyName,
-			Summary:         summary,
+		collected = append(collected, timedSummary{
+			createdAt: run.CreatedAt,
+			item: delegationSummaryItem{
+				ID:              d.ID,
+				AgentID:         run.AgentID,
+				AgentName:       agentName,
+				ChatID:          d.ChatID,
+				SessionID:       d.SessionID,
+				RunID:           run.ID,
+				Turn:            turn,
+				Status:          run.Status,
+				Workspace:       d.Workspace,
+				WorkingCopyName: d.WorkingCopyName,
+				Summary:         summary,
+			},
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	rows.Close()
+
+	remoteRows, err := a.Store.DB.QueryContext(ctx, `SELECT dr.delegation_id, dr.device_id, dr.device_name, dr.agent_id, dr.agent_name,
+dr.chat_id, dr.session_id, dr.run_id, dr.turn, dr.status, dr.working_copy_name, dr.summary, dr.error, dr.created_at
+FROM remote_delegation_runs dr
+WHERE dr.parent_session_id=? AND dr.turn=(SELECT MAX(x.turn) FROM remote_delegation_runs x WHERE x.delegation_id=dr.delegation_id)
+ORDER BY dr.created_at`, owner.session.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer remoteRows.Close()
+	for remoteRows.Next() {
+		var item delegationSummaryItem
+		var errText, createdAt string
+		item.Workspace = "agent"
+		if err := remoteRows.Scan(&item.ID, &item.DeviceID, &item.DeviceName, &item.AgentID, &item.AgentName,
+			&item.ChatID, &item.SessionID, &item.RunID, &item.Turn, &item.Status, &item.WorkingCopyName, &item.Summary, &errText, &createdAt); err != nil {
+			return nil, err
+		}
+		if item.Summary == "" && errText != "" {
+			item.Summary = truncateRunes(errText, 240)
+		}
+		collected = append(collected, timedSummary{createdAt: createdAt, item: item})
+	}
+	if err := remoteRows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(collected, func(a, b timedSummary) int {
+		return strings.Compare(a.createdAt, b.createdAt)
+	})
+	items := make([]delegationSummaryItem, 0, len(collected))
+	for _, c := range collected {
+		items = append(items, c.item)
 	}
 	return &delegationListResult{Delegations: items}, nil
 }
 
 func (a *App) cancelParentDelegationWakesLocked(ctx context.Context, parentRunID string) {
 	_, _ = a.Store.DB.ExecContext(ctx, "UPDATE delegation_runs SET receipt_consumed=1 WHERE parent_run_id=? AND receipt_consumed=0", parentRunID)
+	_, _ = a.Store.DB.ExecContext(ctx, "UPDATE remote_delegation_runs SET receipt_consumed=1 WHERE parent_run_id=? AND receipt_consumed=0", parentRunID)
 }
 
 func (a *App) delegationChildRunsForParent(ctx context.Context, parentRunID string) map[string]bool {
@@ -677,7 +958,7 @@ func (a *App) deliverPendingDelegationReceiptsLocked(parentSessionID string) {
 	if a.closed || parentSessionID == "" || a.hasActiveSessionLocked(parentSessionID) {
 		return
 	}
-	type pendingRow struct {
+	type pendingLocalRow struct {
 		drID         string
 		delegationID string
 		turn         int
@@ -699,17 +980,61 @@ ORDER BY dr.created_at`, parentSessionID)
 	if err != nil {
 		return
 	}
-	var pending []pendingRow
+	var pendingLocal []pendingLocalRow
 	for rows.Next() {
-		var row pendingRow
+		var row pendingLocalRow
 		if err := rows.Scan(&row.drID, &row.delegationID, &row.turn, &row.chatTitle, &row.agentName, &row.childRaw); err != nil {
 			rows.Close()
 			return
 		}
-		pending = append(pending, row)
+		pendingLocal = append(pendingLocal, row)
 	}
 	rows.Close()
-	if len(pending) == 0 {
+
+	type pendingRemoteRow struct {
+		drID         string
+		delegationID string
+		turn         int
+		hubID        string
+		spaceID      string
+		deviceID     string
+		deviceName   string
+		agentID      string
+		agentName    string
+		chatID       string
+		sessionID    string
+		runID        string
+		title        string
+		status       string
+		output       string
+		errText      string
+	}
+	rRows, err := a.Store.DB.QueryContext(a.ctx, `SELECT dr.id, dr.delegation_id, dr.turn,
+  dr.hub_id, dr.space_id, dr.device_id, dr.device_name, dr.agent_id, dr.agent_name,
+  dr.chat_id, dr.session_id, dr.run_id, dr.title, dr.status, dr.output, dr.error
+FROM remote_delegation_runs dr
+JOIN runs parent ON parent.id=dr.parent_run_id
+WHERE dr.parent_session_id=? AND dr.auto_wake=1 AND dr.receipt_consumed=0 AND dr.wake_run_id=''
+  AND parent.status='completed'
+  AND dr.status IN ('completed','failed','interrupted','unknown')
+ORDER BY dr.created_at`, parentSessionID)
+	if err != nil {
+		return
+	}
+	var pendingRemote []pendingRemoteRow
+	for rRows.Next() {
+		var row pendingRemoteRow
+		if err := rRows.Scan(&row.drID, &row.delegationID, &row.turn,
+			&row.hubID, &row.spaceID, &row.deviceID, &row.deviceName, &row.agentID, &row.agentName,
+			&row.chatID, &row.sessionID, &row.runID, &row.title, &row.status, &row.output, &row.errText); err != nil {
+			rRows.Close()
+			return
+		}
+		pendingRemote = append(pendingRemote, row)
+	}
+	rRows.Close()
+
+	if len(pendingLocal) == 0 && len(pendingRemote) == 0 {
 		return
 	}
 	parentSession, err := store.Get[model.Session](a.ctx, a.Store.DB, "SELECT data FROM sessions WHERE id=?", parentSessionID)
@@ -720,11 +1045,13 @@ ORDER BY dr.created_at`, parentSessionID)
 	if err != nil || parentAgent.Archived {
 		return
 	}
-	receipts := make([]model.DelegationReceipt, 0, len(pending))
+	receipts := make([]model.DelegationReceipt, 0, len(pendingLocal)+len(pendingRemote))
 	var prompt strings.Builder
 	prompt.WriteString("[Delegation receipt]\nThe following delegated collaborator task(s) finished. Review the result(s) and continue the workflow. Use delegate_reply to follow up in the same collaborator conversation or read_chat_context if you need full transcript details.\n")
-	drIDs := make([]string, 0, len(pending))
-	for _, row := range pending {
+	localIDs := make([]string, 0, len(pendingLocal))
+	remoteIDs := make([]string, 0, len(pendingRemote))
+	const maxOutputBytes = 12 << 10
+	for _, row := range pendingLocal {
 		var child model.Run
 		if err := json.Unmarshal([]byte(row.childRaw), &child); err != nil {
 			continue
@@ -748,7 +1075,7 @@ ORDER BY dr.created_at`, parentSessionID)
 			Error:        child.Error,
 		}
 		receipts = append(receipts, receipt)
-		drIDs = append(drIDs, row.drID)
+		localIDs = append(localIDs, row.drID)
 
 		fmt.Fprintf(&prompt, "\n- Agent: %s (%s)\n  Delegation ID: %s (Turn %d)\n  Status: %s\n",
 			row.agentName, child.AgentID, row.delegationID, row.turn, child.Status)
@@ -756,10 +1083,51 @@ ORDER BY dr.created_at`, parentSessionID)
 			fmt.Fprintf(&prompt, "  Error: %s\n", child.Error)
 		}
 		if output != "" {
-			const maxOutputBytes = 12 << 10
 			trimmed := output
 			if len(trimmed) > maxOutputBytes {
 				trimmed = trimmed[:maxOutputBytes] + "\n...[truncated; inspect child session for full output]"
+			}
+			fmt.Fprintf(&prompt, "  Output:\n%s\n", trimmed)
+		}
+	}
+	for _, row := range pendingRemote {
+		summary := truncateRunes(row.output, 240)
+		if summary == "" && row.errText != "" {
+			summary = truncateRunes(row.errText, 240)
+		}
+		receipt := model.DelegationReceipt{
+			DelegationID: row.delegationID,
+			HubID:        row.hubID,
+			SpaceID:      row.spaceID,
+			DeviceID:     row.deviceID,
+			DeviceName:   row.deviceName,
+			AgentID:      row.agentID,
+			AgentName:    row.agentName,
+			ChatID:       row.chatID,
+			SessionID:    row.sessionID,
+			RunID:        row.runID,
+			Turn:         row.turn,
+			Status:       row.status,
+			Title:        row.title,
+			Summary:      summary,
+			Error:        row.errText,
+		}
+		receipts = append(receipts, receipt)
+		remoteIDs = append(remoteIDs, row.drID)
+
+		deviceLabel := row.deviceName
+		if deviceLabel == "" {
+			deviceLabel = row.deviceID
+		}
+		fmt.Fprintf(&prompt, "\n- Agent: %s (%s) on device %s (%s)\n  Delegation ID: %s (Turn %d)\n  Status: %s\n",
+			row.agentName, row.agentID, deviceLabel, row.deviceID, row.delegationID, row.turn, row.status)
+		if row.errText != "" {
+			fmt.Fprintf(&prompt, "  Error: %s\n", row.errText)
+		}
+		if row.output != "" {
+			trimmed := row.output
+			if len(trimmed) > maxOutputBytes {
+				trimmed = trimmed[:maxOutputBytes] + "\n...[truncated; inspect remote session for full output]"
 			}
 			fmt.Fprintf(&prompt, "  Output:\n%s\n", trimmed)
 		}
@@ -785,8 +1153,13 @@ ORDER BY dr.created_at`, parentSessionID)
 		return
 	}
 	if err := a.Store.Write(a.ctx, func(tx *sql.Tx) error {
-		for _, id := range drIDs {
+		for _, id := range localIDs {
 			if _, err := tx.ExecContext(a.ctx, "UPDATE delegation_runs SET receipt_consumed=1, wake_run_id=? WHERE id=?", wakeRun.ID, id); err != nil {
+				return err
+			}
+		}
+		for _, id := range remoteIDs {
+			if _, err := tx.ExecContext(a.ctx, "UPDATE remote_delegation_runs SET receipt_consumed=1, wake_run_id=? WHERE id=?", wakeRun.ID, id); err != nil {
 				return err
 			}
 		}

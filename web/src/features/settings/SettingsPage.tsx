@@ -82,6 +82,11 @@ import {
   useSaveTaskDispatchSettings,
   useTaskDispatchSettings,
 } from "@/features/tasks/taskDispatchSettings";
+import {
+  defaultDelegationSettings,
+  useDelegationSettings,
+  useSaveDelegationSettings,
+} from "@/features/agents/delegationPolicy";
 import { RemoteDevices } from "./RemoteDevices";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
@@ -139,6 +144,8 @@ const sectionGroups = [
           "allDayReminderTimeDescription",
           "agentDefaults",
           "agentDefaultsDescription",
+          "defaultDelegationPolicy",
+          "defaultDelegationPolicyDescription",
           "permissions",
           "permissionsDescription",
         ],
@@ -328,6 +335,10 @@ export function SettingsPage({
   const taskDispatchQuery = useTaskDispatchSettings(visible);
   const saveTaskDispatch = useSaveTaskDispatchSettings();
   const taskDispatch = taskDispatchQuery.data ?? defaultTaskDispatchSettings;
+  const delegationSettingsQuery = useDelegationSettings(visible);
+  const saveDelegationSettings = useSaveDelegationSettings();
+  const delegationSettings =
+    delegationSettingsQuery.data ?? defaultDelegationSettings;
   const defaultReminderValue =
     taskReminders.defaultRemindOffsets.length > 0
       ? String(taskReminders.defaultRemindOffsets[0])
@@ -661,6 +672,39 @@ export function SettingsPage({
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title={t("settings.agentConfiguration")}>
+              <SettingsRow
+                title={t("settings.defaultDelegationPolicy")}
+                description={t("settings.defaultDelegationPolicyDescription")}
+              >
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={delegationSettings.defaultPolicy}
+                  aria-label={t("settings.defaultDelegationPolicy")}
+                  onValueChange={(value) => {
+                    if (value !== "none" && value !== "all") return;
+                    if (value === delegationSettings.defaultPolicy) return;
+                    saveDelegationSettings.mutate(
+                      { defaultPolicy: value },
+                      { onError: (error) => toast.error(error.message) },
+                    );
+                  }}
+                >
+                  <ToggleGroupItem
+                    value="none"
+                    disabled={saveDelegationSettings.isPending}
+                  >
+                    {t("settings.defaultDelegationPolicy.none")}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="all"
+                    disabled={saveDelegationSettings.isPending}
+                  >
+                    {t("settings.defaultDelegationPolicy.all")}
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </SettingsRow>
               <SettingsRow
                 title={t("settings.agentDefaults")}
                 description={t("settings.agentDefaultsDescription")}

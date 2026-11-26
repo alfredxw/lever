@@ -80,9 +80,26 @@ type SkillSource struct {
 	Skills      []Skill `json:"skills"`
 }
 
+type DelegationPolicy string
+
+const (
+	DelegationPolicyNone     DelegationPolicy = "none"
+	DelegationPolicyAll      DelegationPolicy = "all"
+	DelegationPolicySelected DelegationPolicy = "selected"
+)
+
+func (p DelegationPolicy) Valid() bool {
+	return p == "" || p == DelegationPolicyNone || p == DelegationPolicyAll || p == DelegationPolicySelected
+}
+
+type DelegationSettings struct {
+	DefaultPolicy DelegationPolicy `json:"defaultPolicy" tstype:"'none' | 'all'"`
+}
+
 type DelegationRule struct {
-	AgentID string `json:"agentId"`
-	Confirm bool   `json:"confirm"`
+	DeviceID string `json:"deviceId,omitempty"`
+	AgentID  string `json:"agentId"`
+	Confirm  bool   `json:"confirm"`
 }
 
 type Scope struct {
@@ -111,11 +128,35 @@ type Profile struct {
 	Permission               string            `json:"permission"`
 	Skills                   []string          `json:"skills"`
 	DisabledSkills           []string          `json:"disabledSkills,omitempty"`
+	DelegationPolicy         DelegationPolicy  `json:"delegationPolicy,omitempty" tstype:"'' | 'none' | 'all' | 'selected'"`
 	Delegations              []DelegationRule  `json:"delegations"`
+	AcceptDelegations        *bool             `json:"acceptDelegations,omitempty"`
+	AllowRemoteDelegation    *bool             `json:"allowRemoteDelegation,omitempty"`
 	WorktreeSetup            map[string]string `json:"worktreeSetup,omitempty"` // Keyed by the Git common directory.
 	TaskConcurrency          int               `json:"taskConcurrency,omitempty"`
 	TaskStartIntervalMinutes int               `json:"taskStartIntervalMinutes,omitempty"`
 	TaskQueuePaused          bool              `json:"taskQueuePaused,omitempty"`
+}
+
+func (p Profile) EffectiveDelegationPolicy(defaults DelegationSettings) DelegationPolicy {
+	if p.DelegationPolicy != "" {
+		return p.DelegationPolicy
+	}
+	if len(p.Delegations) > 0 {
+		return DelegationPolicySelected
+	}
+	if defaults.DefaultPolicy == DelegationPolicyAll {
+		return DelegationPolicyAll
+	}
+	return DelegationPolicyNone
+}
+
+func (p Profile) CanAcceptDelegations() bool {
+	return p.AcceptDelegations == nil || *p.AcceptDelegations
+}
+
+func (p Profile) AllowsRemoteDelegation() bool {
+	return p.AllowRemoteDelegation == nil || *p.AllowRemoteDelegation
 }
 
 const (
@@ -341,6 +382,8 @@ type Reference struct {
 	Kind         string          `json:"kind"`
 	Name         string          `json:"name"`
 	ID           string          `json:"id,omitempty"`
+	DeviceID     string          `json:"deviceId,omitempty"`
+	DeviceName   string          `json:"deviceName,omitempty"`
 	Path         string          `json:"path"`
 	Provider     string          `json:"provider,omitempty"`
 	Description  string          `json:"description,omitempty"`
@@ -372,26 +415,39 @@ func (ref Reference) MCPTool() string {
 	return ""
 }
 
+type RemoteDelegationSource struct {
+	HubID      string `json:"hubId,omitempty"`
+	SpaceID    string `json:"spaceId,omitempty"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName,omitempty"`
+	AgentID    string `json:"agentId"`
+	AgentName  string `json:"agentName,omitempty"`
+	ChatID     string `json:"chatId"`
+	SessionID  string `json:"sessionId"`
+	RunID      string `json:"runId"`
+}
+
 type Session struct {
-	Runtime         *SessionRuntime `json:"runtime,omitempty"`
-	ProjectID       string          `json:"projectId,omitempty"`
-	WorkingCopyID   string          `json:"workingCopyId,omitempty"`
-	WorkingCopyName string          `json:"workingCopyName,omitempty"`
-	Title           string          `json:"title,omitempty"`
+	Runtime         *SessionRuntime         `json:"runtime,omitempty"`
+	ProjectID       string                  `json:"projectId,omitempty"`
+	WorkingCopyID   string                  `json:"workingCopyId,omitempty"`
+	WorkingCopyName string                  `json:"workingCopyName,omitempty"`
+	Title           string                  `json:"title,omitempty"`
 	Scope           `tstype:",extends"`
-	ID              string            `json:"id"`
-	ChatID          string            `json:"chatId"`
-	AgentID         string            `json:"agentId"`
-	Kind            string            `json:"kind"`
-	TaskID          string            `json:"taskId,omitempty"`
-	Channel         *ChannelOrigin    `json:"channel,omitempty"`
-	NativeID        string            `json:"nativeId"`
-	Selection       Selection         `json:"selection"`
-	ParentRunID     string            `json:"parentRunId,omitempty"`
-	SourceRunID     string            `json:"sourceRunId,omitempty"`
-	Comparison      *ComparisonOrigin `json:"comparison,omitempty"`
-	QueuePaused     bool              `json:"queuePaused,omitempty"`
-	CreatedAt       string            `json:"createdAt"`
+	ID              string                  `json:"id"`
+	ChatID          string                  `json:"chatId"`
+	AgentID         string                  `json:"agentId"`
+	Kind            string                  `json:"kind"`
+	TaskID          string                  `json:"taskId,omitempty"`
+	Channel         *ChannelOrigin          `json:"channel,omitempty"`
+	NativeID        string                  `json:"nativeId"`
+	Selection       Selection               `json:"selection"`
+	ParentRunID     string                  `json:"parentRunId,omitempty"`
+	DelegatedFrom   *RemoteDelegationSource `json:"delegatedFrom,omitempty"`
+	SourceRunID     string                  `json:"sourceRunId,omitempty"`
+	Comparison      *ComparisonOrigin       `json:"comparison,omitempty"`
+	QueuePaused     bool                    `json:"queuePaused,omitempty"`
+	CreatedAt       string                  `json:"createdAt"`
 }
 
 type Item struct {
@@ -866,18 +922,19 @@ type ProviderContribution struct {
 }
 
 type Overview struct {
-	Cursor        int64          `json:"cursor"`
-	Agents        []Agent        `json:"agents"`
-	Projects      []Project      `json:"projects"`
-	Chats         []Chat         `json:"chats"`
-	Conversations []Conversation `json:"conversations"`
-	Runs          []Run          `json:"runs"`
-	Requests      []Request      `json:"requests"`
-	DataDir       string         `json:"dataDir"`
-	HomeDir       string         `json:"homeDir"`
-	DeviceID      string         `json:"deviceId"`
-	DeviceName    string         `json:"deviceName"`
-	Platform      string         `json:"platform"`
+	Cursor             int64              `json:"cursor"`
+	Agents             []Agent            `json:"agents"`
+	Projects           []Project          `json:"projects"`
+	Chats              []Chat             `json:"chats"`
+	Conversations      []Conversation     `json:"conversations"`
+	Runs               []Run              `json:"runs"`
+	Requests           []Request          `json:"requests"`
+	DelegationSettings DelegationSettings `json:"delegationSettings"`
+	DataDir            string             `json:"dataDir"`
+	HomeDir            string             `json:"homeDir"`
+	DeviceID           string             `json:"deviceId"`
+	DeviceName         string             `json:"deviceName"`
+	Platform           string             `json:"platform"`
 }
 
 type Event struct {
@@ -941,13 +998,19 @@ type Delegation struct {
 	ID              string   `json:"id"`
 	ParentSessionID string   `json:"parentSessionId,omitempty"`
 	ParentRunID     string   `json:"parentRunId"`
+	HubID           string   `json:"hubId,omitempty"`
+	SpaceID         string   `json:"spaceId,omitempty"`
+	DeviceID        string   `json:"deviceId,omitempty"`
+	DeviceName      string   `json:"deviceName,omitempty"`
 	AgentID         string   `json:"agentId,omitempty"`
+	AgentName       string   `json:"agentName,omitempty"`
 	SessionID       string   `json:"sessionId"`
 	ChatID          string   `json:"chatId"`
 	RunID           string   `json:"runId"`
 	RunIDs          []string `json:"runIds,omitempty"`
 	Turn            int      `json:"turn,omitempty"`
 	Workspace       string   `json:"workspace,omitempty"`
+	WorkingCopyID   string   `json:"workingCopyId,omitempty"`
 	WorkingCopyName string   `json:"workingCopyName,omitempty"`
 	AutoWake        bool     `json:"autoWake,omitempty"`
 }
@@ -956,25 +1019,36 @@ const DelegationCommandPrefix = "delegate:"
 
 type DelegationTarget struct {
 	RunLocation `tstype:",extends"`
+	HubID       string `json:"hubId,omitempty"`
+	SpaceID     string `json:"spaceId,omitempty"`
+	DeviceID    string `json:"deviceId,omitempty"`
+	DeviceName  string `json:"deviceName,omitempty"`
 	AgentID     string `json:"agentId"`
+	AgentName   string `json:"agentName,omitempty"`
 	Title       string `json:"title"`
 }
 
 type DelegatedRun struct {
 	DelegationTarget `tstype:",extends"`
-	DelegationID     string `json:"delegationId,omitempty"`
-	Status           string `json:"status"`
-	Turn             int    `json:"turn,omitempty"`
-	Turns            int    `json:"turns,omitempty"`
-	Provider         string `json:"provider,omitempty"`
-	Model            string `json:"model,omitempty"`
-	Workspace        string `json:"workspace,omitempty"`
-	WorkingCopyName  string `json:"workingCopyName,omitempty"`
-	Summary          string `json:"summary,omitempty"`
+	DelegationID     string    `json:"delegationId,omitempty"`
+	RemoteRowID      string    `json:"remoteRowId,omitempty"`
+	Status           string    `json:"status"`
+	Turn             int       `json:"turn,omitempty"`
+	Turns            int       `json:"turns,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	Model            string    `json:"model,omitempty"`
+	Workspace        string    `json:"workspace,omitempty"`
+	WorkingCopyName  string    `json:"workingCopyName,omitempty"`
+	Summary          string    `json:"summary,omitempty"`
+	RemoteRequests   []Request `json:"remoteRequests,omitempty"`
 }
 
 type DelegationReceipt struct {
 	DelegationID string `json:"delegationId"`
+	HubID        string `json:"hubId,omitempty"`
+	SpaceID      string `json:"spaceId,omitempty"`
+	DeviceID     string `json:"deviceId,omitempty"`
+	DeviceName   string `json:"deviceName,omitempty"`
 	AgentID      string `json:"agentId"`
 	AgentName    string `json:"agentName"`
 	ChatID       string `json:"chatId"`
@@ -985,6 +1059,30 @@ type DelegationReceipt struct {
 	Title        string `json:"title,omitempty"`
 	Summary      string `json:"summary,omitempty"`
 	Error        string `json:"error,omitempty"`
+}
+
+type RemoteWorkingCopy struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	State string `json:"state,omitempty"`
+}
+
+type RemoteAgentTarget struct {
+	HubID          string              `json:"hubId"`
+	SpaceID        string              `json:"spaceId"`
+	SpaceKind      string              `json:"spaceKind,omitempty"`
+	DeviceID       string              `json:"deviceId"`
+	DeviceName     string              `json:"deviceName"`
+	Online         bool                `json:"online"`
+	Draining       bool                `json:"draining,omitempty"`
+	AgentID        string              `json:"agentId"`
+	Name           string              `json:"name"`
+	Avatar         string              `json:"avatar,omitempty"`
+	Description    string              `json:"description,omitempty"`
+	Provider       string              `json:"provider,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	PermissionMode string              `json:"permissionMode,omitempty"`
+	WorkingCopies  []RemoteWorkingCopy `json:"workingCopies,omitempty"`
 }
 
 type ChatDelegations struct {

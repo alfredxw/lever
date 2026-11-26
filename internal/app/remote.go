@@ -98,8 +98,13 @@ func (a *App) ReviewRemote(ctx context.Context, scope model.SharedScope, i p.Int
 		} else {
 			in.AgentID = ""
 		}
+		origin := sendOrigin{remote: &o}
+		if i.Delegation != nil {
+			origin.remoteDelegation = i.Delegation
+			origin.maxPermissionMode = i.Delegation.MaxPermissionMode
+		}
 		a.mu.Lock()
-		run, err := a.sendLocked(ctx, in, sendOrigin{remote: &o})
+		run, err := a.sendLocked(ctx, in, origin)
 		a.mu.Unlock()
 		if err != nil {
 			return empty, err
