@@ -30,12 +30,12 @@ type PairInput struct {
 	Proof    []byte `json:"proof"`
 }
 type Membership struct {
-	Hub      Identity `json:"hub"`
-	SpaceID  string   `json:"spaceId"`
-	UserID   string   `json:"userId"`
-	DeviceID string   `json:"deviceId"`
-	Role     Role     `json:"role"`
-	Token    string   `json:"token"`
+	Hub       Identity `json:"hub"`
+	SpaceID   string   `json:"spaceId"`
+	UserID    string   `json:"userId"`
+	DeviceID  string   `json:"deviceId"`
+	Role      Role     `json:"role"`
+	Token     string   `json:"token"`
 }
 type Space struct {
 	ID   string `json:"id"`
@@ -90,15 +90,15 @@ type FileStat struct {
 	Deletions int    `json:"deletions"`
 }
 type Record struct {
-	CanSteer         bool       `json:"canSteer,omitempty"`
-	Files            []FileStat `json:"files,omitempty"`
-	Error            string     `json:"error,omitempty"`
-	WorkingCopyID    string     `json:"workingCopyId,omitempty"`
-	WorkingCopyName  string     `json:"workingCopyName,omitempty"`
-	AnsweredByUserID string     `json:"answeredByUserId,omitempty"`
-	Avatar           string     `json:"avatar,omitempty"`
-	Private          bool       `json:"private,omitempty"`
-	Kind             string     `json:"kind"`
+	CanSteer          bool       `json:"canSteer,omitempty"`
+	Files             []FileStat `json:"files,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	WorkingCopyID     string     `json:"workingCopyId,omitempty"`
+	WorkingCopyName   string     `json:"workingCopyName,omitempty"`
+	AnsweredByUserID  string     `json:"answeredByUserId,omitempty"`
+	Avatar            string     `json:"avatar,omitempty"`
+	Private           bool       `json:"private,omitempty"`
+	Kind              string     `json:"kind"`
 	ID               string     `json:"id"`
 	AgentID          string     `json:"agentId,omitempty"`
 	ChatID           string     `json:"chatId,omitempty"`
@@ -118,6 +118,13 @@ type Record struct {
 	Superseded       bool       `json:"superseded,omitempty"`
 	QueuePaused      bool       `json:"queuePaused,omitempty"`
 	UnreadSequence   int64      `json:"unreadSequence,omitempty"`
+	ReadSequence     int64      `json:"readSequence,omitempty"`
+	Preview          string     `json:"preview,omitempty"`
+	MessageAt        string     `json:"messageAt,omitempty"`
+	ActiveStatus     string     `json:"activeStatus,omitempty"`
+	PendingCount     int        `json:"pendingCount,omitempty"`
+	ReplyCount       int        `json:"replyCount,omitempty"`
+	SourceRunID      string     `json:"sourceRunId,omitempty"`
 	Sequence         int64      `json:"sequence,omitempty"`
 	CreatedAt        string     `json:"createdAt,omitempty"`
 	UpdatedAt        string     `json:"updatedAt,omitempty"`
@@ -164,25 +171,34 @@ type PushSettings struct {
 	Enabled   bool            `json:"enabled"`
 	Firebase  *FirebaseClient `json:"firebase,omitempty"`
 }
+type ReadMark struct {
+	SessionID string `json:"sessionId"`
+	Sequence  int64  `json:"sequence"`
+}
+type ReadSync struct {
+	DeviceID string     `json:"deviceId,omitempty"`
+	Items    []ReadMark `json:"items"`
+}
 type Frame struct {
-	ControllerID string   `json:"controllerId,omitempty"`
-	Digest       string   `json:"digest,omitempty"`
-	Receipt      *Receipt `json:"receipt,omitempty"`
-	Completed    bool     `json:"completed,omitempty"`
-	Policy       int64    `json:"policy,omitempty"`
-	RPCID        string   `json:"rpcId,omitempty"`
-	SessionID    string   `json:"sessionId,omitempty"`
-	RunID        string   `json:"runId,omitempty"`
-	Idle         bool     `json:"idle,omitempty"`
-	Type         string   `json:"type"`
-	Protocol     int      `json:"protocol,omitempty"`
-	SpaceID      string   `json:"spaceId"`
-	DeviceID     string   `json:"deviceId"`
-	Epoch        string   `json:"epoch,omitempty"`
-	Base         int64    `json:"base,omitempty"`
-	Version      int64    `json:"version,omitempty"`
-	Full         bool     `json:"full,omitempty"`
-	Changes      []Change `json:"changes,omitempty"`
+	ControllerID string     `json:"controllerId,omitempty"`
+	Digest       string     `json:"digest,omitempty"`
+	Receipt      *Receipt   `json:"receipt,omitempty"`
+	Completed    bool       `json:"completed,omitempty"`
+	Policy       int64      `json:"policy,omitempty"`
+	RPCID        string     `json:"rpcId,omitempty"`
+	SessionID    string     `json:"sessionId,omitempty"`
+	RunID        string     `json:"runId,omitempty"`
+	Idle         bool       `json:"idle,omitempty"`
+	Type         string     `json:"type"`
+	Protocol     int        `json:"protocol,omitempty"`
+	SpaceID      string     `json:"spaceId"`
+	DeviceID     string     `json:"deviceId"`
+	Epoch        string     `json:"epoch,omitempty"`
+	Base         int64      `json:"base,omitempty"`
+	Version      int64      `json:"version,omitempty"`
+	Full         bool       `json:"full,omitempty"`
+	Changes      []Change   `json:"changes,omitempty"`
+	ReadMarks    []ReadMark `json:"readMarks,omitempty"`
 }
 type ChatRef struct {
 	DeviceID  string `json:"deviceId"`
@@ -221,23 +237,23 @@ type Dispatch struct {
 // Intent is a proposed user action. Execution credentials, providers and paths
 // are never chosen by a controller. Only the owning Host can record a receipt.
 type Intent struct {
-	Private        bool    `json:"private,omitempty"`
-	ID             string  `json:"id"`
-	Kind           string  `json:"kind"`
-	DeviceID       string  `json:"deviceId"`
-	AgentID        string  `json:"agentId,omitempty"`
-	WorkingCopyID  string  `json:"workingCopyId,omitempty"`
-	ChatID         string  `json:"chatId,omitempty"`
-	SessionID      string  `json:"sessionId,omitempty"`
-	RunID          string  `json:"runId,omitempty"`
-	RequestID      string  `json:"requestId,omitempty"`
-	TaskID         string  `json:"taskId,omitempty"`
-	Operation      string  `json:"operation,omitempty"`
-	Delivery       string  `json:"delivery,omitempty"`
-	Text           string  `json:"text,omitempty"`
-	Answer         *Answer `json:"answer,omitempty"`
-	ActorUserID    string  `json:"actorUserId,omitempty"`
-	OriginDeviceID string  `json:"originDeviceId,omitempty"`
+	Private        bool              `json:"private,omitempty"`
+	ID             string            `json:"id"`
+	Kind           string            `json:"kind"`
+	DeviceID       string            `json:"deviceId"`
+	AgentID        string            `json:"agentId,omitempty"`
+	WorkingCopyID  string            `json:"workingCopyId,omitempty"`
+	ChatID         string            `json:"chatId,omitempty"`
+	SessionID      string            `json:"sessionId,omitempty"`
+	RunID          string            `json:"runId,omitempty"`
+	RequestID      string            `json:"requestId,omitempty"`
+	TaskID         string            `json:"taskId,omitempty"`
+	Operation      string            `json:"operation,omitempty"`
+	Delivery       string            `json:"delivery,omitempty"`
+	Text           string            `json:"text,omitempty"`
+	Answer         *Answer           `json:"answer,omitempty"`
+	ActorUserID    string            `json:"actorUserId,omitempty"`
+	OriginDeviceID string            `json:"originDeviceId,omitempty"`
 }
 type Receipt struct {
 	ID        string `json:"id"`

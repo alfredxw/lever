@@ -72,21 +72,30 @@ func (c *Client) NetworkChanged() {
 	}
 }
 
-func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, renew bool) (route, error) {
+func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, renew, forceDiscover bool) (route, error) {
 	key := routeKey(st, host)
 	c.mu.Lock()
 	r := c.routes[key]
 	c.mu.Unlock()
-	if r.address == "" {
-		discover := c.Discover
-		if discover == nil {
-			discover = bonjour.Discover
+	if r.address == "" || forceDiscover {
+		if !forceDiscover && st.IsDirect() && st.LANAddr != "" && host == st.Membership.Hub.ID {
+			r.address = st.LANAddr
+		} else {
+			discover := c.Discover
+			if discover == nil {
+				discover = bonjour.Discover
+			}
+			address, err := discover(ctx, host)
+			if err != nil {
+				if !forceDiscover && st.LANAddr != "" && host == st.Membership.Hub.ID {
+					r.address = st.LANAddr
+				} else {
+					return route{}, err
+				}
+			} else {
+				r.address = address
+			}
 		}
-		address, err := discover(ctx, host)
-		if err != nil {
-			return route{}, err
-		}
-		r.address = address
 	}
 	if r.token == "" && !renew && c.LoadGrant != nil {
 		token := c.LoadGrant(key)
@@ -96,6 +105,12 @@ func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, r
 		}
 	}
 	if r.token == "" || renew {
+		if st.IsDirect() {
+			if r.token == "" {
+				return route{}, errors.New("缺少局域网直连凭证，请重新扫码配对")
+			}
+			return route{}, errors.New("电脑端已撤销此设备的局域网授权")
+		}
 		var out struct {
 			Grant string `json:"grant"`
 		}
@@ -120,14 +135,17 @@ func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, r
 	return r, nil
 }
 func (c *Client) exchange(ctx context.Context, st p.ClientState, host, method, path string, body []byte, out any) error {
-	r, err := c.readRoute(ctx, st, host, false)
+	r, err := c.readRoute(ctx, st, host, false, false)
 	if err != nil {
 		return err
 	}
 	err = c.direct(ctx, st, r, method, path, body, out)
 	var response *p.HTTPError
 	if errors.As(err, &response) && response.Status == 403 && response.Message == "LAN authorization expired or revoked" {
-		fresh, renewErr := c.readRoute(ctx, st, host, true)
+		if st.IsDirect() {
+			return err
+		}
+		fresh, renewErr := c.readRoute(ctx, st, host, true, false)
 		if renewErr != nil {
 			return err
 		}
@@ -135,6 +153,16 @@ func (c *Client) exchange(ctx context.Context, st p.ClientState, host, method, p
 		err = c.direct(ctx, st, r, method, path, body, out)
 	}
 	if err != nil && !errors.As(err, &response) {
+		// If a saved direct IP failed (e.g. Mac changed Wi-Fi IP), fall back to Bonjour discovery once.
+		if st.IsDirect() && st.LANAddr != "" && r.address == st.LANAddr {
+			if fresh, discErr := c.readRoute(ctx, st, host, false, true); discErr == nil && fresh.address != r.address {
+				r = fresh
+				err = c.direct(ctx, st, r, method, path, body, out)
+				if err == nil {
+					return nil
+				}
+			}
+		}
 		key := routeKey(st, host)
 		c.mu.Lock()
 		if current := c.routes[key]; current.address == r.address && current.token == r.token {
@@ -144,6 +172,17 @@ func (c *Client) exchange(ctx context.Context, st p.ClientState, host, method, p
 		c.mu.Unlock()
 	}
 	return err
+}
+
+func (c *Client) HostInfo(ctx context.Context, st p.ClientState, host string) (p.Device, error) {
+	var d p.Device
+	err := c.exchange(ctx, st, host, http.MethodGet, "/host", nil, &d)
+	return d, err
+}
+
+func (c *Client) UnpairDirect(ctx context.Context, st p.ClientState, host string) error {
+	var ok bool
+	return c.exchange(ctx, st, host, http.MethodPost, "/unpair", nil, &ok)
 }
 
 func (c *Client) direct(ctx context.Context, st p.ClientState, r route, method, path string, body []byte, out any) error {
@@ -236,6 +275,21 @@ func (c *Client) Local(ctx context.Context, st p.ClientState, method, path strin
 	}
 	if method == http.MethodPost && path == st.SpacePath()+"/commands" {
 		return c.TryCommand(ctx, st, body)
+	}
+	if method == http.MethodPost && path == st.SpacePath()+"/read" {
+		var in p.ReadSync
+		if err := p.Decode(body, &in); err != nil {
+			return nil, true, err
+		}
+		if in.DeviceID == "" {
+			return nil, st.IsDirect(), errors.New("missing deviceId")
+		}
+		var out json.RawMessage
+		err := c.exchange(ctx, st, in.DeviceID, http.MethodPost, "/read", body, &out)
+		if err == nil {
+			return out, true, nil
+		}
+		return nil, st.IsDirect(), err
 	}
 	u, err := url.ParseRequestURI(path)
 	if err != nil {

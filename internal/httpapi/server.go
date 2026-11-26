@@ -530,6 +530,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 		v, err := a.Store.SessionRunPage(r.Context(), r.PathValue("id"), before, limit)
 		respond(w, v, err)
 	})
+	mux.HandleFunc("POST /api/sessions/read", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Items []model.ReadMark `json:"items"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]bool{"ok": true}, a.MarkSessionsRead(r.Context(), in.Items))
+	})
 	mux.HandleFunc("POST /api/messages", func(w http.ResponseWriter, r *http.Request) {
 		var in model.SendInput
 		if err := read(w, r, &in); err != nil {

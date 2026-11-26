@@ -26,7 +26,10 @@ export function NewChatComposer({
   const scopes =
     bindings.data?.filter(
       (b) =>
-        b.role !== "controller" && (b.exposeAll || b.agents.includes(agent.id)),
+        !b.direct &&
+        !!b.origin &&
+        b.role !== "controller" &&
+        (b.exposeAll || b.agents.includes(agent.id)),
     ) ?? [];
   const [scopeKey, setScope] = useState("");
   const scope = scopes.find((b) => b.hubId + "/" + b.spaceId === scopeKey);

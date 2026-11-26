@@ -180,6 +180,12 @@ type Conversation struct {
 	MessageAt      string            `json:"messageAt"`
 	FinishedAt     string            `json:"finishedAt,omitempty"`
 	UnreadSequence int64             `json:"unreadSequence"`
+	ReadSequence   int64             `json:"readSequence,omitempty"`
+}
+
+type ReadMark struct {
+	SessionID string `json:"sessionId"`
+	Sequence  int64  `json:"sequence"`
 }
 
 // Selection belongs to a turn. Runtime overrides do not change the Agent profile.

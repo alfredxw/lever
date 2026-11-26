@@ -715,7 +715,15 @@ export function SettingsPage({
             </SettingsGroup>
           </>
         );
-      case "remoteDevices": return <RemoteDevices agents={overview.data?.agents??[]} chats={overview.data?.chats??[]}/>;
+      case "remoteDevices":
+        return (
+          <RemoteDevices
+            title={t("settings.remoteDevices")}
+            titleId="settings-section-remoteDevices"
+            agents={overview.data?.agents ?? []}
+            chats={overview.data?.chats ?? []}
+          />
+        );
  case "storage":
         return (
           <>
@@ -982,7 +990,9 @@ export function SettingsPage({
                   className="settings-category"
                   aria-labelledby={`settings-section-${id}`}
                 >
-                  <h2 id={`settings-section-${id}`}>{t(`settings.${id}`)}</h2>
+                  {id !== "remoteDevices" && (
+                    <h2 id={`settings-section-${id}`}>{t(`settings.${id}`)}</h2>
+                  )}
                   {content(id)}
                 </section>
               ))

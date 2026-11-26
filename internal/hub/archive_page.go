@@ -30,7 +30,7 @@ func trackArchiveView(tx *sql.Tx, a principal, version int64, kind, id, chat str
 	return nil
 }
 
-func (h *Hub) archivePage(w http.ResponseWriter, r *http.Request) error {
+func (h *Hub) archivePage(w http.ResponseWriter, r *http.Request, a principal) error {
 	q := r.URL.Query()
 	space, host, chat := r.PathValue("space"), r.PathValue("device"), q.Get("chat")
 	prev := p.ReadCursor(q)
@@ -47,6 +47,10 @@ func (h *Hub) archivePage(w http.ResponseWriter, r *http.Request) error {
 	}
 	if prev.Stream == "lan" && (page.Cursor.Epoch == "" || prev.Epoch == page.Cursor.Epoch && prev.Version > page.Cursor.Version) {
 		return conflict("Hub 正在同步手机已从局域网读取的进度")
+	}
+	cursors, err := loadDeviceReadCursors(tx, space, a.user, host)
+	if err != nil {
+		return err
 	}
 	page.Full = !page.Cursor.CanReplay(prev, floor)
 	var rows *sql.Rows
@@ -69,6 +73,9 @@ func (h *Hub) archivePage(w http.ResponseWriter, r *http.Request) error {
 		if raw.Valid {
 			if err = json.Unmarshal([]byte(raw.String), &c.Record); err != nil {
 				return err
+			}
+			if c.Kind == "session" && cursors[c.ID] > c.ReadSequence {
+				c.ReadSequence = cursors[c.ID]
 			}
 		}
 		if !raw.Valid || !c.Record.InView(chat) {

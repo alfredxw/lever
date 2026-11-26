@@ -145,8 +145,13 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
         });
       return;
     }
-    if (event.type === "comparison" || event.type === "topic-created") {
-      void queryClient.invalidateQueries({ queryKey: ["chat", event.chatId] });
+    if (
+      event.type === "comparison" ||
+      event.type === "topic-created" ||
+      event.type === "conversation-read"
+    ) {
+      if (event.chatId)
+        void queryClient.invalidateQueries({ queryKey: ["chat", event.chatId] });
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
       return;
     }

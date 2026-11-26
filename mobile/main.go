@@ -56,10 +56,17 @@ func paired() (p.ClientState, error) {
 	}
 	return st, nil
 }
+func validPairLink(link string) bool {
+	if _, isDirect, err := p.ParseDirectPairLink(link); isDirect {
+		return err == nil
+	}
+	_, _, err := parsePair(link)
+	return err == nil
+}
 func parsePair(link string) (string, string, error) {
 	u, err := url.Parse(strings.TrimSpace(link))
 	if err != nil || u.Scheme != "leverdevice" || u.Host != "pair" || u.User != nil {
-		return "", "", errors.New("打开 Hub 设备设置并生成手机配对链接")
+		return "", "", errors.New("请在电脑「设置 → 远程与设备」点击配对新设备获取二维码或链接")
 	}
 	base, err := p.Origin(u.Query().Get("hub"))
 	if err != nil {
@@ -79,16 +86,44 @@ func (m *Mobile) Pair(link string) error {
 	} else if !errors.Is(err, mygo.ErrSecretNotFound) {
 		return err
 	}
-	base, code, err := parsePair(link)
-	if err != nil {
-		return err
-	}
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	if directParams, isDirect, err := p.ParseDirectPairLink(link); isDirect {
+		if err != nil {
+			return err
+		}
+		st, receipt, err := p.PairDirect(ctx, directParams, p.PairInput{
+			Code:     directParams.Code,
+			Identity: p.Identity{ID: p.NewID(), PublicKey: pub},
+			Platform: runtime.GOOS,
+			Name:     "Lever",
+			Role:     p.Controller,
+		}, key)
+		if err != nil {
+			return err
+		}
+		b, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+		if err := mygo.Secrets.Set(accountKey, b); err != nil {
+			return err
+		}
+		grantKey := st.Membership.Hub.ID + "/" + st.Membership.SpaceID + "/" + st.Membership.DeviceID + "/" + directParams.HostID
+		grants := savedGrants()
+		grants[grantKey] = receipt.Grant
+		rawGrants, _ := json.Marshal(grants)
+		_ = mygo.Secrets.Set(grantsKey, rawGrants)
+		return nil
+	}
+	base, code, err := parsePair(link)
+	if err != nil {
+		return err
+	}
 	st, err := p.Pair(ctx, base, p.PairInput{Code: code, Identity: p.Identity{ID: p.NewID(), PublicKey: pub}, Platform: runtime.GOOS, Name: "Lever", Role: p.Controller}, key)
 	if err != nil {
 		return err
@@ -99,6 +134,73 @@ func (m *Mobile) Pair(link string) error {
 	}
 	return mygo.Secrets.Set(accountKey, b)
 }
+func (m *Mobile) requestDirect(ctx context.Context, st p.ClientState, method, path, body string) (string, error) {
+	if out, ok, err := m.lan.Local(ctx, st, method, path, []byte(body)); ok {
+		return string(out), err
+	}
+	mb := st.Membership
+	spacePath := st.SpacePath()
+	if method == "GET" && path == "/api/me" {
+		name := st.HostName
+		if name == "" {
+			name = "局域网直连"
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"hub":      mb.Hub,
+			"userId":   mb.UserID,
+			"spaces":   []p.Space{{ID: mb.SpaceID, Kind: "personal", Name: name}},
+			"deviceId": mb.DeviceID,
+			"origin":   "",
+		})
+		return string(raw), nil
+	}
+	if method == "GET" && path == spacePath+"/devices" {
+		hostName := st.HostName
+		if hostName == "" {
+			hostName = "我的电脑"
+		}
+		hostPlatform := st.HostPlatform
+		if hostPlatform == "" {
+			hostPlatform = "darwin"
+		}
+		hostDev := p.Device{
+			Identity: mb.Hub,
+			SpaceID:  mb.SpaceID,
+			Name:     hostName,
+			Role:     p.Workstation,
+			Platform: hostPlatform,
+			Online:   false,
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if live, err := m.lan.HostInfo(pingCtx, st, mb.Hub.ID); err == nil {
+			hostDev = live
+		}
+		selfDev := p.Device{
+			Identity: p.Identity{ID: mb.DeviceID},
+			SpaceID:  mb.SpaceID,
+			Name:     "Lever",
+			Role:     p.Controller,
+			Platform: runtime.GOOS,
+			Online:   true,
+		}
+		raw, _ := json.Marshal([]p.Device{hostDev, selfDev})
+		return string(raw), nil
+	}
+	if method == "GET" && path == spacePath+"/tasks" {
+		return "[]", nil
+	}
+	if method == "GET" && path == spacePath+"/read" {
+		return "{}", nil
+	}
+	if method == "GET" && path == spacePath+"/push" {
+		return `{"available":false,"enabled":false}`, nil
+	}
+	if strings.HasPrefix(path, spacePath+"/archive/") {
+		return "", errors.New("当前不在同一局域网，暂时无法连接电脑")
+	}
+	return "", errors.New("该功能需要连接 Lever Hub（当前为局域网直连模式）")
+}
 func (m *Mobile) Request(method, path, body string) (string, error) {
 	st, err := paired()
 	if err != nil {
@@ -106,6 +208,9 @@ func (m *Mobile) Request(method, path, body string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if st.IsDirect() {
+		return m.requestDirect(ctx, st, method, path, body)
+	}
 	if method == "GET" && path == "/api/me" {
 		// A paired phone already knows its identity. Limit a black-holed
 		// Hub's delay before the offline workspace and LAN become available.
@@ -181,16 +286,24 @@ func (m *Mobile) Request(method, path, body string) (string, error) {
 }
 func (m *Mobile) Unpair() error {
 	m.accountMu.Lock()
-	defer m.accountMu.Unlock()
 	st, err := paired()
+	m.accountMu.Unlock()
 	if err != nil {
 		return err
 	}
-	err = st.Do(context.Background(), "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
-	var e *p.HTTPError
-	if err != nil && !(errors.As(err, &e) && e.Status == 401) {
-		return err
+	if st.IsDirect() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = m.lan.UnpairDirect(ctx, st, st.Membership.Hub.ID)
+		cancel()
+	} else {
+		err = st.Do(context.Background(), "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
+		var e *p.HTTPError
+		if err != nil && !(errors.As(err, &e) && e.Status == 401) {
+			return err
+		}
 	}
+	m.accountMu.Lock()
+	defer m.accountMu.Unlock()
 	return m.forget()
 }
 
@@ -223,7 +336,7 @@ func main() {
 	mygo.SetFrontend(hubassets.Assets())
 	mygo.Bind(m)
 	mygo.App.OnOpenURL(func(link string) {
-		if _, _, err := parsePair(link); err == nil {
+		if validPairLink(link) {
 			m.mu.Lock()
 			m.link = link
 			m.mu.Unlock()

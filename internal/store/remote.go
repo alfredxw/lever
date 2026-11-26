@@ -128,6 +128,32 @@ ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,cha
 			}
 		}
 	}
+	// Keep session summary projections (activeStatus, pendingCount, replyCount) fresh
+	// on the home index whenever a run or request transitions status, without firing on streaming chunks.
+	for _, spec := range []struct{ table, sessionExpr string }{
+		{"runs", "%[1]s.session_id"},
+		{"requests", "coalesce(json_extract(%[1]s.data,'$.sessionId'),'')"},
+	} {
+		for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
+			ref := "NEW"
+			when := ""
+			if op == "DELETE" {
+				ref = "OLD"
+			} else if op == "UPDATE" {
+				when = " WHEN NEW.status<>OLD.status"
+			}
+			sessionExpr := fmt.Sprintf(spec.sessionExpr, ref)
+			where := fmt.Sprintf(chatScope, ref)
+			trigger := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS share_%s_session_%s AFTER %s ON %s%s BEGIN
+UPDATE remote_memberships SET version=version+1 WHERE %s AND %s<>'';
+INSERT INTO shared_sync_log(hub,space,kind,object_id,version,chat_id) SELECT hub,space,'session',%s,version,%s.chat_id FROM remote_memberships WHERE %s AND %s<>''
+ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,chat_id=excluded.chat_id; END`,
+				spec.table, op, op, spec.table, when, where, sessionExpr, sessionExpr, ref, where, sessionExpr)
+			if _, err = tx.Exec(trigger); err != nil {
+				return err
+			}
+		}
+	}
 	return tx.Commit()
 }
 

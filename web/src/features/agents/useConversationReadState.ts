@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/api/client";
 import type { Conversation } from "@/api/types.gen";
 
 const storageKey = "lever:read-sessions";
@@ -22,23 +23,60 @@ export function useConversationReadState(
 ) {
   const [cursors, setCursors] = useState(() => loadSessionCursors(storageKey));
   const [legacy] = useState(() => loadSessionCursors("lever:read-chats"));
+  const syncedRef = useRef<Record<string, number>>({});
+
+  const pushReadMarks = useCallback(
+    (items: { sessionId: string; sequence: number }[]) => {
+      const pending: { sessionId: string; sequence: number }[] = [];
+      for (const item of items) {
+        if (item.sequence <= (syncedRef.current[item.sessionId] ?? 0)) continue;
+        syncedRef.current[item.sessionId] = item.sequence;
+        pending.push(item);
+      }
+      if (!pending.length) return;
+      void api("/sessions/read", { items: pending }).catch(() => {
+        for (const item of pending) {
+          if (syncedRef.current[item.sessionId] === item.sequence) {
+            delete syncedRef.current[item.sessionId];
+          }
+        }
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!conversations) return;
     setCursors((current) => {
-      const missing = conversations.filter(
-        (item) =>
-          current[item.id] === undefined && legacy[item.chatId] !== undefined,
-      );
-      return missing.length
-        ? {
-            ...Object.fromEntries(
-              missing.map((item) => [item.id, legacy[item.chatId]]),
-            ),
-            ...current,
-          }
-        : current;
+      let next = current;
+      for (const item of conversations) {
+        const merged = Math.max(
+          current[item.id] ?? 0,
+          current[item.id] === undefined ? (legacy[item.chatId] ?? 0) : 0,
+          item.readSequence ?? 0,
+        );
+        if (merged > (next[item.id] ?? 0)) {
+          if (next === current) next = { ...current };
+          next[item.id] = merged;
+        }
+      }
+      return next;
     });
-  }, [conversations, legacy]);
+    const toSync: { sessionId: string; sequence: number }[] = [];
+    for (const item of conversations) {
+      const serverSeq = item.readSequence ?? 0;
+      if (serverSeq > (syncedRef.current[item.id] ?? 0)) {
+        syncedRef.current[item.id] = serverSeq;
+      }
+      const localSeq = cursors[item.id] ?? legacy[item.chatId] ?? 0;
+      const target = Math.min(localSeq, item.unreadSequence);
+      if (target > serverSeq && target > (syncedRef.current[item.id] ?? 0)) {
+        toSync.push({ sessionId: item.id, sequence: target });
+      }
+    }
+    if (toSync.length) pushReadMarks(toSync);
+  }, [conversations, cursors, legacy, pushReadMarks]);
+
   const [focused, setFocused] = useState(
     () => document.visibilityState === "visible" && document.hasFocus(),
   );
@@ -63,17 +101,22 @@ export function useConversationReadState(
   }, [cursors]);
   const markConversationsRead = useCallback(
     (items: Pick<Conversation, "id" | "unreadSequence">[]) => {
+      const syncItems: { sessionId: string; sequence: number }[] = [];
       setCursors((current) => {
         let next = current;
         for (const { id, unreadSequence } of items) {
+          if (unreadSequence > 0) {
+            syncItems.push({ sessionId: id, sequence: unreadSequence });
+          }
           if (unreadSequence <= (next[id] ?? 0)) continue;
           if (next === current) next = { ...current };
           next[id] = unreadSequence;
         }
         return next;
       });
+      if (syncItems.length) pushReadMarks(syncItems);
     },
-    [],
+    [pushReadMarks],
   );
   const markRead = useCallback(
     (id: string, unreadSequence: number) =>
@@ -86,7 +129,10 @@ export function useConversationReadState(
         Object.fromEntries(
           (conversations ?? []).map((item) => [
             item.id,
-            cursors[item.id] ?? legacy[item.chatId] ?? 0,
+            Math.max(
+              item.readSequence ?? 0,
+              cursors[item.id] ?? legacy[item.chatId] ?? 0,
+            ),
           ]),
         ),
       [conversations, cursors, legacy],

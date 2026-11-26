@@ -291,4 +291,5 @@ CREATE TABLE IF NOT EXISTS tasks(space_id TEXT NOT NULL REFERENCES spaces(id), i
 CREATE TABLE IF NOT EXISTS dispatches(space_id TEXT NOT NULL, id TEXT NOT NULL,task_id TEXT NOT NULL,device_id TEXT NOT NULL,digest TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(space_id,id),FOREIGN KEY(space_id,task_id) REFERENCES tasks,FOREIGN KEY(space_id,device_id) REFERENCES devices);
 CREATE INDEX IF NOT EXISTS task_dispatches ON dispatches(space_id,task_id);
 CREATE TABLE IF NOT EXISTS receipts(space_id TEXT NOT NULL,device_id TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL, data TEXT NOT NULL,PRIMARY KEY(space_id,device_id,id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
+CREATE TABLE IF NOT EXISTS read_cursors(space_id TEXT NOT NULL,user_id TEXT NOT NULL,device_id TEXT NOT NULL,session_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(space_id,user_id,device_id,session_id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 PRAGMA user_version=1;`

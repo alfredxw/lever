@@ -113,6 +113,13 @@ export interface Record {
   superseded?: boolean;
   queuePaused?: boolean;
   unreadSequence?: number /* int64 */;
+  readSequence?: number /* int64 */;
+  preview?: string;
+  messageAt?: string;
+  activeStatus?: string;
+  pendingCount?: number /* int */;
+  replyCount?: number /* int */;
+  sourceRunId?: string;
   sequence?: number /* int64 */;
   createdAt?: string;
   updatedAt?: string;
@@ -158,6 +165,14 @@ export interface PushSettings {
   enabled: boolean;
   firebase?: FirebaseClient;
 }
+export interface ReadMark {
+  sessionId: string;
+  sequence: number /* int64 */;
+}
+export interface ReadSync {
+  deviceId?: string;
+  items: ReadMark[];
+}
 export interface Frame {
   controllerId?: string;
   digest?: string;
@@ -177,6 +192,7 @@ export interface Frame {
   version?: number /* int64 */;
   full?: boolean;
   changes?: Change[];
+  readMarks?: ReadMark[];
 }
 export interface ChatRef {
   deviceId: string;

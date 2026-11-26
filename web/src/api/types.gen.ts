@@ -947,6 +947,11 @@ export interface Conversation {
   messageAt: string;
   finishedAt?: string;
   unreadSequence: number /* int64 */;
+  readSequence?: number /* int64 */;
+}
+export interface ReadMark {
+  sessionId: string;
+  sequence: number /* int64 */;
 }
 /**
  * Selection belongs to a turn. Runtime overrides do not change the Agent profile.

@@ -70,6 +70,9 @@ func (m *Mobile) Watch(active bool) error {
 	if m.stopWatch != nil {
 		return nil
 	}
+	if st.IsDirect() {
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stopWatch = cancel
 	go m.watch(ctx, st)

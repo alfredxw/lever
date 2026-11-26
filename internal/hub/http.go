@@ -122,6 +122,8 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	m.HandleFunc("PUT /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("DELETE /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("GET /api/spaces/{space}/archive/{device}", h.handler("controller", h.archive))
+	m.HandleFunc("GET /api/spaces/{space}/read", h.handler("controller", h.readCursors))
+	m.HandleFunc("POST /api/spaces/{space}/read", h.handler("controller", h.markRead))
 	m.HandleFunc("GET /api/spaces/{space}/connect", h.handler("any", h.connect))
 	m.HandleFunc("GET /api/spaces/{space}/devices/{id}/lan", h.handler("controller", h.grant))
 	m.HandleFunc("GET /api/spaces/{space}/controllers/{id}", h.handler("executor", h.personalController))

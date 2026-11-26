@@ -69,6 +69,7 @@ export function DevicesPanel({
     );
   };
 
+  const isDirect = ws.transport.kind === "mobile" && !ws.origin;
   const onlineCount = devices.filter((d) => d.online && !d.revoked).length;
   const activeDevices = [...devices].sort((a, b) => {
     if (a.id === ownDevice) return -1;
@@ -91,27 +92,36 @@ export function DevicesPanel({
           <div>
             <h1 className="text-[20px] font-semibold tracking-tight">设备</h1>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {spaceName} · {onlineCount} / {devices.filter((d) => !d.revoked).length} 台在线
+              {spaceName} · {isDirect ? "局域网直连（免 Hub）· " : ""}
+              {onlineCount} / {devices.filter((d) => !d.revoked).length} 台在线
             </p>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => {
-              if (!pairOpen) {
-                generateTicket(role);
-              } else {
-                setPairOpen(false);
-              }
-            }}
-          >
-            <QrCode data-icon="inline-start" />
-            {pairOpen ? "收起配对码" : "配对新设备"}
-          </Button>
+          {!isDirect && (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (!pairOpen) {
+                  generateTicket(role);
+                } else {
+                  setPairOpen(false);
+                }
+              }}
+            >
+              <QrCode data-icon="inline-start" />
+              {pairOpen ? "收起配对码" : "配对新设备"}
+            </Button>
+          )}
         </div>
 
+        {isDirect && (
+          <section className="hub-card-surface px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+            当前已通过同 Wi-Fi 局域网直连此电脑（无需部署 Hub）。如需在电脑端调整可访问的 Agent 范围或移除设备，请前往电脑「设置 → 远程与设备」。
+          </section>
+        )}
+
         {/* Pair New Device Card */}
-        {pairOpen && (
+        {!isDirect && pairOpen && (
           <section className="hub-card-surface flex flex-col gap-4 p-4">
             <div className="flex flex-col gap-1">
               <h2 className="text-[14px] font-semibold">添加设备到此空间</h2>
@@ -304,7 +314,7 @@ export function DevicesPanel({
                         </div>
                       </div>
 
-                      {!d.revoked && (
+                      {!d.revoked && !isDirect && (
                         <Button
                           type="button"
                           size="xs"
@@ -441,7 +451,7 @@ export function ProfilePanel({
           <div className="min-w-0 flex-1">
             <h1 className="text-[18px] font-semibold tracking-tight">Lever</h1>
             <p className="truncate text-xs text-muted-foreground">
-              {spaceName} · {ws.origin}
+              {spaceName} · {ws.origin || "局域网直连（免 Hub）"}
             </p>
             {ownDevice && (
               <code className="mt-1 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
@@ -464,9 +474,11 @@ export function ProfilePanel({
                   <div className="min-w-0">
                     <div className="text-[14px] font-medium">锁屏通知</div>
                     <p className="text-xs text-muted-foreground">
-                      {push.data && !push.data.available
-                        ? "请在 Hub 配置此平台的推送服务"
-                        : "待审批、运行失败与完成时及时推送"}
+                      {!ws.origin && ws.transport.kind === "mobile"
+                        ? "局域网直连模式不支持锁屏推送，接入 Lever Hub 后可开启"
+                        : push.data && !push.data.available
+                          ? "请在 Hub 配置此平台的推送服务"
+                          : "待审批、运行失败与完成时及时推送"}
                     </p>
                     {push.error && (
                       <p role="alert" className="text-xs text-destructive">

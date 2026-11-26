@@ -12,10 +12,16 @@ import (
 )
 
 type ClientState struct {
-	Origin     string             `json:"origin"`
-	Membership Membership         `json:"membership"`
-	Key        ed25519.PrivateKey `json:"key"`
+	Origin       string             `json:"origin"`
+	Direct       bool               `json:"direct,omitempty"`
+	LANAddr      string             `json:"lanAddr,omitempty"`
+	HostName     string             `json:"hostName,omitempty"`
+	HostPlatform string             `json:"hostPlatform,omitempty"`
+	Membership   Membership         `json:"membership"`
+	Key          ed25519.PrivateKey `json:"key"`
 }
+
+func (s ClientState) IsDirect() bool { return s.Direct || s.Origin == "" }
 
 func Pair(ctx context.Context, origin string, in PairInput, key ed25519.PrivateKey) (ClientState, error) {
 	var state ClientState

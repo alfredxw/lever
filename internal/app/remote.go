@@ -32,7 +32,14 @@ func (o *remoteOrigin) authorize(tx *sql.Tx, chat model.Chat) error {
 			return invalid("invalid device-only target")
 		}
 		var allowed bool
-		err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_private_chats WHERE hub=? AND space=? AND controller=? AND chat=?)", o.scope.HubID, o.scope.SpaceID, o.intent.OriginDeviceID, chat.ID).Scan(&allowed)
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM remote_private_chats WHERE hub=?1 AND space=?2 AND controller=?3 AND chat=?4)
+			OR EXISTS(SELECT 1 FROM remote_memberships m
+				JOIN remote_trusted_controllers t USING(hub,space)
+				JOIN agents a ON a.id=?5
+				WHERE m.hub=?1 AND m.space=?2 AND m.origin='' AND t.controller=?3
+				AND coalesce(json_extract(a.data,'$.archived'),0)=0
+				AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			o.scope.HubID, o.scope.SpaceID, o.intent.OriginDeviceID, chat.ID, chat.AgentID).Scan(&allowed)
 		if err != nil {
 			return err
 		}

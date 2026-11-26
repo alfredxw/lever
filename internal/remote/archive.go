@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"path"
 	"strings"
@@ -95,7 +96,7 @@ func project(ctx context.Context, tx *sql.Tx, m p.Membership, o object, privateC
 		if o.kind == "agent" {
 			return r, sql.ErrNoRows
 		}
-		scope = privateChatScope
+		scope = privateChatCond("?2", "?3", "?4")
 		args = append(args, privateController)
 		r.Private = true
 	}
@@ -123,7 +124,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			}
 		}
 	case "chat":
-		c, err := store.Get[model.Chat](ctx, tx, "SELECT c.data FROM chats c WHERE c.id=? AND "+scope, args...)
+		c, err := store.Get[model.Chat](ctx, tx, "SELECT c.data FROM chats c WHERE c.id=?1 AND "+scope, args...)
 		if err != nil {
 			return r, err
 		}
@@ -137,7 +138,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			r.DispatchID = c.SharedTaskRef.DispatchID
 		}
 	case "session":
-		s, err := store.Get[model.Session](ctx, tx, "SELECT s.data FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=? AND "+scope, args...)
+		s, err := store.Get[model.Session](ctx, tx, "SELECT s.data FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?1 AND "+scope, args...)
 		if err != nil {
 			return r, err
 		}
@@ -147,13 +148,34 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		r.Title, _ = clipped(s.Title, 2048)
 		r.WorkingCopyID = s.WorkingCopyID
 		r.WorkingCopyName, _ = clipped(s.WorkingCopyName, 512)
+		r.SourceRunID = s.SourceRunID
 		r.CreatedAt = s.CreatedAt
 		r.QueuePaused = s.QueuePaused
-		if err = tx.QueryRow("SELECT coalesce(json_extract(activity,'$.unreadSequence'),0) FROM sessions WHERE id=?", s.ID).Scan(&r.UnreadSequence); err != nil {
+		var preview, messageAt, activityTitle string
+		if err = tx.QueryRow(`SELECT
+			coalesce(json_extract(activity,'$.unreadSequence'),0),
+			coalesce(json_extract(activity,'$.readSequence'),0),
+			coalesce(json_extract(activity,'$.preview'),''),
+			coalesce(json_extract(activity,'$.messageAt'),''),
+			coalesce(json_extract(activity,'$.title'),'')
+			FROM sessions WHERE id=?`, s.ID).Scan(&r.UnreadSequence, &r.ReadSequence, &preview, &messageAt, &activityTitle); err != nil {
 			return r, err
 		}
+		if r.Title == "" && activityTitle != "" {
+			r.Title, _ = clipped(activityTitle, 2048)
+		}
+		r.Preview, _ = clipped(preview, 512)
+		r.MessageAt = messageAt
+		var activeStatus string
+		if err := tx.QueryRow(`SELECT status FROM runs WHERE session_id=?
+			AND status IN ('waiting_user','running','starting','cancelling','unknown','queued','paused')
+			ORDER BY CASE status WHEN 'waiting_user' THEN 0 WHEN 'running' THEN 1 WHEN 'starting' THEN 2 WHEN 'paused' THEN 3 WHEN 'queued' THEN 4 ELSE 5 END, sequence DESC LIMIT 1`, s.ID).Scan(&activeStatus); err == nil {
+			r.ActiveStatus = activeStatus
+		}
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM requests WHERE chat_id=? AND status='pending' AND json_extract(data,'$.sessionId')=?`, s.ChatID, s.ID).Scan(&r.PendingCount)
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM runs WHERE session_id=? AND status NOT IN ('steering','steered','cancelled') AND coalesce(json_extract(data,'$.superseded'),0)=0`, s.ID).Scan(&r.ReplyCount)
 	case "run":
-		run, err := store.Get[model.Run](ctx, tx, "SELECT r.data FROM runs r JOIN chats c ON c.id=r.chat_id WHERE r.id=? AND "+scope, args...)
+		run, err := store.Get[model.Run](ctx, tx, "SELECT r.data FROM runs r JOIN chats c ON c.id=r.chat_id WHERE r.id=?1 AND "+scope, args...)
 		if err != nil {
 			return r, err
 		}
@@ -200,7 +222,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			r.Items = append(r.Items, p.Item{ID: i.ID, Kind: i.Kind, Title: title, Text: text, Truncated: ct || cx})
 		}
 	case "request":
-		q, err := store.Get[model.Request](ctx, tx, "SELECT q.data FROM requests q JOIN chats c ON c.id=q.chat_id WHERE q.id=? AND "+scope, args...)
+		q, err := store.Get[model.Request](ctx, tx, "SELECT q.data FROM requests q JOIN chats c ON c.id=q.chat_id WHERE q.id=?1 AND "+scope, args...)
 		if err != nil {
 			return r, err
 		}
@@ -249,5 +271,19 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 	return r, nil
 }
 
-const sharedChatScope = "json_extract(c.data,'$.sharedScope.hubId')=? AND json_extract(c.data,'$.sharedScope.spaceId')=?"
-const privateChatScope = "json_type(c.data,'$.sharedScope') IS NULL AND EXISTS(SELECT 1 FROM remote_private_chats g WHERE g.chat=c.id AND g.hub=? AND g.space=? AND g.controller=?)"
+const sharedChatScope = "json_extract(c.data,'$.sharedScope.hubId')=?2 AND json_extract(c.data,'$.sharedScope.spaceId')=?3"
+
+func sharedChatCond(hubP, spaceP string) string {
+	return fmt.Sprintf("json_extract(c.data,'$.sharedScope.hubId')=%s AND json_extract(c.data,'$.sharedScope.spaceId')=%s", hubP, spaceP)
+}
+
+func privateChatCond(hubP, spaceP, ctrlP string) string {
+	return fmt.Sprintf(`json_type(c.data,'$.sharedScope') IS NULL AND (
+		EXISTS(SELECT 1 FROM remote_private_chats g WHERE g.chat=c.id AND g.hub=%[1]s AND g.space=%[2]s AND g.controller=%[3]s)
+		OR EXISTS(SELECT 1 FROM remote_memberships m
+			JOIN remote_trusted_controllers t USING(hub,space)
+			JOIN agents a ON a.id=c.agent_id
+			WHERE m.hub=%[1]s AND m.space=%[2]s AND m.origin='' AND t.controller=%[3]s
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))))`, hubP, spaceP, ctrlP)
+}

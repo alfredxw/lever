@@ -512,6 +512,38 @@ WHERE id=? AND chat_id=? AND kind='topic'`, title, title, topicID, chatID)
 	})
 }
 
+func (a *App) MarkSessionsRead(ctx context.Context, items []model.ReadMark) error {
+	if len(items) == 0 {
+		return nil
+	}
+	if len(items) > 500 {
+		return invalid("Too many read cursors in one request")
+	}
+	return a.Store.Write(ctx, func(tx *sql.Tx) error {
+		changed := false
+		for _, item := range items {
+			if item.SessionID == "" || item.Sequence <= 0 {
+				continue
+			}
+			res, err := tx.Exec(`UPDATE sessions
+SET activity=json_set(activity,'$.readSequence',min(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0)))
+WHERE id=?2 AND activity IS NOT NULL
+  AND COALESCE(json_extract(activity,'$.readSequence'),0) < min(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0))`,
+				item.Sequence, item.SessionID)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		return store.Event(tx, model.Event{Type: "conversation-read"})
+	})
+}
+
 func (a *App) Send(ctx context.Context, input model.SendInput) (model.Run, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

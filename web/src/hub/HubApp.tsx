@@ -205,16 +205,16 @@ function Entry({
                 <span>或粘贴配对链接</span>
                 <span className="h-px flex-1 bg-border" />
               </div>
-              <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-                配对链接
-                <Input
-                  aria-label="配对链接"
-                  placeholder="leverdevice://pair?hub=...&code=..."
-                  value={link}
-                  onChange={(e) => setLink(e.target.value)}
-                  required
-                />
-              </label>
+                  <label className="flex flex-col gap-1.5 text-[13px] font-medium">
+                    配对链接
+                    <Input
+                      aria-label="配对链接"
+                      placeholder="粘贴局域网直连或 Hub 配对链接"
+                      value={link}
+                      onChange={(e) => setLink(e.target.value)}
+                      required
+                    />
+                  </label>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -499,7 +499,7 @@ function Workbench({
     transport,
     path,
     key,
-    origin: origin ?? location.origin,
+    origin: origin ?? (transport.kind === "mobile" ? "" : location.origin),
     refresh,
     go,
     act: async (fn) => {
@@ -672,7 +672,11 @@ function Workbench({
         let unreadCount = 0;
         for (const c of chats) {
           for (const s of sessionsByChat.get(c.id) ?? []) {
-            if ((s.unreadSequence ?? 0) > readLocal(key + d.id + s.id, 0)) {
+            const seen = Math.max(
+              s.readSequence ?? 0,
+              readLocal(key + d.id + s.id, 0),
+            );
+            if ((s.unreadSequence ?? 0) > seen) {
               unreadCount += 1;
             }
           }
@@ -759,6 +763,7 @@ function Workbench({
     [tasks.data],
   );
 
+  const isDirectMobile = transport.kind === "mobile" && !ws.origin;
   const onlineExecutors = list.filter(
     (d) => d.role !== "controller" && d.online && !d.revoked,
   ).length;
@@ -880,9 +885,13 @@ function Workbench({
                   <span>
                     {hubOffline
                       ? "离线"
-                      : onlineExecutors > 0
-                        ? `${onlineExecutors} 台在线`
-                        : "已连接"}
+                      : isDirectMobile
+                        ? onlineExecutors > 0
+                          ? "局域网"
+                          : "未连 Wi-Fi"
+                        : onlineExecutors > 0
+                          ? `${onlineExecutors} 台在线`
+                          : "已连接"}
                   </span>
                 </button>
                 <h2 className="hub-aside-title">

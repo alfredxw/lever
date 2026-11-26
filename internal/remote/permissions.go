@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 	"lever/internal/model"
@@ -57,6 +58,13 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 		return true, nil
 	case "untrust":
 		_, err := h.App.Store.DB.ExecContext(ctx, "DELETE FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?", args...)
+		return true, err
+	case "rename_trusted":
+		name := strings.TrimSpace(in.Name)
+		if name == "" || len(name) > 80 {
+			return nil, errors.New("invalid device name")
+		}
+		_, err := h.App.Store.DB.ExecContext(ctx, "UPDATE remote_trusted_controllers SET name=? WHERE hub=? AND space=? AND controller=?", name, m.Hub.ID, m.SpaceID, in.ControllerID)
 		return true, err
 	case "permission":
 		if !validRemoteOperation(in.Operation) {
@@ -124,8 +132,26 @@ func validRemoteOperation(op string) bool {
 }
 
 func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Intent) (bool, error) {
-	if i.Private || i.OriginDeviceID == "" {
+	if i.OriginDeviceID == "" {
 		return false, nil
+	}
+	if i.Private {
+		// Private (device-only) chats only auto-authorize in Direct LAN mode (origin='')
+		// where nothing ever leaves the user's Wi-Fi and the controller has explicit permission.
+		if i.ChatID == "" {
+			return false, nil
+		}
+		var ok bool
+		err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chats c
+			JOIN remote_memberships m ON m.hub=? AND m.space=? AND m.origin=''
+			JOIN remote_control_permissions p ON p.hub=m.hub AND p.space=m.space AND p.controller=? AND p.action=? AND (p.agent_id='*' OR p.agent_id=c.agent_id)
+			JOIN agents a ON a.id=c.agent_id
+			WHERE c.id=? AND json_type(c.data,'$.sharedScope') IS NULL
+			AND json_extract(m.credential,'$.userId')=?
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ChatID, i.ActorUserID).Scan(&ok)
+		return ok, err
 	}
 	// For existing chats the owning Agent comes from the local database.
 	// Wildcard agent_id='*' follows whichever non-archived Agents are exposed to this space.

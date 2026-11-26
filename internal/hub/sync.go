@@ -83,6 +83,9 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 	if l.send(hello) != nil {
 		return nil
 	}
+	if a.role.Executes() {
+		h.syncReadCursorsToHost(r.Context(), a, l)
+	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	go h.pulse(ctx, k, l, a.role)
@@ -367,22 +370,37 @@ func (h *Hub) commitBatch(a principal, generation int64, b *batchFile) error {
 		return syncDispatches(tx, a.space, a.device)
 	})
 }
-func (h *Hub) archive(w http.ResponseWriter, r *http.Request, _ principal) error {
+func (h *Hub) archive(w http.ResponseWriter, r *http.Request, a principal) error {
 	if r.URL.Query().Get("sync") == "1" {
-		return h.archivePage(w, r)
+		return h.archivePage(w, r, a)
 	}
-	chat := r.URL.Query().Get("chat")
-	rows, err := h.db.QueryContext(r.Context(), `SELECT data FROM archive WHERE space_id=? AND device_id=? AND
-((?='' AND kind IN ('agent','chat','session')) OR (?<>'' AND ((kind='chat' AND id=?) OR json_extract(data,'$.chatId')=?))) ORDER BY kind,coalesce(json_extract(data,'$.sequence'),0),id`, r.PathValue("space"), r.PathValue("device"), chat, chat, chat, chat)
+	space, host, chat := r.PathValue("space"), r.PathValue("device"), r.URL.Query().Get("chat")
+	cursors, err := loadDeviceReadCursors(h.db, space, a.user, host)
+	if err != nil {
+		return err
+	}
+	rows, err := h.db.QueryContext(r.Context(), `SELECT kind,id,data FROM archive WHERE space_id=? AND device_id=? AND
+((?='' AND kind IN ('agent','chat','session')) OR (?<>'' AND ((kind='chat' AND id=?) OR json_extract(data,'$.chatId')=?))) ORDER BY kind,coalesce(json_extract(data,'$.sequence'),0),id`, space, host, chat, chat, chat, chat)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	records := []json.RawMessage{}
 	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
+		var kind, id, raw string
+		if err = rows.Scan(&kind, &id, &raw); err != nil {
 			return err
+		}
+		if kind == "session" {
+			if cur := cursors[id]; cur > 0 {
+				var rec p.Record
+				if json.Unmarshal([]byte(raw), &rec) == nil && cur > rec.ReadSequence {
+					rec.ReadSequence = cur
+					if b, err := json.Marshal(rec); err == nil {
+						raw = string(b)
+					}
+				}
+			}
 		}
 		records = append(records, json.RawMessage(raw))
 	}
@@ -390,6 +408,135 @@ func (h *Hub) archive(w http.ResponseWriter, r *http.Request, _ principal) error
 		return err
 	}
 	return send(w, records)
+}
+
+func loadDeviceReadCursors(q query, space, user, device string) (map[string]int64, error) {
+	rows, err := q.Query("SELECT session_id,sequence FROM read_cursors WHERE space_id=? AND user_id=? AND device_id=?", space, user, device)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id string
+		var seq int64
+		if err := rows.Scan(&id, &seq); err != nil {
+			return nil, err
+		}
+		out[id] = seq
+	}
+	return out, rows.Err()
+}
+
+func (h *Hub) readCursors(w http.ResponseWriter, r *http.Request, a principal) error {
+	rows, err := h.db.QueryContext(r.Context(), "SELECT device_id,session_id,sequence FROM read_cursors WHERE space_id=? AND user_id=?", r.PathValue("space"), a.user)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	out := map[string]map[string]int64{}
+	for rows.Next() {
+		var dev, sess string
+		var seq int64
+		if err := rows.Scan(&dev, &sess, &seq); err != nil {
+			return err
+		}
+		m := out[dev]
+		if m == nil {
+			m = map[string]int64{}
+			out[dev] = m
+		}
+		m[sess] = seq
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	return send(w, out)
+}
+
+func (h *Hub) markRead(w http.ResponseWriter, r *http.Request, a principal) error {
+	var in p.ReadSync
+	if err := read(r, &in); err != nil {
+		return err
+	}
+	if in.DeviceID == "" || len(in.Items) > 500 {
+		return invalid("invalid read sync")
+	}
+	space := r.PathValue("space")
+	var advanced []p.ReadMark
+	var pushToHost bool
+	err := write(h.db, func(tx *sql.Tx) error {
+		var hostUser, spaceKind string
+		err := tx.QueryRow(`SELECT d.user_id,s.kind FROM devices d JOIN spaces s ON s.id=d.space_id WHERE d.space_id=? AND d.id=?`, space, in.DeviceID).Scan(&hostUser, &spaceKind)
+		if err != nil {
+			return err
+		}
+		pushToHost = spaceKind == "personal" && hostUser == a.user
+		for _, item := range in.Items {
+			if item.SessionID == "" || len(item.SessionID) > 160 || item.Sequence <= 0 {
+				continue
+			}
+			var prev int64
+			err := tx.QueryRow("SELECT sequence FROM read_cursors WHERE space_id=? AND user_id=? AND device_id=? AND session_id=?", space, a.user, in.DeviceID, item.SessionID).Scan(&prev)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if item.Sequence <= prev {
+				continue
+			}
+			if _, err = tx.Exec(`INSERT INTO read_cursors(space_id,user_id,device_id,session_id,sequence) VALUES(?,?,?,?,?)
+ON CONFLICT(space_id,user_id,device_id,session_id) DO UPDATE SET sequence=max(sequence,excluded.sequence)`, space, a.user, in.DeviceID, item.SessionID, item.Sequence); err != nil {
+				return err
+			}
+			advanced = append(advanced, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(advanced) > 0 {
+		h.notify(space)
+		if pushToHost {
+			h.mu.Lock()
+			l := h.links[deviceKey{space, in.DeviceID}]
+			h.mu.Unlock()
+			if l != nil {
+				_ = l.send(p.Frame{Type: "mark_read", SpaceID: space, DeviceID: in.DeviceID, ReadMarks: advanced})
+			}
+		}
+	}
+	return send(w, true)
+}
+
+func (h *Hub) syncReadCursorsToHost(ctx context.Context, a principal, l *link) {
+	var spaceKind string
+	if err := h.db.QueryRowContext(ctx, "SELECT kind FROM spaces WHERE id=?", a.space).Scan(&spaceKind); err != nil || spaceKind != "personal" {
+		return
+	}
+	rows, err := h.db.QueryContext(ctx, "SELECT session_id,sequence FROM read_cursors WHERE space_id=? AND user_id=? AND device_id=?", a.space, a.user, a.device)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var batch []p.ReadMark
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		_ = l.send(p.Frame{Type: "mark_read", SpaceID: a.space, DeviceID: a.device, ReadMarks: batch})
+		batch = nil
+	}
+	for rows.Next() {
+		var m p.ReadMark
+		if rows.Scan(&m.SessionID, &m.Sequence) == nil && m.SessionID != "" && m.Sequence > 0 {
+			batch = append(batch, m)
+			if len(batch) >= 200 {
+				flush()
+			}
+		}
+	}
+	flush()
 }
 
 func (h *Hub) verifyIdle(ctx context.Context, k deviceKey, session, run string, completed bool) error {

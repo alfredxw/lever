@@ -45,10 +45,10 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			cond := sharedChatScope
 			args := []any{i.ChatID, g.HubID, g.SpaceID}
 			if i.Private {
-				cond = privateChatScope
+				cond = privateChatCond("?2", "?3", "?4")
 				args = append(args, i.OriginDeviceID)
 			}
-			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM chats c WHERE c.id=? AND "+cond+")", args...).Scan(&visible); err != nil {
+			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM chats c WHERE c.id=?1 AND "+cond+")", args...).Scan(&visible); err != nil {
 				return err
 			}
 		}
@@ -131,6 +131,9 @@ func (h *Host) reviewLAN(ctx context.Context, in Management) (p.Receipt, bool, e
 	return out, true, err
 }
 func (h *Host) publishLAN(ctx context.Context, st p.ClientState) error {
+	if st.Origin == "" {
+		return nil
+	}
 	m := st.Membership
 	all, err := store.List[p.LANReport](ctx, h.App.Store.DB, `SELECT json_object('command',json(command),'receipt',json(receipt)) FROM lan_proposals WHERE hub=? AND space=? AND published=0 AND coalesce(json_extract(command,'$.intent.private'),0)=0 ORDER BY rowid LIMIT 64`, m.Hub.ID, m.SpaceID)
 	if err != nil {

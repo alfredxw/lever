@@ -27,7 +27,11 @@ import (
 
 type Host struct {
 	lanClient     lanclient.Client
+	lanMu         sync.Mutex
+	lan           *lanServer
+	lanAddr       string
 	lanError      string
+	lanTickets    map[string]int64
 	App           *app.App
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -47,7 +51,9 @@ type Binding struct {
 	Login          bool   `json:"login"`
 	LoginSupported bool   `json:"loginSupported"`
 	LAN            bool   `json:"lan"`
+	LANAddr        string `json:"lanAddr,omitempty"`
 	LANError       string `json:"lanError,omitempty"`
+	Direct         bool   `json:"direct,omitempty"`
 	model.SharedScope
 	Origin   string   `json:"origin"`
 	Role     p.Role   `json:"role"`
@@ -62,7 +68,7 @@ type Binding struct {
 
 func Start(a *app.App) *Host {
 	ctx, cancel := context.WithCancel(a.Context())
-	h := &Host{App: a, ctx: ctx, cancel: cancel, configChanged: make(chan struct{}, 1), clients: map[model.SharedScope]*connection{}}
+	h := &Host{App: a, ctx: ctx, cancel: cancel, configChanged: make(chan struct{}, 1), clients: map[model.SharedScope]*connection{}, lanTickets: map[string]int64{}}
 	h.wg.Add(1)
 	go h.manage()
 	return h
@@ -114,11 +120,16 @@ func (h *Host) Bindings(ctx context.Context) ([]Binding, error) {
 			return nil, err
 		}
 		v.Agents = groups
+		v.Direct = v.Origin == ""
 		h.mu.Lock()
 		if v.LAN {
 			v.LANError = h.lanError
+			v.LANAddr = h.lanAddr
 		}
-		if c := h.clients[v.SharedScope]; c != nil {
+		if v.Direct {
+			v.Online = v.LAN && h.lanError == "" && h.lanAddr != ""
+			v.Error = v.LANError
+		} else if c := h.clients[v.SharedScope]; c != nil {
 			v.Online = c.online
 			v.Error = c.detail
 		}
@@ -126,12 +137,40 @@ func (h *Host) Bindings(ctx context.Context) ([]Binding, error) {
 	}
 	return list, nil
 }
-func (h *Host) manage() {
-	var lan *lanServer
-	defer func() {
-		if lan != nil {
-			lan.close()
+func (h *Host) syncLAN(want bool) (string, error) {
+	h.lanMu.Lock()
+	defer h.lanMu.Unlock()
+	if want && h.lan == nil {
+		lan, err := h.listenLAN()
+		h.mu.Lock()
+		h.lanError = ""
+		h.lanAddr = ""
+		if err != nil {
+			h.lanError = err.Error()
+		} else {
+			h.lan = lan
+			h.lanAddr = lan.addr
 		}
+		h.mu.Unlock()
+		if err != nil {
+			return "", err
+		}
+	} else if !want && h.lan != nil {
+		h.lan.close()
+		h.lan = nil
+		h.mu.Lock()
+		h.lanAddr = ""
+		h.lanError = ""
+		h.mu.Unlock()
+	}
+	if h.lan != nil {
+		return h.lan.addr, nil
+	}
+	return "", nil
+}
+func (h *Host) manage() {
+	defer func() {
+		_, _ = h.syncLAN(false)
 	}()
 	defer h.wg.Done()
 	for {
@@ -141,21 +180,12 @@ func (h *Host) manage() {
 			for _, v := range bindings {
 				wantLAN = wantLAN || (v.LAN && v.Role.Executes())
 			}
-			if wantLAN && lan == nil {
-				var err error
-				lan, err = h.listenLAN()
-				h.mu.Lock()
-				h.lanError = ""
-				if err != nil {
-					h.lanError = err.Error()
-				}
-				h.mu.Unlock()
-			} else if !wantLAN && lan != nil {
-				lan.close()
-				lan = nil
-			}
+			_, _ = h.syncLAN(wantLAN)
 			current := map[model.SharedScope]bool{}
 			for _, v := range bindings {
+				if v.Origin == "" {
+					continue
+				}
 				st, err := stateFor(h.ctx, h.App.Store, v.SharedScope)
 				if err != nil {
 					continue
@@ -427,6 +457,10 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 				if err = send(p.Frame{Type: "idle", RPCID: f.RPCID, Idle: idle}); err != nil {
 					return err
 				}
+			case "mark_read":
+				if m.Role.Executes() && len(f.ReadMarks) > 0 && len(f.ReadMarks) <= 500 {
+					_ = h.markScopeSessionsRead(ctx, m.Hub.ID, m.SpaceID, "", f.ReadMarks)
+				}
 			}
 		}
 	}
@@ -476,12 +510,44 @@ func (h *Host) Unpair(ctx context.Context, scope model.SharedScope) error {
 	if err != nil {
 		return err
 	}
-	err = st.Do(ctx, "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
-	var httpErr *p.HTTPError
-	if err != nil && !(errors.As(err, &httpErr) && httpErr.Status == 401) {
-		return fmt.Errorf("revoking Hub credential: %w", err)
+	if st.Origin != "" {
+		err = st.Do(ctx, "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
+		var httpErr *p.HTTPError
+		if err != nil && !(errors.As(err, &httpErr) && httpErr.Status == 401) {
+			return fmt.Errorf("revoking Hub credential: %w", err)
+		}
 	}
 	_, err = h.App.Store.DB.ExecContext(ctx, "DELETE FROM remote_memberships WHERE hub=? AND space=?", scope.HubID, scope.SpaceID)
 	h.reload()
 	return err
+}
+
+func (h *Host) ensureDirectScope(ctx context.Context, enableLAN bool) (model.SharedScope, ed25519.PublicKey, error) {
+	var key []byte
+	scope := model.SharedScope{HubID: h.App.Store.DeviceID, SpaceID: h.App.Store.DeviceID}
+	if err := h.App.Store.DB.QueryRowContext(ctx, "SELECT key FROM remote_identity WHERE singleton=1").Scan(&key); err != nil {
+		return scope, nil, err
+	}
+	if len(key) != ed25519.PrivateKeySize {
+		return scope, nil, errors.New("invalid Host private key")
+	}
+	pub := ed25519.PrivateKey(key).Public().(ed25519.PublicKey)
+	m := p.Membership{
+		Hub:      p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub},
+		SpaceID:  h.App.Store.DeviceID,
+		UserID:   "local",
+		DeviceID: h.App.Store.DeviceID,
+		Role:     p.Workstation,
+	}
+	lanVal := 0
+	if enableLAN {
+		lanVal = 1
+	}
+	err := h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO remote_memberships(hub,space,origin,credential,epoch,lan,policy,expose_all) VALUES(?,?,'',?,?,?,1,1)
+			ON CONFLICT(hub,space) DO UPDATE SET credential=excluded.credential,policy=max(policy,1),lan=CASE WHEN ?=1 THEN 1 ELSE lan END`,
+			scope.HubID, scope.SpaceID, store.JSON(m), p.NewID(), lanVal, lanVal)
+		return err
+	})
+	return scope, pub, err
 }

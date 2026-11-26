@@ -234,3 +234,86 @@ func TestPushRelayDeliversOpaqueAPNsAlert(t *testing.T) {
 		t.Fatal("unauthenticated relay delivery")
 	}
 }
+
+func TestHubReadCursorsSyncAndMerge(t *testing.T) {
+	h, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if err := h.Setup("owner", "a fixture password"); err != nil {
+		t.Fatal(err)
+	}
+	var space, user string
+	if err := h.db.QueryRow("SELECT space_id,user_id FROM memberships").Scan(&space, &user); err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(h.Handler(nil))
+	defer api.Close()
+	makeDevice := func(role p.Role, platform string) p.ClientState {
+		pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+		m := p.Membership{Hub: h.identity, SpaceID: space, UserID: user, Role: role, DeviceID: p.NewID(), Token: p.Token()}
+		if _, err := h.db.Exec("INSERT INTO devices(space_id,id,user_id,name,platform,role,pub,token,generation) VALUES(?,?,?,'fixture',?,?,?,?,1)", space, m.DeviceID, user, platform, role, []byte(pub), p.Digest([]byte(m.Token))); err != nil {
+			t.Fatal(err)
+		}
+		return p.ClientState{Membership: m, Key: priv, Origin: api.URL}
+	}
+	phone, host := makeDevice(p.Controller, "ios"), makeDevice(p.Workstation, "darwin")
+	a := principal{device: host.Membership.DeviceID, user: user, space: space, token: p.Digest([]byte(host.Membership.Token))}
+
+	file, err := os.CreateTemp(t.TempDir(), "batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := batchFile{start: p.Frame{Epoch: p.NewID(), Base: 0, Version: 1, Full: true}, file: file}
+	defer b.close()
+	for _, rec := range []p.Record{
+		{Kind: "chat", ID: "c1", AgentID: "a1", Title: "Chat"},
+		{Kind: "session", ID: "s1", ChatID: "c1", AgentID: "a1", Type: "topic", Title: "T1", UnreadSequence: 80, ReadSequence: 20},
+	} {
+		_ = json.NewEncoder(file).Encode(p.Change{Record: rec})
+	}
+	if err := h.commitBatch(a, 1, &b); err != nil {
+		t.Fatal(err)
+	}
+
+	// Phone marks s1 read up to 80, then sends a stale 30 (must remain monotonic 80).
+	if err := phone.Do(t.Context(), "POST", phone.SpacePath()+"/read", p.ReadSync{
+		DeviceID: host.Membership.DeviceID,
+		Items:    []p.ReadMark{{SessionID: "s1", Sequence: 80}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.Do(t.Context(), "POST", phone.SpacePath()+"/read", p.ReadSync{
+		DeviceID: host.Membership.DeviceID,
+		Items:    []p.ReadMark{{SessionID: "s1", Sequence: 30}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var cursors map[string]map[string]int64
+	if err := phone.Do(t.Context(), "GET", phone.SpacePath()+"/read", nil, &cursors); err != nil {
+		t.Fatal(err)
+	}
+	if cursors[host.Membership.DeviceID]["s1"] != 80 {
+		t.Fatalf("expected Hub read cursor 80, got %+v", cursors)
+	}
+
+	// Archive page must merge Hub read_cursors into session.readSequence.
+	var page p.ArchivePage
+	if err := phone.Do(t.Context(), "GET", phone.SpacePath()+"/archive/"+host.Membership.DeviceID+"?sync=1", nil, &page); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ch := range page.Changes {
+		if ch.Kind == "session" && ch.ID == "s1" {
+			found = true
+			if ch.ReadSequence != 80 {
+				t.Fatalf("expected merged readSequence 80 on archive page, got %+v", ch.Record)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("session s1 missing from archive page")
+	}
+}

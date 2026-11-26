@@ -394,9 +394,28 @@ export function Conversation({
     (!device.draining || !!chat);
 
   useEffect(() => {
-    if (current?.unreadSequence)
-      saveLocal(ws.key + device.id + current.id, current.unreadSequence);
-  }, [current?.id, current?.unreadSequence, device.id, ws.key]);
+    if (!current?.unreadSequence) return;
+    const prev = Math.max(
+      current.readSequence ?? 0,
+      readLocal(ws.key + device.id + current.id, 0),
+    );
+    if (current.unreadSequence <= prev) return;
+    saveLocal(ws.key + device.id + current.id, current.unreadSequence);
+    void ws.transport
+      .request(ws.path + "/read", "POST", {
+        deviceId: device.id,
+        items: [{ sessionId: current.id, sequence: current.unreadSequence }],
+      })
+      .catch(() => {});
+  }, [
+    current?.id,
+    current?.readSequence,
+    current?.unreadSequence,
+    device.id,
+    ws.key,
+    ws.path,
+    ws.transport,
+  ]);
 
   const enqueue = (cmd: Command) =>
     ws.act(async () => {
@@ -1086,7 +1105,10 @@ export function Conversation({
                                 isCurrentChat && session === t.id;
                               const isTopicUnread =
                                 (t.unreadSequence ?? 0) >
-                                readLocal(ws.key + device.id + t.id, 0);
+                                Math.max(
+                                  t.readSequence ?? 0,
+                                  readLocal(ws.key + device.id + t.id, 0),
+                                );
                               return (
                                 <button
                                   type="button"

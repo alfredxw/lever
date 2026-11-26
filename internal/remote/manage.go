@@ -9,6 +9,8 @@ import (
 	"lever/internal/store"
 	"net/http"
 	"net/url"
+	"os"
+	"runtime"
 	"strings"
 
 	"lever/internal/app"
@@ -20,6 +22,7 @@ import (
 type Management struct {
 	Operation    string            `json:"operation,omitempty"`
 	ControllerID string            `json:"controllerId,omitempty"`
+	Name         string            `json:"name,omitempty"`
 	NoteVersion  string            `json:"noteVersion,omitempty"`
 	Enabled      bool              `json:"enabled,omitempty"`
 	AllAgents    bool              `json:"allAgents,omitempty"`
@@ -44,6 +47,29 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 	switch in.Action {
 	case "status":
 		return h.Bindings(ctx)
+	case "local_info":
+		hostName, _ := os.Hostname()
+		if hostName == "" {
+			hostName = "Lever"
+		}
+		h.mu.Lock()
+		lanAddr, lanError := h.lanAddr, h.lanError
+		h.mu.Unlock()
+		return map[string]any{
+			"deviceId":       h.App.Store.DeviceID,
+			"hostName":       hostName,
+			"platform":       runtime.GOOS,
+			"login":          device.LoginEnabled(h.App.Store.Dir),
+			"loginSupported": runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+			"lanAddr":        lanAddr,
+			"lanError":       lanError,
+		}, nil
+	case "login":
+		return true, device.SetLogin(h.App.Store.Dir, in.Enabled)
+	case "lan_ticket":
+		h.configMu.Lock()
+		defer h.configMu.Unlock()
+		return h.IssueLANTicket(ctx)
 	case "pair":
 		h.configMu.Lock()
 		defer h.configMu.Unlock()
@@ -56,20 +82,25 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(bindings) != 1 {
+		if len(bindings) == 0 && (in.Action == "lan" || in.Action == "expose_all" || in.Action == "expose" || in.Action == "hide") {
+			scope, _, err := h.ensureDirectScope(ctx, in.Action == "lan" && in.Enabled)
+			if err != nil {
+				return nil, err
+			}
+			in.Scope = scope
+		} else if len(bindings) == 1 {
+			in.Scope = bindings[0].SharedScope
+		} else {
 			return nil, errors.New("select a paired Hub and space")
 		}
-		in.Scope = bindings[0].SharedScope
 	}
 	st, err := stateFor(ctx, h.App.Store, in.Scope)
 	if err != nil {
 		return nil, err
 	}
 	switch in.Action {
-	case "trust", "untrust", "permission", "set_permissions", "trusted":
+	case "trust", "untrust", "rename_trusted", "permission", "set_permissions", "trusted":
 		return h.manageController(ctx, st, in)
-	case "login":
-		return true, device.SetLogin(h.App.Store.Dir, in.Enabled)
 	case "share_note", "preview_note":
 		return h.note(ctx, st, in)
 	case "expose_all":
@@ -137,6 +168,9 @@ ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,cha
 			return nil, errors.New("executor role required")
 		}
 		_, err = h.App.Store.DB.ExecContext(ctx, "UPDATE remote_memberships SET lan=? WHERE hub=? AND space=?", in.Enabled, in.Scope.HubID, in.Scope.SpaceID)
+		if err == nil && in.Enabled {
+			_, _ = h.syncLAN(true)
+		}
 		h.reload()
 		return true, err
 	case "unpair":
@@ -148,8 +182,8 @@ ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,cha
 			return nil, errors.New("executor role required")
 		}
 		local, err := h.lanInbox(ctx, in.Scope)
-		if err != nil {
-			return nil, err
+		if err != nil || st.Origin == "" {
+			return local, err
 		}
 		var others []p.InboxItem
 		if err = st.Do(ctx, "GET", st.SpacePath()+"/inbox", nil, &others); err != nil {
