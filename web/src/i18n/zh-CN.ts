@@ -313,8 +313,8 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "automations.notFound": "未找到该自动化任务",
   "automations.advancedSchedule": "触发计划、会话去向与看板联动",
   "automations.runtime": "模型与权限",
-  "automations.runtimeDesc": "覆盖当前自动化使用的运行时模型、推理强度与权限策略",
-  "automations.resetRuntime": "恢复为 Agent 默认配置",
+  "automations.runtimeDesc": "创建时锁定当前模型与权限，后续在对话中切换模型不会影响该自动化",
+  "automations.resetRuntime": "同步为 Agent 当前模型与权限",
   "automations.askPermissionWarning":
     "当前权限为「询问确认」，无人值守定时或事件运行遇到操作时会暂停等待审批。建议在任务层切换为无需人工确认的权限。",
   "automations.askPermissionShort":
@@ -2133,9 +2133,23 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "settings.agentDefaults": "模型与指令",
   "settings.agentDefaultsDescription":
     "在 Agent 的「配置」中设置默认运行时、模型、工作目录和系统指令。在对话中手动选择的模型会用于这个 Agent 的新对话、新话题和工作项执行。",
-  "settings.permissions": "权限",
+  "settings.permissions": "默认权限模式",
   "settings.permissionsDescription":
-    "默认访问权限在各 Agent 的「配置」中设置，也可在对话的模型选择器中调整。",
+    "在新建 Agent、切换运行时和自动化任务等配置点，默认按此模式选择各运行时的等价权限级别。各 Agent 与对话仍可单独调整。",
+  "settings.defaultPermissionMode.auto": "Auto",
+  "settings.defaultPermissionMode.yolo": "YOLO",
+  "permissionSetup.title": "选择默认权限模式",
+  "permissionSetup.description":
+    "首次启动时选择全局默认权限偏好，Lever 会在各个配置点自动对应到各运行时的等价权限级别。",
+  "permissionSetup.recommended": "推荐",
+  "permissionSetup.auto.summary": "常规操作自动执行，高风险操作前请求审批。",
+  "permissionSetup.auto.mapping":
+    "默认对应：Codex 代我审批 · Claude Code 自动 · Antigravity 自动 · Pi 自动接受编辑",
+  "permissionSetup.yolo.summary": "跳过工具审批与沙箱确认，默认使用完全访问权限。",
+  "permissionSetup.yolo.mapping":
+    "默认对应：Codex 完全访问 · Claude Code 完全访问 · Antigravity 极速 · Pi 完全访问",
+  "permissionSetup.settingsHint": "之后可随时在「设置 → 常规」中修改。",
+  "permissionSetup.confirm": "开始使用",
   "settings.perAgent": "按 Agent 配置",
   "settings.maxWorkspaceTabs": "单分栏标签页上限",
   "settings.maxWorkspaceTabsDescription":
@@ -2222,6 +2236,24 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "profile.model": "模型",
   "profile.defaultModel": "使用运行时默认模型",
   "profile.permission": "权限",
+  "profile.permissionPolicyHint":
+    "用于委派、外部通道、工作页派发及新会话，切换运行时会自动映射。",
+  "profile.permissionPolicy.inherit": "跟随全局",
+  "profile.permissionPolicy.read_only": "只读",
+  "profile.permissionPolicy.ask": "询问",
+  "profile.permissionPolicy.auto": "自动",
+  "profile.permissionPolicy.full_access": "完全访问",
+  "profile.permissionPolicy.inheritHint":
+    "跟随全局默认权限（当前：{{mode}}）。",
+  "profile.permissionPolicy.read_onlyHint":
+    "仅读取与规划，禁止直接修改文件或执行写操作（跨运行时映射为只读/计划模式）。",
+  "profile.permissionPolicy.askHint":
+    "涉及编辑或敏感操作前由你确认。",
+  "profile.permissionPolicy.autoHint":
+    "常规编辑与安全操作自动执行，高风险操作前询问。",
+  "profile.permissionPolicy.full_accessHint":
+    "跳过常规审批与沙箱限制，直接执行。",
+  "profile.modelSwitchInComposer": "在对话输入框中切换",
   "permissions.codex.ask": "按需审批",
   "permissions.codex.ask.detail": "可在工作区沙箱内写入，超出范围时由你审批。",
   "permissions.codex.auto_review": "代我审批",

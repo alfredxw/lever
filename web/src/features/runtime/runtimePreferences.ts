@@ -1,11 +1,16 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { Agent, Selection } from "@/api/types.gen";
+import {
+  isMeaningfulEffortSource,
+  type EffortSource,
+} from "./effortMapping.ts";
 
 export type RuntimePreferences = {
   provider?: string;
   models: Record<string, Pick<Selection, "model" | "effort" | "fast">>;
   favoriteSelections?: Record<string, string>;
   permissions?: Record<string, string>;
+  effortHabit?: EffortSource;
 };
 
 const changes = new EventTarget();
@@ -46,8 +51,19 @@ export function readRuntimePreferences(agentId: string) {
   return parse(localStorage.getItem(storageKey(agentId)));
 }
 
+export function agentProfileSelection(
+  profile: Pick<Agent["profile"], "provider" | "model" | "effort" | "fast">,
+): Selection {
+  return {
+    provider: profile.provider,
+    model: profile.model,
+    effort: profile.effort ?? "",
+    fast: Boolean(profile.fast),
+  };
+}
+
 export function selectionForAgentProvider(
-  profile: Pick<Agent["profile"], "provider" | "model">,
+  profile: Pick<Agent["profile"], "provider" | "model" | "effort" | "fast">,
   provider: string,
   preferences?: RuntimePreferences,
   previous?: Selection,
@@ -62,12 +78,7 @@ export function selectionForAgentProvider(
   }
   const fallback: Selection =
     provider === profile.provider
-      ? {
-          provider: profile.provider,
-          model: profile.model,
-          effort: "",
-          fast: false,
-        }
+      ? agentProfileSelection(profile)
       : { provider, model: "", effort: "", fast: false };
   const remembered = preferences?.models[provider];
   return {
@@ -79,7 +90,7 @@ export function selectionForAgentProvider(
 }
 
 export function recentAgentSelection(
-  profile: Pick<Agent["profile"], "provider" | "model">,
+  profile: Pick<Agent["profile"], "provider" | "model" | "effort" | "fast">,
   preferences?: RuntimePreferences,
 ): Selection | undefined {
   if (!preferences?.provider) return undefined;
@@ -156,16 +167,25 @@ export function rememberModel(
   agentId: string,
   { provider, model, effort, fast }: Selection,
   fromFavorites?: boolean,
+  modelEfforts?: readonly string[],
 ) {
   updatePreferences(agentId, (previous) => {
     const favoriteSelections = { ...previous.favoriteSelections };
     if (fromFavorites) favoriteSelections[provider] = model;
     else if (fromFavorites === false) delete favoriteSelections[provider];
+    const effortHabit =
+      effort && isMeaningfulEffortSource(effort, modelEfforts)
+        ? {
+            effort,
+            ...(modelEfforts?.length ? { efforts: [...modelEfforts] } : {}),
+          }
+        : previous.effortHabit;
     return {
       ...previous,
       provider,
       models: { ...previous.models, [provider]: { model, effort, fast } },
       favoriteSelections,
+      effortHabit,
     };
   });
 }
@@ -187,6 +207,7 @@ export function resetModelPreferences(agentId: string) {
     provider: undefined,
     models: {},
     favoriteSelections: undefined,
+    effortHabit: undefined,
   }));
 }
 

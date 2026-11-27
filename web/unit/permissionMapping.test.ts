@@ -92,4 +92,8 @@ test("recommendedUnattendedPermission picks safest non-ask permission per provid
     { id: "turbo", name: "", mode: "full_access" },
   ]);
   assert.equal(recommendedUnattendedPermission(agy)?.id, "auto");
+  assert.equal(recommendedUnattendedPermission(agy, "auto")?.id, "auto");
+  assert.equal(recommendedUnattendedPermission(agy, "yolo")?.id, "turbo");
+  assert.equal(recommendedUnattendedPermission(codex, "yolo")?.id, "full_access");
+  assert.equal(recommendedUnattendedPermission(pi, "yolo")?.id, "full_access");
 });

@@ -1,4 +1,8 @@
 import type { Catalog, ModelInfo, Selection } from "@/api/types.gen";
+import {
+  resolveEffort,
+  type EffortSource,
+} from "@/features/runtime/effortMapping";
 import { useModels, useProviders } from "@/features/runtime/queries";
 
 export function isModelUnavailable(
@@ -24,21 +28,24 @@ export function selectedModel(choice: Selection, catalog?: Catalog | null) {
         models?.find((model) => !model.requiresVersion));
 }
 
-export function modelSelection(choice: Selection, model: ModelInfo): Selection {
+export function modelSelection(
+  choice: Selection,
+  model: ModelInfo,
+  effortSource?: EffortSource,
+): Selection {
   return {
     ...choice,
     model: model.id,
-    effort: model.efforts.includes(choice.effort)
-      ? choice.effort
-      : model.defaultEffort,
+    effort: resolveEffort(effortSource ?? choice.effort, model),
     fast: choice.fast && model.fast,
   };
 }
 
-export function useComposerModel(
-  candidate: Selection,
+export function useComposerModel<T extends Selection>(
+  candidate: T,
   cwd: string,
   profileFallback?: Selection,
+  effortSource?: EffortSource,
 ) {
   const providers = useProviders();
   const runtimeUnavailable = (provider: string) =>
@@ -58,6 +65,7 @@ export function useComposerModel(
       (candidateCatalog.isSuccess &&
         isModelUnavailable(candidate, candidateCatalog.data)));
   const choice = useFallback ? profileFallback : candidate;
+  const activeEffortSource = useFallback ? undefined : effortSource;
   const differentProvider = choice.provider !== candidate.provider;
   const disabled = runtimeUnavailable(choice.provider);
   const fallbackCatalog = useModels(
@@ -70,8 +78,9 @@ export function useComposerModel(
   const selection =
     model &&
     ((!choice.model && model.id) ||
+      (!!activeEffortSource && !choice.effort) ||
       (profileFallback && !useFallback && !catalog.data?.provisional))
-      ? modelSelection(choice, model)
+      ? modelSelection(choice, model, activeEffortSource)
       : choice;
 
   return {

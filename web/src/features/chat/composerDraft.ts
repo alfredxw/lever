@@ -9,11 +9,13 @@ import type {
   Selection,
   SendInput,
 } from "@/api/types.gen";
+import type { EffortSource } from "@/features/runtime/effortMapping";
 import type { PermissionSource } from "@/features/runtime/permissionMapping";
 import { referenceText, textPrompt } from "./prompt.ts";
 
 export type DraftSelection = Selection & {
   permissionSource?: PermissionSource;
+  effortSource?: EffortSource;
 };
 
 export type Draft = {

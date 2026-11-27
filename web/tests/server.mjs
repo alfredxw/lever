@@ -166,20 +166,45 @@ child.stdout.on("data", (buffer) => {
   const match = output.match(/Lever: (http[^\s]+)/);
   if (match && !initialized) {
     initialized = true;
-    mkdirSync(resolve(repo, "output/e2e"), { recursive: true });
-    writeFileSync(
-      process.env.LEVER_TEST_CONTEXT ??
-        resolve(repo, "output/e2e/context.json"),
-      JSON.stringify({
-        url: match[1],
-        scope,
-        skill,
-        skillRepo,
-        otherScope,
-        pluginDirectory,
-      }),
-    );
-    console.log("Lever browser fixture ready");
+    const ready = async () => {
+      const pairUrl = new URL(match[1]);
+      const token = new URLSearchParams(pairUrl.hash.slice(1)).get("token");
+      if (process.env.LEVER_TEST_PENDING_PERMISSION_SETUP !== "1" && token) {
+        const res = await fetch(`${pairUrl.origin}/api/settings/permissions`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ defaultMode: "auto" }),
+        });
+        if (!res.ok) {
+          throw new Error(
+            `Failed to initialize fixture permission mode: ${res.status} ${await res.text()}`,
+          );
+        }
+      }
+      mkdirSync(resolve(repo, "output/e2e"), { recursive: true });
+      writeFileSync(
+        process.env.LEVER_TEST_CONTEXT ??
+          resolve(repo, "output/e2e/context.json"),
+        JSON.stringify({
+          url: match[1],
+          bin,
+          scope,
+          skill,
+          skillRepo,
+          otherScope,
+          pluginDirectory,
+        }),
+      );
+      console.log("Lever browser fixture ready");
+    };
+    void ready().catch((error) => {
+      console.error(error);
+      child.kill("SIGTERM");
+      process.exit(1);
+    });
   }
 });
 for (const signal of ["SIGINT", "SIGTERM"])

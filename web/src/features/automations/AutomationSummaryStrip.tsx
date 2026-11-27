@@ -7,7 +7,10 @@ import type { Agent, Automation, Selection } from "@/api/types.gen";
 import { ErrorNotice } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
-import { isAskPermission } from "@/features/runtime/permissionMapping";
+import {
+  isAskPermission,
+  resolveAgentPermissionForCatalog,
+} from "@/features/runtime/permissionMapping";
 import { permissionLabel } from "@/features/runtime/Permissions";
 import { AutomationPlanIcon } from "./AutomationPlanIcon";
 import {
@@ -40,12 +43,9 @@ export function usePlanConfigAttention(plan: Automation, agents: Agent[]) {
       const targetAgent = agents.find((a) => a.id === target.agentId);
       if (!targetAgent) return false;
       const effectiveSelection = target.selection ?? plan.selection;
-      const sameProvider =
-        !effectiveSelection?.provider ||
-        effectiveSelection.provider === targetAgent.profile.provider;
       const perm =
         effectiveSelection?.permission ||
-        (sameProvider ? targetAgent.profile.permission : "");
+        resolveAgentPermissionForCatalog(targetAgent.profile.permission, undefined);
       return isAskPermission(undefined, perm);
     });
 
@@ -293,12 +293,10 @@ export function AutomationSummaryStrip({
                 primaryRuntime.recommended && primaryAgent
                   ? () => {
                       const nextSel: Selection = {
-                        provider:
-                          plan.selection?.provider ||
-                          primaryAgent.profile.provider,
-                        model: plan.selection?.model ?? "",
-                        effort: plan.selection?.effort ?? "",
-                        fast: Boolean(plan.selection?.fast),
+                        provider: primaryRuntime.selection.provider,
+                        model: primaryRuntime.selection.model,
+                        effort: primaryRuntime.selection.effort,
+                        fast: Boolean(primaryRuntime.selection.fast),
                         permission: primaryRuntime.recommended!.id,
                       };
                       quickFixPermission.mutate(nextSel);

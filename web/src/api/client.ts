@@ -174,6 +174,12 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
       return;
     }
+    if (event.type === "permission-settings") {
+      void queryClient.invalidateQueries({ queryKey: ["permission-settings"] });
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["models"] });
+      return;
+    }
     if (event.type === "task-views") {
       void queryClient.invalidateQueries({ queryKey: ["task-views"] });
       return;

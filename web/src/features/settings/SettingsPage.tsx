@@ -88,6 +88,11 @@ import {
   useDelegationSettings,
   useSaveDelegationSettings,
 } from "@/features/agents/delegationPolicy";
+import {
+  defaultPermissionSettings,
+  usePermissionSettings,
+  useSavePermissionSettings,
+} from "@/features/runtime/permissionSettings";
 import { RemoteDevices } from "./RemoteDevices";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
@@ -151,6 +156,8 @@ const sectionGroups = [
           "defaultDelegationPolicyDescription",
           "permissions",
           "permissionsDescription",
+          "defaultPermissionMode.auto",
+          "defaultPermissionMode.yolo",
         ],
       },
       { id: "providers", icon: Plug, fields: [] },
@@ -302,7 +309,10 @@ export function SettingsPage({
   visible: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  overview: UseQueryResult<Pick<Overview, "dataDir" | "agents" | "chats">, Error>;
+  overview: UseQueryResult<
+    Pick<Overview, "dataDir" | "agents" | "chats" | "permissionSettings">,
+    Error
+  >;
   providerTarget?: { id?: string; pluginId?: string };
   updatesTarget?: number;
   desktopUpdates?: DesktopUpdatesController;
@@ -377,6 +387,12 @@ export function SettingsPage({
   const saveDelegationSettings = useSaveDelegationSettings();
   const delegationSettings =
     delegationSettingsQuery.data ?? defaultDelegationSettings;
+  const permissionSettingsQuery = usePermissionSettings(visible);
+  const savePermissionSettings = useSavePermissionSettings();
+  const permissionSettings =
+    permissionSettingsQuery.data ??
+    overview.data?.permissionSettings ??
+    defaultPermissionSettings;
   const defaultReminderValue =
     taskReminders.defaultRemindOffsets.length > 0
       ? String(taskReminders.defaultRemindOffsets[0])
@@ -753,7 +769,34 @@ export function SettingsPage({
                 title={t("settings.permissions")}
                 description={t("settings.permissionsDescription")}
               >
-                <Badge variant="outline">{t("settings.perAgent")}</Badge>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={permissionSettings.defaultMode}
+                  aria-label={t("settings.permissions")}
+                  onValueChange={(value) => {
+                    if (value !== "auto" && value !== "yolo") return;
+                    if (value === permissionSettings.defaultMode) return;
+                    savePermissionSettings.mutate(
+                      { defaultMode: value },
+                      { onError: (error) => toast.error(error.message) },
+                    );
+                  }}
+                >
+                  <ToggleGroupItem
+                    value="auto"
+                    disabled={savePermissionSettings.isPending}
+                  >
+                    {t("settings.defaultPermissionMode.auto")}
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="yolo"
+                    disabled={savePermissionSettings.isPending}
+                  >
+                    {t("settings.defaultPermissionMode.yolo")}
+                  </ToggleGroupItem>
+                </ToggleGroup>
               </SettingsRow>
             </SettingsGroup>
             <p className="settings-note">{t("settings.autoSave")}</p>

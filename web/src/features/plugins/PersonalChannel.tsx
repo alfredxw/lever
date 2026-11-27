@@ -265,8 +265,8 @@ function RouteModel({
   const base = {
     provider: profile.provider,
     model: profile.model,
-    effort: "",
-    fast: false,
+    effort: profile.effort ?? "",
+    fast: Boolean(profile.fast),
   };
   const selected = choice ?? base;
   const cwd =

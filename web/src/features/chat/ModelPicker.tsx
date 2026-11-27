@@ -1,4 +1,11 @@
-import { type ReactElement, useId, useRef, useState } from "react";
+import {
+  type ReactElement,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import { RadioGroup, Toolbar } from "radix-ui";
 import {
@@ -39,6 +46,10 @@ import {
 import { ErrorNotice, Loading } from "@/components/common";
 import { RuntimeIcon } from "@/components/RuntimeIcon";
 import {
+  isMeaningfulEffortSource,
+  type EffortSource,
+} from "@/features/runtime/effortMapping";
+import {
   modelDescription,
   modelSearchAliases,
 } from "@/features/runtime/modelLabels";
@@ -47,7 +58,7 @@ import {
   toggleModelStar,
   useStarredModelsByProvider,
 } from "@/features/runtime/runtimePreferences";
-import { modelSelection } from "./useComposerModel";
+import { modelSelection, selectedModel } from "./useComposerModel";
 import {
   connectionName,
   hasConnectionLabel,
@@ -182,11 +193,17 @@ function ModelList({
   );
 }
 
+export type ModelPickerChangeMeta = {
+  effortSource?: EffortSource;
+  modelEfforts?: readonly string[];
+};
+
 export function ModelPicker({
   providers,
   catalog,
   value,
   preferFavorites = false,
+  effortHabit,
   onChange,
   open,
   onOpenChange,
@@ -202,11 +219,16 @@ export function ModelPicker({
   catalog: UseQueryResult<Catalog | null>;
   value: Selection;
   preferFavorites?: boolean;
+  effortHabit?: EffortSource;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onReturnToComposer?: () => void;
   onConfigureRuntime?: () => void;
-  onChange: (value: Selection, fromFavorites?: boolean) => void;
+  onChange: (
+    value: Selection,
+    fromFavorites?: boolean,
+    meta?: ModelPickerChangeMeta,
+  ) => void;
   disabled?: boolean;
   cwd?: string;
   selectionForProvider: (provider: string, previous?: Selection) => Selection;
@@ -220,6 +242,9 @@ export function ModelPicker({
   const effortListId = useId();
   const input = useRef<HTMLInputElement>(null);
   const previous = useRef<Record<string, Selection>>({});
+  const pendingEffort = useRef<
+    { provider: string; source: EffortSource } | undefined
+  >(undefined);
   const runtime = providers?.find((item) => item.id === value.provider);
   const readyProviders =
     providers?.filter(
@@ -228,7 +253,7 @@ export function ModelPicker({
   const runtimeUnavailable =
     !!providers && !readyProviders.some((item) => item.id === value.provider);
   const models = catalog.data?.models ?? [];
-  const selected = models.find((model) => model.id === value.model);
+  const selected = selectedModel(value, catalog.data);
   const starred = useStarredModelsByProvider(
     providers?.map(({ id }) => id) ?? [value.provider],
   );
@@ -299,6 +324,47 @@ export function ModelPicker({
     changeOpen(false);
     onReturnToComposer?.();
   }
+  function currentEffortSource(): EffortSource | undefined {
+    const effectiveEffort =
+      value.effort || (selected ? modelSelection(value, selected).effort : "");
+    if (
+      effectiveEffort &&
+      isMeaningfulEffortSource(effectiveEffort, selected?.efforts)
+    ) {
+      return {
+        effort: effectiveEffort,
+        ...(selected?.efforts.length ? { efforts: selected.efforts } : {}),
+      };
+    }
+    if (pendingEffort.current?.provider === value.provider) {
+      return pendingEffort.current.source;
+    }
+    return effortHabit;
+  }
+  const commitResolvedPendingEffort = useEffectEvent(
+    (resolved: Selection, modelEfforts: readonly string[]) => {
+      onChange(resolved, false, { modelEfforts });
+    },
+  );
+  useEffect(() => {
+    const pending = pendingEffort.current;
+    if (
+      !pending ||
+      pending.provider !== value.provider ||
+      catalog.isPending ||
+      catalog.data?.provider !== value.provider
+    ) {
+      return;
+    }
+    const target = selectedModel(value, catalog.data);
+    if (!target || target.requiresVersion) return;
+    pendingEffort.current = undefined;
+    if (!target.efforts.length || value.effort) return;
+    const resolved = modelSelection(value, target, pending.source);
+    if (resolved.effort !== value.effort || resolved.model !== value.model) {
+      commitResolvedPendingEffort(resolved, target.efforts);
+    }
+  }, [catalog.data, catalog.isPending, value]);
   function selectProvider(provider: string) {
     if (provider === value.provider) return value;
     previous.current[value.provider] = value;
@@ -308,10 +374,33 @@ export function ModelPicker({
     { model, provider }: ModelEntry,
     focusEffort?: boolean,
   ) {
-    onChange(
-      modelSelection(selectProvider(provider), model),
-      browsingFavorites,
-    );
+    const sameProvider = provider === value.provider;
+    const base = selectProvider(provider);
+    let next: Selection;
+    if (sameProvider && model.id === value.model) {
+      next = modelSelection(base, model);
+    } else if (!sameProvider && base.model === model.id && base.effort) {
+      next = modelSelection(base, model);
+    } else {
+      const targetModels = sources.find((entry) => entry.provider === provider)
+        ?.catalog.data?.models;
+      const baseModel = base.model
+        ? targetModels?.find((item) => item.id === base.model)
+        : undefined;
+      const source =
+        currentEffortSource() ??
+        (base.effort
+          ? {
+              effort: base.effort,
+              ...(baseModel?.efforts.length
+                ? { efforts: baseModel.efforts }
+                : {}),
+            }
+          : undefined);
+      next = modelSelection(base, model, source);
+    }
+    pendingEffort.current = undefined;
+    onChange(next, browsingFavorites, { modelEfforts: model.efforts });
     if (!model.efforts.length) returnToComposer();
     else if (focusEffort)
       requestAnimationFrame(() => effortList.current?.focus());
@@ -344,7 +433,13 @@ export function ModelPicker({
       ? current.model
       : undefined;
   const currentEffort = effortModel
-    ? modelSelection(value, effortModel).effort
+    ? modelSelection(
+        value,
+        effortModel,
+        !value.effort && pendingEffort.current?.provider === value.provider
+          ? pendingEffort.current.source
+          : undefined,
+      ).effort
     : "";
   const setupMessage = runtimeUnavailable
     ? readyProviders.length
@@ -431,8 +526,16 @@ export function ModelPicker({
                   setFavorites(next === "favorites");
                   if (next === "favorites") return;
                   const provider = next.slice("provider:".length);
-                  if (provider !== value.provider)
-                    onChange(selectProvider(provider), false);
+                  if (provider !== value.provider) {
+                    const nextSelection = selectProvider(provider);
+                    const effortSource = !nextSelection.effort
+                      ? currentEffortSource()
+                      : undefined;
+                    pendingEffort.current = effortSource
+                      ? { provider, source: effortSource }
+                      : undefined;
+                    onChange(nextSelection, false, { effortSource });
+                  }
                 }}
               >
                 {runtimeChoices.map(({ id, name, icon }) => (
@@ -610,10 +713,15 @@ export function ModelPicker({
                         value={effort}
                         className="justify-between"
                         onClick={() => {
-                          onChange({
-                            ...modelSelection(value, effortModel),
-                            effort,
-                          });
+                          pendingEffort.current = undefined;
+                          onChange(
+                            {
+                              ...modelSelection(value, effortModel),
+                              effort,
+                            },
+                            undefined,
+                            { modelEfforts: effortModel.efforts },
+                          );
                           returnToComposer();
                         }}
                       >

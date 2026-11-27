@@ -2470,9 +2470,9 @@ button:focus-visible,
   container: agent-create / inline-size;
   display: flex;
   flex-direction: column;
-  width: min(54rem, calc(100% - 24px));
+  width: min(40rem, calc(100% - 24px));
   max-width: none;
-  height: min(38rem, calc(100dvh - 24px));
+  max-height: min(42rem, calc(100dvh - 24px));
   overflow: hidden;
   gap: 0;
   padding: 0;
@@ -2637,7 +2637,7 @@ button:focus-visible,
 .agent-create-delegations .profile-delegation {
   padding-block: 6px;
 }
-@container agent-create (min-width: 660px) {
+@container agent-create (min-width: 560px) {
   .agent-create-header {
     flex-direction: row;
     align-items: center;
@@ -2651,31 +2651,6 @@ button:focus-visible,
     gap: 12px;
     border-block-end: 1px solid var(--surface-border);
     padding-block-end: 16px;
-  }
-  .agent-create-basics {
-    grid-template: repeat(4, auto) / repeat(2, minmax(0, 1fr));
-    grid-auto-flow: column;
-    column-gap: 0;
-  }
-  .agent-create-section {
-    grid-row: span 4;
-    grid-template-rows: subgrid;
-    align-items: start;
-  }
-  .agent-create-section:first-child {
-    padding-inline-end: 20px;
-  }
-  .agent-create-section + .agent-create-section {
-    padding-block-start: 0;
-    padding-inline-start: 20px;
-    border-block-start: 0;
-    border-inline-start: 1px solid var(--surface-border);
-  }
-  .agent-create-section > .agent-create-role {
-    align-self: stretch;
-  }
-  .agent-create-role textarea {
-    flex: 1 0 auto;
   }
   .agent-create-skills {
     grid-template-columns: repeat(2, minmax(0, 1fr));

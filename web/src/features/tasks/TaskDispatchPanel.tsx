@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ModelPicker } from "@/features/chat/ModelPicker";
 import { useComposerModel } from "@/features/chat/useComposerModel";
 import {
-  recentAgentSelection,
+  agentProfileSelection,
   selectionForAgentProvider,
   useRuntimePreferences,
 } from "@/features/runtime/runtimePreferences";
@@ -79,16 +79,17 @@ export function TaskDispatchPanel({
   const directory = !noteContext && modelCwd;
   const preferences = useRuntimePreferences(agent?.id ?? "");
   const profileSelection: Selection = agent
-    ? {
-        provider: agent.profile.provider,
-        model: agent.profile.model,
-        effort: "",
-        fast: false,
-      }
+    ? agentProfileSelection(agent.profile)
     : { provider: "", model: "", effort: "", fast: false };
-  const recent = agent
-    ? recentAgentSelection(agent.profile, preferences)
-    : undefined;
+  const providerDefaultFallback: Selection | undefined =
+    !modelOverride && profileSelection.provider && profileSelection.model
+      ? {
+          provider: profileSelection.provider,
+          model: "",
+          effort: "",
+          fast: false,
+        }
+      : undefined;
   const {
     providers,
     catalog,
@@ -97,9 +98,9 @@ export function TaskDispatchPanel({
     modelUnavailable,
     checkingPreference,
   } = useComposerModel(
-    modelOverride ?? recent ?? profileSelection,
+    modelOverride ?? profileSelection,
     modelCwd,
-    !modelOverride && recent ? profileSelection : undefined,
+    providerDefaultFallback,
   );
   const preferFavorites =
     preferences?.favoriteSelections?.[selection.provider] === selection.model;
@@ -202,6 +203,7 @@ export function TaskDispatchPanel({
                   onOpenChange={setModelOpen}
                   value={selection}
                   preferFavorites={preferFavorites}
+                  effortHabit={preferences?.effortHabit}
                   selectionForProvider={(provider, previous) =>
                     selectionForAgentProvider(
                       agent.profile,

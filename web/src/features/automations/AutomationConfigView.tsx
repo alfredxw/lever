@@ -31,7 +31,10 @@ import { primaryDirectory } from "@/features/worktrees/scope";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { directoryName } from "@/lib/paths";
 import { Choice, FormRow, ToggleRow } from "./AutomationFormControls";
-import { AutomationRuntimeControls } from "./AutomationRuntimeControls";
+import {
+  AutomationRuntimeControls,
+  snapshotAgentSelection,
+} from "./AutomationRuntimeControls";
 import { AutomationScheduleFields } from "./AutomationScheduleFields";
 import { scheduleDraft, scheduleInput } from "./automationSchedule";
 import {
@@ -332,10 +335,16 @@ export function AutomationConfigView({
 
   function confirmAddScope() {
     if (!pendingAgentId) return;
+    const addedAgent = activeAgents.find((item) => item.id === pendingAgentId);
     const base = targets.map((item, idx) => ({
       ...item,
       id: item.id || crypto.randomUUID(),
-      selection: item.selection ?? (idx === 0 ? selection : undefined),
+      selection:
+        item.selection ??
+        (idx === 0
+          ? (selection ??
+            (primaryAgent ? snapshotAgentSelection(primaryAgent) : undefined))
+          : undefined),
     }));
     const nextTargets: AutomationTarget[] = [
       ...base,
@@ -344,6 +353,7 @@ export function AutomationConfigView({
         agentId: pendingAgentId,
         enabled: true,
         prompt: "",
+        selection: addedAgent ? snapshotAgentSelection(addedAgent) : undefined,
       },
     ];
     setTargets(nextTargets);
@@ -508,6 +518,12 @@ export function AutomationConfigView({
                       value={primaryTarget?.agentId}
                       disabled={savePlan.isPending}
                       onChange={(agentId) => {
+                        const nextAgent = activeAgents.find(
+                          (item) => item.id === agentId,
+                        );
+                        const locked = nextAgent
+                          ? snapshotAgentSelection(nextAgent)
+                          : undefined;
                         const nextTargets: AutomationTarget[] = [
                           {
                             ...(primaryTarget ?? { id: "" }),
@@ -518,12 +534,12 @@ export function AutomationConfigView({
                           },
                         ];
                         setTargets(nextTargets);
-                        setSelection(undefined);
+                        setSelection(locked);
                         setChatId("");
                         setChatSource("dedicated");
                         commit({
                           targets: nextTargets,
-                          selection: null,
+                          selection: locked ?? null,
                           chatId: "",
                           chatSource: "dedicated",
                         });
@@ -558,6 +574,7 @@ export function AutomationConfigView({
                       value={selection}
                       disabled={savePlan.isPending}
                       compact
+                      lockOnReset
                       idPrefix="automation-config"
                       onChange={(nextSelection) => {
                         setSelection(nextSelection);
@@ -593,13 +610,19 @@ export function AutomationConfigView({
                             value={target.agentId}
                             disabled={savePlan.isPending}
                             onChange={(agentId) => {
+                              const nextAgent = activeAgents.find(
+                                (item) => item.id === agentId,
+                              );
+                              const locked = nextAgent
+                                ? snapshotAgentSelection(nextAgent)
+                                : undefined;
                               const nextTargets = targets.map((item, idx) =>
                                 idx === index
                                   ? {
                                       ...item,
                                       agentId,
                                       workingCopyId: undefined,
-                                      selection: undefined,
+                                      selection: locked,
                                     }
                                   : item,
                               );
@@ -711,6 +734,7 @@ export function AutomationConfigView({
                             value={target.selection ?? selection}
                             disabled={savePlan.isPending || !targetEnabled}
                             compact
+                            lockOnReset
                             idPrefix={`automation-target-${index}`}
                             onChange={(nextSelection) => {
                               const nextTargets = targets.map((item, idx) =>

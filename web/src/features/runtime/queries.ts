@@ -1,10 +1,13 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api, APIError, queryClient } from "@/api/client";
 import type {
+  Agent,
   Catalog,
+  Overview,
   Provider,
   ProviderCandidate,
   ProviderInfo,
+  Selection,
 } from "@/api/types.gen";
 
 export const providersQuery = queryOptions({
@@ -135,4 +138,64 @@ export function refreshModels(provider: string, cwd = "") {
       ),
     staleTime: 0,
   });
+}
+
+const agentSelectionSeq = new Map<string, number>();
+
+export async function persistAgentSelection(
+  agentId: string,
+  selection: Pick<Selection, "provider" | "model" | "effort" | "fast">,
+) {
+  if (!agentId || !selection.provider) return;
+  const clean: Selection = {
+    provider: selection.provider,
+    model: selection.model,
+    effort: selection.effort,
+    fast: Boolean(selection.fast),
+  };
+  const seq = (agentSelectionSeq.get(agentId) ?? 0) + 1;
+  agentSelectionSeq.set(agentId, seq);
+  queryClient.setQueryData<Overview>(["overview"], (current) => {
+    if (!current) return current;
+    return {
+      ...current,
+      lastSelection: clean,
+      agents: current.agents.map((item) =>
+        item.id === agentId
+          ? {
+              ...item,
+              profile: {
+                ...item.profile,
+                provider: clean.provider,
+                model: clean.model,
+                effort: clean.effort || undefined,
+                fast: clean.fast || undefined,
+              },
+            }
+          : item,
+      ),
+    };
+  });
+  try {
+    const saved = await api<Agent>(
+      `/agents/${encodeURIComponent(agentId)}/selection`,
+      clean,
+      "PUT",
+    );
+    if (agentSelectionSeq.get(agentId) !== seq) return;
+    queryClient.setQueryData<Overview>(["overview"], (current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        lastSelection: clean,
+        agents: current.agents.map((item) =>
+          item.id === saved.id ? saved : item,
+        ),
+      };
+    });
+  } catch {
+    if (agentSelectionSeq.get(agentId) === seq) {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    }
+  }
 }

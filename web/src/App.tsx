@@ -174,6 +174,7 @@ import { HtmlPreviewHost, HtmlPreviewPanel } from "@/features/chat/HtmlPreview";
 import type { HtmlPreview } from "@/features/chat/chatFileLinks";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { useDesktopUpdates } from "@/features/settings/useDesktopUpdates";
+import { PermissionSetupDialog } from "@/features/settings/PermissionSetupDialog";
 import { usePreferences } from "@/features/settings/Preferences";
 import {
   availableShortcuts,
@@ -2331,7 +2332,8 @@ export default function App() {
                           focused &&
                           !create &&
                           !forward &&
-                          !workspaceSearch;
+                          !workspaceSearch &&
+                          !overview.data?.permissionSettings?.needsSetup;
                         const panel = (
                           <Panel
                             key={`${owner}:${t.id}`}
@@ -2833,6 +2835,9 @@ export default function App() {
               )}
             </DialogContent>
           </Dialog>
+          <PermissionSetupDialog
+            open={Boolean(overview.data?.permissionSettings?.needsSetup)}
+          />
           {page === "skills" && (
             <SkillsPage
               agents={overview.data?.agents ?? noAgents}

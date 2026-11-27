@@ -8,7 +8,10 @@ import type {
   Selection,
 } from "@/api/types.gen";
 import { modelsQuery } from "@/features/runtime/queries";
-import { useAgentRuntimePreferences } from "@/features/runtime/runtimePreferences";
+import {
+  agentProfileSelection,
+  useAgentRuntimePreferences,
+} from "@/features/runtime/runtimePreferences";
 import { primaryDirectory } from "@/features/worktrees/scope";
 import { modelSelection, selectedModel } from "./useComposerModel";
 
@@ -60,7 +63,8 @@ export function useComparisonModels(
   >();
   const candidates = participants.map((agent, index) => {
     const preference = preferences[index];
-    const provider = preference?.provider ?? agent.profile.provider;
+    const profileSelection = agentProfileSelection(agent.profile);
+    const provider = agent.profile.provider;
     const saved = options.submitted?.[agent.id];
     function selectionForProvider(
       provider: string,
@@ -69,9 +73,10 @@ export function useComparisonModels(
       if (previous) return previous;
       if (agent.id === ownerId && provider === ownerSelection.provider)
         return ownerSelection;
+      if (provider === agent.profile.provider) return profileSelection;
       return {
         provider,
-        model: provider === agent.profile.provider ? agent.profile.model : "",
+        model: "",
         effort: "",
         fast: false,
         ...preference?.models[provider],

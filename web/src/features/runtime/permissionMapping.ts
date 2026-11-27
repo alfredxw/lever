@@ -3,9 +3,13 @@ import { findPermission } from "./permissionPolicy";
 import { useModels } from "./queries";
 
 export {
+  AGENT_PERMISSION_POLICIES,
   findPermission,
   isAskPermission,
+  normalizeAgentPermissionPolicy,
   recommendedUnattendedPermission,
+  resolveAgentPermissionForCatalog,
+  type AgentPermissionPolicy,
 } from "./permissionPolicy";
 
 export type PermissionSource = Pick<Selection, "provider" | "permission">;
@@ -31,6 +35,13 @@ export function usePermissionMapping(
     : mode
       ? (
           options?.find((option) => option.mode === mode) ??
+          (mode === "auto"
+            ? options?.find(
+                (option) =>
+                  option.mode === "accept_edits" ||
+                  option.mode === "workspace_edit",
+              )
+            : undefined) ??
           options?.find((option) => option.mode === "ask")
         )?.id
       : undefined;

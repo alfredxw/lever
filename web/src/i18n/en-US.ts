@@ -322,8 +322,8 @@ export const enUS = {
   "automations.advancedSchedule": "Schedule, destination & board settings",
   "automations.runtime": "Model & permissions",
   "automations.runtimeDesc":
-    "Override the runtime model, reasoning effort, and permission policy for this automation",
-  "automations.resetRuntime": "Reset to Agent default",
+    "Locked when created; changing the Agent's model in chat will not modify this automation",
+  "automations.resetRuntime": "Sync to Agent's current model & permissions",
   "automations.askPermissionWarning":
     "Current permission asks before acting, so unattended runs will pause for approval. Switch permissions for this automation to avoid stalled runs.",
   "automations.askPermissionShort":
@@ -2229,9 +2229,26 @@ export const enUS = {
   "settings.agentDefaults": "Model and instructions",
   "settings.agentDefaultsDescription":
     "Open an Agent’s Profile to set its default runtime, model, working directories, and instructions. Manual model choices carry over to new Chats, Topics, and work items for that Agent.",
-  "settings.permissions": "Permissions",
+  "settings.permissions": "Default permissions",
   "settings.permissionsDescription":
-    "Set default access in each Agent’s Profile. You can change access for a conversation in the model picker.",
+    "Choose the default permission preset applied to new Agents, runtime switches, and automations. Individual Agents and conversations can still override it.",
+  "settings.defaultPermissionMode.auto": "Auto",
+  "settings.defaultPermissionMode.yolo": "YOLO",
+  "permissionSetup.title": "Choose default permission mode",
+  "permissionSetup.description":
+    "Pick your default permission preference on first launch. Lever maps it to the equivalent permission level for each runtime across configuration points.",
+  "permissionSetup.recommended": "Recommended",
+  "permissionSetup.auto.summary":
+    "Runs routine actions automatically and asks before high-risk actions.",
+  "permissionSetup.auto.mapping":
+    "Defaults: Codex Approve for me · Claude Code Auto · Antigravity Auto · Pi Auto-accept edits",
+  "permissionSetup.yolo.summary":
+    "Skips tool approval prompts and defaults to full access.",
+  "permissionSetup.yolo.mapping":
+    "Defaults: Codex Full access · Claude Code Full access · Antigravity Turbo · Pi Full access",
+  "permissionSetup.settingsHint":
+    "You can change this anytime in Settings → General.",
+  "permissionSetup.confirm": "Continue",
   "settings.perAgent": "Per Agent",
   "settings.maxWorkspaceTabs": "Maximum tabs per pane",
   "settings.maxWorkspaceTabsDescription":
@@ -2325,6 +2342,24 @@ export const enUS = {
   "profile.model": "Model",
   "profile.defaultModel": "Runtime default",
   "profile.permission": "Permissions",
+  "profile.permissionPolicyHint":
+    "Applies to delegations, external channels, task dispatches, and new conversations across runtimes.",
+  "profile.permissionPolicy.inherit": "Follow global",
+  "profile.permissionPolicy.read_only": "Read-only",
+  "profile.permissionPolicy.ask": "Ask",
+  "profile.permissionPolicy.auto": "Auto",
+  "profile.permissionPolicy.full_access": "Full access",
+  "profile.permissionPolicy.inheritHint":
+    "Follows the global default permission mode (currently {{mode}}).",
+  "profile.permissionPolicy.read_onlyHint":
+    "Read and plan only without editing files (maps to Read-only / Plan across runtimes).",
+  "profile.permissionPolicy.askHint":
+    "Asks for approval before edits or sensitive actions.",
+  "profile.permissionPolicy.autoHint":
+    "Handles routine edits automatically and asks before risky actions.",
+  "profile.permissionPolicy.full_accessHint":
+    "Skips routine approval prompts and sandbox restrictions.",
+  "profile.modelSwitchInComposer": "Switch in chat composer",
   "permissions.codex.ask": "Ask for approval",
   "permissions.codex.ask.detail":
     "Writes within the workspace sandbox and asks you before using more access.",

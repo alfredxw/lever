@@ -30,10 +30,8 @@ import {
   ExternalLink,
   Monitor,
   Trash2,
-  Terminal,
   Archive,
   ChevronDown,
-  RefreshCw,
 } from "lucide-react";
 import { isMyGo, runtime } from "mygo-runtime";
 import { toast } from "sonner";
@@ -101,25 +99,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ErrorNotice, Loading } from "@/components/common";
-import { ModelCatalogUnavailable } from "@/features/runtime/ModelCatalogUnavailable";
 import {
-  modelDescription,
-  modelSearchAliases,
-} from "@/features/runtime/modelLabels";
-import {
-  resetModelPreferences,
-  resetPermissionPreference,
-} from "@/features/runtime/runtimePreferences";
-import { PermissionOptions } from "@/features/runtime/Permissions";
-import {
-  usePermissionMapping,
-  type PermissionSource,
+  AGENT_PERMISSION_POLICIES,
+  normalizeAgentPermissionPolicy,
+  type AgentPermissionPolicy,
 } from "@/features/runtime/permissionMapping";
-import {
-  refreshModels,
-  useModels,
-  useProviders,
-} from "@/features/runtime/queries";
+import { useProviders } from "@/features/runtime/queries";
 import { displayPath } from "@/lib/paths";
 import { RuntimeIcon } from "@/components/RuntimeIcon";
 import { connectionName } from "@/features/runtime/connections";
@@ -240,12 +225,20 @@ function newAgentDraft(
 function rebaseProfileDraft(draft: Agent, previous: Agent, latest: Agent) {
   const contents = ({ updatedAt, archived, profile, ...identity }: Agent) => {
     const {
+      provider,
+      model,
+      effort,
+      fast,
       disabledSkills,
       taskConcurrency,
       taskStartIntervalMinutes,
       taskQueuePaused,
       ...settings
     } = profile;
+    void provider;
+    void model;
+    void effort;
+    void fast;
     return JSON.stringify({ identity, settings });
   };
   if (contents(previous) !== contents(latest)) return latest;
@@ -273,6 +266,10 @@ function rebaseProfileDraft(draft: Agent, previous: Agent, latest: Agent) {
     updatedAt: latest.updatedAt,
     profile: {
       ...draft.profile,
+      provider: latest.profile.provider,
+      model: latest.profile.model,
+      effort: latest.profile.effort,
+      fast: latest.profile.fast,
       disabledSkills,
       taskConcurrency: latest.profile.taskConcurrency,
       taskStartIntervalMinutes: latest.profile.taskStartIntervalMinutes,
@@ -315,13 +312,12 @@ export function Profile({
   const [createMode, setCreateMode] = useState<"new" | "copy">(
     creation?.source ? "copy" : "new",
   );
-  const [permissionSources, setPermissionSources] = useState<
-    Partial<Record<typeof createMode, PermissionSource>>
-  >({});
-  const permissionSource = permissionSources[createMode];
-  function setPermissionSource(source?: PermissionSource) {
-    setPermissionSources((current) => ({ ...current, [createMode]: source }));
-  }
+  const overviewQuery = useQuery({
+    queryKey: ["overview"],
+    queryFn: () => api<Overview>("/overview"),
+  });
+  const globalPermissionMode =
+    overviewQuery.data?.permissionSettings?.defaultMode ?? "auto";
   const copyMode = createMode === "copy";
   const copyFrom = (source: Agent) => ({
     sourceId: source.id,
@@ -383,50 +379,19 @@ export function Profile({
   const p = draft.profile;
   const available =
     providers.data?.filter((runtime) => runtime.available) ?? [];
-  if (creating && hasDraft && !p.provider && available.length) {
-    const preferred =
-      available.find(
-        (runtime) => runtime.id === creation?.defaultAgent?.profile.provider,
-      ) ??
-      available.find((runtime) => runtime.installed) ??
-      available[0];
-    updateDraft((current) => ({
-      ...current,
-      profile: { ...current.profile, provider: preferred.id },
-    }));
-  }
   const delegations = p.delegations ?? [];
   const cwd = p.roots.find((root) => root.id === p.primaryRootId)?.path ?? "";
-  const catalog = useModels(
-    p.provider,
-    cwd,
-    hasDraft &&
-      !!p.provider &&
-      (!creating || (!!cwd.trim() && editingRoot !== p.primaryRootId)),
-  );
-  const mapped = usePermissionMapping(
-    permissionSource,
-    p.provider,
-    cwd,
-    catalog.data,
-  );
-  const permission =
-    p.permission || mapped.permission || catalog.data?.defaultPermission || "";
-  const profileToSave = useMemo(
-    () =>
-      mapped.permission && !p.permission
-        ? { ...draft, profile: { ...p, permission: mapped.permission } }
-        : draft,
-    [draft, mapped.permission, p],
-  );
-  const models = catalog.data?.models ?? [];
-  const selectedModel = models.find((model) => model.id === p.model);
-  const hiddenModels = providers.data?.find(
-    ({ id }) => id === p.provider,
-  )?.hiddenModels;
-  const refresh = () => {
-    void refreshModels(p.provider, cwd).catch(() => {});
-  };
+  const previewProviderId =
+    p.provider ||
+    available.find(
+      (runtime) => runtime.id === overviewQuery.data?.lastSelection?.provider,
+    )?.id ||
+    available.find(
+      (runtime) => runtime.id === creation?.defaultAgent?.profile.provider,
+    )?.id ||
+    available.find((runtime) => runtime.installed)?.id ||
+    available[0]?.id ||
+    "";
   const desktop = isMyGo();
   const change = (
     profile: Partial<Agent["profile"]>,
@@ -498,18 +463,7 @@ export function Profile({
       }),
   });
 
-  function applySavedAgent(saved: Agent, previous: Agent) {
-    if (saved.id) {
-      const providerChanged =
-        previous.profile.provider !== saved.profile.provider;
-      if (providerChanged || previous.profile.model !== saved.profile.model)
-        resetModelPreferences(saved.id);
-      if (
-        providerChanged ||
-        previous.profile.permission !== saved.profile.permission
-      )
-        resetPermissionPreference(saved.id, saved.profile.provider);
-    }
+  function applySavedAgent(saved: Agent) {
     queryClient.setQueryData<Overview>(
       ["overview"],
       (data) =>
@@ -530,22 +484,35 @@ export function Profile({
 
   // Creation mode uses an explicit submit mutation.
   const createSave = useMutation({
-    mutationFn: (value: Agent) => api<Agent>("/agents", value, "POST"),
+    mutationFn: (value: Agent) => {
+      const providerAvailable = available.some(
+        (runtime) => runtime.id === value.profile.provider,
+      );
+      const payload =
+        value.profile.provider && !providerAvailable
+          ? {
+              ...value,
+              profile: {
+                ...value.profile,
+                provider: "",
+                model: "",
+                effort: "",
+                fast: false,
+              },
+            }
+          : value;
+      return api<Agent>("/agents", payload, "POST");
+    },
     onSuccess: (saved) => {
-      setPermissionSource();
-      applySavedAgent(saved, agent);
+      applySavedAgent(saved);
       creation?.onSave(saved);
       toast.success(t("profile.saved"));
     },
   });
 
-  const latestDraftSigRef = useRef(
-    profileContentSignature(profileToSave, homeDir),
-  );
-  const latestDraftProviderRef = useRef(profileToSave.profile.provider);
+  const latestDraftSigRef = useRef(profileContentSignature(draft, homeDir));
   useLayoutEffect(() => {
-    latestDraftSigRef.current = profileContentSignature(profileToSave, homeDir);
-    latestDraftProviderRef.current = profileToSave.profile.provider;
+    latestDraftSigRef.current = profileContentSignature(draft, homeDir);
   });
 
   const autoSave = useAutoSave<Agent, Agent>({
@@ -556,21 +523,11 @@ export function Profile({
     rebase: (latest, saved) => ({
       ...latest,
       updatedAt: saved.updatedAt,
-      profile:
-        latest.profile.provider === saved.profile.provider &&
-        !latest.profile.permission &&
-        saved.profile.permission
-          ? { ...latest.profile, permission: saved.profile.permission }
-          : latest.profile,
     }),
     onSaved: (saved, _sent, sentSig) => {
       archiveSave.reset();
-      const previous = prevSavedRef.current;
       prevSavedRef.current = saved;
       seenUpdatedAts.current.add(saved.updatedAt);
-      if (latestDraftProviderRef.current === saved.profile.provider) {
-        setPermissionSource();
-      }
       setSavedProfile(saved);
       const savedSig = profileContentSignature(saved, homeDir);
       autoSave.syncSaved(savedSig);
@@ -580,7 +537,7 @@ export function Profile({
       } else {
         setBaseDraft((current) => ({ ...current, updatedAt: saved.updatedAt }));
       }
-      applySavedAgent(saved, previous);
+      applySavedAgent(saved);
     },
   });
 
@@ -590,15 +547,13 @@ export function Profile({
     mutationFn: (value: Agent) =>
       api<Agent>(`/agents/${existingAgent!.id}`, value, "PUT"),
     onSuccess: (saved) => {
-      const previous = prevSavedRef.current;
       prevSavedRef.current = saved;
       seenUpdatedAts.current.add(saved.updatedAt);
       dirtyByUserRef.current = false;
-      setPermissionSource();
       setSavedProfile(saved);
       setBaseDraft(saved);
       autoSave.syncSaved(profileContentSignature(saved, homeDir));
-      applySavedAgent(saved, previous);
+      applySavedAgent(saved);
     },
   });
 
@@ -626,11 +581,11 @@ export function Profile({
   }, [existingAgent, savedProfile, homeDir, autoSave.syncSaved]);
 
   const installed = providers.data?.find(
-    (provider) => provider.id === p.provider,
+    (provider) => provider.id === previewProviderId,
   );
   const supportsSkills = installed?.capabilities.skills === true;
   const skillSources = useSkillSources(
-    p.provider,
+    previewProviderId,
     { roots: p.roots, primaryRootId: p.primaryRootId },
     hasDraft && supportsSkills && showOptions,
   );
@@ -731,19 +686,13 @@ export function Profile({
 
   const nameInvalid = !creating && !draft.name.trim();
   const hasEmptyRoot = p.roots.some((root) => !root.path.trim());
-  const providerUnavailableChange =
-    !creating &&
-    p.provider !== savedProfile.profile.provider &&
-    !installed?.available;
 
   const canAutoSave =
     !creating &&
     !archiveSave.isPending &&
-    !mapped.pending &&
     !emptyScope &&
     !nameInvalid &&
-    !hasEmptyRoot &&
-    !providerUnavailableChange;
+    !hasEmptyRoot;
 
   useEffect(() => {
     if (creating) return;
@@ -752,12 +701,12 @@ export function Profile({
       autoSave.cancelPending();
       return;
     }
-    const sig = profileContentSignature(profileToSave, homeDir);
-    autoSave.schedule(profileToSave, sig, pendingModeRef.current);
+    const sig = profileContentSignature(draft, homeDir);
+    autoSave.schedule(draft, sig, pendingModeRef.current);
   }, [
     creating,
     canAutoSave,
-    profileToSave,
+    draft,
     homeDir,
     autoSave.schedule,
     autoSave.cancelPending,
@@ -766,13 +715,13 @@ export function Profile({
   const busy = creating
     ? pickDirectory.isPending || createSave.isPending
     : pickDirectory.isPending || archiveSave.isPending;
+  const noAvailableRuntime = !!providers.data && available.length === 0;
   const canCreate =
     !busy &&
-    !mapped.pending &&
     hasDraft &&
     !emptyScope &&
     !!draft.name.trim() &&
-    !!installed?.available &&
+    !noAvailableRuntime &&
     !hasEmptyRoot;
 
   function flushOnEnter(event: KeyboardEvent<HTMLInputElement>) {
@@ -1333,7 +1282,6 @@ export function Profile({
           if (!source) return;
           focusNameAfterSourceChange.current = true;
           createSave.reset();
-          setPermissionSource();
           setCopy(copyFrom(source));
         }}
         onCloseAutoFocus={(event) => {
@@ -1346,181 +1294,89 @@ export function Profile({
       />
     </Field>
   );
-  const providerField = (
-    <Field>
-      <FieldLabel htmlFor={`${scopeId}-provider`}>
-        {t("profile.provider")}
-      </FieldLabel>
-      <Select
-        value={p.provider}
-        disabled={creating && !available.length}
-        onValueChange={(provider) => {
-          if (provider === p.provider) return;
-          setPermissionSource(
-            permissionSource ??
-              (p.provider ? { provider: p.provider, permission } : undefined),
-          );
-          change({ provider, model: "", permission: "" }, "immediate");
-        }}
-      >
-        <SelectTrigger
-          id={`${scopeId}-provider`}
-          aria-label={t("profile.provider")}
-          className="w-full"
-        >
-          <SelectValue
-            placeholder={t(
-              providers.isPending ? "common.loading" : "channels.chooseRuntime",
-            )}
-          />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            {providers.data?.map((provider) => (
-              <SelectItem
-                key={provider.id}
-                value={provider.id}
-                disabled={!provider.available}
-              >
-                <RuntimeIcon provider={provider} />
-                {connectionName(provider, providers.data ?? [], t)}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      {creating && providers.error && (
-        <ErrorNotice
-          error={providers.error}
-          retry={() => void providers.refetch()}
-        />
-      )}
-      {creating && providers.data && !available.length && (
-        <p className="profile-note">{t("channels.enableRuntime")}</p>
-      )}
-      {creating &&
-        p.provider &&
-        !!available.length &&
-        !installed?.available && (
-          <p className="profile-note">{t("profile.chooseAvailableRuntime")}</p>
-        )}
-    </Field>
-  );
   const instructionsId = `${scopeId}-instructions`;
   const instructionsInput = (
     <Textarea
       id={instructionsId}
       form={creating ? formId : undefined}
-      rows={creating ? 2 : 9}
+      rows={creating ? 3 : 9}
       placeholder={t("profile.instructionsPlaceholder")}
       value={p.instructions}
       onChange={(e) => change({ instructions: e.target.value }, "debounced")}
       onBlur={creating ? undefined : () => autoSave.flush()}
     />
   );
-  const refreshButton = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      aria-label={t("models.refresh")}
-      title={t("models.refresh")}
-      disabled={catalog.isFetching || !p.provider}
-      onClick={refresh}
-    >
-      <RefreshCw className={catalog.isFetching ? "animate-spin" : undefined} />
-    </Button>
+  const normalizedPermissionPolicy = normalizeAgentPermissionPolicy(
+    p.permission,
   );
-  const modelLabel = (
-    <FieldLabel htmlFor={`${scopeId}-model`}>{t("profile.model")}</FieldLabel>
-  );
-  const runtimeFields = (
-    <>
-      {providerField}
-      <Field>
-        {creating ? (
-          <div className="agent-create-field-heading">
-            {modelLabel}
-            {refreshButton}
-          </div>
-        ) : (
-          modelLabel
-        )}
-        <div className="profile-model-picker">
-          <SearchableSelect
-            key={p.provider}
-            id={`${scopeId}-model`}
-            label={t("profile.model")}
-            placeholder={t("profile.defaultModel")}
-            searchLabel={t("models.search")}
-            emptyLabel={t("models.noMatches")}
-            className="flex-1"
-            value={p.model ?? ""}
-            currentLabel={selectedModel?.name}
-            onChange={(model) => change({ model }, "immediate")}
-            options={[
-              { id: "", label: t("profile.defaultModel") },
-              ...(p.model && !selectedModel
-                ? [{ id: p.model, label: p.model, disabled: true }]
-                : []),
-              ...models
-                .filter(({ id }) => id !== "" && !hiddenModels?.includes(id))
-                .map((model) => ({
-                  id: model.id,
-                  label: model.name,
-                  keywords: modelSearchAliases(model),
-                  description: modelDescription(
-                    t,
-                    model,
-                    installed?.name ?? p.provider,
-                  ),
-                  disabled: !!model.requiresVersion,
-                })),
-            ]}
-          />
-          {!creating && refreshButton}
-        </div>
-        {catalog.isLoading && (
-          <p className="profile-note">{t("common.loading")}</p>
-        )}
-        {catalog.error ? (
-          <ErrorNotice error={catalog.error} retry={refresh} />
-        ) : (
-          catalog.data === null && (
-            <ModelCatalogUnavailable
-              retry={refresh}
-              disabled={catalog.isFetching}
-            />
-          )
-        )}
-      </Field>
-      <PermissionOptions
-        providerType={installed?.type}
-        permissions={catalog.data?.permissions}
-        legacyPermissions={catalog.data?.legacyPermissions}
-        value={permission}
-        onChange={(permission) => {
-          setPermissionSource();
-          change({ permission }, "immediate");
-        }}
-      />
-    </>
-  );
-  const runtimeCard = !creating && (
+  const permissionToggleValue = normalizedPermissionPolicy || "inherit";
+  const currentRuntimeLabel = installed
+    ? connectionName(installed, providers.data ?? [], t)
+    : p.provider;
+  const currentSelectionSummary = [
+    currentRuntimeLabel,
+    p.model || (p.provider ? t("profile.defaultModel") : ""),
+    p.effort
+      ? t(`models.effort.${p.effort}`, { defaultValue: p.effort })
+      : "",
+    p.fast ? "Fast" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const permissionCard = !creating && (
     <Card className="profile-card profile-runtime">
       <CardHeader>
-        <CardTitle>{t("profile.runtime")}</CardTitle>
-        <CardDescription>{t("profile.runtimeHint")}</CardDescription>
+        <CardTitle>{t("profile.permission")}</CardTitle>
+        <CardDescription>{t("profile.permissionPolicyHint")}</CardDescription>
       </CardHeader>
-      <CardContent>
-        <FieldGroup>{runtimeFields}</FieldGroup>
-        {installed?.installed && catalog.data !== null && (
-          <p
-            className="profile-runtime-status profile-note"
-            title={installed.path}
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            spacing={0}
+            className="flex-wrap"
+            value={permissionToggleValue}
+            aria-label={t("profile.permission")}
+            disabled={busy}
+            onValueChange={(value) => {
+              if (!value) return;
+              const nextPolicy: AgentPermissionPolicy =
+                value === "inherit"
+                  ? ""
+                  : (value as Exclude<AgentPermissionPolicy, "">);
+              if (!AGENT_PERMISSION_POLICIES.includes(nextPolicy)) return;
+              change({ permission: nextPolicy }, "immediate");
+            }}
           >
-            <Terminal aria-hidden="true" />
-            {installed.version}
+            {AGENT_PERMISSION_POLICIES.map((policy) => {
+              const value = policy || "inherit";
+              return (
+                <ToggleGroupItem key={value} value={value}>
+                  {t(`profile.permissionPolicy.${value}`)}
+                </ToggleGroupItem>
+              );
+            })}
+          </ToggleGroup>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {permissionToggleValue === "inherit"
+              ? t("profile.permissionPolicy.inheritHint", {
+                  mode: t(
+                    globalPermissionMode === "yolo"
+                      ? "profile.permissionPolicy.full_access"
+                      : "profile.permissionPolicy.auto",
+                  ),
+                })
+              : t(`profile.permissionPolicy.${permissionToggleValue}Hint`)}
+          </p>
+        </div>
+        {currentSelectionSummary && (
+          <p className="profile-runtime-status profile-note">
+            {installed && <RuntimeIcon provider={installed} />}
+            <span className="truncate">{currentSelectionSummary}</span>
+            <span className="text-muted-foreground/75">
+              · {t("profile.modelSwitchInComposer")}
+            </span>
           </p>
         )}
       </CardContent>
@@ -1908,7 +1764,7 @@ export function Profile({
           hidden
           onSubmit={(event) => {
             event.preventDefault();
-            if (canCreate) createSave.mutate(profileToSave);
+            if (canCreate) createSave.mutate(draft);
           }}
         />
       )}
@@ -1972,13 +1828,17 @@ export function Profile({
                       </FieldLabel>
                       {instructionsInput}
                     </Field>
-                  </section>
-                  <section
-                    className="agent-create-section"
-                    aria-labelledby={`${scopeId}-runtime`}
-                  >
-                    <h3 id={`${scopeId}-runtime`}>{t("profile.runtime")}</h3>
-                    {runtimeFields}
+                    {providers.error && (
+                      <ErrorNotice
+                        error={providers.error}
+                        retry={() => void providers.refetch()}
+                      />
+                    )}
+                    {noAvailableRuntime && (
+                      <p className="profile-note">
+                        {t("channels.enableRuntime")}
+                      </p>
+                    )}
                   </section>
                 </div>
                 <CreateAgentOptions
@@ -2044,7 +1904,7 @@ export function Profile({
               </CardHeader>
               <CardContent>{instructionsInput}</CardContent>
             </Card>
-            {runtimeCard}
+            {permissionCard}
             {scopeCard}
             {disabledSkills}
             {additionalSkills}
@@ -2094,7 +1954,7 @@ export function Profile({
               onClick={() => {
                 autoSave.cancelPending();
                 archiveSave.mutate({
-                  ...profileToSave,
+                  ...draft,
                   archived: !savedProfile.archived,
                 });
               }}

@@ -104,13 +104,15 @@ import {
 import { useComposerShortcuts } from "@/features/settings/Preferences";
 import { PermissionMenu } from "@/features/runtime/Permissions";
 import {
-  findPermission,
+  resolveAgentPermissionForCatalog,
   usePermissionMapping,
   type PermissionSource,
 } from "@/features/runtime/permissionMapping";
+import type { EffortSource } from "@/features/runtime/effortMapping";
+import { persistAgentSelection } from "@/features/runtime/queries";
 import {
+  agentProfileSelection,
   rememberModel,
-  rememberPermission,
   useRuntimePreferences,
 } from "@/features/runtime/runtimePreferences";
 import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPicker";
@@ -246,12 +248,7 @@ export function Composer({
   const scopeSession = !topicMode || shareScope ? session : undefined;
   const currentScope = scopeSession ?? copy ?? profile;
   const cwd = primaryDirectory(currentScope);
-  const profileSelection: Selection = {
-    provider: profile.provider,
-    model: profile.model,
-    effort: "",
-    fast: false,
-  };
+  const profileSelection = agentProfileSelection(profile);
   const sessionSelection =
     !topicMode && session?.selection.provider ? session.selection : undefined;
   const currentSelection = sessionSelection ?? profileSelection;
@@ -259,12 +256,14 @@ export function Composer({
     provider: string,
     previous?: Selection,
   ): Selection {
-    const fallback =
-      provider === currentSelection.provider
-        ? currentSelection
-        : { provider, model: "", effort: "", fast: false };
+    if (previous) return previous;
+    if (provider === currentSelection.provider) return currentSelection;
+    if (provider === profile.provider) return profileSelection;
     return {
-      ...(previous ?? fallback),
+      provider,
+      model: "",
+      effort: "",
+      fast: false,
       ...preferences?.models[provider],
     };
   }
@@ -280,9 +279,21 @@ export function Composer({
       ? submitted
       : undefined;
   const ownSelection = override ?? submitted ?? sessionSelection;
-  const recent =
-    !ownSelection && preferences?.provider
-      ? selectionForProvider(preferences.provider)
+  const candidateSelection = ownSelection ?? profileSelection;
+  const candidateEffortSource =
+    !replaySelection &&
+    candidateSelection === override &&
+    override?.effortSource
+      ? override.effortSource
+      : undefined;
+  const providerDefaultFallback: Selection | undefined =
+    !ownSelection && profileSelection.provider && profileSelection.model
+      ? {
+          provider: profileSelection.provider,
+          model: "",
+          effort: "",
+          fast: false,
+        }
       : undefined;
   const {
     providers,
@@ -294,12 +305,46 @@ export function Composer({
     modelUnavailable,
     checkingPreference,
   } = useComposerModel(
-    ownSelection ?? recent ?? profileSelection,
+    candidateSelection,
     cwd,
-    recent ? profileSelection : undefined,
+    providerDefaultFallback,
+    candidateEffortSource,
   );
-  const { permissionSource, ...selection }: DraftSelection =
-    replaySelection ?? resolvedSelection;
+  const {
+    permissionSource,
+    effortSource: _effortSource,
+    ...selection
+  }: DraftSelection = replaySelection ?? resolvedSelection;
+  const pendingEffortSyncRef = useRef("");
+  useEffect(() => {
+    if (
+      !candidateEffortSource ||
+      draft.editing ||
+      !catalog.isSuccess ||
+      !model ||
+      catalog.data?.provisional
+    )
+      return;
+    const sig = JSON.stringify([
+      agentId,
+      selection.provider,
+      selection.model,
+      selection.effort,
+      selection.fast,
+    ]);
+    if (pendingEffortSyncRef.current === sig) return;
+    pendingEffortSyncRef.current = sig;
+    rememberModel(agentId, selection, undefined, model.efforts);
+    void persistAgentSelection(agentId, selection);
+  }, [
+    agentId,
+    candidateEffortSource,
+    catalog.data?.provisional,
+    catalog.isSuccess,
+    draft.editing,
+    model,
+    selection,
+  ]);
   const preferFavorites =
     preferences?.favoriteSelections?.[selection.provider] === selection.model;
   const mapped = usePermissionMapping(
@@ -311,10 +356,18 @@ export function Composer({
   const configureRuntime = composer
     ? () => composer.openRuntimeSettings(selection.provider)
     : undefined;
-  function setSelection(next: Selection, source?: PermissionSource) {
+  function setSelection(
+    next: Selection,
+    source?: PermissionSource,
+    effortSource?: EffortSource,
+  ) {
     setDraft((d) => ({
       ...d,
-      [selectionField]: { ...next, permissionSource: source },
+      [selectionField]: {
+        ...next,
+        permissionSource: source,
+        effortSource,
+      },
     }));
   }
   const prompt = serializePrompt(draft.content);
@@ -569,22 +622,15 @@ export function Composer({
     selection.provider === sessionSelection?.provider
       ? sessionSelection.permission
       : undefined;
-  const profilePermission =
-    selection.provider === profile.provider ? profile.permission : undefined;
-  const rememberedPermission =
-    !selection.permission &&
-    selection.provider !== sessionSelection?.provider &&
-    !draft.editing &&
-    !replaySelection
-      ? preferences?.permissions?.[selection.provider]
-      : undefined;
+  const profilePermission = resolveAgentPermissionForCatalog(
+    profile.permission,
+    catalog.data,
+    runtime?.type,
+  );
   const permission =
     mapped.permission ||
     selection.permission ||
     sessionPermission ||
-    (findPermission(catalog.data, rememberedPermission)
-      ? rememberedPermission
-      : undefined) ||
     profilePermission ||
     catalog.data?.defaultPermission ||
     "";
@@ -783,7 +829,6 @@ export function Composer({
       : undefined;
   const selectPermission = (permission: string) => {
     setSelection({ ...selection, permission });
-    rememberPermission(agentId, selection.provider, permission);
   };
   const changeRunPermission = useMutation({
     mutationFn: ({ run, ...change }: RunPermissionChange) =>
@@ -794,11 +839,6 @@ export function Composer({
     onSuccess: async (_, change) => {
       const { run } = change;
       if ("permission" in change) {
-        rememberPermission(
-          run.agentId,
-          run.selection.provider,
-          change.permission,
-        );
         setDraft((d) =>
           !d.editing && d.sessionSelection?.provider === run.selection.provider
             ? {
@@ -984,7 +1024,7 @@ export function Composer({
         comparisonAgents.length <= MaxComparisonAgents &&
         (!!replayComparison ||
           comparisonAgents.every((id) => comparisonSelections[id]))
-      : hasModel && (!rememberedPermission || !catalog.isPending)) &&
+      : hasModel) &&
     !sending &&
     !changeRunPermission.isPending &&
     !uploading &&
@@ -1706,17 +1746,35 @@ export function Composer({
                       onConfigureRuntime={configureRuntime}
                       value={selection}
                       preferFavorites={preferFavorites}
+                      effortHabit={preferences?.effortHabit}
                       selectionForProvider={selectionForProvider}
-                      onChange={(next, fromFavorites) => {
+                      onChange={(next, fromFavorites, meta) => {
+                        const hasExplicitPermission = Boolean(
+                          sessionSelection?.permission || override?.permission,
+                        );
                         const source =
                           next.provider !== selection.provider
-                            ? (permissionSource ?? {
-                                provider: selection.provider,
-                                permission,
-                              })
+                            ? hasExplicitPermission
+                              ? (permissionSource ?? {
+                                  provider: selection.provider,
+                                  permission,
+                                })
+                              : undefined
                             : permissionSource;
-                        setSelection(next, source);
-                        rememberModel(agentId, next, fromFavorites);
+                        setSelection(next, source, meta?.effortSource);
+                        if (!meta?.effortSource) {
+                          rememberModel(
+                            agentId,
+                            next,
+                            fromFavorites,
+                            meta?.modelEfforts,
+                          );
+                          if (!draft.editing) {
+                            void persistAgentSelection(agentId, next);
+                          }
+                        } else if (!draft.editing) {
+                          void persistAgentSelection(agentId, next);
+                        }
                       }}
                       disabled={sending || changeRunPermission.isPending}
                     />

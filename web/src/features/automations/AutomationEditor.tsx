@@ -35,7 +35,10 @@ import { WorkingDirectoryPicker } from "@/features/worktrees/WorkingDirectoryPic
 import { availableGroup, useWorkingCopies } from "@/features/worktrees/queries";
 import { primaryDirectory } from "@/features/worktrees/scope";
 import { Choice, FormRow, ToggleRow } from "./AutomationFormControls";
-import { AutomationRuntimeControls } from "./AutomationRuntimeControls";
+import {
+  AutomationRuntimeControls,
+  lockAutomationSelection,
+} from "./AutomationRuntimeControls";
 import { AutomationScheduleFields } from "./AutomationScheduleFields";
 import { scheduleDraft, scheduleInput } from "./automationSchedule";
 import {
@@ -222,6 +225,11 @@ export function AutomationEditor({
           onSubmit={(event) => {
             event.preventDefault();
             if (!canSave || save.isPending) return;
+            const lockedPrimary = lockAutomationSelection(
+              agent,
+              selection,
+              runtimeCwd,
+            );
             const targets =
               extraTargets.length > 0
                 ? [
@@ -229,10 +237,21 @@ export function AutomationEditor({
                       id: plan?.targets?.[0]?.id || crypto.randomUUID(),
                       agentId,
                       workingCopyId: groupApplicable ? copyId : undefined,
-                      selection,
+                      selection: lockedPrimary,
                       enabled: true,
                     },
-                    ...extraTargets,
+                    ...extraTargets.map((extra) => {
+                      const extraAgent = agents.find(
+                        (item) => item.id === extra.agentId,
+                      );
+                      return {
+                        ...extra,
+                        selection: lockAutomationSelection(
+                          extraAgent,
+                          extra.selection,
+                        ),
+                      };
+                    }),
                   ]
                 : undefined;
             save.mutate({
@@ -259,7 +278,7 @@ export function AutomationEditor({
                 chatId: existing ? chatId : undefined,
                 workingCopyId: groupApplicable ? copyId : undefined,
               },
-              selection: extraTargets.length > 0 ? undefined : selection,
+              selection: extraTargets.length > 0 ? undefined : lockedPrimary,
               targets,
               notifyPolicy: quiet ? "silent" : notifyPolicy,
               deliveryMode,
