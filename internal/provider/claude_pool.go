@@ -137,10 +137,11 @@ func (p *claudePool) closeStateDir(stateDir string) {
 type claudeResident struct {
 	p           *device.Process
 	nativeID    string
-	fingerprint string
-	permission  string
-	commands    []model.Reference
-	mcpRelay    *claudeMCPRelay
+	fingerprint    string
+	permission     string
+	commands       []model.Reference
+	contextWindows map[string]int64
+	mcpRelay       *claudeMCPRelay
 	reqSeq      atomic.Uint64
 	parkedAt    time.Time
 

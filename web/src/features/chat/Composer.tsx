@@ -156,8 +156,6 @@ export function Composer({
   resumableRun,
   queuedRuns = [],
   hasActiveDelegations,
-  hasHistory,
-  lastCompacted,
   archived,
   autoFocus,
   visible,
@@ -179,8 +177,6 @@ export function Composer({
   resumableRun?: Run;
   queuedRuns?: Run[];
   hasActiveDelegations?: boolean;
-  hasHistory?: boolean;
-  lastCompacted?: boolean;
   archived?: boolean;
   autoFocus?: boolean;
   visible?: boolean;
@@ -1806,70 +1802,8 @@ export function Composer({
                       !archived &&
                       !draftAgentId &&
                       session &&
-                      (Boolean(sessionRuntime?.context) ||
-                        Boolean(hasHistory)) && (
-                        <ContextMeter
-                          sessionRuntime={sessionRuntime}
-                          catalog={catalog.data}
-                          hasHistory={Boolean(hasHistory)}
-                          lastCompacted={lastCompacted}
-                          disabled={
-                            sending ||
-                            changeRunPermission.isPending ||
-                            activeRun?.status === "unknown"
-                          }
-                          onCompact={async (focus) => {
-                            const nextSelection =
-                              permission && permission !== selection.permission
-                                ? { ...selection, permission }
-                                : selection;
-                            const run = await api<Run>("/messages", {
-                              commandId: crypto.randomUUID(),
-                              chatId,
-                              sessionId: reply ? session.id : undefined,
-                              operation: reply ? "reply" : "main",
-                              delivery: running ? "queue" : undefined,
-                              text: focus ? `/compact ${focus}` : "/compact",
-                              selection: nextSelection,
-                            } satisfies SendInput);
-                            await Promise.all([
-                              queryClient.invalidateQueries({
-                                queryKey: ["chat", run.chatId],
-                              }),
-                              queryClient.invalidateQueries({
-                                queryKey: ["session", session.id],
-                              }),
-                              queryClient.invalidateQueries({
-                                queryKey: ["overview"],
-                              }),
-                            ]);
-                            onSent(run);
-                          }}
-                          onHandoff={async (text) => {
-                            const nextSelection =
-                              permission && permission !== selection.permission
-                                ? { ...selection, permission }
-                                : selection;
-                            const run = await api<Run>("/messages", {
-                              commandId: crypto.randomUUID(),
-                              chatId,
-                              operation: "topic",
-                              handoffFromSessionId: session.id,
-                              text,
-                              selection: nextSelection,
-                            } satisfies SendInput);
-                            await Promise.all([
-                              queryClient.invalidateQueries({
-                                queryKey: ["chat", run.chatId],
-                              }),
-                              queryClient.invalidateQueries({
-                                queryKey: ["overview"],
-                              }),
-                            ]);
-                            onOpenHandoffTopic?.(run);
-                          }}
-                          onReturnToComposer={() => textbox.current?.focus()}
-                        />
+                      sessionRuntime?.context && (
+                        <ContextMeter context={sessionRuntime.context} />
                       )}
                     <PermissionMenu
                       providerType={runtime?.type}

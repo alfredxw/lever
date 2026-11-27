@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode"
@@ -52,13 +53,38 @@ func commandResult(sink Sink, id, text string) error {
 	return sink.Item(model.Item{ID: id, Kind: "text", Text: text, Status: "completed"})
 }
 
+func nonNegativeInt(value any) (int64, bool) {
+	switch n := value.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+			return 0, false
+		}
+		return int64(math.Round(n)), true
+	case int:
+		if n < 0 {
+			return 0, false
+		}
+		return int64(n), true
+	case int64:
+		if n < 0 {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
 func setContextUsage(sink Sink, used, window any) error {
-	n, ok := used.(float64)
-	w, valid := window.(float64)
-	if !ok || !valid || n < 0 || w <= 0 {
+	n, ok := nonNegativeInt(used)
+	if !ok {
+		return nil
+	}
+	w, _ := nonNegativeInt(window)
+	if n == 0 && w == 0 {
 		return nil
 	}
 	return sink.UpdateRuntime(func(s *model.SessionRuntime) {
-		s.Context = &model.ContextUsage{Used: int64(n), Window: int64(w)}
+		s.Context = &model.ContextUsage{Used: n, Window: w}
 	})
 }

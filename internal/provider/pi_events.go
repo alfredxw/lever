@@ -13,10 +13,36 @@ import (
 )
 
 type piTranscript struct {
-	sink    Sink
-	items   map[string]model.Item
-	message int
-	failure error
+	sink                  Sink
+	items                 map[string]model.Item
+	message               int
+	failure               error
+	contextWindow         int64
+	lastUsedTokens        int64
+	compacted             bool
+	compactionAfterTokens int64
+}
+
+func piUsageTokens(usage object) int64 {
+	if total, ok := nonNegativeInt(usage["totalTokens"]); ok && total > 0 {
+		return total
+	}
+	var sum int64
+	for _, key := range []string{"input", "cacheRead", "cacheWrite", "output"} {
+		if n, ok := nonNegativeInt(usage[key]); ok {
+			sum += n
+		}
+	}
+	return sum
+}
+
+func (t *piTranscript) reportUsage(usage object) error {
+	used := piUsageTokens(usage)
+	if used <= 0 || used == t.lastUsedTokens {
+		return nil
+	}
+	t.lastUsedTokens = used
+	return setContextUsage(t.sink, used, t.contextWindow)
 }
 
 func (t *piTranscript) emit(item model.Item) error {
@@ -35,6 +61,11 @@ func (t *piTranscript) update(frame object) error {
 			t.message++
 		}
 	case "message_update":
+		if frame["usage"] != nil {
+			if err := t.reportUsage(obj(frame["usage"])); err != nil {
+				return err
+			}
+		}
 		delta := obj(frame["assistantMessageEvent"])
 		kind := ""
 		switch delta["type"] {
@@ -51,6 +82,11 @@ func (t *piTranscript) update(frame object) error {
 	case "message_end":
 		if message["role"] != "assistant" {
 			return nil
+		}
+		if message["usage"] != nil {
+			if err := t.reportUsage(obj(message["usage"])); err != nil {
+				return err
+			}
 		}
 		for i, value := range arr(message["content"]) {
 			content := obj(value)
@@ -79,6 +115,22 @@ func (t *piTranscript) update(frame object) error {
 		default:
 			t.failure = nil
 		}
+	case "compaction_end", "auto_compaction_end":
+		if frame["aborted"] == true {
+			return nil
+		}
+		result := obj(frame["result"])
+		if len(result) == 0 {
+			return nil
+		}
+		t.compacted = true
+		if after, ok := nonNegativeInt(result["estimatedTokensAfter"]); ok && after > 0 {
+			t.compactionAfterTokens = after
+			t.lastUsedTokens = after
+			return setContextUsage(t.sink, after, t.contextWindow)
+		}
+		t.lastUsedTokens = 0
+		return t.sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil })
 	case "tool_execution_start", "tool_execution_update", "tool_execution_end":
 		id := "tool-" + str(frame["toolCallId"])
 		item := t.items[id]

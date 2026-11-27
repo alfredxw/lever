@@ -155,7 +155,7 @@ func (l *claudeLoop) waiting() bool {
 
 // After a real model turn, ask the native /goal command whether a goal is
 // still active. A successful model result alone cannot establish that.
-func finishClaude(ctx context.Context, r *claudeResident, sink Sink, checkGoal, refreshContext bool) (bool, error) {
+func finishClaude(ctx context.Context, r *claudeResident, sink Sink, checkGoal, refreshContext bool, autoCompactWindow int) (bool, error) {
 	if !checkGoal && !refreshContext {
 		return true, nil
 	}
@@ -203,11 +203,22 @@ func finishClaude(ctx context.Context, r *claudeResident, sink Sink, checkGoal, 
 			if waitGoalResult && str(f["type"]) == "result" && str(f["parent_tool_use_id"]) == "" {
 				waitGoalResult = false
 			}
-			if r := obj(f["response"]); refreshContext && f["type"] == "control_response" && r["request_id"] == contextReqID {
+			if resp := obj(f["response"]); refreshContext && f["type"] == "control_response" && resp["request_id"] == contextReqID {
 				refreshContext = false
-				usage := obj(r["response"])
-				if err := setContextUsage(sink, usage["totalTokens"], usage["maxTokens"]); err != nil {
-					return false, err
+				usage := obj(resp["response"])
+				if used, ok := nonNegativeInt(usage["totalTokens"]); ok {
+					window, _ := nonNegativeInt(usage["maxTokens"])
+					if used > 0 || window > 0 {
+						threshold, _ := nonNegativeInt(usage["autoCompactThreshold"])
+						if threshold == 0 {
+							threshold = claudeAutoCompactThreshold(autoCompactWindow, window)
+						}
+						if err := sink.UpdateRuntime(func(s *model.SessionRuntime) {
+							s.Context = &model.ContextUsage{Used: used, Window: window, AutoCompactThreshold: threshold}
+						}); err != nil {
+							return false, err
+						}
+					}
 				}
 			}
 		}

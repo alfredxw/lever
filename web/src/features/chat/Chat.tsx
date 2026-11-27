@@ -727,10 +727,6 @@ function ChatContent(props: ChatProps) {
             resumableRun={resumableMainRun}
             queuedRuns={queuedRuns}
             hasActiveDelegations={hasActiveMainDelegations}
-            hasHistory={mainRuns.some(
-              (run) => run.status !== "queued" && run.status !== "cancelled",
-            )}
-            lastCompacted={latestMainRun?.input.trim().startsWith("/compact")}
             archived={agent.archived}
             visible={enabled}
             onSent={onSent}

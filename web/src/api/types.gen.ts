@@ -1062,6 +1062,7 @@ export interface SessionGoal {
 export interface ContextUsage {
   promptCacheExpiresAt?: number /* int64 */;
   cacheRunId?: string;
+  autoCompactThreshold?: number /* int64 */;
   used: number /* int64 */;
   window: number /* int64 */;
 }

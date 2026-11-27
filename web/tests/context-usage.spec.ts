@@ -25,7 +25,7 @@ async function waitRunCompleted(request: APIRequestContext, runId: string) {
     .toBe("completed");
 }
 
-test("context meter is off by default, toggles in Settings, supports Claude/Codex compact and fresh-topic handoff", async ({
+test("context meter is off by default, renders simplified usage when reported, and hides when unavailable", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -108,10 +108,10 @@ test("context meter is off by default, toggles in Settings, supports Claude/Code
   await contextSwitch.click();
   await expect(contextSwitch).toBeChecked();
 
-  // 3. Return to Agents -> Claude Topic; verify context ring + Claude popover controls.
+  // 3. Return to Agents -> Claude Topic; verify simplified context ring and read-only popover.
   await page.getByRole("button", { name: "Agents" }).click();
   const claudeMeter = topicComposer.getByRole("button", {
-    name: /上下文窗口 \d+%/,
+    name: /上下文窗口 20%/,
   });
   await expect(claudeMeter).toBeVisible();
   await expect(claudeMeter).toHaveText("");
@@ -119,36 +119,15 @@ test("context meter is off by default, toggles in Settings, supports Claude/Code
 
   const popover = page.getByRole("dialog").last();
   await expect(popover).toBeVisible();
-  await expect(popover.getByRole("progressbar", { name: "上下文窗口" })).toBeVisible();
-  await expect(popover.getByLabel("压缩保留重点（可选）")).toBeVisible();
   await expect(
-    popover.getByRole("button", { name: "压缩", exact: true }),
+    popover.getByRole("progressbar", { name: "上下文窗口" }),
   ).toBeVisible();
-  await expect(popover.getByLabel("转入新话题的下一步目标")).toBeVisible();
+  await expect(popover.getByText("20%")).toBeVisible();
+  await expect(popover.getByText("2,000 / 10,000 tokens")).toBeVisible();
+  await expect(popover.getByRole("button")).toHaveCount(0);
+  await expect(popover.getByRole("textbox")).toHaveCount(0);
 
-  // 4. Trigger Fresh-Topic Handoff from the popover and verify lineage back-link.
-  await popover
-    .getByLabel("转入新话题的下一步目标")
-    .fill("continue work in a fresh topic");
-  const handoffPost = page.waitForResponse(
-    (res) =>
-      res.url().endsWith("/api/messages") &&
-      res.request().method() === "POST" &&
-      res.request().postDataJSON()?.handoffFromSessionId === claudeRun.sessionId,
-  );
-  await popover.getByRole("button", { name: "新话题", exact: true }).click();
-  const handoffRun: Run = await (await handoffPost).json();
-  expect(handoffRun.sessionId).not.toBe(claudeRun.sessionId);
-  await waitRunCompleted(page.request, handoffRun.id);
-
-  // Fresh Topic should open with a clickable "承接自 ..." back-link and no runtime-switch notice.
-  const backToSource = page
-    .locator(".topic-toolbar:visible")
-    .getByRole("button", { name: /^承接自 / });
-  await expect(backToSource).toBeVisible();
-  await expect(page.locator(".runtime-handoff:visible")).toHaveCount(0);
-
-  // 5. Switch to Codex Topic and verify arg-less compact button + post-compact state.
+  // 4. Switch to Codex Topic; verify meter renders and disappears cleanly when usage is cleared.
   await page
     .getByRole("button", { name: codexAgent.name, exact: true })
     .first()
@@ -157,35 +136,31 @@ test("context meter is off by default, toggles in Settings, supports Claude/Code
 
   const codexMeter = page
     .locator(".topic-composer-wrap:visible")
-    .getByRole("button", { name: /上下文窗口 \d+%/ });
+    .getByRole("button", { name: /上下文窗口 7%/ });
   await expect(codexMeter).toBeVisible();
   await codexMeter.click();
 
   const codexPopover = page.getByRole("dialog").last();
-  await expect(codexPopover.getByLabel("压缩保留重点（可选）")).toHaveCount(0);
-  const compactButton = codexPopover.getByRole("button", {
-    name: "压缩当前会话",
-    exact: true,
-  });
-  await expect(compactButton).toBeVisible();
+  await expect(codexPopover.getByText("710 / 10,000 tokens")).toBeVisible();
+  await expect(codexPopover.getByRole("button")).toHaveCount(0);
 
-  const compactPost = page.waitForResponse(
-    (res) =>
-      res.url().endsWith("/api/messages") &&
-      res.request().method() === "POST" &&
-      res.request().postDataJSON()?.text === "/compact",
-  );
-  await compactButton.click();
-  const compactRun: Run = await (await compactPost).json();
+  // Compact Codex session via /compact; context usage clears and the indicator hides (no dashed placeholder).
+  const compactRes = await page.request.post("/api/messages", {
+    data: {
+      commandId: crypto.randomUUID(),
+      chatId: codexRun.chatId,
+      sessionId: codexRun.sessionId,
+      operation: "reply",
+      text: "/compact",
+    },
+  });
+  expect(compactRes.ok()).toBeTruthy();
+  const compactRun: Run = await compactRes.json();
   await waitRunCompleted(page.request, compactRun.id);
 
-  // After Codex compacts, context usage clears until the next reply; meter still opens cleanly.
-  const compactedMeter = page
-    .locator(".topic-composer-wrap:visible")
-    .getByRole("button", { name: "上下文窗口" });
-  await expect(compactedMeter).toBeVisible();
-  await compactedMeter.click();
   await expect(
-    page.getByText("已压缩，下一轮回复后更新用量"),
-  ).toBeVisible();
+    page
+      .locator(".topic-composer-wrap:visible")
+      .getByRole("button", { name: /上下文窗口/ }),
+  ).toHaveCount(0);
 });

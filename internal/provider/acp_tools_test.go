@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -13,18 +14,34 @@ import (
 )
 
 type recordingSink struct {
-	items  []model.Item
-	byID   map[string]model.Item
-	titles []string
+	mu      sync.Mutex
+	items   []model.Item
+	byID    map[string]model.Item
+	titles  []string
+	runtime model.SessionRuntime
 }
 
 func newRecordingSink() *recordingSink {
 	return &recordingSink{byID: map[string]model.Item{}}
 }
 
-func (s *recordingSink) Bind(string) error                                           { return nil }
-func (s *recordingSink) BindTurn(string) error                                       { return nil }
-func (s *recordingSink) UpdateRuntime(func(*model.SessionRuntime)) error             { return nil }
+func (s *recordingSink) Bind(string) error     { return nil }
+func (s *recordingSink) BindTurn(string) error { return nil }
+func (s *recordingSink) UpdateRuntime(update func(*model.SessionRuntime)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	update(&s.runtime)
+	return nil
+}
+func (s *recordingSink) contextUsage() *model.ContextUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime.Context == nil {
+		return nil
+	}
+	copy := *s.runtime.Context
+	return &copy
+}
 func (s *recordingSink) Usage([]model.UsageWindow) error                             { return nil }
 func (s *recordingSink) Title(title string) error                                    { s.titles = append(s.titles, title); return nil }
 func (s *recordingSink) TurnDiff(string) error                                       { return nil }

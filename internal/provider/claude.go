@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -258,6 +259,14 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	goalActive := in.Session.Runtime != nil && in.Session.Runtime.Goal != nil && in.Session.Runtime.Goal.Status == "active"
 	goalSawModel := false
 	var lastModelMessage object
+	var lastModelRequestedAt time.Time
+	var streamModel, streamMessageID string
+	var streamUsage object
+	var streamRequestedAt time.Time
+	var lastContextWindow int64
+	if in.Session.Runtime != nil && in.Session.Runtime.Context != nil && in.Session.Runtime.Context.Window > 0 && in.Session.Selection.Model == in.Selection.Model {
+		lastContextWindow = in.Session.Runtime.Context.Window
+	}
 	var lastUsage []model.UsageWindow
 	var requestedAt time.Time
 	refreshContext := command == "context" || command == "compact"
@@ -463,10 +472,19 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 						return err
 					}
 				}
+			case "conversation_reset":
+				lastModelMessage, streamUsage = nil, nil
+				if err := sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil }); err != nil {
+					return err
+				}
 			case "system":
 				if f["subtype"] == "compact_boundary" {
-					lastModelMessage = nil
-					if err := sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil }); err != nil {
+					lastModelMessage, streamUsage = nil, nil
+					if post, ok := nonNegativeInt(obj(f["compact_metadata"])["post_tokens"]); ok && post > 0 {
+						if err := setClaudeContext(sink, in, time.Time{}, post, lastContextWindow, nil); err != nil {
+							return err
+						}
+					} else if err := sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil }); err != nil {
 						return err
 					}
 				}
@@ -508,8 +526,36 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 				index := fmt.Sprint(e["index"])
 				switch str(e["type"]) {
 				case "message_start":
-					currentMessage = str(obj(e["message"])["id"])
+					msg := obj(e["message"])
+					currentMessage = str(msg["id"])
 					delete(nextAssistantBlock, currentMessage)
+					streamModel, streamMessageID = str(msg["model"]), currentMessage
+					streamRequestedAt = time.Now()
+					streamUsage = maps.Clone(obj(msg["usage"]))
+					if streamModel != "<synthetic>" {
+						if input, used := claudeUsageCounts(streamUsage); input > 0 {
+							window := claudeResolveContextWindow(nil, streamModel, r.contextWindows)
+							if window == 0 {
+								window = lastContextWindow
+							}
+							if err := setClaudeContext(sink, in, streamRequestedAt, used, window, streamUsage); err != nil {
+								return err
+							}
+						}
+					}
+				case "message_delta":
+					if streamModel != "<synthetic>" && e["usage"] != nil {
+						streamUsage = mergeClaudeStreamUsage(streamUsage, obj(e["usage"]))
+						if input, used := claudeUsageCounts(streamUsage); input > 0 {
+							window := claudeResolveContextWindow(nil, streamModel, r.contextWindows)
+							if window == 0 {
+								window = lastContextWindow
+							}
+							if err := setClaudeContext(sink, in, streamRequestedAt, used, window, streamUsage); err != nil {
+								return err
+							}
+						}
+					}
 				case "content_block_start":
 					v := obj(e["content_block"])
 					if isClaudeAgentTool(v) {
@@ -574,13 +620,26 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 				}
 			case "assistant":
 				m := obj(f["message"])
-				if m["model"] != "<synthetic>" && obj(m["usage"])["input_tokens"] != nil {
-					lastModelMessage = m
+				messageID := str(m["id"])
+				if m["model"] != "<synthetic>" {
+					if input, used := claudeUsageCounts(obj(m["usage"])); input > 0 {
+						lastModelMessage = m
+						lastModelRequestedAt = requestedAt
+						if messageID != "" && messageID == streamMessageID && !streamRequestedAt.IsZero() {
+							lastModelRequestedAt = streamRequestedAt
+						}
+						window := claudeResolveContextWindow(nil, str(m["model"]), r.contextWindows)
+						if window == 0 {
+							window = lastContextWindow
+						}
+						if err := setClaudeContext(sink, in, lastModelRequestedAt, used, window, obj(m["usage"])); err != nil {
+							return err
+						}
+					}
 				}
 				if goalActive && str(m["model"]) != "" && m["model"] != "<synthetic>" {
 					goalSawModel = true
 				}
-				messageID := str(m["id"])
 				content := arr(m["content"])
 				// Claude Code can send one final assistant frame per block with the same message ID.
 				offset := 0
@@ -707,23 +766,44 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 						return err
 					}
 				}
-				if lastModelMessage != nil {
-					window := obj(obj(f["modelUsage"])[str(lastModelMessage["model"])])["contextWindow"]
-					usage := obj(lastModelMessage["usage"])
-					var used float64
-					for _, key := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"} {
-						n, _ := usage[key].(float64)
-						used += n
+				modelUsage := obj(f["modelUsage"])
+				if len(modelUsage) > 0 {
+					if r.contextWindows == nil {
+						r.contextWindows = map[string]int64{}
 					}
-					if err := setClaudeContext(sink, in, requestedAt, used, window, usage); err != nil {
-						return err
+					claudeRememberContextWindows(modelUsage, r.contextWindows)
+				}
+				if lastModelMessage != nil {
+					usage := obj(lastModelMessage["usage"])
+					if input, used := claudeUsageCounts(usage); input > 0 {
+						window := claudeResolveContextWindow(modelUsage, str(lastModelMessage["model"]), r.contextWindows)
+						if window == 0 {
+							window = lastContextWindow
+						} else {
+							lastContextWindow = window
+						}
+						if err := setClaudeContext(sink, in, lastModelRequestedAt, used, window, usage); err != nil {
+							return err
+						}
+					}
+				} else if streamUsage != nil {
+					if input, used := claudeUsageCounts(streamUsage); input > 0 {
+						window := claudeResolveContextWindow(modelUsage, streamModel, r.contextWindows)
+						if window == 0 {
+							window = lastContextWindow
+						} else {
+							lastContextWindow = window
+						}
+						if err := setClaudeContext(sink, in, streamRequestedAt, used, window, streamUsage); err != nil {
+							return err
+						}
 					}
 				}
 				if loopEnabled && loop.waiting() {
 					loop.idle = true
 					continue
 				}
-				finishReusable, err := finishClaude(ctx, r, sink, goalActive && goalSawModel, refreshContext)
+				finishReusable, err := finishClaude(ctx, r, sink, goalActive && goalSawModel, refreshContext, in.Provider.AutoCompactWindow)
 				if err != nil {
 					return err
 				}
@@ -820,18 +900,132 @@ func claudeContent(in Input) ([]object, error) {
 	return content, nil
 }
 
-func setClaudeContext(sink Sink, in Input, requestedAt time.Time, used float64, window any, usageMap object) error {
-	w, ok := window.(float64)
-	if !ok || w <= 0 {
+// Claude caps the auto-compact window at the model's context and triggers
+// compaction 33,000 tokens below the configured window.
+const claudeAutoCompactReserveTokens int64 = 33_000
+
+func claudeAutoCompactThreshold(autoCompactWindow int, window int64) int64 {
+	limit := int64(autoCompactWindow)
+	if limit <= claudeAutoCompactReserveTokens {
+		return 0
+	}
+	if window > 0 && limit >= window {
+		return 0
+	}
+	return limit - claudeAutoCompactReserveTokens
+}
+
+func claudeUsageSample(usage object) object {
+	if iterations := arr(usage["iterations"]); len(iterations) > 0 {
+		for i := len(iterations) - 1; i >= 0; i-- {
+			sample := obj(iterations[i])
+			if str(sample["type"]) == "message" {
+				return sample
+			}
+		}
+	}
+	return usage
+}
+
+func claudeUsageCounts(usage object) (input, total int64) {
+	sample := claudeUsageSample(usage)
+	for _, key := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+		if n, ok := nonNegativeInt(sample[key]); ok {
+			input += n
+		}
+	}
+	output, _ := nonNegativeInt(sample["output_tokens"])
+	return input, input + output
+}
+
+func mergeClaudeStreamUsage(current, delta object) object {
+	merged := maps.Clone(current)
+	if merged == nil {
+		merged = object{}
+	}
+	for _, key := range []string{"iterations", "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens", "cache_creation"} {
+		if value, ok := delta[key]; ok && value != nil {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func stripClaudeModelSuffix(model string) string {
+	if i := strings.IndexByte(model, '['); i > 0 {
+		return model[:i]
+	}
+	return model
+}
+
+func claudeRememberContextWindows(modelUsage object, cache map[string]int64) {
+	for name, raw := range modelUsage {
+		entry := obj(raw)
+		if w, ok := nonNegativeInt(entry["contextWindow"]); ok && w > 0 {
+			cache[name] = w
+			if canonical := str(entry["canonicalModel"]); canonical != "" {
+				cache[canonical] = w
+			}
+		}
+	}
+}
+
+func claudeResolveContextWindow(modelUsage object, model string, cache map[string]int64) int64 {
+	if w, ok := nonNegativeInt(obj(modelUsage[model])["contextWindow"]); ok && w > 0 {
+		return w
+	}
+	base := stripClaudeModelSuffix(model)
+	for name, raw := range modelUsage {
+		entry := obj(raw)
+		w, ok := nonNegativeInt(entry["contextWindow"])
+		if !ok || w <= 0 {
+			continue
+		}
+		if str(entry["canonicalModel"]) == model || (base != "" && (stripClaudeModelSuffix(name) == base || stripClaudeModelSuffix(str(entry["canonicalModel"])) == base)) {
+			return w
+		}
+	}
+	if len(modelUsage) == 1 {
+		for _, raw := range modelUsage {
+			if w, ok := nonNegativeInt(obj(raw)["contextWindow"]); ok && w > 0 {
+				return w
+			}
+		}
+	}
+	if w := cache[model]; w > 0 {
+		return w
+	}
+	if base != "" {
+		if w := cache[base]; w > 0 {
+			return w
+		}
+		for name, w := range cache {
+			if w > 0 && stripClaudeModelSuffix(name) == base {
+				return w
+			}
+		}
+	}
+	return 0
+}
+
+func setClaudeContext(sink Sink, in Input, requestedAt time.Time, used, window int64, usageMap object) error {
+	if used < 0 || (used == 0 && window <= 0) {
 		return nil
 	}
-	usage := &model.ContextUsage{Used: int64(used), Window: int64(w)}
-	if !requestedAt.IsZero() {
+	if window < 0 {
+		window = 0
+	}
+	usage := &model.ContextUsage{
+		Used:                 used,
+		Window:               window,
+		AutoCompactThreshold: claudeAutoCompactThreshold(in.Provider.AutoCompactWindow, window),
+	}
+	if !requestedAt.IsZero() && usageMap != nil {
 		// Start at submission, so a slow response cannot extend a cache's lifetime.
 		cache := obj(usageMap["cache_creation"])
-		hour, _ := cache["ephemeral_1h_input_tokens"].(float64)
-		short, _ := cache["ephemeral_5m_input_tokens"].(float64)
-		cacheRead, _ := usageMap["cache_read_input_tokens"].(float64)
+		hour, _ := nonNegativeInt(cache["ephemeral_1h_input_tokens"])
+		short, _ := nonNegativeInt(cache["ephemeral_5m_input_tokens"])
+		cacheRead, _ := nonNegativeInt(usageMap["cache_read_input_tokens"])
 		var ttl time.Duration
 		switch {
 		case hour > 0:

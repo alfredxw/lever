@@ -213,7 +213,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 		switch method {
 		case "thread/tokenUsage/updated":
 			usage := obj(q["tokenUsage"])
-			return setContextUsage(sink, obj(usage["last"])["totalTokens"], usage["modelContextWindow"])
+			return setContextUsage(sink, codexContextUsed(obj(usage["last"])), usage["modelContextWindow"])
 		case "thread/compacted":
 			return sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil })
 		case "turn/diff/updated":
@@ -801,6 +801,18 @@ func codexInstructions(instructions string) object {
 		text = text[end:]
 	}
 	return context
+}
+
+func codexContextUsed(last object) any {
+	if last["totalTokens"] != nil {
+		return last["totalTokens"]
+	}
+	input, ok := nonNegativeInt(last["inputTokens"])
+	if !ok {
+		return nil
+	}
+	output, _ := nonNegativeInt(last["outputTokens"])
+	return input + output
 }
 
 func codexContent(in Input) []object {

@@ -330,6 +330,7 @@ type SessionGoal struct {
 type ContextUsage struct {
 	PromptCacheExpiresAt int64  `json:"promptCacheExpiresAt,omitempty"`
 	CacheRunID           string `json:"cacheRunId,omitempty"`
+	AutoCompactThreshold int64  `json:"autoCompactThreshold,omitempty"`
 	Used                 int64  `json:"used"`
 	Window               int64  `json:"window"`
 }

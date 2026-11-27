@@ -33,16 +33,20 @@ type acpRuntime struct {
 	mu            sync.Mutex
 	provider      model.Provider
 	cwd           string
-	antigravity   bool
-	session       acp.SessionId
-	active        bool
-	modeTouched   bool
-	promptStarted chan struct{}
-	agyCLI        bool
-	commands       map[acp.SessionId][]model.NativeCommand
-	titles         map[acp.SessionId]string
-	publishedTitle string
-	skillCommands  map[string]bool
+	antigravity        bool
+	session            acp.SessionId
+	active             bool
+	prompted           bool
+	modeTouched        bool
+	promptStarted      chan struct{}
+	agyCLI             bool
+	commands           map[acp.SessionId][]model.NativeCommand
+	titles             map[acp.SessionId]string
+	publishedTitle     string
+	contextUsage       map[acp.SessionId]model.ContextUsage
+	publishedContext   *model.ContextUsage
+	modelContextWindow int64
+	skillCommands      map[string]bool
 	commandUpdate  chan struct{}
 	background    *antigravityBackground
 	interruptDone <-chan struct{}
@@ -68,8 +72,9 @@ type acpState struct {
 	Models        *struct {
 		CurrentModelID  string `json:"currentModelId"`
 		AvailableModels []struct {
-			ModelID string `json:"modelId"`
-			Name    string `json:"name"`
+			ModelID string         `json:"modelId"`
+			Name    string         `json:"name"`
+			Meta    map[string]any `json:"_meta,omitempty"`
 		} `json:"availableModels"`
 	} `json:"models"`
 }
@@ -108,6 +113,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 		subagents:     map[string]*subagent{},
 		commands:      make(map[acp.SessionId][]model.NativeCommand),
 		titles:        make(map[acp.SessionId]string),
+		contextUsage:  make(map[acp.SessionId]model.ContextUsage),
 		commandUpdate: make(chan struct{}, 1),
 	}
 	cmd := device.Command(path, config.Args...)
@@ -301,6 +307,37 @@ func (state acpState) option(category acp.SessionConfigOptionCategory) *acp.Sess
 		}
 	}
 	return nil
+}
+
+func acpMetaContextWindow(meta map[string]any) int64 {
+	for _, key := range []string{"totalContextTokens", "contextWindow", "context_window", "maxContextTokens"} {
+		if w, ok := nonNegativeInt(meta[key]); ok && w > 0 {
+			return w
+		}
+	}
+	return 0
+}
+
+func (state acpState) activeModelContextWindow() int64 {
+	if option := state.option(acp.SessionConfigOptionCategoryModel); option != nil {
+		for _, value := range acpChoices(option) {
+			if value.Value == option.CurrentValue {
+				if w := acpMetaContextWindow(value.Meta); w > 0 {
+					return w
+				}
+			}
+		}
+	}
+	if state.Models != nil {
+		for _, value := range state.Models.AvailableModels {
+			if value.ModelID == state.Models.CurrentModelID {
+				if w := acpMetaContextWindow(value.Meta); w > 0 {
+					return w
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func (state acpState) catalog() model.Catalog {
@@ -624,13 +661,24 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 		}))
 	}
 	c.mu.Lock()
+	c.modelContextWindow = state.activeModelContextWindow()
 	c.active = true
+	c.prompted = true
 	if commands, ok := c.commands[c.session]; ok {
 		err = c.publishCommands(commands)
 	}
 	if err == nil {
 		if title := c.titles[c.session]; title != "" {
 			err = c.publishTitle(title)
+		}
+	}
+	if err == nil {
+		if usage, ok := c.contextUsage[c.session]; ok {
+			if usage.Window <= 0 && c.modelContextWindow > 0 {
+				usage.Window = c.modelContextWindow
+				c.contextUsage[c.session] = usage
+			}
+			err = c.publishContextUsageLocked(usage)
 		}
 	}
 	c.mu.Unlock()
@@ -946,6 +994,23 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 			}
 			return nil, nil
 		}
+		if usage, ok := c.extractContextUsageLocked(update); ok && (c.session == "" || update.SessionId == c.session) {
+			if c.contextUsage == nil {
+				c.contextUsage = make(map[acp.SessionId]model.ContextUsage)
+			}
+			c.contextUsage[update.SessionId] = usage
+			if c.sink != nil && (c.active || (c.prompted && update.SessionId == c.session)) {
+				if err := c.publishContextUsageLocked(usage); err != nil {
+					return nil, acp.NewInternalError(err.Error())
+				}
+			}
+		}
+		if update.Update.UsageUpdate != nil {
+			if c.active && c.background != nil && update.SessionId == c.session {
+				c.background.observe(update.Update, c.tools)
+			}
+			return nil, nil
+		}
 		if !c.active || update.SessionId != c.session {
 			return nil, nil
 		}
@@ -1019,10 +1084,44 @@ func acpText(content acp.ContentBlock) string {
 	return "[ACP content]\n" + clip(pretty(content))
 }
 
-func (c *acpRuntime) update(update acp.SessionUpdate) error {
-	if u := update.UsageUpdate; u != nil {
-		return setContextUsage(c.sink, float64(u.Used), float64(u.Size))
+// publishContextUsageLocked forwards distinct context usage updates.
+// The caller holds c.mu.
+func (c *acpRuntime) publishContextUsageLocked(usage model.ContextUsage) error {
+	if c.sink == nil || (usage.Used == 0 && usage.Window == 0) {
+		return nil
 	}
+	if c.publishedContext != nil && *c.publishedContext == usage {
+		return nil
+	}
+	if err := setContextUsage(c.sink, usage.Used, usage.Window); err != nil {
+		return err
+	}
+	published := usage
+	c.publishedContext = &published
+	return nil
+}
+
+func (c *acpRuntime) extractContextUsageLocked(update acp.SessionNotification) (model.ContextUsage, bool) {
+	if u := update.Update.UsageUpdate; u != nil {
+		if u.Used < 0 || u.Size < 0 {
+			return model.ContextUsage{}, false
+		}
+		window := int64(u.Size)
+		if window <= 0 {
+			window = c.modelContextWindow
+		}
+		if u.Used == 0 && window == 0 {
+			return model.ContextUsage{}, false
+		}
+		return model.ContextUsage{Used: int64(u.Used), Window: window}, true
+	}
+	if used, ok := nonNegativeInt(update.Meta["totalTokens"]); ok && used > 0 {
+		return model.ContextUsage{Used: used, Window: c.modelContextWindow}, true
+	}
+	return model.ContextUsage{}, false
+}
+
+func (c *acpRuntime) update(update acp.SessionUpdate) error {
 	var item model.Item
 	switch {
 	case update.AgentMessageChunk != nil || update.AgentThoughtChunk != nil:

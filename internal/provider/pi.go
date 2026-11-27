@@ -372,24 +372,38 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 		}
 		bound = true
 	}
+	modelWindow, _ := nonNegativeInt(obj(state["model"])["contextWindow"])
 	if name == "compact" {
 		prompt = object{"type": "compact", "id": "compact"}
 		if argument != "" {
 			prompt["customInstructions"] = argument
 		}
 	}
-	if err := runPiPrompt(ctx, p, prompt, sink, in.Steers, piModelImages(obj(state["model"]))); err != nil {
+	turn, err := runPiPrompt(ctx, p, prompt, sink, in.Steers, piModelImages(obj(state["model"])), modelWindow)
+	if err != nil {
 		return err
 	}
 	// A stats probe is optional and cannot mask a successfully settled turn.
-	statsCtx, cancel := context.WithTimeout(ctx, time.Second)
+	statsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if stats, err := piRequest(statsCtx, p, "get_session_stats"); err == nil {
 		usage := obj(stats["contextUsage"])
-		if usage["tokens"] != nil {
-			return setContextUsage(sink, usage["tokens"], usage["contextWindow"])
+		window := usage["contextWindow"]
+		if w, ok := nonNegativeInt(window); !ok || w == 0 {
+			window = modelWindow
 		}
-		return sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil })
+		tokens := usage["tokens"]
+		if tokens == nil && turn.compactionAfterTokens > 0 {
+			tokens = turn.compactionAfterTokens
+		}
+		if tokens != nil {
+			return setContextUsage(sink, tokens, window)
+		}
+		if name == "compact" || turn.compacted {
+			return sink.UpdateRuntime(func(s *model.SessionRuntime) { s.Context = nil })
+		}
+	} else if turn.compactionAfterTokens > 0 {
+		return setContextUsage(sink, turn.compactionAfterTokens, modelWindow)
 	}
 	return nil
 }
@@ -417,14 +431,14 @@ func piPrompt(in Input) (object, error) {
 	return prompt, nil
 }
 
-func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink, steers <-chan struct{}, images bool) error {
+func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink, steers <-chan struct{}, images bool, contextWindow int64) (piTranscript, error) {
+	turn := piTranscript{sink: sink, items: map[string]model.Item{}, contextWindow: contextWindow}
 	if err := ctx.Err(); err != nil {
-		return err
+		return turn, err
 	}
 	if err := p.Send(prompt); err != nil {
-		return errors.Join(ErrUnconfirmed, err)
+		return turn, errors.Join(ErrUnconfirmed, err)
 	}
-	turn := piTranscript{sink: sink, items: map[string]model.Item{}}
 	accepted, started, settled := false, false, false
 	var pending *piSteer
 	var wake <-chan struct{}
@@ -438,12 +452,12 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			if queued && pending == nil && !settled && ctx.Err() == nil {
 				message, err := sink.NextSteer()
 				if err != nil {
-					return err
+					return turn, err
 				}
 				if message != nil {
 					pending, err = sendPiSteer(p, sink, *message, images)
 					if err != nil {
-						return err
+						return turn, err
 					}
 					continue
 				}
@@ -451,7 +465,7 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return turn, ctx.Err()
 			case <-wake:
 				queued = true
 				continue
@@ -459,16 +473,16 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			}
 		}
 		if !ok {
-			return errors.Join(ErrUnconfirmed, errors.New("Pi exited before settling"), p.Error())
+			return turn, errors.Join(ErrUnconfirmed, errors.New("Pi exited before settling"), p.Error())
 		}
 		frame, err := decode(raw)
 		if err != nil {
-			return errors.Join(ErrUnconfirmed, err)
+			return turn, errors.Join(ErrUnconfirmed, err)
 		}
 		if pending != nil {
 			if done, delivery := pending.observe(frame); done {
 				if err := sink.Steered(pending.id, delivery); err != nil {
-					return err
+					return turn, err
 				}
 				pending = nil
 			}
@@ -479,13 +493,17 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			case "compact":
 				data, err := piResponse(frame)
 				if err != nil {
-					return err
+					return turn, err
+				}
+				turn.compacted = true
+				if after, ok := nonNegativeInt(data["estimatedTokensAfter"]); ok && after > 0 {
+					turn.compactionAfterTokens = after
 				}
 				summary := str(data["summary"])
 				if summary == "" {
 					summary = "Context compacted."
 				}
-				return commandResult(sink, "compaction", summary)
+				return turn, commandResult(sink, "compaction", summary)
 			case "prompt-state":
 				state, err := piResponse(frame)
 				if err == nil && !started && state["isStreaming"] == false && state["isCompacting"] != true && state["pendingMessageCount"] == float64(0) {
@@ -494,7 +512,7 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			case "prompt":
 				data, err := piResponse(frame)
 				if err != nil {
-					return err
+					return turn, err
 				}
 				accepted = true
 				disposition := str(data["disposition"])
@@ -503,7 +521,7 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 				// Older Pi acknowledges extension-consumed input without a disposition.
 				if disposition == "" && !started && !settled {
 					if err := p.Send(object{"type": "get_state", "id": "prompt-state"}); err != nil {
-						return errors.Join(ErrUnconfirmed, err)
+						return turn, errors.Join(ErrUnconfirmed, err)
 					}
 				}
 			default:
@@ -515,26 +533,26 @@ func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sin
 			settled = true
 		case "extension_ui_request":
 			if err := answerPiDialog(ctx, p, sink, frame); err != nil {
-				return errors.Join(ErrUnconfirmed, err)
+				return turn, errors.Join(ErrUnconfirmed, err)
 			}
 		default:
 			if err := turn.update(frame); err != nil {
-				return errors.Join(ErrUnconfirmed, err)
+				return turn, errors.Join(ErrUnconfirmed, err)
 			}
 		}
 		if accepted && started && !settled && wake == nil && steers != nil {
 			if err := sink.SetSteerState(SteerReady); err != nil {
-				return err
+				return turn, err
 			}
 			wake = steers
 		}
 	}
 	if wake != nil {
 		if err := sink.SetSteerState(SteerUnavailable); err != nil {
-			return err
+			return turn, err
 		}
 	}
-	return turn.failure
+	return turn, turn.failure
 }
 
 type piSteer struct {

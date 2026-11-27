@@ -1,55 +1,18 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import type {
-  Catalog,
-  ContextUsage,
-  NativeCommand,
-  SessionRuntime,
-} from "@/api/types.gen";
-import { ErrorNotice } from "@/components/common";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import type { ContextUsage } from "@/api/types.gen";
 import { InputGroupButton } from "@/components/ui/input-group";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { deriveContextMeterSnapshot, formatTokenCount } from "./contextUsage";
 
 const RING_RADIUS = 6;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-export function resolveCompactCommand(
-  sessionRuntime?: SessionRuntime,
-  catalog?: Catalog | null,
-): NativeCommand | undefined {
-  const commands =
-    sessionRuntime?.commands !== undefined
-      ? sessionRuntime.commands
-      : (catalog?.commands ?? []);
-  return commands.find((command) => command.name === "compact");
-}
-
-export function contextPercent(context?: ContextUsage): number | undefined {
-  if (!context || context.window <= 0) return undefined;
-  return Math.max(0, Math.min(100, Math.round((context.used / context.window) * 100)));
-}
-
-export function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) {
-    const scaled = value / 1_000_000;
-    return `${scaled >= 10 ? Math.round(scaled) : scaled.toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (value >= 1_000) {
-    const scaled = value / 1_000;
-    return `${scaled >= 100 ? Math.round(scaled) : scaled.toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(Math.max(0, Math.round(value)));
-}
 
 export function formatCacheRemaining(ms: number, t: TFunction): string {
   const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
@@ -71,41 +34,13 @@ export function formatCacheRemaining(ms: number, t: TFunction): string {
   return t("context.cacheDurationSeconds", { seconds });
 }
 
-export function ContextMeter({
-  sessionRuntime,
-  catalog,
-  hasHistory,
-  lastCompacted,
-  disabled,
-  onCompact,
-  onHandoff,
-  onReturnToComposer,
-}: {
-  sessionRuntime?: SessionRuntime;
-  catalog?: Catalog | null;
-  hasHistory: boolean;
-  lastCompacted?: boolean;
-  disabled?: boolean;
-  onCompact: (focus?: string) => Promise<void>;
-  onHandoff: (prompt: string) => Promise<void>;
-  onReturnToComposer?: () => void;
-}) {
-  const { t } = useTranslation();
+export function ContextMeter({ context }: { context?: ContextUsage }) {
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [focus, setFocus] = useState("");
-  const [handoffPrompt, setHandoffPrompt] = useState("");
-  const [pendingAction, setPendingAction] = useState<"compact" | "handoff">();
-  const [error, setError] = useState<unknown>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  const context =
-    sessionRuntime?.context && sessionRuntime.context.window > 0
-      ? sessionRuntime.context
-      : undefined;
-  const percent = contextPercent(context);
-  const ratio = context ? Math.max(0, Math.min(1, context.used / context.window)) : 0;
-  const compactCommand = resolveCompactCommand(sessionRuntime, catalog);
-  const expiresAt = context?.promptCacheExpiresAt ?? 0;
+  const snapshot = deriveContextMeterSnapshot(context);
+  const expiresAt = snapshot?.promptCacheExpiresAt ?? 0;
 
   useEffect(() => {
     if (!open) return;
@@ -115,177 +50,151 @@ export function ContextMeter({
     return () => window.clearInterval(timer);
   }, [open, expiresAt]);
 
+  if (!snapshot) return null;
+
+  const locale = i18n.resolvedLanguage || i18n.language;
   const cacheRemainingMs = expiresAt > now ? expiresAt - now : 0;
-  const busy = Boolean(disabled || pendingAction);
-  const level =
-    percent === undefined
-      ? "idle"
-      : percent >= 90
-        ? "critical"
-        : percent >= 75
-          ? "warn"
-          : "normal";
-  const preferHandoff = !compactCommand || (percent !== undefined && percent >= 75);
-
-  async function runCompact(event?: FormEvent) {
-    event?.preventDefault();
-    if (!compactCommand || busy) return;
-    setError(null);
-    setPendingAction("compact");
-    try {
-      const instruction = compactCommand.argumentHint ? focus.trim() : "";
-      await onCompact(instruction || undefined);
-      setFocus("");
-      setOpen(false);
-      onReturnToComposer?.();
-    } catch (reason) {
-      setError(reason);
-    } finally {
-      setPendingAction(undefined);
-    }
-  }
-
-  async function runHandoff(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = handoffPrompt.trim();
-    if (!hasHistory || !trimmed || busy) return;
-    setError(null);
-    setPendingAction("handoff");
-    try {
-      await onHandoff(trimmed);
-      setHandoffPrompt("");
-      setOpen(false);
-    } catch (reason) {
-      setError(reason);
-    } finally {
-      setPendingAction(undefined);
-    }
-  }
-
   const triggerLabel =
-    percent !== undefined
+    snapshot.window !== null && snapshot.percent !== null
       ? t("context.triggerUsed", {
-          percent,
-          used: formatTokenCount(context!.used),
-          window: formatTokenCount(context!.window),
+          percent: snapshot.percent,
+          used: formatTokenCount(snapshot.used),
+          window: formatTokenCount(snapshot.window),
         })
-      : t("context.title");
+      : t("context.triggerTokens", {
+          used: formatTokenCount(snapshot.used),
+        });
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setError(null);
-      }}
-    >
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <InputGroupButton
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size={snapshot.window !== null ? "icon-sm" : "xs"}
           className={cn(
+            snapshot.window === null && "px-1.5 text-xs font-medium tabular-nums",
             open && "bg-control-selected text-foreground",
-            level === "critical"
+            snapshot.level === "critical"
               ? "text-destructive"
-              : level === "warn"
+              : snapshot.level === "warn"
                 ? "text-(--status-attention)"
                 : !open && "text-muted-foreground hover:text-foreground",
           )}
           aria-label={triggerLabel}
           title={triggerLabel}
-          disabled={disabled}
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-            className="shrink-0"
-          >
-            {context ? (
-              <>
-                <circle
-                  cx="8"
-                  cy="8"
-                  r={RING_RADIUS}
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  opacity="0.22"
-                />
-                <circle
-                  cx="8"
-                  cy="8"
-                  r={RING_RADIUS}
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeDasharray={RING_CIRCUMFERENCE}
-                  strokeDashoffset={RING_CIRCUMFERENCE * (1 - ratio)}
-                  transform="rotate(-90 8 8)"
-                />
-              </>
-            ) : (
+          {snapshot.window !== null && snapshot.ratio !== null ? (
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+              className="shrink-0"
+            >
               <circle
                 cx="8"
                 cy="8"
                 r={RING_RADIUS}
                 stroke="currentColor"
-                strokeWidth="1.75"
-                strokeDasharray="2.5 2.5"
-                opacity="0.6"
+                strokeWidth="2"
+                opacity="0.22"
               />
-            )}
-          </svg>
+              <circle
+                cx="8"
+                cy="8"
+                r={RING_RADIUS}
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeDasharray={RING_CIRCUMFERENCE}
+                strokeDashoffset={RING_CIRCUMFERENCE * (1 - snapshot.ratio)}
+                transform="rotate(-90 8 8)"
+              />
+            </svg>
+          ) : (
+            formatTokenCount(snapshot.used)
+          )}
         </InputGroupButton>
       </PopoverTrigger>
       <PopoverContent
         align="center"
         side="top"
         sideOffset={8}
-        collisionPadding={12}
-        className="floating-surface w-80 max-w-[calc(100vw-24px)] p-3"
+        className="w-60 max-w-[calc(100vw-24px)] p-3"
       >
         <div className="flex flex-col gap-2">
-          {context && percent !== undefined ? (
-            <>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs font-medium text-foreground">
-                  {t("context.title")}
-                </span>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {formatTokenCount(context.used)} /{" "}
-                  {formatTokenCount(context.window)} · {percent}%
-                </span>
-              </div>
-              <div
-                className="h-1 w-full overflow-hidden rounded-full bg-muted"
-                role="progressbar"
-                aria-label={t("context.title")}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-xs font-medium text-foreground">
+              {t("context.title")}
+            </span>
+            {snapshot.percent !== null && (
+              <span
+                className={cn(
+                  "text-xs font-medium tabular-nums",
+                  snapshot.level === "critical"
+                    ? "text-destructive"
+                    : snapshot.level === "warn"
+                      ? "text-(--status-attention)"
+                      : "text-foreground",
+                )}
               >
+                {snapshot.percent}%
+              </span>
+            )}
+          </div>
+          {snapshot.window !== null && snapshot.percent !== null && (
+            <div
+              className="relative h-1 w-full rounded-full bg-muted"
+              role="progressbar"
+              aria-label={t("context.title")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={snapshot.percent}
+            >
+              {snapshot.used > 0 && (
                 <div
                   className={cn(
                     "h-full rounded-full transition-[width]",
-                    level === "critical"
+                    snapshot.level === "critical"
                       ? "bg-destructive"
-                      : level === "warn"
+                      : snapshot.level === "warn"
                         ? "bg-(--status-attention)"
-                        : "bg-foreground",
+                        : "bg-foreground/80",
                   )}
-                  style={{ width: `${percent}%` }}
+                  style={{
+                    width: `min(100%, max(${snapshot.percent}%, 4px))`,
+                  }}
                 />
-              </div>
-            </>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {lastCompacted
-                ? t("context.compactedPending")
-                : t("context.unavailable")}
-            </p>
+              )}
+              {snapshot.autoCompactTickPercent !== null && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-[2px] h-2 w-px -translate-x-1/2 bg-foreground/75"
+                  style={{
+                    left: `clamp(1px, ${snapshot.autoCompactTickPercent}%, calc(100% - 1px))`,
+                  }}
+                />
+              )}
+            </div>
+          )}
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {snapshot.window !== null
+              ? t("context.tokenCounts", {
+                  used: snapshot.used.toLocaleString(locale),
+                  window: snapshot.window.toLocaleString(locale),
+                })
+              : t("context.tokensUsed", {
+                  used: snapshot.used.toLocaleString(locale),
+                })}
+          </span>
+          {snapshot.autoCompactThreshold !== null && (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {t("context.autoCompactAt", {
+                tokens: snapshot.autoCompactThreshold.toLocaleString(locale),
+              })}
+            </span>
           )}
           {cacheRemainingMs > 0 && (
             <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
@@ -304,92 +213,6 @@ export function ContextMeter({
             </div>
           )}
         </div>
-        {(compactCommand || hasHistory) && (
-          <>
-            <Separator className="my-2.5" />
-            <div className="flex flex-col gap-2">
-              {compactCommand &&
-                (compactCommand.argumentHint ? (
-                  <form
-                    className="flex items-center gap-1.5"
-                    onSubmit={(event) => void runCompact(event)}
-                  >
-                    <Input
-                      className="h-8 text-xs"
-                      aria-label={t("context.compactFocusLabel")}
-                      placeholder={t("context.compactFocusPlaceholder")}
-                      value={focus}
-                      disabled={busy}
-                      onChange={(event) => setFocus(event.target.value)}
-                    />
-                    <Button
-                      type="submit"
-                      variant="outline"
-                      size="sm"
-                      className="min-w-20 shrink-0"
-                      disabled={busy}
-                    >
-                      {pendingAction === "compact" ? (
-                        <LoaderCircle className="animate-spin" />
-                      ) : (
-                        t("context.compactAction")
-                      )}
-                    </Button>
-                  </form>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    disabled={busy}
-                    onClick={() => void runCompact()}
-                  >
-                    {pendingAction === "compact" && (
-                      <LoaderCircle
-                        className="animate-spin"
-                        data-icon="inline-start"
-                      />
-                    )}
-                    {t("context.compact")}
-                  </Button>
-                ))}
-              {hasHistory && (
-                <form
-                  className="flex items-center gap-1.5"
-                  onSubmit={(event) => void runHandoff(event)}
-                >
-                  <Input
-                    className="h-8 text-xs"
-                    aria-label={t("context.handoffLabel")}
-                    placeholder={t("context.handoffPlaceholder")}
-                    value={handoffPrompt}
-                    disabled={busy}
-                    onChange={(event) => setHandoffPrompt(event.target.value)}
-                  />
-                  <Button
-                    type="submit"
-                    variant={preferHandoff ? "default" : "outline"}
-                    size="sm"
-                    className="min-w-20 shrink-0"
-                    disabled={busy || !handoffPrompt.trim()}
-                  >
-                    {pendingAction === "handoff" ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : (
-                      t("context.handoffAction")
-                    )}
-                  </Button>
-                </form>
-              )}
-            </div>
-          </>
-        )}
-        {!!error && (
-          <div className="mt-2">
-            <ErrorNotice error={error} />
-          </div>
-        )}
       </PopoverContent>
     </Popover>
   );

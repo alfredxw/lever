@@ -752,13 +752,6 @@ function TopicConversationContent({
             session.id,
             runs,
           ).some((d) => isDelegatedRunActive(d.status))}
-          hasHistory={
-            Boolean(props.source) ||
-            runs.some(
-              (run) => run.status !== "queued" && run.status !== "cancelled",
-            )
-          }
-          lastCompacted={latestRun?.input.trim().startsWith("/compact")}
           archived={agent.archived}
           visible={enabled}
           onSent={() =>
