@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./cmd/lever-desktop/icon.png" alt="Lever Logo" width="112" height="112" />
-
-<h1>Lever</h1>
+<p>
+  <img src="./cmd/lever-desktop/icon.png" alt="Lever" width="112" height="112" />
+</p>
 
 <p><strong>为高并发协作而生的本机 AI 工作台</strong></p>
 
@@ -26,16 +26,29 @@
 
 <p>
   <a href="#设计理念">设计理念</a> ·
+  <a href="#快速开始">快速开始</a> ·
   <a href="#lever-的不同之处">不同之处</a> ·
   <a href="#核心能力">核心能力</a> ·
   <a href="#支持的运行时">运行时</a> ·
-  <a href="#快速开始">快速开始</a> ·
   <a href="#开发指南">开发指南</a>
 </p>
 
 </div>
 
----
+![Lever Agents](./docs/images/agents.zh.png)
+
+<details>
+<summary>查看更多界面截图</summary>
+
+### 工作
+
+![Lever 工作](./docs/images/works.zh.png)
+
+### 自动化
+
+![Lever 自动化](./docs/images/automations.zh.png)
+
+</details>
 
 ## 设计理念
 
@@ -58,6 +71,68 @@
 - **Topic 间弱联系**：每个 Topic 共享同一个 Agent 的持久化设定与同一条 Chat 时间线视图（以实时摘要呈现），一眼看清全局进展，却不会互相污染上下文窗口，也不会彼此阻塞执行。
 - **Topic 内强连续**：当某个任务确实需要反复打磨时，点开摘要即可在侧栏进入专属会话——它拥有独立的运行时、模型、Worktree 目录组、草稿、消息队列与未读状态，可以持续深挖直到交付。
 - **天生高并发**：同一个 Agent 下可以同时跑着主聊天与多条并行 Topic，你在同一工作区里顺滑切换、审阅文件与代码变更，不再被单线程聊天或零散窗口拖慢节奏。
+
+## 快速开始
+
+### 让你的 Agent 帮你安装
+
+如果你已经在用 Codex、Claude Code、Pi、Antigravity 等本机 Agent，可以直接复制下面的提示词，让它帮你完成安装：
+
+```text
+帮我在这台电脑上安装 Lever（https://github.com/alfredxw/lever）。
+先查看仓库 README 和 GitHub Releases：如果已有适配当前系统的桌面安装包就直接安装；否则克隆仓库，检查 Go 1.27.3、Node.js 24 和 pnpm 11 后编译桌面应用（`make desktop`，或用 `make build` 构建 Web 版）。
+安装完成后启动 Lever，并确认本机已登录的运行时 CLI（如 Codex、Claude Code、Pi、Antigravity）可以正常识别。
+```
+
+如果之前在其他 Agent 应用（如 Codex App、Claude 等）里配置了 **Projects** 或**定时任务**，也可以在 Lever 启动后让你的 Agent 顺手迁移过来。项目会映射为带目录 **Scope** 的 Lever **Agent**，定时任务会映射为 **Automations**：
+
+```text
+帮我检查这台电脑上其他 Agent 应用（如 Codex App、Claude 或其他本机 Agent 工具）里现有的项目（Projects）和定时任务，并迁移到 Lever。
+通过 Lever 本机 CLI（桌面端或 `lever` 可执行文件）把项目创建为带对应目录 Scope 的 Agent（`agent create`），把定时任务迁移为 Automations（Codex App 可先用 `automations import-codex --dry-run` 预览，其他工具用 `automations create`）。
+在正式创建或停用原应用的定时任务前，先给我看一份迁移清单，等我确认后再执行。
+```
+
+### 手动安装
+
+**环境准备：** Go `1.27.3`、Node.js `24`、pnpm `11`（固定版本 `11.15.1`），并至少登录一个本机运行时 CLI。
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**运行 Web UI**
+
+```sh
+make build
+./bin/lever
+```
+
+打开终端打印的完整本机链接（默认 `127.0.0.1:4778`，仅本机访问，一次性 token 配对后自动清除）。
+
+</td>
+<td width="50%" valign="top">
+
+**运行桌面应用**
+
+```sh
+make desktop
+./bin/desktop/Lever
+```
+
+使用同一 Go 后端与 SQLite 存储启动原生桌面窗口，并额外提供内置工作区浏览器与系统文件夹选择器。
+
+</td>
+</tr>
+</table>
+
+启动 Lever 后：
+
+1. **连接 CLI**：打开 **设置 → 运行时**，启用本机发现的 CLI，或点击 **添加连接** 配置多账号。
+2. **配置 Agent**：直接使用初始 **Lever** 或新建专属 Agent，在 **Profile** 中设置连接、权限与 **Scope** 目录。
+3. **高并发协作**：日常在 **Chat** 沟通，遇到独立任务随时发成 **Topic** 并行推进，旁边随时打开 **Files**、**Diff**、**Terminal** 与**工作区浏览器**验收。
+
+> [!NOTE]
+> Web 与桌面共用同一数据目录（默认 `<系统用户配置目录>/Lever`，可用 `--data-dir` 或 `LEVER_DATA_DIR` 指定）。关闭桌面窗口后活跃任务会在后台继续执行，重启 Go 后端也不会中断当前轮次。
 
 ## Lever 的不同之处
 
@@ -134,46 +209,6 @@ Lever 直接编排本机已安装的 CLI 与 ACP 服务，沿用原有登录态�
   ```
 
 </details>
-
-## 快速开始
-
-**环境准备：** Go `1.27.3`、Node.js `24`、pnpm `11`（固定版本 `11.15.1`），并至少登录一个本机运行时 CLI。
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**运行 Web UI**
-
-```sh
-make build
-./bin/lever
-```
-
-打开终端打印的完整本机链接（默认 `127.0.0.1:4778`，仅本机访问，一次性 token 配对后自动清除）。
-
-</td>
-<td width="50%" valign="top">
-
-**运行桌面应用**
-
-```sh
-make desktop
-./bin/desktop/Lever
-```
-
-使用同一 Go 后端与 SQLite 存储启动原生桌面窗口，并额外提供内置工作区浏览器与系统文件夹选择器。
-
-</td>
-</tr>
-</table>
-
-1. **连接 CLI**：打开 **设置 → 运行时**，启用本机发现的 CLI，或点击 **添加连接** 配置多账号。
-2. **配置 Agent**：直接使用初始 **Lever** 或新建专属 Agent，在 **Profile** 中设置连接、权限与 **Scope** 目录。
-3. **高并发协作**：日常在 **Chat** 沟通，遇到独立任务随时发成 **Topic** 并行推进，旁边随时打开 **Files**、**Diff**、**Terminal** 与**工作区浏览器**验收。
-
-> [!NOTE]
-> Web 与桌面共用同一数据目录（默认 `<系统用户配置目录>/Lever`，可用 `--data-dir` 或 `LEVER_DATA_DIR` 指定）。关闭桌面窗口后活跃任务会在后台继续执行，重启 Go 后端也不会中断当前轮次。
 
 ## 开发指南
 

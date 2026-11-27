@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./cmd/lever-desktop/icon.png" alt="Lever Logo" width="112" height="112" />
-
-<h1>Lever</h1>
+<p>
+  <img src="./cmd/lever-desktop/icon.png" alt="Lever" width="112" height="112" />
+</p>
 
 <p><strong>The Agent-first local AI workbench built for high-concurrency work.</strong></p>
 
@@ -26,16 +26,29 @@
 
 <p>
   <a href="#the-idea">The Idea</a> ·
+  <a href="#quick-start">Quick Start</a> ·
   <a href="#how-lever-differs">How Lever Differs</a> ·
   <a href="#core-capabilities">Capabilities</a> ·
   <a href="#supported-runtimes">Runtimes</a> ·
-  <a href="#quick-start">Quick Start</a> ·
   <a href="#development">Development</a>
 </p>
 
 </div>
 
----
+![Lever Agents](./docs/images/agents.png)
+
+<details>
+<summary>View more screenshots</summary>
+
+### Works
+
+![Lever Works](./docs/images/works.png)
+
+### Automations
+
+![Lever Automations](./docs/images/automations.png)
+
+</details>
 
 ## The Idea
 
@@ -58,6 +71,68 @@ One Agent · One Chat Timeline
 - **Weak coupling across Topics:** Every Topic lives on the same Chat timeline as a live summary and inherits the Agent's persistent identity, directories, and Skills—so you keep the full picture in one place without Topics blocking each other or polluting each other's context window.
 - **Strong continuity within each Topic:** Open any Topic in the side pane whenever a task *does* need deep iteration. Each Topic owns an isolated Session with its own runtime, model, worktree directory group, draft, queue, and unread state.
 - **High concurrency by default:** Run five Topics and a main Chat simultaneously under one Agent—then review their files, diffs, terminals, and live web previews right beside the conversation.
+
+## Quick Start
+
+### Install with Your Agent
+
+If you already use a local Agent such as Codex, Claude Code, Pi, or Antigravity, paste this prompt to let it install Lever for you:
+
+```text
+Install Lever (https://github.com/alfredxw/lever) on this machine.
+Check the README and GitHub Releases first. Install the desktop package for my OS if available. Otherwise clone the repo, verify Go 1.27.3, Node.js 24, and pnpm 11, and build the Desktop app (`make desktop`, or `make build` for the Web UI).
+Launch Lever and confirm which local runtime CLIs (such as Codex, Claude Code, Pi, or Antigravity) are detected.
+```
+
+If you have **projects** or **scheduled tasks** in other Agent apps (such as Codex App or Claude), ask your Agent to migrate them after Lever starts. Projects map to Lever **Agents** with directory **Scopes**, and scheduled tasks map to **Automations**:
+
+```text
+Find the projects and scheduled tasks configured in other local Agent apps on this machine (such as Codex App, Claude, or similar tools) and migrate them into Lever.
+Use Lever's local CLI (the Desktop binary or `lever`) to create Lever Agents with matching directory Scopes (`agent create`) and migrate scheduled tasks to Automations (`automations import-codex --dry-run` for Codex App, `automations create` for other tools).
+Show me the migration plan first and wait for my confirmation before creating anything or disabling the original schedules.
+```
+
+### Install Manually
+
+**Prerequisites:** Go `1.27.3`, Node.js `24`, pnpm `11` *(repository pins `11.15.1`)*, and at least one signed-in runtime CLI.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Web UI**
+
+```sh
+make build
+./bin/lever
+```
+
+Open the local URL printed in the terminal (default `127.0.0.1:4778`, loopback-only with one-time pairing token).
+
+</td>
+<td width="50%" valign="top">
+
+**Desktop App**
+
+```sh
+make desktop
+./bin/desktop/Lever
+```
+
+Launches the native desktop shell over the same Go backend and SQLite store, adding the Workspace Browser and native folder pickers.
+
+</td>
+</tr>
+</table>
+
+After launching Lever:
+
+1. **Connect a CLI:** Open **Settings → Runtimes**, enable a discovered CLI, or click **Add connection** for another account.
+2. **Set up an Agent:** Use the default **Lever** Agent or create your own; choose a connection, permissions, and **Scope** directories in **Profile**.
+3. **Run in parallel:** Chat continuously or branch off independent **Topics** as work splits up, with **Files**, **Diff**, **Terminal**, and **Browser** right alongside.
+
+> [!NOTE]
+> Web and Desktop share one data directory (`<user-config-dir>/Lever`, override via `--data-dir` or `LEVER_DATA_DIR`). Active runs continue in the background after closing the desktop window and survive Go backend restarts.
 
 ## How Lever Differs
 
@@ -132,46 +207,6 @@ Lever orchestrates the CLIs already installed on your machine—reusing your exi
   ```
 
 </details>
-
-## Quick Start
-
-**Prerequisites:** Go `1.27.3`, Node.js `24`, pnpm `11` *(repository pins `11.15.1`)*, and at least one signed-in runtime CLI.
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**Web UI**
-
-```sh
-make build
-./bin/lever
-```
-
-Open the local URL printed in the terminal (default `127.0.0.1:4778`, loopback-only with one-time pairing token).
-
-</td>
-<td width="50%" valign="top">
-
-**Desktop App**
-
-```sh
-make desktop
-./bin/desktop/Lever
-```
-
-Launches the native desktop shell over the same Go backend and SQLite store, adding the Workspace Browser and native folder pickers.
-
-</td>
-</tr>
-</table>
-
-1. **Connect a CLI:** Open **Settings → Runtimes**, enable a discovered CLI, or click **Add connection** for another account.
-2. **Set up an Agent:** Use the default **Lever** Agent or create your own; choose a connection, permissions, and **Scope** directories in **Profile**.
-3. **Run in parallel:** Chat continuously or branch off independent **Topics** as work splits up, with **Files**, **Diff**, **Terminal**, and **Browser** right alongside.
-
-> [!NOTE]
-> Web and Desktop share one data directory (`<user-config-dir>/Lever`, override via `--data-dir` or `LEVER_DATA_DIR`). Active runs continue in the background after closing the desktop window and survive Go backend restarts.
 
 ## Development
 
