@@ -406,8 +406,11 @@ func (c *core) requestDirect(ctx context.Context, st p.ClientState, method, path
 	if method == "GET" && path == spacePath+"/read" {
 		return json.RawMessage("{}"), nil
 	}
+	if method == "GET" && path == spacePath+"/cleared" {
+		return json.RawMessage("{}"), nil
+	}
 	if method == "GET" && path == spacePath+"/push" {
-		return json.RawMessage(`{"available":false,"enabled":false}`), nil
+		return json.RawMessage(`{"available":false,"enabled":false,"silenceWhenDesktopActive":true}`), nil
 	}
 	if strings.HasPrefix(path, spacePath+"/archive/") {
 		return nil, errors.New("当前不在同一局域网，暂时无法连接电脑")

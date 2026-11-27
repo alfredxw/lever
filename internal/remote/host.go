@@ -356,7 +356,27 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 	dirty := true
 	pending := int64(-1)
 	var epoch string
+	lastPresenceSent := false
+	lastPresenceAt := time.Time{}
+	sendPresence := func(force bool) error {
+		if !m.Role.Executes() {
+			return nil
+		}
+		active := h.App.DesktopActive()
+		if !force && active == lastPresenceSent && (!active || time.Since(lastPresenceAt) < 20*time.Second) {
+			return nil
+		}
+		lastPresenceSent = active
+		lastPresenceAt = time.Now()
+		return send(p.Frame{Type: "desktop_presence", DesktopActive: active})
+	}
+	if err = sendPresence(true); err != nil {
+		return err
+	}
 	for {
+		if err = sendPresence(false); err != nil {
+			return err
+		}
 		if dirty && pending < 0 && m.Role.Executes() {
 			b, err := projectBatch(ctx, h.App.Store, m, base, full)
 			if err != nil {
@@ -462,6 +482,10 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 			case "mark_read":
 				if m.Role.Executes() && len(f.ReadMarks) > 0 && len(f.ReadMarks) <= 500 {
 					_ = h.markScopeSessionsRead(ctx, m.Hub.ID, m.SpaceID, "", f.ReadMarks)
+				}
+			case "mark_cleared":
+				if m.Role.Executes() && len(f.ClearMarks) > 0 && len(f.ClearMarks) <= 500 {
+					_ = h.markScopeSessionsCleared(ctx, m.Hub.ID, m.SpaceID, "", f.ClearMarks)
 				}
 			}
 		}

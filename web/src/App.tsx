@@ -394,6 +394,9 @@ export default function App() {
     markRead,
     markConversationsRead,
   } = useConversationReadState(overview.data?.conversations);
+  useEffect(() => {
+    recentState.syncServerCleared(overview.data?.conversations);
+  }, [overview.data?.conversations, recentState.syncServerCleared]);
   const seenTaskReminders = useRef(new Set<string>());
   const notifyTaskReminder = useEffectEvent((notice: TaskReminderNotice) => {
     if (seenTaskReminders.current.has(notice.id)) return;

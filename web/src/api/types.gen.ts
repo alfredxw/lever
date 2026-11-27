@@ -1003,8 +1003,13 @@ export interface Conversation {
   finishedAt?: string;
   unreadSequence: number /* int64 */;
   readSequence?: number /* int64 */;
+  clearedSequence?: number /* int64 */;
 }
 export interface ReadMark {
+  sessionId: string;
+  sequence: number /* int64 */;
+}
+export interface ClearMark {
   sessionId: string;
   sequence: number /* int64 */;
 }

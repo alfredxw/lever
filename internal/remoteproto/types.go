@@ -44,16 +44,17 @@ type Space struct {
 	Kind string `json:"kind"`
 }
 type Device struct {
-	Identity `tstype:",extends"`
-	SpaceID  string `json:"spaceId"`
-	Name     string `json:"name"`
-	Role     Role   `json:"role"`
-	Platform string `json:"platform"`
-	Online   bool   `json:"online"`
-	Draining bool   `json:"draining"`
-	Revoked  bool   `json:"revoked"`
-	LastSeen int64  `json:"lastSeen"`
-	Version  int64  `json:"version"`
+	Identity      `tstype:",extends"`
+	SpaceID       string `json:"spaceId"`
+	Name          string `json:"name"`
+	Role          Role   `json:"role"`
+	Platform      string `json:"platform"`
+	Online        bool   `json:"online"`
+	DesktopActive bool   `json:"desktopActive,omitempty"`
+	Draining      bool   `json:"draining"`
+	Revoked       bool   `json:"revoked"`
+	LastSeen      int64  `json:"lastSeen"`
+	Version       int64  `json:"version"`
 }
 type Group struct {
 	ID    string `json:"id"`
@@ -123,6 +124,7 @@ type Record struct {
 	QueuePaused      bool       `json:"queuePaused,omitempty"`
 	UnreadSequence   int64      `json:"unreadSequence,omitempty"`
 	ReadSequence     int64      `json:"readSequence,omitempty"`
+	ClearedSequence  int64      `json:"clearedSequence,omitempty"`
 	Preview          string     `json:"preview,omitempty"`
 	MessageAt        string     `json:"messageAt,omitempty"`
 	ActiveStatus     string     `json:"activeStatus,omitempty"`
@@ -171,9 +173,13 @@ type FirebaseClient struct {
 	SenderID  string `json:"senderId"`
 }
 type PushSettings struct {
-	Available bool            `json:"available"`
-	Enabled   bool            `json:"enabled"`
-	Firebase  *FirebaseClient `json:"firebase,omitempty"`
+	Available                bool            `json:"available"`
+	Enabled                  bool            `json:"enabled"`
+	SilenceWhenDesktopActive bool            `json:"silenceWhenDesktopActive"`
+	Firebase                 *FirebaseClient `json:"firebase,omitempty"`
+}
+type PushPreferences struct {
+	SilenceWhenDesktopActive *bool `json:"silenceWhenDesktopActive,omitempty"`
 }
 type ReadMark struct {
 	SessionID string `json:"sessionId"`
@@ -183,27 +189,37 @@ type ReadSync struct {
 	DeviceID string     `json:"deviceId,omitempty"`
 	Items    []ReadMark `json:"items"`
 }
+type ClearMark struct {
+	SessionID string `json:"sessionId"`
+	Sequence  int64  `json:"sequence"`
+}
+type ClearSync struct {
+	DeviceID string      `json:"deviceId,omitempty"`
+	Items    []ClearMark `json:"items"`
+}
 type Frame struct {
-	ControllerID string     `json:"controllerId,omitempty"`
-	Delegation   bool       `json:"delegation,omitempty"`
-	Digest       string     `json:"digest,omitempty"`
-	Receipt      *Receipt   `json:"receipt,omitempty"`
-	Completed    bool       `json:"completed,omitempty"`
-	Policy       int64      `json:"policy,omitempty"`
-	RPCID        string     `json:"rpcId,omitempty"`
-	SessionID    string     `json:"sessionId,omitempty"`
-	RunID        string     `json:"runId,omitempty"`
-	Idle         bool       `json:"idle,omitempty"`
-	Type         string     `json:"type"`
-	Protocol     int        `json:"protocol,omitempty"`
-	SpaceID      string     `json:"spaceId"`
-	DeviceID     string     `json:"deviceId"`
-	Epoch        string     `json:"epoch,omitempty"`
-	Base         int64      `json:"base,omitempty"`
-	Version      int64      `json:"version,omitempty"`
-	Full         bool       `json:"full,omitempty"`
-	Changes      []Change   `json:"changes,omitempty"`
-	ReadMarks    []ReadMark `json:"readMarks,omitempty"`
+	ControllerID  string      `json:"controllerId,omitempty"`
+	Delegation    bool        `json:"delegation,omitempty"`
+	Digest        string      `json:"digest,omitempty"`
+	Receipt       *Receipt    `json:"receipt,omitempty"`
+	Completed     bool        `json:"completed,omitempty"`
+	Policy        int64       `json:"policy,omitempty"`
+	RPCID         string      `json:"rpcId,omitempty"`
+	SessionID     string      `json:"sessionId,omitempty"`
+	RunID         string      `json:"runId,omitempty"`
+	Idle          bool        `json:"idle,omitempty"`
+	DesktopActive bool        `json:"desktopActive,omitempty"`
+	Type          string      `json:"type"`
+	Protocol      int         `json:"protocol,omitempty"`
+	SpaceID       string      `json:"spaceId"`
+	DeviceID      string      `json:"deviceId"`
+	Epoch         string      `json:"epoch,omitempty"`
+	Base          int64       `json:"base,omitempty"`
+	Version       int64       `json:"version,omitempty"`
+	Full          bool        `json:"full,omitempty"`
+	Changes       []Change    `json:"changes,omitempty"`
+	ReadMarks     []ReadMark  `json:"readMarks,omitempty"`
+	ClearMarks    []ClearMark `json:"clearMarks,omitempty"`
 }
 type ChatRef struct {
 	DeviceID  string `json:"deviceId"`

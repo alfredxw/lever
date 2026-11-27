@@ -44,6 +44,7 @@ export interface Device extends Identity {
   role: Role;
   platform: string;
   online: boolean;
+  desktopActive?: boolean;
   draining: boolean;
   revoked: boolean;
   lastSeen: number /* int64 */;
@@ -118,6 +119,7 @@ export interface Record {
   queuePaused?: boolean;
   unreadSequence?: number /* int64 */;
   readSequence?: number /* int64 */;
+  clearedSequence?: number /* int64 */;
   preview?: string;
   messageAt?: string;
   activeStatus?: string;
@@ -167,7 +169,11 @@ export interface FirebaseClient {
 export interface PushSettings {
   available: boolean;
   enabled: boolean;
+  silenceWhenDesktopActive: boolean;
   firebase?: FirebaseClient;
+}
+export interface PushPreferences {
+  silenceWhenDesktopActive?: boolean;
 }
 export interface ReadMark {
   sessionId: string;
@@ -176,6 +182,14 @@ export interface ReadMark {
 export interface ReadSync {
   deviceId?: string;
   items: ReadMark[];
+}
+export interface ClearMark {
+  sessionId: string;
+  sequence: number /* int64 */;
+}
+export interface ClearSync {
+  deviceId?: string;
+  items: ClearMark[];
 }
 export interface Frame {
   controllerId?: string;
@@ -188,6 +202,7 @@ export interface Frame {
   sessionId?: string;
   runId?: string;
   idle?: boolean;
+  desktopActive?: boolean;
   type: string;
   protocol?: number /* int */;
   spaceId: string;
@@ -198,6 +213,7 @@ export interface Frame {
   full?: boolean;
   changes?: Change[];
   readMarks?: ReadMark[];
+  clearMarks?: ClearMark[];
 }
 export interface ChatRef {
   deviceId: string;

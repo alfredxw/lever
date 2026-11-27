@@ -602,6 +602,27 @@ func (s *Server) routes(mux *http.ServeMux) {
 		}
 		respond(w, map[string]bool{"ok": true}, a.MarkSessionsRead(r.Context(), in.Items))
 	})
+	mux.HandleFunc("POST /api/sessions/cleared", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Items []model.ClearMark `json:"items"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]bool{"ok": true}, a.MarkSessionsCleared(r.Context(), in.Items))
+	})
+	mux.HandleFunc("POST /api/desktop/presence", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Active bool `json:"active"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		a.SetDesktopPresence(in.Active)
+		respond(w, map[string]bool{"active": a.DesktopActive()}, nil)
+	})
 	mux.HandleFunc("POST /api/messages", func(w http.ResponseWriter, r *http.Request) {
 		var in model.SendInput
 		if err := read(w, r, &in); err != nil {

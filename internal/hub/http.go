@@ -120,10 +120,13 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	m.HandleFunc("GET /api/spaces/{space}/events", h.handler("controller", h.events))
 	m.HandleFunc("GET /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("PUT /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
+	m.HandleFunc("PATCH /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("DELETE /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("GET /api/spaces/{space}/archive/{device}", h.handler("controller", h.archive))
 	m.HandleFunc("GET /api/spaces/{space}/read", h.handler("controller", h.readCursors))
 	m.HandleFunc("POST /api/spaces/{space}/read", h.handler("controller", h.markRead))
+	m.HandleFunc("GET /api/spaces/{space}/cleared", h.handler("controller", h.clearedCursors))
+	m.HandleFunc("POST /api/spaces/{space}/cleared", h.handler("controller", h.markCleared))
 	m.HandleFunc("GET /api/spaces/{space}/connect", h.handler("any", h.connect))
 	m.HandleFunc("GET /api/spaces/{space}/devices/{id}/lan", h.handler("controller", h.grant))
 	m.HandleFunc("GET /api/spaces/{space}/controllers/{id}", h.handler("executor", h.personalController))
@@ -444,7 +447,7 @@ func (h *Hub) devices(w http.ResponseWriter, r *http.Request, a principal) error
 			return err
 		}
 	}
-	rows, err := h.db.Query("SELECT id,pub,name,platform,role,draining,revoked,seen,version FROM devices WHERE space_id=? ORDER BY name,id", space)
+	rows, err := h.db.Query("SELECT id,pub,name,platform,role,draining,revoked,seen,version,desktop_active_until FROM devices WHERE space_id=? ORDER BY name,id", space)
 	if err != nil {
 		return err
 	}
@@ -453,13 +456,16 @@ func (h *Hub) devices(w http.ResponseWriter, r *http.Request, a principal) error
 		p.Device
 		LANProof string `json:"lanProof,omitempty"`
 	}
+	nowUnix := time.Now().Unix()
 	out := []entry{}
 	for rows.Next() {
 		d := p.Device{SpaceID: space}
-		if err := rows.Scan(&d.ID, &d.PublicKey, &d.Name, &d.Platform, &d.Role, &d.Draining, &d.Revoked, &d.LastSeen, &d.Version); err != nil {
+		var desktopActiveUntil int64
+		if err := rows.Scan(&d.ID, &d.PublicKey, &d.Name, &d.Platform, &d.Role, &d.Draining, &d.Revoked, &d.LastSeen, &d.Version, &desktopActiveUntil); err != nil {
 			return err
 		}
 		d.Online = !d.Revoked && (h.online(deviceKey{space, d.ID}) || d.Role == p.Controller && time.Since(time.Unix(d.LastSeen, 0)) < 75*time.Second)
+		d.DesktopActive = d.Online && desktopActiveUntil > nowUnix
 		item := entry{Device: d}
 		if grant.Controller.ID != "" && !d.Revoked && d.Role.Executes() && d.ID != a.device {
 			grant.Host = d.Identity

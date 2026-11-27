@@ -47,13 +47,51 @@ func (h *Hub) pushDevice(w http.ResponseWriter, r *http.Request, a principal) er
 			return err
 		}
 		state.Enabled = true
+		silence := true
+		if in.SilenceWhenDesktopActive != nil {
+			silence = *in.SilenceWhenDesktopActive
+		} else {
+			_ = h.db.QueryRowContext(r.Context(), "SELECT silence_when_desktop_active FROM push_devices WHERE space_id=? AND device_id=?", a.space, a.device).Scan(&silence)
+		}
+		state.SilenceWhenDesktopActive = silence
+	case http.MethodPatch:
+		var in p.PushPreferences
+		if err := read(r, &in); err != nil {
+			return err
+		}
+		if in.SilenceWhenDesktopActive != nil {
+			val := 0
+			if *in.SilenceWhenDesktopActive {
+				val = 1
+			}
+			if _, err := h.db.ExecContext(r.Context(), "UPDATE push_devices SET silence_when_desktop_active=? WHERE space_id=? AND device_id=?", val, a.space, a.device); err != nil {
+				return err
+			}
+		}
+		var silence bool
+		err := h.db.QueryRowContext(r.Context(), "SELECT silence_when_desktop_active FROM push_devices WHERE space_id=? AND device_id=?", a.space, a.device).Scan(&silence)
+		if err == nil {
+			state.Enabled = true
+			state.SilenceWhenDesktopActive = silence
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		} else if in.SilenceWhenDesktopActive != nil {
+			state.SilenceWhenDesktopActive = *in.SilenceWhenDesktopActive
+		}
 	case http.MethodDelete:
 		if _, err := h.db.ExecContext(r.Context(), "DELETE FROM push_devices WHERE space_id=? AND device_id=?", a.space, a.device); err != nil {
 			return err
 		}
 	default:
-		if err := h.db.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM push_devices WHERE space_id=? AND device_id=?)", a.space, a.device).Scan(&state.Enabled); err != nil {
+		var silence bool
+		err := h.db.QueryRowContext(r.Context(), "SELECT silence_when_desktop_active FROM push_devices WHERE space_id=? AND device_id=?", a.space, a.device).Scan(&silence)
+		if err == nil {
+			state.Enabled = true
+			state.SilenceWhenDesktopActive = silence
+		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
+		} else {
+			state.SilenceWhenDesktopActive = true
 		}
 	}
 	return send(w, state)
@@ -79,7 +117,23 @@ func (h *Hub) registerPush(ctx context.Context, a principal, platform string, in
 			return err
 		}
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO push_devices SELECT space_id,id,platform,?,? FROM devices WHERE space_id=? AND id=? AND token=? AND revoked=0 ON CONFLICT(space_id,device_id) DO UPDATE SET token=excluded.token,seal_key=excluded.seal_key`, in.Token, in.Key, a.space, a.device, a.token)
+	silenceVal := 1
+	if in.SilenceWhenDesktopActive != nil {
+		if *in.SilenceWhenDesktopActive {
+			silenceVal = 1
+		} else {
+			silenceVal = 0
+		}
+	} else {
+		var existing int
+		if tx.QueryRowContext(ctx, "SELECT silence_when_desktop_active FROM push_devices WHERE space_id=? AND device_id=?", a.space, a.device).Scan(&existing) == nil {
+			silenceVal = existing
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO push_devices(space_id,device_id,platform,token,seal_key,silence_when_desktop_active)
+		SELECT space_id,id,platform,?,?,? FROM devices WHERE space_id=? AND id=? AND token=? AND revoked=0
+		ON CONFLICT(space_id,device_id) DO UPDATE SET token=excluded.token,seal_key=excluded.seal_key,silence_when_desktop_active=excluded.silence_when_desktop_active`,
+		in.Token, in.Key, silenceVal, a.space, a.device, a.token)
 	if err != nil {
 		return err
 	}
@@ -132,12 +186,15 @@ func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 	var raw sql.NullString
 	var expires int64
 	var active bool
+	var silenceWhenDesktopActive bool
+	var desktopActiveUntil int64
 	var sealKey []byte
-	err := h.db.QueryRowContext(ctx, `SELECT q.id,q.attempts,q.status,q.expires,p.platform,p.token,p.seal_key,q.recipient,q.space_id,q.host,a.data,(host.revoked=0 AND dest.revoked=0)
+	nowUnix := time.Now().Unix()
+	err := h.db.QueryRowContext(ctx, `SELECT q.id,q.attempts,q.status,q.expires,p.platform,p.token,p.seal_key,p.silence_when_desktop_active,host.desktop_active_until,q.recipient,q.space_id,q.host,a.data,(host.revoked=0 AND dest.revoked=0)
 		FROM push_outbox q JOIN push_devices p ON p.space_id=q.space_id AND p.device_id=q.recipient
 		JOIN devices host ON host.space_id=q.space_id AND host.id=q.host JOIN devices dest ON dest.space_id=q.space_id AND dest.id=q.recipient
 		LEFT JOIN archive a ON (a.space_id,a.device_id,a.kind,a.id)=(q.space_id,q.host,q.kind,q.object)
-		WHERE q.due<=? ORDER BY q.due,q.id LIMIT 1`, time.Now().Unix()).Scan(&d.id, &d.attempts, &d.status, &expires, &d.platform, &d.token, &sealKey, &d.recipient, &d.notice.SpaceID, &d.notice.DeviceID, &raw, &active)
+		WHERE q.due<=? ORDER BY q.due,q.id LIMIT 1`, nowUnix).Scan(&d.id, &d.attempts, &d.status, &expires, &d.platform, &d.token, &sealKey, &silenceWhenDesktopActive, &desktopActiveUntil, &d.recipient, &d.notice.SpaceID, &d.notice.DeviceID, &raw, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -151,7 +208,8 @@ func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 		}
 	}
 	d.notice.Kind = noticeKind(r)
-	if active && expires > time.Now().Unix() && d.notice.Kind != "" && r.Status == d.status {
+	silenced := silenceWhenDesktopActive && desktopActiveUntil > nowUnix
+	if active && !silenced && expires > nowUnix && d.notice.Kind != "" && r.Status == d.status {
 		d.notice.HubID = h.identity.ID
 		d.notice.ChatID, d.notice.SessionID, d.notice.RunID = r.ChatID, r.SessionID, r.RunID
 		if r.Kind == "request" {

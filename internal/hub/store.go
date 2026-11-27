@@ -104,7 +104,18 @@ func (h *Hub) init() error {
 	if v > 1 {
 		return fmt.Errorf("Hub schema version %d is newer than this binary", v)
 	}
-	if err := write(h.db, func(tx *sql.Tx) error { _, err := tx.Exec(schema); return err }); err != nil {
+	if err := write(h.db, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(schema); err != nil {
+			return err
+		}
+		if err := ensureColumn(tx, "devices", "desktop_active_until", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+		if err := ensureColumn(tx, "push_devices", "silence_when_desktop_active", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	path := filepath.Join(h.dir, "identity", "hub.json")
@@ -267,6 +278,31 @@ func (h *Hub) notify(space string) {
 	}
 }
 
+func ensureColumn(tx *sql.Tx, table, column, def string) error {
+	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = tx.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + def)
+	return err
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS hub_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,salt BLOB NOT NULL,verifier BLOB NOT NULL);
@@ -292,4 +328,5 @@ CREATE TABLE IF NOT EXISTS dispatches(space_id TEXT NOT NULL, id TEXT NOT NULL,t
 CREATE INDEX IF NOT EXISTS task_dispatches ON dispatches(space_id,task_id);
 CREATE TABLE IF NOT EXISTS receipts(space_id TEXT NOT NULL,device_id TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL, data TEXT NOT NULL,PRIMARY KEY(space_id,device_id,id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 CREATE TABLE IF NOT EXISTS read_cursors(space_id TEXT NOT NULL,user_id TEXT NOT NULL,device_id TEXT NOT NULL,session_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(space_id,user_id,device_id,session_id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
+CREATE TABLE IF NOT EXISTS cleared_cursors(space_id TEXT NOT NULL,user_id TEXT NOT NULL,device_id TEXT NOT NULL,session_id TEXT NOT NULL,sequence INTEGER NOT NULL,PRIMARY KEY(space_id,user_id,device_id,session_id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 PRAGMA user_version=1;`

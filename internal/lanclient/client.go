@@ -291,6 +291,21 @@ func (c *Client) Local(ctx context.Context, st p.ClientState, method, path strin
 		}
 		return nil, st.IsDirect(), err
 	}
+	if method == http.MethodPost && path == st.SpacePath()+"/cleared" {
+		var in p.ClearSync
+		if err := p.Decode(body, &in); err != nil {
+			return nil, true, err
+		}
+		if in.DeviceID == "" {
+			return nil, st.IsDirect(), errors.New("missing deviceId")
+		}
+		var out json.RawMessage
+		err := c.exchange(ctx, st, in.DeviceID, http.MethodPost, "/cleared", body, &out)
+		if err == nil {
+			return out, true, nil
+		}
+		return nil, st.IsDirect(), err
+	}
 	u, err := url.ParseRequestURI(path)
 	if err != nil {
 		return nil, true, err

@@ -93,6 +93,33 @@ export function useConversationReadState(
     };
   }, []);
   useEffect(() => {
+    const reportPresence = (active: boolean, keepalive = false) => {
+      void fetch("/api/desktop/presence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+        keepalive,
+      }).catch(() => undefined);
+    };
+    const syncVisibility = () =>
+      reportPresence(document.visibilityState === "visible");
+    const onHide = () => reportPresence(false, true);
+    syncVisibility();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        reportPresence(true);
+      }
+    }, 20_000);
+    document.addEventListener("visibilitychange", syncVisibility);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncVisibility);
+      window.removeEventListener("pagehide", onHide);
+      onHide();
+    };
+  }, []);
+  useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify(cursors));
     } catch {

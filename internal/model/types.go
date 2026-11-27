@@ -255,21 +255,27 @@ type Chat struct {
 // Conversation is the sidebar projection of a main or Topic session. Its
 // unread cursor advances when its view has loaded or the user marks it read.
 type Conversation struct {
-	BackgroundOnly bool              `json:"backgroundOnly,omitempty"` // No foreground activity in this session yet.
-	Comparison     *ComparisonOrigin `json:"comparison,omitempty"`
-	ID             string            `json:"id"`
-	ChatID         string            `json:"chatId"`
-	AgentID        string            `json:"agentId"`
-	Kind           string            `json:"kind"`
-	Title          string            `json:"title"`
-	Preview        string            `json:"preview"`
-	MessageAt      string            `json:"messageAt"`
-	FinishedAt     string            `json:"finishedAt,omitempty"`
-	UnreadSequence int64             `json:"unreadSequence"`
-	ReadSequence   int64             `json:"readSequence,omitempty"`
+	BackgroundOnly  bool              `json:"backgroundOnly,omitempty"` // No foreground activity in this session yet.
+	Comparison      *ComparisonOrigin `json:"comparison,omitempty"`
+	ID              string            `json:"id"`
+	ChatID          string            `json:"chatId"`
+	AgentID         string            `json:"agentId"`
+	Kind            string            `json:"kind"`
+	Title           string            `json:"title"`
+	Preview         string            `json:"preview"`
+	MessageAt       string            `json:"messageAt"`
+	FinishedAt      string            `json:"finishedAt,omitempty"`
+	UnreadSequence  int64             `json:"unreadSequence"`
+	ReadSequence    int64             `json:"readSequence,omitempty"`
+	ClearedSequence int64             `json:"clearedSequence,omitempty"`
 }
 
 type ReadMark struct {
+	SessionID string `json:"sessionId"`
+	Sequence  int64  `json:"sequence"`
+}
+
+type ClearMark struct {
 	SessionID string `json:"sessionId"`
 	Sequence  int64  `json:"sequence"`
 }

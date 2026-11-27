@@ -326,7 +326,7 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	commandID, lookup := strings.CutPrefix(r.URL.Path, "/commands/")
 	lookup = lookup && len(commandID) == 36 && !strings.Contains(commandID, "/")
 	if !(r.Method == http.MethodGet && (r.URL.Path == "/archive" || r.URL.Path == "/private" || r.URL.Path == "/host" || lookup) ||
-		r.Method == http.MethodPost && (r.URL.Path == "/commands" || r.URL.Path == "/read" || r.URL.Path == "/pair" || r.URL.Path == "/unpair")) {
+		r.Method == http.MethodPost && (r.URL.Path == "/commands" || r.URL.Path == "/read" || r.URL.Path == "/cleared" || r.URL.Path == "/pair" || r.URL.Path == "/unpair")) {
 		http.NotFound(w, r)
 		return
 	}
@@ -404,6 +404,25 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(true)
 		return
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/cleared" {
+		var in p.ClearSync
+		if err = p.Decode(body, &in); err != nil {
+			http.Error(w, "invalid cleared sync", 400)
+			return
+		}
+		if len(in.Items) > 500 {
+			http.Error(w, "too many cleared cursors", 400)
+			return
+		}
+		if m.UserID == g.UserID && len(in.Items) > 0 {
+			if err = h.markScopeSessionsCleared(r.Context(), g.HubID, g.SpaceID, g.Controller.ID, in.Items); err != nil {
+				http.Error(w, "failed to sync cleared state", 500)
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(true)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/host" {
 		var version int64
 		_ = h.App.Store.DB.QueryRowContext(r.Context(), "SELECT version FROM remote_memberships WHERE hub=? AND space=?", g.HubID, g.SpaceID).Scan(&version)
@@ -412,13 +431,14 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 			hostName = "Lever"
 		}
 		_ = json.NewEncoder(w).Encode(p.Device{
-			Identity: g.Host,
-			SpaceID:  g.SpaceID,
-			Name:     hostName,
-			Role:     m.Role,
-			Platform: runtime.GOOS,
-			Online:   true,
-			Version:  version,
+			Identity:      g.Host,
+			SpaceID:       g.SpaceID,
+			Name:          hostName,
+			Role:          m.Role,
+			Platform:      runtime.GOOS,
+			Online:        true,
+			DesktopActive: h.App.DesktopActive(),
+			Version:       version,
 		})
 		return
 	}
@@ -552,4 +572,28 @@ func (h *Host) markScopeSessionsRead(ctx context.Context, hubID, spaceID, contro
 		}
 	}
 	return h.App.MarkSessionsRead(ctx, allowed)
+}
+
+func (h *Host) markScopeSessionsCleared(ctx context.Context, hubID, spaceID, controllerID string, items []p.ClearMark) error {
+	allowed := make([]model.ClearMark, 0, len(items))
+	for _, item := range items {
+		if item.SessionID == "" {
+			continue
+		}
+		var visible bool
+		query := "SELECT EXISTS(SELECT 1 FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?1 AND ((" + sharedChatCond("?2", "?3") + ")"
+		args := []any{item.SessionID, hubID, spaceID}
+		if controllerID != "" {
+			query += " OR (" + privateChatCond("?2", "?3", "?4") + ")"
+			args = append(args, controllerID)
+		}
+		query += "))"
+		if err := h.App.Store.DB.QueryRowContext(ctx, query, args...).Scan(&visible); err != nil {
+			return err
+		}
+		if visible {
+			allowed = append(allowed, model.ClearMark{SessionID: item.SessionID, Sequence: item.Sequence})
+		}
+	}
+	return h.App.MarkSessionsCleared(ctx, allowed)
 }

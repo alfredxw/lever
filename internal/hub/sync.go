@@ -85,6 +85,7 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 	}
 	if a.role.Executes() {
 		h.syncReadCursorsToHost(r.Context(), a, l)
+		h.syncClearedCursorsToHost(r.Context(), a, l)
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -127,6 +128,19 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 				select {
 				case ch.(chan bool) <- f.Idle:
 				default:
+				}
+			}
+		case "desktop_presence":
+			var until int64
+			if f.DesktopActive {
+				until = time.Now().Add(50 * time.Second).Unix()
+			}
+			var prevUntil int64
+			_ = h.db.QueryRowContext(ctx, "SELECT desktop_active_until FROM devices WHERE space_id=? AND id=? AND generation=?", k.space, k.device, l.generation).Scan(&prevUntil)
+			if _, err := h.db.ExecContext(ctx, "UPDATE devices SET desktop_active_until=? WHERE space_id=? AND id=? AND generation=?", until, k.space, k.device, l.generation); err == nil {
+				nowUnix := time.Now().Unix()
+				if (prevUntil > nowUnix) != f.DesktopActive {
+					h.notify(k.space)
 				}
 			}
 		case "start":
@@ -532,6 +546,120 @@ func (h *Hub) syncReadCursorsToHost(ctx context.Context, a principal, l *link) {
 	}
 	for rows.Next() {
 		var m p.ReadMark
+		if rows.Scan(&m.SessionID, &m.Sequence) == nil && m.SessionID != "" && m.Sequence > 0 {
+			batch = append(batch, m)
+			if len(batch) >= 200 {
+				flush()
+			}
+		}
+	}
+	flush()
+}
+
+func (h *Hub) clearedCursors(w http.ResponseWriter, r *http.Request, a principal) error {
+	rows, err := h.db.QueryContext(r.Context(), "SELECT device_id,session_id,sequence FROM cleared_cursors WHERE space_id=? AND user_id=?", r.PathValue("space"), a.user)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	out := map[string]map[string]int64{}
+	for rows.Next() {
+		var dev, sess string
+		var seq int64
+		if err := rows.Scan(&dev, &sess, &seq); err != nil {
+			return err
+		}
+		m := out[dev]
+		if m == nil {
+			m = map[string]int64{}
+			out[dev] = m
+		}
+		m[sess] = seq
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	return send(w, out)
+}
+
+func (h *Hub) markCleared(w http.ResponseWriter, r *http.Request, a principal) error {
+	var in p.ClearSync
+	if err := read(r, &in); err != nil {
+		return err
+	}
+	if in.DeviceID == "" || len(in.Items) > 500 {
+		return invalid("invalid cleared sync")
+	}
+	space := r.PathValue("space")
+	var changed []p.ClearMark
+	var pushToHost bool
+	err := write(h.db, func(tx *sql.Tx) error {
+		var hostUser, spaceKind string
+		err := tx.QueryRow(`SELECT d.user_id,s.kind FROM devices d JOIN spaces s ON s.id=d.space_id WHERE d.space_id=? AND d.id=?`, space, in.DeviceID).Scan(&hostUser, &spaceKind)
+		if err != nil {
+			return err
+		}
+		pushToHost = spaceKind == "personal" && hostUser == a.user
+		for _, item := range in.Items {
+			if item.SessionID == "" || len(item.SessionID) > 160 {
+				continue
+			}
+			if item.Sequence <= 0 {
+				res, err := tx.Exec("DELETE FROM cleared_cursors WHERE space_id=? AND user_id=? AND device_id=? AND session_id=?", space, a.user, in.DeviceID, item.SessionID)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n > 0 || pushToHost {
+					changed = append(changed, p.ClearMark{SessionID: item.SessionID, Sequence: 0})
+				}
+				continue
+			}
+			seq := max(item.Sequence, int64(1))
+			if _, err = tx.Exec(`INSERT INTO cleared_cursors(space_id,user_id,device_id,session_id,sequence) VALUES(?,?,?,?,?)
+ON CONFLICT(space_id,user_id,device_id,session_id) DO UPDATE SET sequence=max(sequence,excluded.sequence)`, space, a.user, in.DeviceID, item.SessionID, seq); err != nil {
+				return err
+			}
+			changed = append(changed, p.ClearMark{SessionID: item.SessionID, Sequence: seq})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(changed) > 0 {
+		h.notify(space)
+		if pushToHost {
+			h.mu.Lock()
+			l := h.links[deviceKey{space, in.DeviceID}]
+			h.mu.Unlock()
+			if l != nil {
+				_ = l.send(p.Frame{Type: "mark_cleared", SpaceID: space, DeviceID: in.DeviceID, ClearMarks: changed})
+			}
+		}
+	}
+	return send(w, true)
+}
+
+func (h *Hub) syncClearedCursorsToHost(ctx context.Context, a principal, l *link) {
+	var spaceKind string
+	if err := h.db.QueryRowContext(ctx, "SELECT kind FROM spaces WHERE id=?", a.space).Scan(&spaceKind); err != nil || spaceKind != "personal" {
+		return
+	}
+	rows, err := h.db.QueryContext(ctx, "SELECT session_id,sequence FROM cleared_cursors WHERE space_id=? AND user_id=? AND device_id=?", a.space, a.user, a.device)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var batch []p.ClearMark
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		_ = l.send(p.Frame{Type: "mark_cleared", SpaceID: a.space, DeviceID: a.device, ClearMarks: batch})
+		batch = nil
+	}
+	for rows.Next() {
+		var m p.ClearMark
 		if rows.Scan(&m.SessionID, &m.Sequence) == nil && m.SessionID != "" && m.Sequence > 0 {
 			batch = append(batch, m)
 			if len(batch) >= 200 {

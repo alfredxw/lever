@@ -91,6 +91,11 @@ type App struct {
 	typingDeferSince         map[string]time.Time
 	receiptTimers            map[string]*time.Timer
 	delegationCoalesceWindow time.Duration
+	presenceMu               sync.Mutex
+	desktopActive           bool
+	desktopSeenAt           time.Time
+	screenLockCheckedAt     time.Time
+	screenLocked            bool
 }
 
 // Open embeds provider execution in the caller. The standalone hosts use
@@ -607,6 +612,51 @@ WHERE id=?2 AND activity IS NOT NULL
 			return nil
 		}
 		return store.Event(tx, model.Event{Type: "conversation-read"})
+	})
+}
+
+// MarkSessionsCleared synchronizes cleared/restored session cursors between
+// Desktop and paired mobile controllers. Sequence > 0 clears through at least
+// that sequence (floor 1 so idle unreadSequence=0 sessions remain distinguishable);
+// Sequence <= 0 restores the session back to active.
+func (a *App) MarkSessionsCleared(ctx context.Context, items []model.ClearMark) error {
+	if len(items) == 0 {
+		return nil
+	}
+	if len(items) > 500 {
+		return invalid("Too many cleared cursors in one request")
+	}
+	return a.Store.Write(ctx, func(tx *sql.Tx) error {
+		changed := false
+		for _, item := range items {
+			if item.SessionID == "" {
+				continue
+			}
+			var res sql.Result
+			var err error
+			if item.Sequence <= 0 {
+				res, err = tx.Exec(`UPDATE sessions
+SET activity=json_remove(activity,'$.clearedSequence')
+WHERE id=?1 AND activity IS NOT NULL AND json_extract(activity,'$.clearedSequence') IS NOT NULL`,
+					item.SessionID)
+			} else {
+				res, err = tx.Exec(`UPDATE sessions
+SET activity=json_set(activity,'$.clearedSequence',max(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0),1))
+WHERE id=?2 AND activity IS NOT NULL
+  AND COALESCE(json_extract(activity,'$.clearedSequence'),0) < max(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0),1)`,
+					item.Sequence, item.SessionID)
+			}
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		return store.Event(tx, model.Event{Type: "conversation-cleared"})
 	})
 }
 

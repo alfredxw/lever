@@ -9,8 +9,9 @@ import (
 )
 
 type PushRegistration struct {
-	Token string `json:"token"`
-	Key   []byte `json:"key"`
+	Token                    string `json:"token"`
+	Key                      []byte `json:"key"`
+	SilenceWhenDesktopActive *bool  `json:"silenceWhenDesktopActive,omitempty"`
 }
 
 // The phone shares its notification key only with its own paired Hub.

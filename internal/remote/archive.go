@@ -174,10 +174,11 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		if err = tx.QueryRow(`SELECT
 			coalesce(json_extract(activity,'$.unreadSequence'),0),
 			coalesce(json_extract(activity,'$.readSequence'),0),
+			coalesce(json_extract(activity,'$.clearedSequence'),0),
 			coalesce(json_extract(activity,'$.preview'),''),
 			coalesce(json_extract(activity,'$.messageAt'),''),
 			coalesce(json_extract(activity,'$.title'),'')
-			FROM sessions WHERE id=?`, s.ID).Scan(&r.UnreadSequence, &r.ReadSequence, &preview, &messageAt, &activityTitle); err != nil {
+			FROM sessions WHERE id=?`, s.ID).Scan(&r.UnreadSequence, &r.ReadSequence, &r.ClearedSequence, &preview, &messageAt, &activityTitle); err != nil {
 			return r, err
 		}
 		if r.Title == "" && activityTitle != "" {
