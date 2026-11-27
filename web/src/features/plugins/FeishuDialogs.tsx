@@ -85,10 +85,19 @@ export function ChipListInput({
   const [draft, setDraft] = useState("");
 
   const add = () => {
-    const value = draft.trim();
-    if (!value) return;
-    if (!items.includes(value)) {
-      onChange([...items, value]);
+    const tokens = draft
+      .split(/[\s,，]+/u)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return;
+    const next = [...items];
+    for (const token of tokens) {
+      if (!next.includes(token)) {
+        next.push(token);
+      }
+    }
+    if (next.length !== items.length) {
+      onChange(next);
     }
     setDraft("");
   };
@@ -631,6 +640,15 @@ export function FeishuAddBotDialog({
                       ))}
                     </ToggleGroup>
                   </div>
+                  {config.dmAccess === "admin" && (
+                    <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                      {t(
+                        mode === "qr"
+                          ? "channels.bot.dmAccessAdminQrHint"
+                          : "channels.bot.dmAccessAdminManualHint",
+                      )}
+                    </p>
+                  )}
                   {config.dmAccess === "whitelist" && (
                     <div className="pt-1">
                       <ChipListInput
@@ -1441,6 +1459,25 @@ const FEISHU_SCOPE_ITEMS = [
   },
 ] as const;
 
+const FEISHU_CONTACT_SCOPE_ITEMS = [
+  {
+    key: "contact:user.base:readonly",
+    descKey: "channels.bot.scope.contactUserBase",
+  },
+  {
+    key: "contact:contact.base:readonly",
+    descKey: "channels.bot.scope.contactBase",
+  },
+  {
+    key: "contact:user.id:readonly",
+    descKey: "channels.bot.scope.contactUserId",
+  },
+  {
+    key: "im:chat.members:read",
+    descKey: "channels.bot.scope.chatMembers",
+  },
+] as const;
+
 export function FeishuScopesDialog({
   open,
   onOpenChange,
@@ -1474,32 +1511,57 @@ export function FeishuScopesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="feishu-scope-list">
-          {FEISHU_SCOPE_ITEMS.map((item) => {
-            const isMissing = missing.has(item.key);
-            return (
-              <div key={item.key} className="feishu-scope-row">
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className="font-mono text-xs font-medium">
-                    {item.key}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {t(item.descKey)}
+        <div className="flex max-h-[min(60vh,460px)] flex-col gap-3 overflow-y-auto pr-1">
+          <div className="feishu-scope-list">
+            {FEISHU_SCOPE_ITEMS.map((item) => {
+              const isMissing = missing.has(item.key);
+              return (
+                <div key={item.key} className="feishu-scope-row">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-mono text-xs font-medium">
+                      {item.key}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t(item.descKey)}
+                    </span>
+                  </div>
+                  <span
+                    className="feishu-status-pill shrink-0"
+                    data-tone={isMissing ? "attention" : "positive"}
+                  >
+                    {t(
+                      isMissing
+                        ? "channels.bot.scopeMissing"
+                        : "channels.bot.scopeReady",
+                    )}
                   </span>
                 </div>
-                <span
-                  className="feishu-status-pill shrink-0"
-                  data-tone={isMissing ? "attention" : "positive"}
-                >
-                  {t(
-                    isMissing
-                      ? "channels.bot.scopeMissing"
-                      : "channels.bot.scopeReady",
-                  )}
-                </span>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("channels.bot.scopesContactGroup")}
+            </span>
+            <div className="feishu-scope-list">
+              {FEISHU_CONTACT_SCOPE_ITEMS.map((item) => (
+                <div key={item.key} className="feishu-scope-row">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-mono text-xs font-medium">
+                      {item.key}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t(item.descKey)}
+                    </span>
+                  </div>
+                  <span className="feishu-status-pill shrink-0">
+                    {t("channels.bot.scopeRecommended")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         {recheck.error && <ErrorNotice error={recheck.error} />}
@@ -1598,6 +1660,7 @@ export function FeishuPairDialog({
             candidate={bot.pairCandidate}
             botName={botDisplayName(bot, t("channels.feishu"))}
             agents={available}
+            defaultAgentId={bot.settings.agentId}
             busy={busy}
             online={bot.connection === "online"}
             onRenew={() => startPair.mutate()}

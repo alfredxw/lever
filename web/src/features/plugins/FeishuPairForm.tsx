@@ -25,6 +25,7 @@ export function FeishuPairForm({
   candidate,
   botName,
   agents,
+  defaultAgentId,
   busy,
   online,
   onRenew,
@@ -33,14 +34,19 @@ export function FeishuPairForm({
   candidate: string;
   botName: string;
   agents: Agent[];
+  defaultAgentId?: string;
   busy: boolean;
   online: boolean;
   onRenew: () => void;
   onConfirm: (input: ChannelPairInput) => void;
 }) {
   const { t } = useTranslation();
-  const [mode, setMode] = useState("new");
-  const [agentId, setAgentId] = useState("");
+  const initialAgentId =
+    defaultAgentId && agents.some((agent) => agent.id === defaultAgentId)
+      ? defaultAgentId
+      : "";
+  const [mode, setMode] = useState(initialAgentId ? "existing" : "new");
+  const [agentId, setAgentId] = useState(initialAgentId);
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("");
   const [directory, setDirectory] = useState("");

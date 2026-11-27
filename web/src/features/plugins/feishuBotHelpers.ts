@@ -43,6 +43,8 @@ export function buildInitialBotSettings(
     agentId,
     dmMode: config.dmMode,
     replyStyle: config.replyStyle,
+    reaction: "OnIt",
+    reactionDone: "DONE",
     groupEnabled: config.groupEnabled,
     groupMention: config.groupMention,
     groupReplyTarget: config.groupReplyTarget,
@@ -66,6 +68,42 @@ export function buildInitialBotSettings(
   };
 }
 
+export function feishuBotEffectiveReaction(settings: FeishuBotSettings) {
+  const reaction =
+    settings.reaction !== undefined
+      ? settings.reaction.trim()
+      : settings.advanced?.reactionAck
+        ? "OnIt"
+        : "";
+  const reactionDone =
+    settings.reactionDone !== undefined
+      ? settings.reactionDone.trim()
+      : settings.reaction === undefined && settings.advanced?.reactionAck
+        ? "DONE"
+        : "";
+  return { reaction, reactionDone };
+}
+
+export function feishuBotWaitingFirstDmBind(bot: FeishuBotView): boolean {
+  const dmAccess = bot.settings.dmAccess || "admin";
+  if (dmAccess !== "admin") return false;
+  return !bot.paired && (bot.settings.admins?.length ?? 0) === 0;
+}
+
+export function feishuBotDmAccessBlocked(bot: FeishuBotView): boolean {
+  const dmAccess = bot.settings.dmAccess || "admin";
+  if (dmAccess !== "whitelist") return false;
+  if (bot.paired) return false;
+  if ((bot.settings.admins?.length ?? 0) > 0) return false;
+  return (bot.settings.dmWhitelist?.length ?? 0) === 0;
+}
+
+export function feishuBotGroupWhitelistEmpty(bot: FeishuBotView): boolean {
+  if (!bot.settings.groupEnabled) return false;
+  if ((bot.settings.groupAccess || "whitelist") !== "whitelist") return false;
+  return !(bot.settings.chatOverrides ?? []).some((rule) => rule.enabled);
+}
+
 export function shortId(id: string | undefined) {
   if (!id || id.length <= 14) return id ?? "";
   return `${id.slice(0, 8)}…${id.slice(-4)}`;
@@ -84,8 +122,8 @@ export function baseSelectionForAgent(agent?: Agent): Selection {
   return {
     provider: agent?.profile.provider ?? "",
     model: agent?.profile.model ?? "",
-    effort: "",
-    fast: false,
+    effort: agent?.profile.effort ?? "",
+    fast: Boolean(agent?.profile.fast),
   };
 }
 

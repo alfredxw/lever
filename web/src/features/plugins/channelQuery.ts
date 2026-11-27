@@ -6,6 +6,10 @@ import type {
   FeishuBotView,
   FeishuKnownChat,
 } from "@/api/types.gen";
+import {
+  feishuBotDmAccessBlocked,
+  feishuBotGroupWhitelistEmpty,
+} from "./feishuBotHelpers";
 
 export const feishuPath = "/channels/feishu";
 export const feishuQueryKey = ["channel", "feishu"] as const;
@@ -27,6 +31,7 @@ export function feishuBotStatus(
   | "credentials_missing"
   | "paused"
   | "unpaired"
+  | "needs_access"
   | "online"
   | undefined {
   if (!pluginEnabled) return;
@@ -39,6 +44,12 @@ export function feishuBotStatus(
       | "credentials_missing";
   }
   if (!bot.settings.agentId && !bot.paired) return "unpaired";
+  if (
+    feishuBotDmAccessBlocked(bot) &&
+    (!bot.settings.groupEnabled || feishuBotGroupWhitelistEmpty(bot))
+  ) {
+    return "needs_access";
+  }
   return "online";
 }
 
@@ -58,6 +69,7 @@ export function feishuStatus(channel: ChannelView) {
   if (statuses.includes("credentials_missing")) return "credentials_missing";
   if (statuses.includes("error")) return "error";
   if (statuses.includes("unpaired")) return "unpaired";
+  if (statuses.includes("needs_access")) return "needs_access";
   if (statuses.includes("paused")) return "paused";
   return "offline";
 }

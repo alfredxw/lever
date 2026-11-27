@@ -24,12 +24,16 @@ import (
 // All mutable channel state is guarded by App.mu. The socket and outbound
 // requests run outside the lock; each worker belongs to one bot connection.
 type feishuChannel struct {
-	bots         []feishuBotConfig
-	enabled      bool
-	started      bool
-	runtimes     map[string]*channelRuntime
-	pairs        map[string]channelPair
-	registration *feishuRegistration
+	bots           []feishuBotConfig
+	enabled        bool
+	started        bool
+	runtimes       map[string]*channelRuntime
+	pairs          map[string]channelPair
+	registration   *feishuRegistration
+	userCache      map[string]map[string]model.FeishuContact
+	contactCache   map[string]feishuContactDirCache
+	accessRequests map[string][]feishuAccessReqRecord
+	hydrating      map[string]map[string]time.Time
 }
 
 type channelRuntime struct {
@@ -137,23 +141,27 @@ type feishuTurn struct {
 }
 
 type feishuDeliveryMeta struct {
-	BotID        string `json:"botId"`
-	RemoteChatID string `json:"remoteChatId,omitempty"`
-	RemoteUserID string `json:"remoteUserId,omitempty"`
-	ChatType     string `json:"chatType,omitempty"`
-	ReplyStyle   string `json:"replyStyle,omitempty"`   // "card" | "text"
-	ReplyTarget  string `json:"replyTarget,omitempty"`  // "topic" | "main" | "quote" | "dm_first"
-	ReplyMention string `json:"replyMention,omitempty"` // "none" | "requester" | "members"
-	HideLocal    bool   `json:"hideLocal,omitempty"`
-	ApprovalMode string `json:"approvalMode,omitempty"` // "lever" | "feishu_card"
-	ReactionAck  bool   `json:"reactionAck,omitempty"`
-	ReactionID   string `json:"reactionId,omitempty"`
+	BotID         string `json:"botId"`
+	RemoteChatID  string `json:"remoteChatId,omitempty"`
+	RemoteUserID  string `json:"remoteUserId,omitempty"`
+	ChatType      string `json:"chatType,omitempty"`
+	ReplyStyle    string `json:"replyStyle,omitempty"`    // "card" | "text"
+	ReplyTarget   string `json:"replyTarget,omitempty"`   // "topic" | "main" | "quote" | "dm_first"
+	ReplyMention  string `json:"replyMention,omitempty"`  // "none" | "requester" | "members"
+	HideLocal     bool   `json:"hideLocal,omitempty"`
+	ApprovalMode  string `json:"approvalMode,omitempty"`  // "lever" | "feishu_card"
+	ReactionAck   bool   `json:"reactionAck,omitempty"`
+	ReactionEmoji string `json:"reactionEmoji,omitempty"`
+	ReactionDone  string `json:"reactionDone,omitempty"`
+	ReactionID    string `json:"reactionId,omitempty"`
 }
 
 func defaultFeishuSettings() model.FeishuBotSettings {
 	return model.FeishuBotSettings{
 		DMMode:           "continuous",
 		ReplyStyle:       "card",
+		Reaction:         "OnIt",
+		ReactionDone:     "DONE",
 		GroupEnabled:     false,
 		GroupMention:     "thread_free",
 		GroupReplyTarget: "topic",
@@ -181,6 +189,8 @@ func legacyFeishuSettings(agentID, botName string) model.FeishuBotSettings {
 	s.DisplayName = botName
 	s.AgentID = agentID
 	s.ReplyStyle = "text"
+	s.Reaction = ""
+	s.ReactionDone = ""
 	s.GroupEnabled = false
 	s.DMAccess = "admin"
 	s.ReplyMention = "none"
@@ -280,6 +290,20 @@ func normalizeFeishuSettings(s *model.FeishuBotSettings) {
 	}
 	s.DisplayName = strings.TrimSpace(s.DisplayName)
 	s.DefaultPrompt = strings.TrimSpace(s.DefaultPrompt)
+	s.Reaction = strings.TrimSpace(s.Reaction)
+	s.ReactionDone = strings.TrimSpace(s.ReactionDone)
+	if s.Reaction == "" && s.Advanced.ReactionAck {
+		s.Reaction = "OnIt"
+		if s.ReactionDone == "" {
+			s.ReactionDone = "DONE"
+		}
+	}
+	if s.Reaction == "" {
+		s.ReactionDone = ""
+		s.Advanced.ReactionAck = false
+	} else {
+		s.Advanced.ReactionAck = true
+	}
 	s.DMWhitelist = cleanStringList(s.DMWhitelist)
 	s.Admins = cleanStringList(s.Admins)
 	s.Advanced.BlockedUsers = cleanStringList(s.Advanced.BlockedUsers)
@@ -330,6 +354,12 @@ func validateFeishuSettings(s model.FeishuBotSettings) error {
 	}
 	if err := validateSelection(s.Selection); err != nil {
 		return err
+	}
+	if s.Reaction != "" && !personalReaction.MatchString(s.Reaction) {
+		return invalid("Invalid Feishu reaction emoji key")
+	}
+	if s.ReactionDone != "" && !personalReaction.MatchString(s.ReactionDone) {
+		return invalid("Invalid Feishu completion reaction emoji key")
 	}
 	if len(s.DMWhitelist) > 256 || len(s.Admins) > 64 || len(s.Advanced.BlockedUsers) > 256 || len(s.ChatOverrides) > 128 {
 		return invalid("Too many entries in bot access or group rules")
@@ -498,6 +528,7 @@ func (a *App) startFeishuBotRuntimeLocked(cfg feishuBotConfig) {
 	}
 	bot := larkbot.New(cfg.AppID, string(secret), cfg.brand())
 	r.bot = bot
+	a.scheduleFeishuUserHydrationLocked(r, collectBotUserIDs(cfg), true)
 	needsInfo := cfg.BotName == "" || cfg.BotOpenID == ""
 	a.wg.Add(2)
 	go func() {
@@ -603,19 +634,45 @@ func (a *App) botViewLocked(cfg feishuBotConfig) model.FeishuBotView {
 	if rt := a.feishu.runtimes[cfg.ID]; rt != nil {
 		conn = rt.state
 	}
+	chatID := cfg.Binding.LeverChatID
+	if chatID == "" && len(cfg.ChatMap) > 0 {
+		if id := cfg.ChatMap["bot:"+cfg.ID]; id != "" {
+			chatID = id
+		} else {
+			keys := make([]string, 0, len(cfg.ChatMap))
+			for k := range cfg.ChatMap {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			for _, k := range keys {
+				if cfg.ChatMap[k] != "" {
+					chatID = cfg.ChatMap[k]
+					break
+				}
+			}
+		}
+	}
+	ownerName := cfg.Binding.Name
+	if (ownerName == "" || ownerName == "DM") && cfg.Binding.UserID != "" {
+		if cached := a.cachedFeishuUserNameLocked(cfg.ID, cfg.Binding.UserID); cached != "" {
+			ownerName = cached
+		}
+	}
 	bv := model.FeishuBotView{
-		ID:            cfg.ID,
-		AppID:         cfg.AppID,
-		Brand:         cfg.brand(),
-		BotName:       cfg.BotName,
-		Enabled:       cfg.Enabled,
-		Connection:    conn,
-		OwnerName:     cfg.Binding.Name,
-		ChatID:        cfg.Binding.LeverChatID,
-		Paired:        cfg.Binding.ID != "",
-		LastMessageAt: cfg.Binding.LastMessageAt,
-		MissingScopes: append([]string(nil), cfg.MissingScopes...),
-		Settings:      settings,
+		ID:              cfg.ID,
+		AppID:           cfg.AppID,
+		Brand:           cfg.brand(),
+		BotName:         cfg.BotName,
+		Enabled:         cfg.Enabled,
+		Connection:      conn,
+		OwnerName:       ownerName,
+		ChatID:          chatID,
+		Paired:          cfg.Binding.ID != "",
+		LastMessageAt:   cfg.Binding.LastMessageAt,
+		MissingScopes:   append([]string(nil), cfg.MissingScopes...),
+		PendingRequests: a.pendingRequestsForBotLocked(cfg.ID),
+		KnownUsers:      a.knownUsersForBotLocked(cfg, settings),
+		Settings:        settings,
 	}
 	if p, ok := a.feishu.pairs[cfg.ID]; ok && time.Now().Before(p.expires) {
 		bv.PairLocked = len(p.rejected) >= 5
@@ -822,6 +879,9 @@ func (a *App) upsertFeishuBotCredentialsLocked(ctx context.Context, idx int, nex
 		a.removeSecretFile(previous.SecretID)
 	}
 	a.feishu.bots = bots
+	if hasPrev && (next.AppID != previous.AppID || next.brand() != previous.brand()) {
+		a.clearFeishuBotCachesLocked(next.ID)
+	}
 	if a.feishu.pairs != nil {
 		delete(a.feishu.pairs, next.ID)
 	}
@@ -957,6 +1017,10 @@ func (a *App) UpdateFeishuBotSettings(ctx context.Context, botID string, setting
 		return model.ChannelView{}, err
 	}
 	a.feishu.bots = bots
+	a.pruneFeishuAccessRequestsLocked(botID, settings.Admins...)
+	a.pruneFeishuAccessRequestsLocked(botID, settings.DMWhitelist...)
+	a.pruneFeishuAccessRequestsLocked(botID, settings.Advanced.BlockedUsers...)
+	a.scheduleFeishuUserHydrationLocked(a.feishu.runtimes[botID], collectBotUserIDs(updated), false)
 	return a.feishuViewLocked(), nil
 }
 
@@ -1013,6 +1077,7 @@ func (a *App) DeleteFeishuBot(ctx context.Context, botID string) (model.ChannelV
 	if a.feishu.pairs != nil {
 		delete(a.feishu.pairs, botID)
 	}
+	a.clearFeishuBotCachesLocked(botID)
 	a.feishu.bots = bots
 	a.removeSecretFile(removed.SecretID)
 	return a.feishuViewLocked(), nil
@@ -1401,7 +1466,7 @@ func (a *App) TestFeishuBot(ctx context.Context, botID string) error {
 	}
 	if targetChat == "" && targetOpenID == "" {
 		a.mu.Unlock()
-		return conflict("Pair a private chat, add an admin Open ID, or enable a group rule first")
+		return conflict("Send a message to the bot in Feishu, authorize an admin, or enable a group rule first")
 	}
 	a.mu.Unlock()
 
@@ -1444,7 +1509,7 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 	s := cfg.Settings
 	normalizeFeishuSettings(&s)
 
-	// 1. Handle /pair command strictly on p2p + user messages when not yet paired.
+	// 1. Handle legacy /pair command strictly on p2p + user messages when not yet paired.
 	if b.ID == "" && strings.HasPrefix(m.Text, "/pair ") {
 		if m.ChatType == "p2p" && m.SenderType == "user" {
 			if f.pairs == nil {
@@ -1464,36 +1529,180 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		return nil
 	}
 
-	// 2. Bot must be enabled and bound to an Agent.
-	agentID := cfg.effectiveAgentID()
-	if !cfg.Enabled || b.Paused || agentID == "" || strings.HasPrefix(m.Text, "/pair ") {
+	// 2. Bot must be enabled and not a redundant /pair command.
+	if !cfg.Enabled || b.Paused || strings.HasPrefix(m.Text, "/pair ") {
+		slog.Info("ignored Feishu message", "bot", cfg.ID, "chatType", m.ChatType, "reason", "paused_or_pair")
 		a.mu.Unlock()
 		return nil
 	}
 
 	// 3. Sender validation (blocklist & bot-to-bot trust).
-	if slices.Contains(s.Advanced.BlockedUsers, m.UserID) {
-		a.mu.Unlock()
-		return nil
-	}
 	if m.SenderType != "user" {
 		if !s.Advanced.TrustSameOwnerBots || !a.isSameOwnerBotLocked(cfg.ID, m.UserID) {
 			a.mu.Unlock()
 			return nil
 		}
 	}
+	if slices.Contains(s.Advanced.BlockedUsers, m.UserID) {
+		slog.Info("ignored Feishu message", "bot", cfg.ID, "chatType", m.ChatType, "reason", "blocked_user")
+		a.mu.Unlock()
+		return nil
+	}
 
-	// 4. Determine DM vs Group admission, override, trigger, and effective settings.
-	var override *model.FeishuChatOverride
+	// Remember observed users & mention display names for contact search and chips.
+	if m.SenderType == "user" && m.UserID != "" {
+		a.rememberFeishuUserLocked(cfg.ID, model.FeishuContact{
+			OpenID: m.UserID,
+			Source: "recent",
+		})
+		a.scheduleFeishuUserHydrationLocked(r, []string{m.UserID}, false)
+	}
+	for _, mention := range m.Mentions {
+		if mention.OpenID != "" && mention.OpenID != cfg.BotOpenID && mention.Name != "" {
+			a.rememberFeishuUserLocked(cfg.ID, model.FeishuContact{
+				OpenID: mention.OpenID,
+				Name:   strings.TrimSpace(mention.Name),
+				Source: "recent",
+			})
+		}
+	}
+
 	isGroup := m.ChatType == "group"
-	if !isGroup {
-		if !canAccessFeishuDM(cfg, s, m) {
+	mentioned := isGroup && isFeishuBotMentioned(cfg, m)
+	agentID := cfg.effectiveAgentID()
+	hasActivePair := false
+	if p, ok := f.pairs[cfg.ID]; ok && p.code != "" && time.Now().Before(p.expires) {
+		hasActivePair = true
+	}
+
+	// 3b. Direct message auto-binding: when no admin/owner is bound yet under default
+	// admin-only DM policy (and no explicit legacy /pair code session is active), the
+	// first human DM directly binds the sender as admin & owner without manual /pair.
+	justAutoBound := false
+	if !isGroup && m.SenderType == "user" && !hasActivePair && cfg.Binding.ID == "" && len(s.Admins) == 0 && s.DMAccess == "admin" {
+		updated := cfg
+		updated.Settings.Admins = append(updated.Settings.Admins, m.UserID)
+		normalizeFeishuSettings(&updated.Settings)
+		ownerName := a.cachedFeishuUserNameLocked(cfg.ID, m.UserID)
+		if ownerName == "" {
+			ownerName = "DM"
+		}
+		updated.Binding = channelBinding{
+			ID:     ID(),
+			Name:   ownerName,
+			UserID: m.UserID,
+			ChatID: m.ChatID,
+			Tenant: m.Tenant,
+			Paused: !updated.Enabled,
+		}
+		bots := append([]feishuBotConfig(nil), f.bots...)
+		err := a.Store.Write(ctx, func(tx *sql.Tx) error {
+			if agentID != "" {
+				if err := writeFeishuBotTarget(ctx, tx, &updated, agentID); err != nil {
+					return err
+				}
+			}
+			bots[idx] = updated
+			return saveFeishuBots(ctx, tx, bots)
+		})
+		if err != nil {
+			slog.Warn("could not auto-bind Feishu DM admin", "bot", cfg.ID, "error", err)
 			a.mu.Unlock()
 			return nil
+		}
+		f.bots = bots
+		cfg = updated
+		b = updated.Binding
+		s = updated.Settings
+		justAutoBound = true
+		a.pruneFeishuAccessRequestsLocked(cfg.ID, m.UserID)
+		a.scheduleFeishuUserHydrationLocked(r, []string{m.UserID}, true)
+		slog.Info("auto-bound Feishu bot admin from direct DM", "bot", cfg.ID, "user", m.UserID)
+	}
+	deliveryBindingID := cfg.deliveryBindingID()
+
+	// 4. Bot must be bound to an Agent.
+	if agentID == "" {
+		a.mu.Unlock()
+		slog.Warn("rejected Feishu message: no agent bound", "bot", cfg.ID, "chatType", m.ChatType)
+		if m.SenderType == "user" && (!isGroup || mentioned) {
+			if justAutoBound {
+				a.replyFeishuNotice(r, deliveryBindingID, m.ID, "no-agent",
+					"已自动将你绑定为管理员，但此机器人尚未绑定接收消息的 Agent，请在 Lever 中选择对应 Agent 后即可开始对话。\nYou have been bound as admin automatically, but no Agent is selected yet. Choose an Agent in Lever to start chatting.")
+			} else {
+				a.replyFeishuNotice(r, deliveryBindingID, m.ID, "no-agent",
+					"此机器人尚未绑定接收消息的 Agent，请在 Lever 中选择对应 Agent 后重试。\nNo Agent is bound to this bot yet. Select a target Agent in Lever and try again.")
+			}
+		}
+		return nil
+	}
+
+	// 5. Determine DM vs Group admission, override, trigger, and effective settings.
+	var override *model.FeishuChatOverride
+	if !isGroup {
+		if !canAccessFeishuDM(cfg, s, m) {
+			if m.SenderType == "user" {
+				a.recordFeishuAccessRequestLocked(cfg.ID, m)
+				a.scheduleFeishuUserHydrationLocked(r, []string{m.UserID}, false)
+			}
+			noAdminConfigured := cfg.Binding.ID == "" && len(s.Admins) == 0 && (s.DMAccess == "admin" || (s.DMAccess == "whitelist" && len(s.DMWhitelist) == 0))
+			a.mu.Unlock()
+			slog.Info("rejected Feishu DM: unauthorized sender", "bot", cfg.ID, "dmAccess", s.DMAccess, "hasAdmins", len(s.Admins) > 0, "paired", cfg.Binding.ID != "")
+			if m.SenderType == "user" {
+				if noAdminConfigured {
+					a.replyFeishuNotice(r, deliveryBindingID, m.ID, "dm-denied",
+						"暂无私聊权限：白名单为空，请在 Lever 中搜索联系人授权或调整「私聊调用权限」（你的 Open ID: "+m.UserID+"）。\nNo DM access: allowlist is empty. Authorize a contact or update DM access in Lever (your Open ID: "+m.UserID+").")
+				} else {
+					a.replyFeishuNotice(r, deliveryBindingID, m.ID, "dm-denied",
+						"你暂无使用此机器人的私聊权限，已向管理员提交访问提示，请在 Lever 中一键通过授权（你的 Open ID: "+m.UserID+"）。\nYou don't have permission to DM this bot. Ask an admin to approve your request in Lever (your Open ID: "+m.UserID+").")
+				}
+			}
+			return nil
+		}
+		// Automatically capture the primary admin's DM binding on their first DM
+		// (e.g. after QR registration or direct contact authorization) so "Open chat"
+		// and "Test" work without a separate /pair step.
+		if m.SenderType == "user" && cfg.Binding.ID == "" && isFeishuAdmin(cfg, s, m.UserID) {
+			updated := cfg
+			ownerName := a.cachedFeishuUserNameLocked(cfg.ID, m.UserID)
+			if ownerName == "" {
+				ownerName = "DM"
+			}
+			updated.Binding = channelBinding{
+				ID:     ID(),
+				Name:   ownerName,
+				UserID: m.UserID,
+				ChatID: m.ChatID,
+				Tenant: m.Tenant,
+				Paused: !updated.Enabled,
+			}
+			bots := append([]feishuBotConfig(nil), f.bots...)
+			err := a.Store.Write(ctx, func(tx *sql.Tx) error {
+				if existingChat := updated.ChatMap["bot:"+updated.ID]; existingChat != "" {
+					updated.Binding.AgentID = agentID
+					updated.Binding.LeverChatID = existingChat
+				} else if err := writeFeishuBotTarget(ctx, tx, &updated, agentID); err != nil {
+					return err
+				}
+				bots[idx] = updated
+				return saveFeishuBots(ctx, tx, bots)
+			})
+			if err == nil {
+				f.bots = bots
+				cfg = updated
+				b = updated.Binding
+				deliveryBindingID = updated.deliveryBindingID()
+				a.scheduleFeishuUserHydrationLocked(r, []string{m.UserID}, true)
+			}
 		}
 	} else {
 		if !s.GroupEnabled {
 			a.mu.Unlock()
+			if mentioned && m.SenderType == "user" {
+				slog.Info("rejected Feishu group mention: group disabled", "bot", cfg.ID, "chat", m.ChatID)
+				a.replyFeishuNotice(r, deliveryBindingID, m.ID, "group-disabled",
+					"此机器人暂未开启群聊功能，请在 Lever 中开启「允许在群聊中使用」。\nGroup chat is disabled for this bot. Enable \"Allow in group chats\" in Lever.")
+			}
 			return nil
 		}
 		for i := range s.ChatOverrides {
@@ -1505,10 +1714,20 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		}
 		if override != nil && !override.Enabled {
 			a.mu.Unlock()
+			if mentioned && m.SenderType == "user" {
+				slog.Info("rejected Feishu group mention: group rule disabled", "bot", cfg.ID, "chat", m.ChatID)
+				a.replyFeishuNotice(r, deliveryBindingID, m.ID, "group-paused",
+					"当前群聊的机器人规则已暂停，请在 Lever 中重新启用该群规则。\nThis bot is paused for this group. Re-enable its group rule in Lever.")
+			}
 			return nil
 		}
 		if s.GroupAccess == "whitelist" && override == nil {
 			a.mu.Unlock()
+			if mentioned && m.SenderType == "user" {
+				slog.Info("rejected Feishu group mention: group not allowlisted", "bot", cfg.ID, "chat", m.ChatID)
+				a.replyFeishuNotice(r, deliveryBindingID, m.ID, "group-denied",
+					"当前群聊未在白名单中，暂无使用权限。请在 Lever 中添加该群规则（群 ID: "+m.ChatID+"），或将群聊准入设为「拉入任意群可用」。\nThis group is not allowlisted. Add a group rule in Lever (Chat ID: "+m.ChatID+") or allow any joined group.")
+			}
 			return nil
 		}
 		mentionMode := s.GroupMention
@@ -1521,31 +1740,43 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		}
 	}
 
-	// 5. Clean @ mention tokens from message text.
+	// 6. Clean @ mention tokens from message text.
 	cleanText := stripFeishuMentions(m.Text, m.Mentions)
 	if cleanText == "" {
 		a.mu.Unlock()
 		return nil
 	}
 
-	// 6. Admin /reset command clears active thread/chat session routing.
+	// 7. Admin /reset command clears active thread/chat session routing.
 	if cleanText == "/reset" && isFeishuAdmin(cfg, s, m.UserID) {
+		var botsToSave []feishuBotConfig
 		if cfg.ThreadMap != nil {
 			delete(cfg.ThreadMap, threadMapKey(m))
+			if !isGroup {
+				delete(cfg.ThreadMap, m.ChatID+":dm")
+			} else {
+				delete(cfg.ThreadMap, m.ChatID+":main")
+			}
 			a.feishu.bots[idx] = cfg
+			botsToSave = append([]feishuBotConfig(nil), a.feishu.bots...)
 		}
 		a.mu.Unlock()
-		a.wg.Add(1)
-		go func() {
-			defer a.wg.Done()
-			rctx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
-			defer cancel()
-			_ = r.bot.Reply(rctx, m.ID, hash(m.ID+"-reset")[:40], "已重置当前会话上下文。")
-		}()
+		if botsToSave != nil {
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				wctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+				defer cancel()
+				if err := a.Store.Write(wctx, func(tx *sql.Tx) error { return saveFeishuBots(wctx, tx, botsToSave) }); err != nil {
+					slog.Warn("could not persist Feishu /reset state", "bot", cfg.ID, "error", err)
+				}
+			}()
+		}
+		a.replyFeishuNotice(r, deliveryBindingID, m.ID, "reset", "已重置当前会话上下文。")
 		return nil
 	}
 
-	// 7. Resolve effective model selection, prompt, reply style/target, Lever chat & session.
+	// 8. Resolve effective model selection, prompt, reply style/target, Lever chat & session.
 	var sel *model.Selection
 	if s.Selection != nil {
 		cp := *s.Selection
@@ -1573,11 +1804,11 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 	}
 
 	prompt := composeFeishuPrompt(s, override)
-	deliveryBindingID := cfg.deliveryBindingID()
 	scopeKey, existingChatID, chatTitle, threadKey, existingSessionID, op, sessionTitle := resolveFeishuRouting(cfg, s, override, m, isGroup)
 
 	// Optional reaction ack (async, non-blocking).
-	reactionAck := s.Advanced.ReactionAck
+	reactionEmoji := s.Reaction
+	reactionDone := s.ReactionDone
 	historyLimit := 0
 	if isGroup && s.Advanced.HistoryLimit > 0 && existingSessionID == "" {
 		historyLimit = s.Advanced.HistoryLimit
@@ -1614,7 +1845,11 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 
 	var contextParts []string
 	if senderTag {
-		contextParts = append(contextParts, "[发言人 OpenID: "+m.UserID+"]")
+		if name := a.cachedFeishuUserNameLocked(cfg.ID, m.UserID); name != "" {
+			contextParts = append(contextParts, "[发言人: "+name+" ("+m.UserID+")]")
+		} else {
+			contextParts = append(contextParts, "[发言人 OpenID: "+m.UserID+"]")
+		}
 	}
 	if historyContext != "" {
 		contextParts = append(contextParts, historyContext)
@@ -1640,16 +1875,18 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		scopeKey:  scopeKey,
 		threadKey: threadKey,
 		meta: feishuDeliveryMeta{
-			BotID:        cfg.ID,
-			RemoteChatID: m.ChatID,
-			RemoteUserID: m.UserID,
-			ChatType:     m.ChatType,
-			ReplyStyle:   replyStyle,
-			ReplyTarget:  replyTarget,
-			ReplyMention: s.ReplyMention,
-			HideLocal:    s.Advanced.HideLocalAddresses,
-			ApprovalMode: s.Advanced.ApprovalMode,
-			ReactionAck:  reactionAck,
+			BotID:         cfg.ID,
+			RemoteChatID:  m.ChatID,
+			RemoteUserID:  m.UserID,
+			ChatType:      m.ChatType,
+			ReplyStyle:    replyStyle,
+			ReplyTarget:   replyTarget,
+			ReplyMention:  s.ReplyMention,
+			HideLocal:     s.Advanced.HideLocalAddresses,
+			ApprovalMode:  s.Advanced.ApprovalMode,
+			ReactionAck:   reactionEmoji != "",
+			ReactionEmoji: reactionEmoji,
+			ReactionDone:  reactionDone,
 		},
 	}
 
@@ -1693,16 +1930,22 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		}
 		a.feishu.bots[idx] = updated
 
-		if reactionAck && r.bot != nil {
+		if reactionEmoji != "" && r.bot != nil {
 			runID := run.ID
 			msgID := m.ID
+			emoji := reactionEmoji
 			botClient := r.bot
 			a.wg.Add(1)
 			go func() {
 				defer a.wg.Done()
 				rctx, cancel := context.WithTimeout(r.ctx, 6*time.Second)
 				defer cancel()
-				if reactionID, err := botClient.AddReaction(rctx, msgID, "OnIt"); err == nil && reactionID != "" {
+				reactionID, rerr := botClient.AddReaction(rctx, msgID, emoji)
+				if rerr != nil {
+					slog.Warn("add Feishu ack reaction failed", "bot", cfg.ID, "emoji", emoji, "error", rerr)
+					return
+				}
+				if reactionID != "" {
 					_ = a.Store.Write(a.ctx, func(tx *sql.Tx) error {
 						_, err := tx.ExecContext(a.ctx, "UPDATE feishu_delivery_meta SET data=json_set(data,'$.reactionId',?) WHERE run_id=?", reactionID, runID)
 						return err
@@ -1718,23 +1961,47 @@ func (a *App) receiveChannelMessage(ctx context.Context, r *channelRuntime, m pl
 		if errors.Is(err, errCommandConflict) {
 			return nil
 		}
-		// The socket ACK must not wait for an outbound API call.
-		a.wg.Add(1)
-		go func() {
-			defer a.wg.Done()
-			rctx, cancel := context.WithTimeout(r.ctx, 12*time.Second)
-			defer cancel()
-			a.mu.Lock()
-			_, cur := a.findFeishuBotLocked(r.botID)
-			current := a.feishu.runtimes[r.botID] == r && cur != nil && cur.deliveryBindingID() == deliveryBindingID
-			a.mu.Unlock()
-			if current {
-				_ = r.bot.Reply(rctx, m.ID, hash(origin)[:40], "请在 Lever 检查 Agent 或恢复对话后重试。\nCheck the Agent or resume the conversation in Lever.")
-			}
-		}()
+		slog.Warn("Feishu message rejected by Lever", "bot", cfg.ID, "error", err)
+		a.replyFeishuNotice(r, deliveryBindingID, m.ID, hash(origin)[:16],
+			"请在 Lever 检查 Agent 或恢复对话后重试。\nCheck the Agent or resume the conversation in Lever.")
 		return nil
 	}
+	slog.Error("accept Feishu channel message", "bot", cfg.ID, "error", err)
 	return err
+}
+
+func (a *App) replyFeishuNotice(r *channelRuntime, bindingID, messageID, key, text string) {
+	if r == nil || r.bot == nil || messageID == "" || text == "" {
+		return
+	}
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		rctx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
+		defer cancel()
+		a.mu.Lock()
+		_, cur := a.findFeishuBotLocked(r.botID)
+		current := a.feishu.runtimes[r.botID] == r && cur != nil && cur.deliveryBindingID() == bindingID
+		a.mu.Unlock()
+		if !current {
+			return
+		}
+		if err := r.bot.Reply(rctx, messageID, hash(messageID+"-"+key)[:40], text); err != nil {
+			slog.Warn("send Feishu notice reply failed", "bot", r.botID, "kind", key, "error", err)
+		}
+	}()
+}
+
+func isFeishuBotMentioned(cfg feishuBotConfig, m plugin.ChannelMessage) bool {
+	for _, mention := range m.Mentions {
+		if cfg.BotOpenID != "" && mention.OpenID == cfg.BotOpenID {
+			return true
+		}
+		if cfg.BotName != "" && strings.EqualFold(mention.Name, cfg.BotName) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) isSameOwnerBotLocked(selfBotID, senderOpenID string) bool {
@@ -1772,17 +2039,7 @@ func canAccessFeishuDM(cfg feishuBotConfig, s model.FeishuBotSettings, m plugin.
 }
 
 func matchesGroupMention(cfg feishuBotConfig, mode string, m plugin.ChannelMessage) bool {
-	botMentioned := false
-	for _, mention := range m.Mentions {
-		if cfg.BotOpenID != "" && mention.OpenID == cfg.BotOpenID {
-			botMentioned = true
-			break
-		}
-		if cfg.BotName != "" && strings.EqualFold(mention.Name, cfg.BotName) {
-			botMentioned = true
-			break
-		}
-	}
+	botMentioned := isFeishuBotMentioned(cfg, m)
 	switch mode {
 	case "free":
 		return true
@@ -1887,7 +2144,7 @@ func resolveFeishuRouting(cfg feishuBotConfig, s model.FeishuBotSettings, overri
 	// Determine main vs topic session inside the resolved Lever Chat.
 	useTopic := false
 	if !isGroup {
-		useTopic = s.DMMode == "topic" || (s.Advanced.SessionMapping == "single_chat_topics" && chatID != "")
+		useTopic = s.DMMode == "topic" || s.Advanced.SessionMapping == "single_chat_topics"
 	} else {
 		replyTarget := s.GroupReplyTarget
 		if override != nil && override.GroupReplyTarget != "" {

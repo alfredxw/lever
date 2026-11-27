@@ -752,11 +752,170 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   padding: 10px 14px;
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--status-attention) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--status-attention) 25%, transparent);
+}
+.feishu-info-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--panel-background);
+  border: 1px solid var(--surface-border);
+}
+.feishu-pending-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--surface-border);
+}
+.feishu-pending-requests-list {
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  overflow: hidden;
+}
+.feishu-pending-request-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 12px;
+}
+.feishu-pending-request-row + .feishu-pending-request-row {
+  border-top: 1px solid var(--surface-border);
+}
+.feishu-user-avatar {
+  border-radius: 999px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--surface-border);
+}
+.feishu-user-avatar[data-size="xs"] {
+  width: 16px;
+  height: 16px;
+  font-size: 9.5px;
+}
+.feishu-user-avatar[data-size="sm"] {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+.feishu-user-avatar-fallback {
+  display: inline-grid;
+  place-items: center;
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.feishu-contact-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, var(--radix-popover-content-available-width));
+  padding: 8px;
+}
+.feishu-contact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.feishu-contact-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  outline: none;
+  box-shadow: none;
+  transition: background-color 120ms ease;
+}
+.feishu-contact-option:not(:disabled):hover {
+  background: var(--control-hover);
+}
+.feishu-contact-option:not(:disabled):focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: var(--control-focus);
+}
+.feishu-contact-option:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.feishu-contact-source {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 16px;
+}
+.feishu-contact-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--status-attention) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-attention) 25%, transparent);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--foreground);
+}
+.feishu-contact-scope-hint {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.feishu-prompt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--surface-border);
+}
+.feishu-group-section > .settings-row {
+  border-top: 1px solid var(--surface-border);
+}
+.feishu-group-rules-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--surface-border);
+}
+.feishu-group-rules-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.feishu-group-rules-list {
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  overflow: hidden;
 }
 
 .feishu-chip-list {

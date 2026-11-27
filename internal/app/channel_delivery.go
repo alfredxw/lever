@@ -156,15 +156,28 @@ func (a *App) deliverChannelReply(runtime *channelRuntime, d channelDelivery) {
 	ctx, cancel := context.WithTimeout(runtime.ctx, 12*time.Second)
 	err := runtime.bot.Deliver(ctx, opts)
 	cancel()
+	if err != nil {
+		slog.Warn("deliver Feishu channel reply failed", "bot", runtime.botID, "run", d.run.ID, "part", d.part, "error", err)
+	}
 
-	// Swap reaction OnIt -> DONE best-effort when answer delivery finishes.
-	if err == nil && d.part == "answer" && meta.ReactionAck && runtime.bot != nil {
-		rctx, rcancel := context.WithTimeout(runtime.ctx, 6*time.Second)
-		if meta.ReactionID != "" {
-			_ = runtime.bot.DeleteReaction(rctx, d.messageID, meta.ReactionID)
+	// Swap or keep reaction ack best-effort when answer delivery finishes.
+	if err == nil && d.part == "answer" && runtime.bot != nil {
+		doneEmoji := meta.ReactionDone
+		if doneEmoji == "" && meta.ReactionAck && meta.ReactionEmoji == "" {
+			doneEmoji = "DONE"
 		}
-		_, _ = runtime.bot.AddReaction(rctx, d.messageID, "DONE")
-		rcancel()
+		if doneEmoji != "" && doneEmoji != meta.ReactionEmoji {
+			rctx, rcancel := context.WithTimeout(runtime.ctx, 6*time.Second)
+			if meta.ReactionID != "" {
+				if rerr := runtime.bot.DeleteReaction(rctx, d.messageID, meta.ReactionID); rerr != nil {
+					slog.Warn("delete Feishu ack reaction failed", "bot", runtime.botID, "error", rerr)
+				}
+			}
+			if _, rerr := runtime.bot.AddReaction(rctx, d.messageID, doneEmoji); rerr != nil {
+				slog.Warn("add Feishu completion reaction failed", "bot", runtime.botID, "emoji", doneEmoji, "error", rerr)
+			}
+			rcancel()
+		}
 	}
 
 	status := "sent"

@@ -149,7 +149,37 @@ export interface FeishuBotView {
   pairLocked?: boolean;
   lastMessageAt?: string;
   missingScopes?: string[];
+  pendingRequests?: FeishuAccessRequest[];
+  knownUsers?: FeishuContact[];
   settings: FeishuBotSettings;
+}
+export interface FeishuContact {
+  openId: string;
+  name?: string;
+  enName?: string;
+  email?: string;
+  avatarUrl?: string;
+  department?: string;
+  source?: string; // "contact" | "directory" | "chat" | "recent" | "lookup"
+}
+export interface FeishuContactSearchResult {
+  contacts: FeishuContact[];
+  missingScopes?: string[];
+  warning?: string; // e.g. "cross_app_open_id"
+}
+export interface FeishuAccessRequest {
+  openId: string;
+  name?: string;
+  avatarUrl?: string;
+  preview?: string;
+  requestedAt: string;
+}
+export interface FeishuAccessRequestInput {
+  openId: string;
+  action: string; // "allow_dm" | "grant_admin" | "block" | "dismiss"
+  name?: string;
+  avatarUrl?: string;
+  email?: string;
 }
 export interface FeishuBotSettings {
   displayName?: string;
@@ -157,6 +187,8 @@ export interface FeishuBotSettings {
   selection?: Selection;
   dmMode?: string; // "continuous" | "topic"
   replyStyle?: string; // "card" | "text"
+  reaction?: string; // Feishu emoji_type on receipt; "" disables reaction ack.
+  reactionDone?: string; // Optional Feishu emoji_type swapped on completion; "" keeps Reaction.
   groupEnabled: boolean;
   groupMention?: string; // "at_only" | "thread_free" | "yield" | "free"
   groupReplyTarget?: string; // "topic" | "main" | "quote"

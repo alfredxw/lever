@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"lever/internal/model"
@@ -175,13 +176,19 @@ func (a *App) registerFeishu(ctx context.Context, job *feishuRegistration) {
 				Settings: settings,
 			}
 		}
+		// Automatically grant admin access to the user who scanned the QR code
+		// so dmAccess:"admin" works out of the box without silent drops.
+		if result.OpenID != "" && !slices.Contains(cfg.Settings.Admins, result.OpenID) {
+			cfg.Settings.Admins = append(cfg.Settings.Admins, result.OpenID)
+			normalizeFeishuSettings(&cfg.Settings)
+		}
 		if err := a.upsertFeishuBotCredentialsLocked(a.ctx, existingIdx, cfg, result.Secret); err != nil {
 			slog.Error("save registered Lark Bot", "error", err)
 			job.state = model.ChannelRegistration{Phase: "failed", AppID: cfg.AppID, Brand: cfg.Brand}
 			return
 		}
 		f.registration = nil
-		if !job.multiBot || cfg.Settings.AgentID == "" {
+		if !job.multiBot && result.OpenID == "" {
 			if f.pairs == nil {
 				f.pairs = make(map[string]channelPair)
 			}

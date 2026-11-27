@@ -7,7 +7,6 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { TFunction } from "i18next";
 import { Trash2 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
@@ -39,9 +38,14 @@ import {
 } from "@/features/settings/SettingsControls";
 import { useAutoSave } from "@/hooks/useAutoSave";
 import type { AutoSaveMode } from "@/lib/autoSave";
+import {
+  CUSTOM_REACTION_OPTION as customReactionOption,
+  FEISHU_REACTION_ICONS as reactionIcons,
+  FEISHU_REACTION_PATTERN as reactionPattern,
+  feishuReactionOption as reactionOption,
+} from "./feishuReactions";
 
 const commandPattern = /^\/[\p{L}\p{N}_-]{1,48}$/u;
-const reactionPattern = /^[A-Za-z0-9_+-]{1,64}$/;
 const chatIdPattern = /^[1-9][0-9]{0,30}$/;
 const personalChatModes: readonly PersonalChannelChatMode[] = [
   "single",
@@ -50,35 +54,6 @@ const personalChatModes: readonly PersonalChannelChatMode[] = [
 
 function words(value: string) {
   return value.split(/[\s,，]+/u).filter(Boolean);
-}
-
-const reactionIcons = new Map([
-  ["OnIt", "🛠️"],
-  ["Get", "📩"],
-  ["OK", "👌"],
-  ["THUMBSUP", "👍"],
-  ["DONE", "✅"],
-  ["OneSecond", "☝️"],
-  ["THINKING", "🤔"],
-  ["SALUTE", "🫡"],
-  ["THANKS", "🙏"],
-  ["HEART", "❤️"],
-  ["APPLAUSE", "👏"],
-  ["MUSCLE", "💪"],
-  ["SMILE", "🙂"],
-  ["LAUGH", "😄"],
-  ["PARTY", "🎉"],
-]);
-const customReactionOption = ":custom";
-
-function reactionOption(key: string, t: TFunction) {
-  const icon = reactionIcons.get(key);
-  return {
-    id: key,
-    label: icon ? t(`personal.reaction.${key}`) : key,
-    icon: icon && <span aria-hidden="true">{icon}</span>,
-    keywords: icon ? [key, icon] : [key],
-  };
 }
 
 type RouteDraft = PersonalChannelRoute & { input: string };

@@ -968,6 +968,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.status.error": "连接失败",
   "channels.status.credentials_missing": "凭据缺失",
   "channels.status.unpaired": "待绑定私聊",
+  "channels.status.needs_access": "待配置权限",
   "channels.status.paused": "已暂停接收",
   "channels.status.online": "已连接",
   "channels.connectBot": "连接飞书机器人",
@@ -1061,6 +1062,50 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.bot.editCreds": "编辑名称与凭据",
   "channels.bot.viewScopes": "查看飞书权限清单",
   "channels.bot.pairDm": "绑定管理员私聊",
+  "channels.bot.unpairDm": "解除私聊会话绑定",
+  "channels.bot.unpairedDmToast": "已解除私聊会话绑定",
+  "channels.bot.directBindHint":
+    "尚未绑定管理员：直接在飞书给机器人发任意一条消息即可自动绑定并开始对话，也可搜索联系人直接授权。",
+  "channels.bot.authorizeAdminAction": "搜索授权管理员",
+  "channels.bot.authorizeContactAction": "搜索添加白名单",
+  "channels.bot.dmAdminEmptyWarning":
+    "当前私聊权限为「仅管理员」，但尚未设置管理员或绑定私聊，发给机器人的私聊会被拒绝提示无权限。",
+  "channels.bot.dmWhitelistEmptyWarning":
+    "当前私聊权限为「指定白名单」，但管理员与白名单均为空，发给机器人的私聊会被拒绝提示无权限。",
+  "channels.bot.allowAllDmAction": "改为应用内全员",
+  "channels.bot.dmAccessAdminQrHint":
+    "扫码授权完成后将自动把扫码账号加入管理员，在飞书直接发消息即可开始对话。",
+  "channels.bot.dmAccessAdminManualHint":
+    "保存后直接在飞书给机器人发任意消息即可自动绑定管理员，无需手动配对；也可在配置页搜索联系人直接授权。",
+  "channels.bot.pendingRequestsTitle": "待处理私聊授权请求（{{count}}）",
+  "channels.bot.pendingRequestsDesc":
+    "以下飞书用户向机器人发起了私聊消息，点击即可直接开通权限。",
+  "channels.bot.requestAllowDm": "授权私聊",
+  "channels.bot.requestGrantAdmin": "设为管理员",
+  "channels.bot.requestDismiss": "忽略",
+  "channels.bot.requestAllowedDmToast": "已开通私聊权限并通知对方",
+  "channels.bot.requestGrantedAdminToast": "已设为管理员并通知对方",
+  "channels.bot.whitelistDesc":
+    "搜索飞书联系人或输入邮箱、手机号、Open ID 直接授权私聊。",
+  "channels.bot.searchAuthorizeContact": "搜索授权",
+  "channels.bot.searchAuthorizeAdmin": "搜索添加管理员",
+  "channels.bot.searchBlockContact": "搜索添加黑名单",
+  "channels.bot.contactSearchPlaceholder": "搜姓名、邮箱、手机号或粘贴 ou_...",
+  "channels.bot.contactRefresh": "刷新联系人列表",
+  "channels.bot.contactLoadFailed": "无法读取飞书联系人",
+  "channels.bot.contactAdded": "已添加",
+  "channels.bot.contactSource.directory": "通讯录",
+  "channels.bot.contactSource.chat": "群成员",
+  "channels.bot.contactSource.recent": "近期",
+  "channels.bot.contactAddDirectOne": "直接添加 {{id}}",
+  "channels.bot.contactAddDirectMany": "批量添加 {{count}} 个 Open ID",
+  "channels.bot.contactEmptySearch": "未找到与「{{query}}」匹配的联系人，可输入完整邮箱、手机号或 ou_ Open ID",
+  "channels.bot.contactEmptyHint": "输入姓名、完整邮箱、手机号或 ou_ Open ID 查找联系人",
+  "channels.bot.contactCrossAppWarning":
+    "该 Open ID 属于其他飞书应用，无法用于当前机器人。请改用姓名、完整邮箱、手机号或 on_ Union ID 搜索。",
+  "channels.bot.contactMissingScopes":
+    "部分通讯录权限未开通（{{scopes}}），可开通以搜索更多同事，或直接粘贴 Open ID。",
+  "channels.bot.contactOpenConsole": "去开通",
   "channels.bot.unbindBot": "解绑此机器人",
   "channels.bot.unbindBotTitle": "解绑「{{name}}」？",
   "channels.bot.unbindBotDesc":
@@ -1071,7 +1116,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
     "当前配置需要飞书应用权限 {{scopes}}，未开通时对应群消息或历史上下文可能无法读取。",
   "channels.bot.checkScopes": "查看权限",
   "channels.bot.missingScopesBadge": "缺少权限",
-  "channels.bot.sectionBinding": "绑定与模型",
+  "channels.bot.sectionBinding": "绑定与身份",
   "channels.bot.sectionBindingSub": "工作目录、Skills 与基础指令沿用目标 Agent",
   "channels.bot.agentLabel": "对应 Agent",
   "channels.bot.agentDesc": "当前工作区 {{workspace}} · 默认模型 {{model}}",
@@ -1081,6 +1126,11 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.bot.modelOverrideDesc": "已覆写：{{model}}",
   "channels.bot.modelFollow": "跟随 Agent",
   "channels.bot.modelOverride": "单独指定",
+  "channels.bot.sectionDmAndReply": "私聊与反馈",
+  "channels.bot.sectionGroup": "群聊接入与规则",
+  "channels.bot.groupRulesTitle": "指定群聊规则",
+  "channels.bot.groupRulesDesc":
+    "按群聊单独覆写身份提示、模型、触发方式与回复落点。",
   "channels.bot.sectionReply": "回复模式",
   "channels.bot.sectionReplySub": "控制机器人如何被触发及消息落点",
   "channels.bot.dmMode": "私聊形态",
@@ -1091,7 +1141,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.bot.dmMode.topicDesc":
     "每条新私聊自动开启独立话题隔离上下文，适合多任务并行。",
   "channels.bot.replyStyle": "回复样式",
-  "channels.bot.replyStyle.card": "进度卡片",
+  "channels.bot.replyStyle.card": "Markdown 卡片",
   "channels.bot.replyStyle.cardDesc":
     "结构化 Markdown 卡片回复，阅读代码与列表更清晰。",
   "channels.bot.replyStyle.text": "简洁文本",
@@ -1185,8 +1235,14 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.bot.ruleAllInherit": "全部跟随机器人默认",
   "channels.bot.advancedTitle": "高级与安全",
   "channels.bot.advancedSub":
-    "表情回执、发言人标签、本机路径脱敏、群历史上下文、会话归档、黑名单",
+    "发言人标签、本机路径脱敏、群历史上下文、会话归档、审批落点、黑名单",
   "channels.bot.reactionAck": "表情回执",
+  "channels.bot.reactionAckSelectDesc":
+    "收到消息开始处理时，立即在原消息上贴上所选表情。",
+  "channels.bot.reactionDone": "完成后切换表情",
+  "channels.bot.reactionDoneDesc":
+    "回复送达后替换原受理表情；选「保持不变」则保留原表情。",
+  "channels.bot.reactionDoneKeep": "保持不变",
   "channels.bot.reactionAckDesc":
     "收到消息后自动贴「处理中」表情，回复完成后切换为「已完成」。",
   "channels.bot.senderTag": "群消息附加发言人标签",
@@ -1271,6 +1327,12 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "channels.bot.scope.groupMsg": "读取群内全部消息（免 @ / 让位免 @ / 群历史）",
   "channels.bot.scope.chatRead": "获取机器人已加入的群列表",
   "channels.bot.scope.reactions": "为消息贴处理中 / 已完成表情回执",
+  "channels.bot.scopesContactGroup": "联系人搜索与展示权限（推荐）",
+  "channels.bot.scopeRecommended": "推荐",
+  "channels.bot.scope.contactUserBase": "读取用户姓名、头像与基础资料",
+  "channels.bot.scope.contactBase": "读取通讯录可见范围与部门成员列表",
+  "channels.bot.scope.contactUserId": "按完整邮箱或手机号解析用户 Open ID",
+  "channels.bot.scope.chatMembers": "读取机器人所在群成员列表用于搜索授权",
   "channels.bot.removeItem": "移除 {{item}}",
   "channels.bot.dmPairTitle": "绑定管理员私聊",
   "channels.bot.dmPairDesc":

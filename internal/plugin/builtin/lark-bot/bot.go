@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,9 +34,20 @@ const (
 )
 
 const (
-	feishuMessageBeingSent = 230049
-	feishuScopeMissingCode = 99991672
+	feishuMessageBeingSent      = 230049
+	feishuThreadUnsupportedCode = 230071
+	feishuScopeMissingCode      = 99991672
+	feishuCrossAppOpenIDCode    = 99992361
 )
+
+var wsQueryParamRe = regexp.MustCompile(`\?[^\s"'<>]+`)
+
+func sanitizeWSError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return wsQueryParamRe.ReplaceAllString(err.Error(), "?[redacted]")
+}
 
 type Bot struct {
 	appID, secret string
@@ -121,9 +134,16 @@ func (b *Bot) Listen(ctx context.Context, state func(string), receive func(conte
 		larkws.WithOnReady(func() { state("online") }),
 		larkws.WithOnReconnected(func() { state("online") }),
 		larkws.WithOnDisconnected(func() { state("connecting") }),
-		larkws.WithOnError(func(error) { state("error") }),
+		larkws.WithOnError(func(err error) {
+			slog.Warn("Feishu WebSocket error", "appId", b.appID, "error", sanitizeWSError(err))
+			state("error")
+		}),
 	)
-	return client.Start(ctx)
+	err := client.Start(ctx)
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("Feishu WebSocket stopped", "appId", b.appID, "error", sanitizeWSError(err))
+	}
+	return err
 }
 
 func extractMessageText(msgType, raw string) string {
@@ -269,6 +289,17 @@ func (b *Bot) Deliver(ctx context.Context, opts plugin.ChannelSendOptions) error
 	}
 	err = b.request(ctx, http.MethodPost, path, token, body, &out)
 	var rejected *feishuError
+	if errors.As(err, &rejected) && rejected.code == feishuThreadUnsupportedCode && opts.MessageID != "" && opts.ReplyInThread {
+		slog.Info("Feishu chat does not support reply_in_thread, falling back to quote reply", "appId", b.appID)
+		delete(body, "reply_in_thread")
+		out = struct {
+			Data struct {
+				MessageID string `json:"message_id"`
+			} `json:"data"`
+		}{}
+		err = b.request(ctx, http.MethodPost, path, token, body, &out)
+		rejected = nil
+	}
 	if errors.As(err, &rejected) && rejected.code != feishuMessageBeingSent {
 		return err
 	}
@@ -283,7 +314,6 @@ func encodeMessageContent(text string, card bool) string {
 	if card {
 		payload := map[string]any{
 			"schema": "2.0",
-			"config": map[string]any{"wide_screen_mode": true},
 			"body": map[string]any{
 				"elements": []map[string]any{
 					{"tag": "markdown", "content": clipped},
@@ -435,6 +465,379 @@ func (b *Bot) FetchHistory(ctx context.Context, chatID string, limit int) (strin
 	return strings.Join(lines, "\n"), nil
 }
 
+type feishuContactUser struct {
+	OpenID          string `json:"open_id"`
+	Name            string `json:"name"`
+	EnName          string `json:"en_name"`
+	Email           string `json:"email"`
+	EnterpriseEmail string `json:"enterprise_email"`
+	Avatar          struct {
+		Avatar72  string `json:"avatar_72"`
+		Avatar240 string `json:"avatar_240"`
+	} `json:"avatar"`
+}
+
+func (u feishuContactUser) toModel(source string) model.FeishuContact {
+	email := strings.TrimSpace(u.EnterpriseEmail)
+	if email == "" {
+		email = strings.TrimSpace(u.Email)
+	}
+	avatar := strings.TrimSpace(u.Avatar.Avatar72)
+	if avatar == "" {
+		avatar = strings.TrimSpace(u.Avatar.Avatar240)
+	}
+	return model.FeishuContact{
+		OpenID:    strings.TrimSpace(u.OpenID),
+		Name:      strings.TrimSpace(u.Name),
+		EnName:    strings.TrimSpace(u.EnName),
+		Email:     email,
+		AvatarURL: avatar,
+		Source:    source,
+	}
+}
+
+// GetUser fetches a Feishu user's basic profile by open_id or union_id in this app's scope.
+func (b *Bot) GetUser(ctx context.Context, userID, idType string) (model.FeishuContact, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return model.FeishuContact{}, errors.New("missing Feishu user id")
+	}
+	if idType == "" {
+		idType = "open_id"
+	}
+	token, err := b.accessToken(ctx)
+	if err != nil {
+		return model.FeishuContact{}, err
+	}
+	path := "/open-apis/contact/v3/users/" + url.PathEscape(userID) + "?user_id_type=" + url.QueryEscape(idType)
+	var out struct {
+		Data struct {
+			User feishuContactUser `json:"user"`
+		} `json:"data"`
+	}
+	if err := b.request(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+		return model.FeishuContact{}, err
+	}
+	contact := out.Data.User.toModel("contact")
+	if contact.OpenID == "" && idType == "open_id" {
+		contact.OpenID = userID
+	}
+	return contact, nil
+}
+
+// ResolveUsersByContact resolves emails and/or mobile numbers into this app's open_ids.
+func (b *Bot) ResolveUsersByContact(ctx context.Context, emails, mobiles []string) ([]string, error) {
+	if len(emails) == 0 && len(mobiles) == 0 {
+		return nil, nil
+	}
+	token, err := b.accessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"include_resigned": false,
+	}
+	if len(emails) > 0 {
+		body["emails"] = emails
+	}
+	if len(mobiles) > 0 {
+		body["mobiles"] = mobiles
+	}
+	var out struct {
+		Data struct {
+			UserList []struct {
+				UserID string `json:"user_id"`
+				Email  string `json:"email"`
+				Mobile string `json:"mobile"`
+			} `json:"user_list"`
+		} `json:"data"`
+	}
+	if err := b.request(ctx, http.MethodPost, "/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id", token, body, &out); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(out.Data.UserList))
+	ids := make([]string, 0, len(out.Data.UserList))
+	for _, item := range out.Data.UserList {
+		id := strings.TrimSpace(item.UserID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// ListDirectoryUsers lists users within the app's authorized contact visibility scope
+// (up to maxUsers). Missing contact scopes are returned instead of aborting.
+func (b *Bot) ListDirectoryUsers(ctx context.Context, maxUsers int) ([]model.FeishuContact, []string, error) {
+	if maxUsers <= 0 {
+		maxUsers = 200
+	}
+	token, err := b.accessToken(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var scopeOut struct {
+		Data struct {
+			DepartmentIDs []string `json:"department_ids"`
+			UserIDs       []string `json:"user_ids"`
+		} `json:"data"`
+	}
+	if err := b.request(ctx, http.MethodGet, "/open-apis/contact/v3/scopes?user_id_type=open_id&department_id_type=open_department_id&page_size=50", token, nil, &scopeOut); err != nil {
+		if isScopeError(err) {
+			return nil, []string{"contact:contact.base:readonly"}, nil
+		}
+		return nil, nil, err
+	}
+
+	var missing []string
+	addMissing := func(scope string) {
+		for _, s := range missing {
+			if s == scope {
+				return
+			}
+		}
+		missing = append(missing, scope)
+	}
+
+	seen := make(map[string]bool)
+	contacts := make([]model.FeishuContact, 0)
+	addContact := func(c model.FeishuContact) {
+		if c.OpenID == "" || seen[c.OpenID] || len(contacts) >= maxUsers {
+			return
+		}
+		seen[c.OpenID] = true
+		contacts = append(contacts, c)
+	}
+
+	// 1. Fetch direct users listed in scopes via batch endpoint (50 per call).
+	directIDs := scopeOut.Data.UserIDs
+	for i := 0; i < len(directIDs) && len(contacts) < maxUsers; i += 50 {
+		end := min(i+50, len(directIDs))
+		q := url.Values{}
+		q.Set("user_id_type", "open_id")
+		for _, id := range directIDs[i:end] {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				q.Add("user_ids", trimmed)
+			}
+		}
+		var batchOut struct {
+			Data struct {
+				Items []feishuContactUser `json:"items"`
+			} `json:"data"`
+		}
+		err := b.request(ctx, http.MethodGet, "/open-apis/contact/v3/users/batch?"+q.Encode(), token, nil, &batchOut)
+		if isScopeError(err) {
+			addMissing("contact:user.base:readonly")
+			break
+		}
+		if err != nil {
+			continue
+		}
+		for _, u := range batchOut.Data.Items {
+			addContact(u.toModel("directory"))
+		}
+	}
+
+	// 2. Breadth-first traverse authorized departments (bounded for responsiveness).
+	const maxDepts = 20
+	deptQueue := make([]string, 0, len(scopeOut.Data.DepartmentIDs))
+	visitedDepts := make(map[string]bool)
+	for _, id := range scopeOut.Data.DepartmentIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" && !visitedDepts[trimmed] {
+			visitedDepts[trimmed] = true
+			deptQueue = append(deptQueue, trimmed)
+		}
+	}
+	deptNames := map[string]string{}
+	processedDepts := 0
+	for len(deptQueue) > 0 && len(contacts) < maxUsers && processedDepts < maxDepts {
+		deptID := deptQueue[0]
+		deptQueue = deptQueue[1:]
+		processedDepts++
+
+		pageToken := ""
+		for page := 0; page < 4 && len(contacts) < maxUsers; page++ {
+			q := url.Values{}
+			q.Set("department_id", deptID)
+			q.Set("department_id_type", "open_department_id")
+			q.Set("user_id_type", "open_id")
+			q.Set("page_size", "50")
+			if pageToken != "" {
+				q.Set("page_token", pageToken)
+			}
+			var deptUsers struct {
+				Data struct {
+					Items     []feishuContactUser `json:"items"`
+					HasMore   bool                `json:"has_more"`
+					PageToken string              `json:"page_token"`
+				} `json:"data"`
+			}
+			err := b.request(ctx, http.MethodGet, "/open-apis/contact/v3/users/find_by_department?"+q.Encode(), token, nil, &deptUsers)
+			if isScopeError(err) {
+				addMissing("contact:user.base:readonly")
+				break
+			}
+			if err != nil {
+				break
+			}
+			for _, u := range deptUsers.Data.Items {
+				c := u.toModel("directory")
+				if c.Department == "" {
+					c.Department = deptNames[deptID]
+				}
+				addContact(c)
+			}
+			if !deptUsers.Data.HasMore || deptUsers.Data.PageToken == "" {
+				break
+			}
+			pageToken = deptUsers.Data.PageToken
+		}
+
+		// Queue child departments if budget remains.
+		if len(contacts) < maxUsers && processedDepts+len(deptQueue) < maxDepts {
+			var childOut struct {
+				Data struct {
+					Items []struct {
+						OpenDepartmentID string `json:"open_department_id"`
+						DepartmentID     string `json:"department_id"`
+						Name             string `json:"name"`
+					} `json:"items"`
+				} `json:"data"`
+			}
+			childPath := "/open-apis/contact/v3/departments/" + url.PathEscape(deptID) + "/children?department_id_type=open_department_id&page_size=50"
+			if err := b.request(ctx, http.MethodGet, childPath, token, nil, &childOut); err == nil {
+				for _, child := range childOut.Data.Items {
+					cid := strings.TrimSpace(child.OpenDepartmentID)
+					if cid == "" {
+						cid = strings.TrimSpace(child.DepartmentID)
+					}
+					if cid == "" || visitedDepts[cid] {
+						continue
+					}
+					visitedDepts[cid] = true
+					if name := strings.TrimSpace(child.Name); name != "" {
+						deptNames[cid] = name
+					}
+					deptQueue = append(deptQueue, cid)
+				}
+			}
+		}
+	}
+
+	return contacts, missing, nil
+}
+
+// ListChatMembers lists human members of a group chat with app-scoped open_ids and names.
+func (b *Bot) ListChatMembers(ctx context.Context, chatID string, limit int) ([]model.FeishuContact, error) {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	token, err := b.accessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	members := make([]model.FeishuContact, 0)
+	pageToken := ""
+	for page := 0; page < 4 && len(members) < limit; page++ {
+		q := url.Values{}
+		q.Set("member_id_type", "open_id")
+		q.Set("page_size", "100")
+		if pageToken != "" {
+			q.Set("page_token", pageToken)
+		}
+		var out struct {
+			Data struct {
+				Items []struct {
+					MemberID string `json:"member_id"`
+					Name     string `json:"name"`
+				} `json:"items"`
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+			} `json:"data"`
+		}
+		path := "/open-apis/im/v1/chats/" + url.PathEscape(chatID) + "/members?" + q.Encode()
+		if err := b.request(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+			return nil, err
+		}
+		for _, item := range out.Data.Items {
+			id := strings.TrimSpace(item.MemberID)
+			if id == "" || seen[id] || len(members) >= limit {
+				continue
+			}
+			seen[id] = true
+			members = append(members, model.FeishuContact{
+				OpenID: id,
+				Name:   strings.TrimSpace(item.Name),
+				Source: "chat",
+			})
+		}
+		if !out.Data.HasMore || out.Data.PageToken == "" {
+			break
+		}
+		pageToken = out.Data.PageToken
+	}
+	return members, nil
+}
+
+// ListAllChatMembers gathers deduplicated members from up to maxChats joined groups.
+func (b *Bot) ListAllChatMembers(ctx context.Context, maxChats, maxUsers int) ([]model.FeishuContact, []string, error) {
+	if maxChats <= 0 {
+		maxChats = 10
+	}
+	if maxUsers <= 0 {
+		maxUsers = 200
+	}
+	chats, err := b.ListChats(ctx)
+	if err != nil {
+		if isScopeError(err) {
+			return nil, []string{"im:chat:readonly"}, nil
+		}
+		return nil, nil, err
+	}
+	seen := make(map[string]bool)
+	contacts := make([]model.FeishuContact, 0)
+	var missing []string
+	for i, chat := range chats {
+		if i >= maxChats || len(contacts) >= maxUsers {
+			break
+		}
+		members, err := b.ListChatMembers(ctx, chat.ChatID, maxUsers-len(contacts))
+		if err != nil {
+			if isScopeError(err) {
+				missing = []string{"im:chat.members:read"}
+				break
+			}
+			continue
+		}
+		for _, m := range members {
+			if m.OpenID == "" || seen[m.OpenID] {
+				continue
+			}
+			seen[m.OpenID] = true
+			contacts = append(contacts, m)
+		}
+	}
+	return contacts, missing, nil
+}
+
+// IsScopeError reports whether err is a Feishu missing-scope / forbidden API error.
+func IsScopeError(err error) bool {
+	return isScopeError(err)
+}
+
+// IsCrossAppOpenIDError reports whether err indicates an open_id belongs to another app.
+func IsCrossAppOpenIDError(err error) bool {
+	var fe *feishuError
+	return errors.As(err, &fe) && fe.code == feishuCrossAppOpenIDCode
+}
+
 // CheckScopes probes lightweight read endpoints to report missing scopes.
 func (b *Bot) CheckScopes(ctx context.Context, probeChatID string, needsGroupMsg bool) []string {
 	var missing []string
@@ -472,9 +875,13 @@ func isScopeError(err error) bool {
 
 type feishuError struct {
 	code, status int
+	msg          string
 }
 
 func (e *feishuError) Error() string {
+	if e.msg != "" {
+		return fmt.Sprintf("Feishu API rejected the request (HTTP %d, code %d: %s)", e.status, e.code, e.msg)
+	}
 	return fmt.Sprintf("Feishu API rejected the request (HTTP %d, code %d)", e.status, e.code)
 }
 
@@ -501,10 +908,12 @@ func (b *Bot) accessToken(ctx context.Context) (string, error) {
 
 func (b *Bot) request(ctx context.Context, method, path, token string, body any, out any) error {
 	var raw []byte
+	var reader io.Reader
 	if body != nil {
 		raw, _ = json.Marshal(body)
+		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, b.base+path, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, method, b.base+path, reader)
 	if err != nil {
 		return errors.New("cannot build Feishu API request")
 	}
@@ -530,14 +939,19 @@ func (b *Bot) request(ctx context.Context, method, path, token string, body any,
 		return errors.New("invalid response from Feishu API")
 	}
 	var result struct {
-		Code *int `json:"code"`
+		Code *int   `json:"code"`
+		Msg  string `json:"msg"`
 	}
 	_ = json.Unmarshal(raw, &result)
+	msg := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(result.Msg, "\r", " "), "\n", " "))
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
 	if result.Code != nil && *result.Code != 0 {
-		return &feishuError{code: *result.Code, status: res.StatusCode}
+		return &feishuError{code: *result.Code, status: res.StatusCode, msg: msg}
 	}
 	if res.StatusCode >= 400 {
-		return &feishuError{status: res.StatusCode}
+		return &feishuError{status: res.StatusCode, msg: msg}
 	}
 	if res.StatusCode != http.StatusOK || result.Code == nil {
 		return errors.New("invalid response from Feishu API")

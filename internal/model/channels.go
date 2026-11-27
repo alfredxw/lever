@@ -23,21 +23,55 @@ type ChannelView struct {
 }
 
 type FeishuBotView struct {
-	ID            string            `json:"id"`
-	AppID         string            `json:"appId"`
-	Brand         string            `json:"brand"`
-	BotName       string            `json:"botName,omitempty"`
-	Enabled       bool              `json:"enabled"`
-	Connection    string            `json:"connection"`
-	OwnerName     string            `json:"ownerName,omitempty"`
-	ChatID        string            `json:"chatId,omitempty"`
-	Paired        bool              `json:"paired"`
-	PairCode      string            `json:"pairCode,omitempty"`
-	PairCandidate string            `json:"pairCandidate,omitempty"`
-	PairLocked    bool              `json:"pairLocked,omitempty"`
-	LastMessageAt string            `json:"lastMessageAt,omitempty"`
-	MissingScopes []string          `json:"missingScopes,omitempty"`
-	Settings      FeishuBotSettings `json:"settings"`
+	ID              string                `json:"id"`
+	AppID           string                `json:"appId"`
+	Brand           string                `json:"brand"`
+	BotName         string                `json:"botName,omitempty"`
+	Enabled         bool                  `json:"enabled"`
+	Connection      string                `json:"connection"`
+	OwnerName       string                `json:"ownerName,omitempty"`
+	ChatID          string                `json:"chatId,omitempty"`
+	Paired          bool                  `json:"paired"`
+	PairCode        string                `json:"pairCode,omitempty"`
+	PairCandidate   string                `json:"pairCandidate,omitempty"`
+	PairLocked      bool                  `json:"pairLocked,omitempty"`
+	LastMessageAt   string                `json:"lastMessageAt,omitempty"`
+	MissingScopes   []string              `json:"missingScopes,omitempty"`
+	PendingRequests []FeishuAccessRequest `json:"pendingRequests,omitempty"`
+	KnownUsers      []FeishuContact       `json:"knownUsers,omitempty"`
+	Settings        FeishuBotSettings     `json:"settings"`
+}
+
+type FeishuContact struct {
+	OpenID     string `json:"openId"`
+	Name       string `json:"name,omitempty"`
+	EnName     string `json:"enName,omitempty"`
+	Email      string `json:"email,omitempty"`
+	AvatarURL  string `json:"avatarUrl,omitempty"`
+	Department string `json:"department,omitempty"`
+	Source     string `json:"source,omitempty"` // "contact" | "directory" | "chat" | "recent" | "lookup"
+}
+
+type FeishuContactSearchResult struct {
+	Contacts      []FeishuContact `json:"contacts"`
+	MissingScopes []string        `json:"missingScopes,omitempty"`
+	Warning       string          `json:"warning,omitempty"` // e.g. "cross_app_open_id"
+}
+
+type FeishuAccessRequest struct {
+	OpenID      string `json:"openId"`
+	Name        string `json:"name,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+	Preview     string `json:"preview,omitempty"`
+	RequestedAt string `json:"requestedAt"`
+}
+
+type FeishuAccessRequestInput struct {
+	OpenID    string `json:"openId"`
+	Action    string `json:"action"` // "allow_dm" | "grant_admin" | "block" | "dismiss"
+	Name      string `json:"name,omitempty"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	Email     string `json:"email,omitempty"`
 }
 
 type FeishuBotSettings struct {
@@ -46,6 +80,8 @@ type FeishuBotSettings struct {
 	Selection        *Selection           `json:"selection,omitempty"`
 	DMMode           string               `json:"dmMode,omitempty"`           // "continuous" | "topic"
 	ReplyStyle       string               `json:"replyStyle,omitempty"`       // "card" | "text"
+	Reaction         string               `json:"reaction,omitempty"`         // Feishu emoji_type on receipt; "" disables reaction ack.
+	ReactionDone     string               `json:"reactionDone,omitempty"`     // Optional Feishu emoji_type swapped on completion; "" keeps Reaction.
 	GroupEnabled     bool                 `json:"groupEnabled"`
 	GroupMention     string               `json:"groupMention,omitempty"`     // "at_only" | "thread_free" | "yield" | "free"
 	GroupReplyTarget string               `json:"groupReplyTarget,omitempty"` // "topic" | "main" | "quote"

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,6 +72,10 @@ func TestFeishuChannelPrivateChatDelivery(t *testing.T) {
 	}
 
 	feishu.event(socket, appID, "ignored", "oc_owner", "ou_other", "p2p", "user", "not the owner")
+	denied := feishu.nextPost()
+	if denied.parent != "ignored" || !strings.Contains(denied.text, "ou_other") || !strings.Contains(denied.text, "permission") {
+		t.Fatal("unauthorized DM did not receive a permission-denied reply", denied)
+	}
 	feishu.event(socket, appID, "bot", "oc_owner", "ou_owner", "p2p", "bot", "bot output")
 	feishu.event(socket, appID, "approval", "oc_owner", "ou_owner", "p2p", "user", "[approval]")
 	feishu.event(socket, appID, "approval", "oc_owner", "ou_owner", "p2p", "user", "[approval]")
@@ -258,10 +263,16 @@ func TestFeishuRegistrationCreatesAgentAtPairing(t *testing.T) {
 	}
 }
 
+type feishuReactionCall struct {
+	method, messageID, emoji, reactionID string
+}
+
 type feishuFixture struct {
-	t       *testing.T
-	sockets chan *websocket.Conn
-	posts   chan feishuPost
+	t                *testing.T
+	sockets          chan *websocket.Conn
+	posts            chan feishuPost
+	reactions        chan feishuReactionCall
+	denyContactScope atomic.Bool
 }
 
 // Route the Feishu and Lark origins to a local test platform. The SDK
@@ -287,7 +298,12 @@ func (tr feishuTestTransport) RoundTrip(r *http.Request) (*http.Response, error)
 
 func newFeishuFixture(t *testing.T, register http.HandlerFunc) *feishuFixture {
 	t.Helper()
-	f := &feishuFixture{t: t, sockets: make(chan *websocket.Conn, 4), posts: make(chan feishuPost, 16)}
+	f := &feishuFixture{
+		t:         t,
+		sockets:   make(chan *websocket.Conn, 4),
+		posts:     make(chan feishuPost, 16),
+		reactions: make(chan feishuReactionCall, 32),
+	}
 	var rejected sync.Map
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		write := func(body string) { _, _ = fmt.Fprint(w, body) }
@@ -312,8 +328,107 @@ func newFeishuFixture(t *testing.T, register http.HandlerFunc) *feishuFixture {
 			}
 		case "/open-apis/im/v1/chats":
 			write(`{"code":0,"data":{"items":[{"chat_id":"oc_dev_group","name":"Lever 研发群"},{"chat_id":"oc_oncall","name":"Oncall 值班群"}]}}`)
+		case "/open-apis/contact/v3/scopes":
+			if f.denyContactScope.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				write(`{"code":99991672,"msg":"Access denied. One of the following scopes is required: [contact:contact.base:readonly]"}`)
+				return
+			}
+			write(`{"code":0,"data":{"department_ids":["od_eng"],"user_ids":["ou_direct"]}}`)
+		case "/open-apis/contact/v3/users/batch":
+			if f.denyContactScope.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				write(`{"code":99991672,"msg":"scope missing"}`)
+				return
+			}
+			write(`{"code":0,"data":{"items":[{"open_id":"ou_direct","name":"王直属","en_name":"Direct Wang","email":"direct@example.com","avatar":{"avatar_72":"https://cdn.example.com/direct.png"}}]}}`)
+		case "/open-apis/contact/v3/users/find_by_department":
+			if f.denyContactScope.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				write(`{"code":99991672,"msg":"scope missing"}`)
+				return
+			}
+			write(`{"code":0,"data":{"items":[{"open_id":"ou_alice","name":"张爱丽","en_name":"Alice Zhang","enterprise_email":"alice@example.com","avatar":{"avatar_72":"https://cdn.example.com/alice.png"}}],"has_more":false}}`)
+		case "/open-apis/contact/v3/users/batch_get_id":
+			if f.denyContactScope.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				write(`{"code":99991672,"msg":"scope missing"}`)
+				return
+			}
+			var qbody struct {
+				Emails  []string `json:"emails"`
+				Mobiles []string `json:"mobiles"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&qbody)
+			list := make([]map[string]string, 0)
+			for _, e := range qbody.Emails {
+				if strings.EqualFold(e, "bob@example.com") {
+					list = append(list, map[string]string{"email": e, "user_id": "ou_bob"})
+				}
+			}
+			for _, m := range qbody.Mobiles {
+				if m == "13800138000" {
+					list = append(list, map[string]string{"mobile": m, "user_id": "ou_mobile"})
+				}
+			}
+			rawList, _ := json.Marshal(map[string]any{"code": 0, "data": map[string]any{"user_list": list}})
+			write(string(rawList))
 		default:
+			if strings.HasPrefix(r.URL.Path, "/open-apis/contact/v3/departments/") && strings.HasSuffix(r.URL.Path, "/children") {
+				write(`{"code":0,"data":{"items":[],"has_more":false}}`)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/open-apis/contact/v3/users/") {
+				if f.denyContactScope.Load() {
+					w.WriteHeader(http.StatusForbidden)
+					write(`{"code":99991672,"msg":"scope missing"}`)
+					return
+				}
+				uid := strings.TrimPrefix(r.URL.Path, "/open-apis/contact/v3/users/")
+				switch uid {
+				case "ou_foreign":
+					w.WriteHeader(http.StatusBadRequest)
+					write(`{"code":99992361,"msg":"open_id cross app"}`)
+				case "ou_bob", "on_bob":
+					write(`{"code":0,"data":{"user":{"open_id":"ou_bob","name":"李鲍勃","en_name":"Bob Li","email":"bob@example.com","avatar":{"avatar_72":"https://cdn.example.com/bob.png"}}}}`)
+				case "ou_mobile":
+					write(`{"code":0,"data":{"user":{"open_id":"ou_mobile","name":"陈手机","en_name":"Mobile Chen"}}}`)
+				case "ou_first":
+					write(`{"code":0,"data":{"user":{"open_id":"ou_first","name":"首条管理员","en_name":"First Admin","avatar":{"avatar_72":"https://cdn.example.com/first.png"}}}}`)
+				case "ou_requester":
+					write(`{"code":0,"data":{"user":{"open_id":"ou_requester","name":"赵访客","en_name":"Guest Zhao","avatar":{"avatar_72":"https://cdn.example.com/guest.png"}}}}`)
+				default:
+					write(`{"code":41012,"msg":"no such user"}`)
+				}
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/chats/") && strings.HasSuffix(r.URL.Path, "/members") {
+				write(`{"code":0,"data":{"items":[{"member_id":"ou_chat_member","name":"群成员小周"},{"member_id":"ou_alice","name":"张爱丽"}],"has_more":false}}`)
+				return
+			}
 			if strings.Contains(r.URL.Path, "/reactions") {
+				rest := strings.TrimPrefix(r.URL.Path, "/open-apis/im/v1/messages/")
+				parts := strings.Split(rest, "/")
+				msgID := ""
+				if len(parts) > 0 {
+					msgID = parts[0]
+				}
+				call := feishuReactionCall{method: r.Method, messageID: msgID}
+				if r.Method == http.MethodPost {
+					var rbody struct {
+						ReactionType struct {
+							EmojiType string `json:"emoji_type"`
+						} `json:"reaction_type"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&rbody)
+					call.emoji = rbody.ReactionType.EmojiType
+				} else if r.Method == http.MethodDelete && len(parts) >= 3 {
+					call.reactionID = parts[2]
+				}
+				select {
+				case f.reactions <- call:
+				default:
+				}
 				write(`{"code":0,"data":{"reaction_id":"react_1"}}`)
 				return
 			}
@@ -375,6 +490,12 @@ func newFeishuFixture(t *testing.T, register http.HandlerFunc) *feishuFixture {
 				w.WriteHeader(http.StatusBadRequest)
 				write(`{"code":230049,"msg":"The message is being sent."}`)
 				return
+			case "no-thread-fallback":
+				if inThread {
+					w.WriteHeader(http.StatusBadRequest)
+					write(`{"code":230071,"msg":"The group to which the message belongs does not support reply in thread."}`)
+					return
+				}
 			}
 			write(`{"code":0,"data":{"message_id":"om_sent"}}`)
 		}
@@ -623,10 +744,15 @@ func TestFeishuMultiBotConfigAndGroupOverrides(t *testing.T) {
 	// Blocked user is ignored in DM even when dmAccess == "all".
 	feishu.event(sockDev, "cli_dev_bot", "blocked-dm", "oc_dm_blocked", "ou_blocked", "p2p", "user", "should ignore")
 
-	// Unlisted group is ignored because groupAccess == "whitelist".
+	// Unlisted group @mention gets an explicit permission-denied reply (while unmentioned chatter stays silent).
+	feishu.groupEvent(sockDev, "cli_dev_bot", "unlisted-chatter", "oc_unknown", "ou_alice", "", "just chatting", nil)
 	feishu.groupEvent(sockDev, "cli_dev_bot", "unlisted-grp", "oc_unknown", "ou_alice", "", "@_user_1 hello", []map[string]any{
 		{"key": "@_user_1", "name": "Fixture Bot", "id": map[string]string{"open_id": "ou_bot"}},
 	})
+	groupDenied := feishu.nextPost()
+	if groupDenied.parent != "unlisted-grp" || !strings.Contains(groupDenied.text, "oc_unknown") {
+		t.Fatalf("expected group allowlist denied notice, got %+v", groupDenied)
+	}
 
 	// Mentioning dev bot in oc_dev_group triggers card reply in thread with model override and prompt.
 	fixtureHome := path.Join("/Users", "fixture-user")
@@ -670,6 +796,10 @@ FROM runs r JOIN channel_deliveries d ON d.run_id=r.id WHERE d.message_id='grp-a
 	opsSettings.DMWhitelist = []string{"ou_sre"}
 	f.request("PUT", "/channels/feishu/bots/"+botOps.ID+"/settings", opsSettings, 200, &view)
 	feishu.event(sockOps, "cli_ops_bot", "ops-denied", "oc_ops_dm", "ou_stranger", "p2p", "user", "denied dm")
+	opsDenied := feishu.nextPost()
+	if opsDenied.parent != "ops-denied" || !strings.Contains(opsDenied.text, "ou_stranger") {
+		t.Fatalf("expected DM permission-denied reply for ou_stranger, got %+v", opsDenied)
+	}
 	feishu.event(sockOps, "cli_ops_bot", "ops-ok", "oc_ops_dm", "ou_sre", "p2p", "user", "check alert")
 	opsPost := feishu.nextPost()
 	if opsPost.parent != "ops-ok" || opsPost.host != "open.larksuite.com" || !strings.Contains(opsPost.text, "check alert") {
@@ -830,5 +960,280 @@ func TestFeishuMultiBotRegistrationWithDirectSettings(t *testing.T) {
 	manual := view.Bots[1].Settings
 	if manual.DMAccess != "all" || manual.GroupEnabled || !manual.Advanced.HideLocalAddresses || manual.Advanced.HistoryLimit != 20 {
 		t.Fatalf("unexpected manual bot settings: %+v", manual)
+	}
+}
+
+func TestFeishuQRAdminReactionsAndContinuousDM(t *testing.T) {
+	const appID, secret = "cli_qr_admin", "secret-qr-admin"
+	feishu := newFeishuFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.FormValue("action") {
+		case "begin":
+			fmt.Fprint(w, `{"device_code":"device-admin","verification_uri_complete":"https://accounts.feishu.cn/create?user_code=admin","interval":1,"expire_in":60}`)
+		case "poll":
+			fmt.Fprintf(w, `{"client_id":%q,"client_secret":%q,"user_info":{"open_id":"ou_scanner","tenant_brand":"feishu"}}`, appID, secret)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+		}
+	})
+	f := newFixture(t)
+	agent := f.agent("codex")
+
+	// 1. QR registration with default dmAccess:"admin" automatically grants admin to the scanning user.
+	var view model.ChannelView
+	f.request("POST", "/channels/feishu/bots/registration", model.FeishuRegistrationInput{
+		AgentID: agent.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:     "admin",
+			DMMode:       "continuous",
+			ReplyStyle:   "card",
+			GroupEnabled: false,
+		},
+	}, 200, &view)
+	sock := feishu.nextSocket()
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return c.Registration == nil && len(c.Bots) == 1 && c.Bots[0].Connection == "online"
+	})
+	bot := view.Bots[0]
+	if len(bot.Settings.Admins) != 1 || bot.Settings.Admins[0] != "ou_scanner" {
+		t.Fatalf("expected QR scanner open_id auto-added to admins, got %+v", bot.Settings.Admins)
+	}
+	if bot.Settings.Reaction != "OnIt" || bot.Settings.ReactionDone != "DONE" {
+		t.Fatalf("expected default OnIt -> DONE reactions, got %q -> %q", bot.Settings.Reaction, bot.Settings.ReactionDone)
+	}
+
+	// 2. Customize reactions to THINKING -> PARTY and reject invalid emoji keys.
+	badSettings := bot.Settings
+	badSettings.Reaction = "not valid!"
+	f.request("PUT", "/channels/feishu/bots/"+bot.ID+"/settings", badSettings, 400, nil)
+
+	customSettings := bot.Settings
+	customSettings.Reaction = "THINKING"
+	customSettings.ReactionDone = "PARTY"
+	f.request("PUT", "/channels/feishu/bots/"+bot.ID+"/settings", customSettings, 200, &view)
+
+	// Scanner can immediately DM, and two consecutive messages stay in the SAME session.
+	feishu.event(sock, appID, "dm-1", "oc_scanner_dm", "ou_scanner", "p2p", "user", "first continuous dm")
+	firstPost := feishu.nextPost()
+	if firstPost.parent != "dm-1" || !strings.Contains(firstPost.text, "first continuous dm") {
+		t.Fatalf("unexpected first DM reply: %+v", firstPost)
+	}
+
+	// Verify THINKING was added and swapped to PARTY.
+	var addedEmojis []string
+	deadline := time.After(3 * time.Second)
+	for len(addedEmojis) < 2 {
+		select {
+		case rc := <-feishu.reactions:
+			if rc.messageID == "dm-1" && rc.method == http.MethodPost {
+				addedEmojis = append(addedEmojis, rc.emoji)
+			}
+		case <-deadline:
+			t.Fatalf("expected THINKING and PARTY reactions, got %v", addedEmojis)
+		}
+	}
+	if addedEmojis[0] != "THINKING" || addedEmojis[1] != "PARTY" {
+		t.Fatalf("unexpected reaction sequence: %v", addedEmojis)
+	}
+
+	// Keep-original reaction mode (Reaction: "Get", ReactionDone: "") should only add Get.
+	keepSettings := view.Bots[0].Settings
+	keepSettings.Reaction = "Get"
+	keepSettings.ReactionDone = ""
+	view = model.ChannelView{}
+	f.request("PUT", "/channels/feishu/bots/"+bot.ID+"/settings", keepSettings, 200, &view)
+	if view.Bots[0].Settings.Reaction != "Get" || view.Bots[0].Settings.ReactionDone != "" {
+		t.Fatalf("keep-original reaction settings not preserved: %+v", view.Bots[0].Settings)
+	}
+
+	feishu.event(sock, appID, "dm-2", "oc_scanner_dm", "ou_scanner", "p2p", "user", "second continuous dm")
+	secondPost := feishu.nextPost()
+	if secondPost.parent != "dm-2" || !strings.Contains(secondPost.text, "second continuous dm") {
+		t.Fatalf("unexpected second DM reply: %+v", secondPost)
+	}
+	gotGet := false
+	getDeadline := time.After(2 * time.Second)
+	for !gotGet {
+		select {
+		case rc := <-feishu.reactions:
+			if rc.messageID == "dm-2" && rc.method == http.MethodPost && rc.emoji == "Get" {
+				gotGet = true
+			} else if rc.messageID == "dm-2" {
+				t.Fatalf("unexpected reaction on keep-original turn: %+v", rc)
+			}
+		case <-getDeadline:
+			t.Fatal("expected Get reaction on dm-2")
+		}
+	}
+
+	// Both continuous DM runs must share the exact same Lever chat_id and session_id, and bot.ChatID must be populated.
+	var chat1, sess1, chat2, sess2 string
+	if err := f.a.Store.DB.QueryRow(`SELECT r.chat_id, r.session_id FROM runs r JOIN channel_deliveries d ON d.run_id=r.id WHERE d.message_id='dm-1' AND d.part='answer'`).Scan(&chat1, &sess1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.a.Store.DB.QueryRow(`SELECT r.chat_id, r.session_id FROM runs r JOIN channel_deliveries d ON d.run_id=r.id WHERE d.message_id='dm-2' AND d.part='answer'`).Scan(&chat2, &sess2); err != nil {
+		t.Fatal(err)
+	}
+	if chat1 == "" || chat1 != chat2 || sess1 == "" || sess1 != sess2 {
+		t.Fatalf("continuous DM split across sessions: msg1=(%s,%s) msg2=(%s,%s)", chat1, sess1, chat2, sess2)
+	}
+	f.request("GET", "/channels/feishu", nil, 200, &view)
+	if view.Bots[0].ChatID != chat1 {
+		t.Fatalf("expected bot.ChatID=%q from ChatMap, got %q", chat1, view.Bots[0].ChatID)
+	}
+
+	// Group @mention when groupEnabled=false replies with group-disabled notice.
+	feishu.groupEvent(sock, appID, "grp-disabled", "oc_some_grp", "ou_scanner", "", "@_user_1 ping", []map[string]any{
+		{"key": "@_user_1", "name": "Fixture Bot", "id": map[string]string{"open_id": "ou_bot"}},
+	})
+	grpNotice := feishu.nextPost()
+	if grpNotice.parent != "grp-disabled" || !strings.Contains(grpNotice.text, "Group chat is disabled") {
+		t.Fatalf("expected group-disabled notice, got %+v", grpNotice)
+	}
+
+	// DM topic mode reply_in_thread falls back cleanly to quote reply on Feishu code 230071.
+	topicSettings := view.Bots[0].Settings
+	topicSettings.DMMode = "topic"
+	f.request("PUT", "/channels/feishu/bots/"+bot.ID+"/settings", topicSettings, 200, &view)
+	feishu.event(sock, appID, "no-thread-fallback", "oc_scanner_dm", "ou_scanner", "p2p", "user", "fallback test")
+	attempt1 := feishu.nextPost()
+	attempt2 := feishu.nextPost()
+	if !attempt1.inThread || attempt2.inThread || attempt2.parent != "no-thread-fallback" {
+		t.Fatalf("expected thread fallback retry, got attempt1=%+v attempt2=%+v", attempt1, attempt2)
+	}
+}
+
+func TestFeishuDirectMessageBindAndContactSearch(t *testing.T) {
+	const appID, secret = "cli_direct_bind", "secret-direct-bind"
+	feishu := newFeishuFixture(t, nil)
+	f := newFixture(t)
+	agent := f.agent("codex")
+
+	// 1. Create a manual bot with default admin-only DM policy and NO admins configured yet.
+	var view model.ChannelView
+	f.request("POST", "/channels/feishu/bots", model.FeishuBotCreateInput{
+		AppID:       appID,
+		AppSecret:   secret,
+		Brand:       "feishu",
+		DisplayName: "直连助手",
+		AgentID:     agent.ID,
+		Settings: &model.FeishuBotSettings{
+			DMAccess:     "admin",
+			DMMode:       "continuous",
+			ReplyStyle:   "card",
+			Reaction:     "OnIt",
+			ReactionDone: "DONE",
+		},
+	}, 200, &view)
+	sock := feishu.nextSocket()
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return len(c.Bots) == 1 && c.Bots[0].Connection == "online"
+	})
+	botID := view.Bots[0].ID
+
+	// 2. First normal DM message directly binds the sender as admin & paired owner (no /pair needed!)
+	// and immediately gets an Agent reply.
+	feishu.event(sock, appID, "direct-dm-1", "oc_first_dm", "ou_first", "p2p", "user", "hello without pair")
+	firstReply := feishu.nextPost()
+	if firstReply.parent != "direct-dm-1" || !strings.Contains(firstReply.text, "hello without pair") {
+		t.Fatalf("expected immediate reply after direct DM bind, got %+v", firstReply)
+	}
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return len(c.Bots) == 1 && c.Bots[0].Paired && len(c.Bots[0].Settings.Admins) == 1 && c.Bots[0].OwnerName == "首条管理员"
+	})
+	if view.Bots[0].Settings.Admins[0] != "ou_first" || view.Bots[0].ChatID == "" {
+		t.Fatalf("expected auto-bound admin and chatId, got %+v", view.Bots[0])
+	}
+
+	// 3. Another unauthorized user DMs the now-bound bot -> gets permission-denied reply
+	// and appears in PendingRequests with hydrated name/avatar (and NO oc_ chat ID exposed in JSON).
+	feishu.event(sock, appID, "guest-dm-1", "oc_guest_dm", "ou_requester", "p2p", "user", "请问可以帮我看看吗")
+	denied := feishu.nextPost()
+	if denied.parent != "guest-dm-1" || !strings.Contains(denied.text, "ou_requester") {
+		t.Fatalf("expected permission-denied reply for guest, got %+v", denied)
+	}
+	view = feishu.waitChannel(f, func(c model.ChannelView) bool {
+		return len(c.Bots) == 1 && len(c.Bots[0].PendingRequests) == 1 && c.Bots[0].PendingRequests[0].Name == "赵访客"
+	})
+	var rawChannel json.RawMessage
+	f.request("GET", "/channels/feishu", nil, 200, &rawChannel)
+	if bytes.Contains(rawChannel, []byte("oc_guest_dm")) || bytes.Contains(rawChannel, []byte("oc_first_dm")) {
+		t.Fatal("channel view leaked Feishu chat routing ID")
+	}
+
+	// 4. Approve the pending requester with 1-click allow_dm -> switches dmAccess to whitelist,
+	// adds ou_requester, clears pending request, sends confirmation DM, and subsequent DM succeeds!
+	view = model.ChannelView{}
+	f.request("POST", "/channels/feishu/bots/"+botID+"/access-requests", model.FeishuAccessRequestInput{
+		OpenID: "ou_requester",
+		Action: "allow_dm",
+	}, 200, &view)
+	if view.Bots[0].Settings.DMAccess != "whitelist" || !slices.Contains(view.Bots[0].Settings.DMWhitelist, "ou_requester") || len(view.Bots[0].PendingRequests) != 0 {
+		t.Fatalf("unexpected bot state after approving access request: %+v", view.Bots[0])
+	}
+	grantNotice := feishu.nextPost()
+	if grantNotice.parent != "oc_guest_dm" || !strings.Contains(grantNotice.text, "私聊权限") {
+		t.Fatalf("expected confirmation DM to approved user, got %+v", grantNotice)
+	}
+	feishu.event(sock, appID, "guest-dm-2", "oc_guest_dm", "ou_requester", "p2p", "user", "approved hello")
+	guestReply := feishu.nextPost()
+	if guestReply.parent != "guest-dm-2" || !strings.Contains(guestReply.text, "approved hello") {
+		t.Fatalf("expected reply for newly approved guest, got %+v", guestReply)
+	}
+
+	// 5. Contact search: directory + chat members, name filter, email/mobile/union_id resolution,
+	// cross-app open_id warning, and missing-scope graceful fallback.
+	var searchRes model.FeishuContactSearchResult
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts", nil, 200, &searchRes)
+	foundIDs := map[string]bool{}
+	for _, c := range searchRes.Contacts {
+		foundIDs[c.OpenID] = true
+	}
+	for _, want := range []string{"ou_direct", "ou_alice", "ou_chat_member", "ou_first"} {
+		if !foundIDs[want] {
+			t.Fatalf("expected contact %s in empty-query list, got %+v", want, searchRes.Contacts)
+		}
+	}
+
+	// Name search
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?q="+url.QueryEscape("小周"), nil, 200, &searchRes)
+	if len(searchRes.Contacts) != 1 || searchRes.Contacts[0].OpenID != "ou_chat_member" {
+		t.Fatalf("expected chat member match for 小周, got %+v", searchRes.Contacts)
+	}
+
+	// Email exact lookup via batch_get_id
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?q="+url.QueryEscape("bob@example.com"), nil, 200, &searchRes)
+	if len(searchRes.Contacts) == 0 || searchRes.Contacts[0].OpenID != "ou_bob" || searchRes.Contacts[0].Name != "李鲍勃" {
+		t.Fatalf("expected email lookup to resolve ou_bob, got %+v", searchRes)
+	}
+
+	// Mobile exact lookup via batch_get_id
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?q=13800138000", nil, 200, &searchRes)
+	if len(searchRes.Contacts) == 0 || searchRes.Contacts[0].OpenID != "ou_mobile" || searchRes.Contacts[0].Name != "陈手机" {
+		t.Fatalf("expected mobile lookup to resolve ou_mobile, got %+v", searchRes)
+	}
+
+	// Union ID resolution
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?q=on_bob", nil, 200, &searchRes)
+	if len(searchRes.Contacts) == 0 || searchRes.Contacts[0].OpenID != "ou_bob" {
+		t.Fatalf("expected union_id lookup to resolve ou_bob, got %+v", searchRes)
+	}
+
+	// Cross-app Open ID warning
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?q=ou_foreign", nil, 200, &searchRes)
+	if searchRes.Warning != "cross_app_open_id" {
+		t.Fatalf("expected cross_app_open_id warning, got %+v", searchRes)
+	}
+
+	// Missing contact scopes gracefully reports missingScopes while still returning chat members.
+	feishu.denyContactScope.Store(true)
+	searchRes = model.FeishuContactSearchResult{}
+	f.request("GET", "/channels/feishu/bots/"+botID+"/contacts?refresh=1&q="+url.QueryEscape("小周"), nil, 200, &searchRes)
+	if len(searchRes.MissingScopes) == 0 || len(searchRes.Contacts) != 1 || searchRes.Contacts[0].OpenID != "ou_chat_member" {
+		t.Fatalf("expected missingScopes + chat member fallback, got %+v", searchRes)
 	}
 }

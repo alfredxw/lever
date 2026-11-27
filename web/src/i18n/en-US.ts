@@ -1002,6 +1002,7 @@ export const enUS = {
   "channels.status.error": "Connection failed",
   "channels.status.credentials_missing": "Credentials missing",
   "channels.status.unpaired": "Pairing required",
+  "channels.status.needs_access": "Access needed",
   "channels.status.paused": "Incoming messages paused",
   "channels.status.online": "Connected",
   "channels.connectBot": "Connect Lark Bot",
@@ -1103,6 +1104,52 @@ export const enUS = {
   "channels.bot.editCreds": "Edit name & credentials",
   "channels.bot.viewScopes": "Check Feishu scopes",
   "channels.bot.pairDm": "Pair owner DM",
+  "channels.bot.unpairDm": "Unbind owner DM session",
+  "channels.bot.unpairedDmToast": "Owner DM session unbound",
+  "channels.bot.directBindHint":
+    "No admin bound yet: send any direct message to this bot in Feishu to bind yourself automatically, or search contacts to authorize directly.",
+  "channels.bot.authorizeAdminAction": "Search & authorize admin",
+  "channels.bot.authorizeContactAction": "Search & add contact",
+  "channels.bot.dmAdminEmptyWarning":
+    "DM access is set to Admins only, but no admin or paired DM is configured yet. Direct messages will receive a permission-denied reply.",
+  "channels.bot.dmWhitelistEmptyWarning":
+    "DM access is set to Allowlist, but both admins and the allowlist are empty. Direct messages will receive a permission-denied reply.",
+  "channels.bot.allowAllDmAction": "Allow all app users",
+  "channels.bot.dmAccessAdminQrHint":
+    "Scanning automatically adds your Feishu account as a bot admin so you can DM right away.",
+  "channels.bot.dmAccessAdminManualHint":
+    "After saving, send any DM to the bot in Feishu to auto-bind as admin (no /pair needed), or search contacts to authorize directly.",
+  "channels.bot.pendingRequestsTitle": "Pending DM access requests ({{count}})",
+  "channels.bot.pendingRequestsDesc":
+    "These Feishu users recently messaged the bot. Approve access with one click.",
+  "channels.bot.requestAllowDm": "Allow DM",
+  "channels.bot.requestGrantAdmin": "Make admin",
+  "channels.bot.requestDismiss": "Dismiss",
+  "channels.bot.requestAllowedDmToast": "Granted DM access and notified the user",
+  "channels.bot.requestGrantedAdminToast": "Granted admin access and notified the user",
+  "channels.bot.whitelistDesc":
+    "Search Feishu contacts or enter an email, phone number, or Open ID to grant DM access.",
+  "channels.bot.searchAuthorizeContact": "Search & authorize",
+  "channels.bot.searchAuthorizeAdmin": "Add admin",
+  "channels.bot.searchBlockContact": "Add blocked user",
+  "channels.bot.contactSearchPlaceholder": "Search name, email, phone, or ou_...",
+  "channels.bot.contactRefresh": "Refresh contacts",
+  "channels.bot.contactLoadFailed": "Could not load Feishu contacts",
+  "channels.bot.contactAdded": "Added",
+  "channels.bot.contactSource.directory": "Directory",
+  "channels.bot.contactSource.chat": "Group",
+  "channels.bot.contactSource.recent": "Recent",
+  "channels.bot.contactAddDirectOne": "Add {{id}} directly",
+  "channels.bot.contactAddDirectMany": "Add {{count}} Open IDs",
+  "channels.bot.contactEmptySearch":
+    'No contacts match "{{query}}". Try a full email, phone number, or ou_ Open ID.',
+  "channels.bot.contactEmptyHint":
+    "Search by name, full email, phone number, or paste an ou_ Open ID",
+  "channels.bot.contactCrossAppWarning":
+    "This Open ID belongs to another Feishu app and cannot be used by this bot. Search by name, email, phone, or on_ Union ID instead.",
+  "channels.bot.contactMissingScopes":
+    "Some contact scopes are missing ({{scopes}}). Enable them to search more teammates, or paste an Open ID directly.",
+  "channels.bot.contactOpenConsole": "Enable",
   "channels.bot.unbindBot": "Unbind this bot",
   "channels.bot.unbindBotTitle": 'Unbind "{{name}}"?',
   "channels.bot.unbindBotDesc":
@@ -1113,7 +1160,7 @@ export const enUS = {
     "Current settings require Feishu scope(s) {{scopes}}. Without them, non-mention group messages or history may not arrive.",
   "channels.bot.checkScopes": "View scopes",
   "channels.bot.missingScopesBadge": "Missing scopes",
-  "channels.bot.sectionBinding": "Binding & Model",
+  "channels.bot.sectionBinding": "Binding & Identity",
   "channels.bot.sectionBindingSub":
     "Workspace, Skills, and base instructions inherit from the target Agent",
   "channels.bot.agentLabel": "Target Agent",
@@ -1124,6 +1171,11 @@ export const enUS = {
   "channels.bot.modelOverrideDesc": "Overridden: {{model}}",
   "channels.bot.modelFollow": "Follow Agent",
   "channels.bot.modelOverride": "Override",
+  "channels.bot.sectionDmAndReply": "Direct Messages & Feedback",
+  "channels.bot.sectionGroup": "Group Chats & Rules",
+  "channels.bot.groupRulesTitle": "Per-group rules",
+  "channels.bot.groupRulesDesc":
+    "Override prompts, models, triggers, and reply placement for individual groups.",
   "channels.bot.sectionReply": "Reply Mode",
   "channels.bot.sectionReplySub":
     "Control how the bot is triggered and where replies land",
@@ -1232,8 +1284,14 @@ export const enUS = {
   "channels.bot.ruleAllInherit": "Inherits all bot defaults",
   "channels.bot.advancedTitle": "Advanced & Safety",
   "channels.bot.advancedSub":
-    "Reactions, sender tags, local path redaction, group history, chat archiving, blocklist",
+    "Sender tags, local path redaction, group history, chat archiving, approvals, blocklist",
   "channels.bot.reactionAck": "Reaction acknowledgements",
+  "channels.bot.reactionAckSelectDesc":
+    "React to the incoming message immediately when the bot starts working on it.",
+  "channels.bot.reactionDone": "Completion reaction",
+  "channels.bot.reactionDoneDesc":
+    "Replace the initial reaction after the reply is delivered, or keep it as-is.",
+  "channels.bot.reactionDoneKeep": "Keep original",
   "channels.bot.reactionAckDesc":
     "Add an OnIt reaction when received and switch to DONE on completion.",
   "channels.bot.senderTag": "Attach sender tag in groups",
@@ -1322,6 +1380,12 @@ export const enUS = {
     "Read all group messages (mention-free / yield / history)",
   "channels.bot.scope.chatRead": "List groups the bot has joined",
   "channels.bot.scope.reactions": "Add OnIt / DONE message reactions",
+  "channels.bot.scopesContactGroup": "Contact search & display scopes (recommended)",
+  "channels.bot.scopeRecommended": "Recommended",
+  "channels.bot.scope.contactUserBase": "Read user names, avatars, and basic profile info",
+  "channels.bot.scope.contactBase": "List authorized contact scopes and department members",
+  "channels.bot.scope.contactUserId": "Resolve user Open IDs by email or phone number",
+  "channels.bot.scope.chatMembers": "List members in groups joined by the bot",
   "channels.bot.removeItem": "Remove {{item}}",
   "channels.bot.dmPairTitle": "Pair owner direct message",
   "channels.bot.dmPairDesc":

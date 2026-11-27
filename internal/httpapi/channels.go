@@ -190,6 +190,21 @@ func (s *Server) channelRoutes(mux *http.ServeMux) {
 		chats, err := a.ListFeishuBotChats(r.Context(), r.PathValue("id"))
 		respond(w, chats, err)
 	})
+	mux.HandleFunc("GET /api/channels/feishu/bots/{id}/contacts", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		refresh := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
+		res, err := a.SearchFeishuBotContacts(r.Context(), r.PathValue("id"), q, refresh)
+		respond(w, res, err)
+	})
+	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/access-requests", func(w http.ResponseWriter, r *http.Request) {
+		var in model.FeishuAccessRequestInput
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.ResolveFeishuAccessRequest(r.Context(), r.PathValue("id"), in)
+		respond(w, v, err)
+	})
 	mux.HandleFunc("POST /api/channels/feishu/bots/{id}/check-scopes", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.CheckFeishuBotScopes(r.Context(), r.PathValue("id"))
 		respond(w, v, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 
 	"github.com/larksuite/oapi-sdk-go/v3/scene/registration"
 )
@@ -14,7 +15,7 @@ var (
 )
 
 type Registration struct {
-	AppID, Secret, Brand string
+	AppID, Secret, Brand, OpenID string
 }
 
 func Register(ctx context.Context, showURL func(string)) (Registration, error) {
@@ -32,7 +33,11 @@ func Register(ctx context.Context, showURL func(string)) (Registration, error) {
 				"im:message.group_at_msg:readonly",
 				"im:message:send_as_bot",
 				"im:chat:readonly",
+				"im:chat.members:read",
 				"im:message.reactions:write_only",
+				"contact:user.base:readonly",
+				"contact:contact.base:readonly",
+				"contact:user.id:readonly",
 			}},
 			Events: registration.AppAddonsEvents{Items: registration.AppAddonsEventItems{
 				Tenant: []string{"im.message.receive_v1"},
@@ -61,8 +66,12 @@ func Register(ctx context.Context, showURL func(string)) (Registration, error) {
 		}
 		return Registration{}, err
 	}
-	if result.UserInfo != nil && result.UserInfo.TenantBrand == Lark {
-		brand = Lark
+	openID := ""
+	if result.UserInfo != nil {
+		if result.UserInfo.TenantBrand == Lark {
+			brand = Lark
+		}
+		openID = strings.TrimSpace(result.UserInfo.OpenID)
 	}
-	return Registration{AppID: result.ClientID, Secret: result.ClientSecret, Brand: brand}, nil
+	return Registration{AppID: result.ClientID, Secret: result.ClientSecret, Brand: brand, OpenID: openID}, nil
 }

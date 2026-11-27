@@ -752,6 +752,266 @@ test("feishu add bot dialog defaults to QR registration with direct configurable
   ).toBeVisible();
 });
 
+test("feishu bot settings warn on deadlocked DM access, configure reactions top-level, and group chat rules together", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+
+  let settings: Record<string, unknown> = {
+    displayName: "测试小助手",
+    agentId: "agent-placeholder",
+    dmMode: "continuous",
+    replyStyle: "card",
+    reaction: "OnIt",
+    reactionDone: "DONE",
+    groupEnabled: false,
+    groupMention: "thread_free",
+    groupReplyTarget: "topic",
+    dmAccess: "admin",
+    dmWhitelist: [],
+    groupAccess: "whitelist",
+    replyMention: "requester",
+    admins: [],
+    defaultPrompt: "",
+    chatOverrides: [],
+    advanced: {
+      reactionAck: true,
+      senderTag: true,
+      hideLocalAddresses: true,
+      historyLimit: 20,
+      trustSameOwnerBots: false,
+      sessionMapping: "single_chat_topics",
+      approvalMode: "lever",
+      blockedUsers: [],
+    },
+  };
+  let pendingRequests: Array<Record<string, unknown>> = [
+    {
+      openId: "ou_requester",
+      name: "赵访客",
+      preview: "请问可以帮我看看吗",
+      requestedAt: "2026-11-27T05:00:00Z",
+    },
+  ];
+  const knownUsers: Array<Record<string, unknown>> = [
+    {
+      openId: "ou_requester",
+      name: "赵访客",
+      email: "guest@example.com",
+      source: "recent",
+    },
+  ];
+  const settingsPuts: Array<Record<string, unknown>> = [];
+  const accessPosts: Array<Record<string, unknown>> = [];
+
+  const directoryContacts = [
+    {
+      openId: "ou_alice",
+      name: "张爱丽",
+      enName: "Alice Zhang",
+      email: "alice@example.com",
+      source: "directory",
+    },
+    {
+      openId: "ou_zhou",
+      name: "群成员小周",
+      source: "chat",
+    },
+  ];
+
+  const makeChannel = () => ({
+    configured: true,
+    enabled: true,
+    connection: "online",
+    paused: false,
+    bots: [
+      {
+        id: "bot-ux-1",
+        appId: "cli_ux_test",
+        brand: "feishu",
+        botName: "Lever",
+        enabled: true,
+        connection: "online",
+        paired: false,
+        pendingRequests,
+        knownUsers,
+        settings,
+      },
+    ],
+  });
+
+  await page.route("**/api/channels/feishu**", async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    if (url.pathname === "/api/channels/feishu" && req.method() === "GET") {
+      await route.fulfill({ json: makeChannel() });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/bots/bot-ux-1/contacts" &&
+      req.method() === "GET"
+    ) {
+      const q = (url.searchParams.get("q") ?? "").trim();
+      if (q === "ou_foreign") {
+        await route.fulfill({
+          json: {
+            contacts: [],
+            warning: "cross_app_open_id",
+          },
+        });
+        return;
+      }
+      const filtered = q
+        ? directoryContacts.filter(
+            (c) =>
+              c.name.includes(q) ||
+              (c.email ?? "").toLowerCase().includes(q.toLowerCase()) ||
+              c.openId.includes(q),
+          )
+        : directoryContacts;
+      await route.fulfill({
+        json: {
+          contacts: filtered,
+          missingScopes: ["contact:user.id:readonly"],
+        },
+      });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/bots/bot-ux-1/access-requests" &&
+      req.method() === "POST"
+    ) {
+      const body = req.postDataJSON() as Record<string, unknown>;
+      accessPosts.push(body);
+      const openId = String(body.openId ?? "");
+      pendingRequests = pendingRequests.filter((r) => r.openId !== openId);
+      if (body.action === "allow_dm") {
+        const cur = (settings.dmWhitelist as string[]) ?? [];
+        settings = {
+          ...settings,
+          dmAccess: "whitelist",
+          dmWhitelist: cur.includes(openId) ? cur : [...cur, openId],
+        };
+      }
+      await route.fulfill({ json: makeChannel() });
+      return;
+    }
+    if (
+      url.pathname === "/api/channels/feishu/bots/bot-ux-1/settings" &&
+      req.method() === "PUT"
+    ) {
+      const next = req.postDataJSON() as Record<string, unknown>;
+      settingsPuts.push(next);
+      settings = next;
+      for (const id of [
+        ...((next.admins as string[]) ?? []),
+        ...((next.dmWhitelist as string[]) ?? []),
+      ]) {
+        const hit = directoryContacts.find((c) => c.openId === id);
+        if (hit && !knownUsers.some((u) => u.openId === id)) {
+          knownUsers.push(hit);
+        }
+      }
+      await route.fulfill({ json: makeChannel() });
+      return;
+    }
+    await route.continue();
+  });
+
+  const plugins = await openPlugins(page);
+  await plugins
+    .getByRole("navigation", { name: "插件" })
+    .getByRole("button", { name: "飞书机器人", exact: true })
+    .click();
+
+  const settingsRegion = plugins.getByRole("region", { name: "渠道设置" });
+
+  // Unclaimed admin-only bot shows direct-message auto-bind guidance (NOT manual /pair).
+  await expect(settingsRegion.getByText("已连接")).toBeVisible();
+  await expect(
+    settingsRegion.getByText(/直接在飞书给机器人发任意一条消息即可自动绑定/),
+  ).toBeVisible();
+  await expect(
+    settingsRegion.getByRole("button", { name: "绑定管理员私聊" }),
+  ).toHaveCount(0);
+
+  // Pending DM access request can be approved with one click ("授权私聊").
+  await expect(settingsRegion.getByText("待处理私聊授权请求（1）")).toBeVisible();
+  await expect(settingsRegion.getByText("赵访客")).toBeVisible();
+  await settingsRegion.getByRole("button", { name: "授权私聊" }).click();
+  await expect
+    .poll(() => accessPosts[accessPosts.length - 1]?.action)
+    .toBe("allow_dm");
+  await expect(settingsRegion.getByText("待处理私聊授权请求")).toHaveCount(0);
+  // Approved user appears as a human-readable chip in the DM whitelist row.
+  await expect(settingsRegion.getByText("赵访客")).toBeVisible();
+
+  // Search contacts & directly authorize an admin via FeishuContactPicker.
+  await settingsRegion.getByRole("button", { name: "搜索添加管理员" }).click();
+  const contactSearch = page.getByPlaceholder(
+    "搜姓名、邮箱、手机号或粘贴 ou_...",
+  );
+  await expect(contactSearch).toBeVisible();
+  await expect(page.getByText(/部分通讯录权限未开通/)).toBeVisible();
+  await contactSearch.fill("ou_foreign");
+  await expect(page.getByText(/该 Open ID 属于其他飞书应用/)).toBeVisible();
+
+  await contactSearch.fill("张爱丽");
+  await page.getByRole("option", { name: /张爱丽/ }).click();
+  await expect
+    .poll(() => settingsPuts[settingsPuts.length - 1]?.admins)
+    .toEqual(["ou_alice"]);
+  await page.keyboard.press("Escape");
+  await expect(settingsRegion.getByText("张爱丽")).toBeVisible();
+
+  // Reaction ack & completion pickers are top-level (NOT hidden in Advanced & Safety).
+  const ackSelect = settingsRegion.getByRole("button", { name: "表情回执" });
+  const doneSelect = settingsRegion.getByRole("button", {
+    name: "完成后切换表情",
+  });
+  await expect(ackSelect).toBeVisible();
+  await expect(doneSelect).toBeVisible();
+
+  await ackSelect.click();
+  await page.getByRole("option", { name: "点赞" }).click();
+  await expect
+    .poll(() => settingsPuts[settingsPuts.length - 1]?.reaction)
+    .toBe("THUMBSUP");
+
+  await doneSelect.click();
+  await page.getByRole("option", { name: "保持不变" }).click();
+  await expect
+    .poll(() => settingsPuts[settingsPuts.length - 1]?.reactionDone)
+    .toBe("");
+
+  // Switching to custom emoji shows inline key input and persists valid custom emoji.
+  await ackSelect.click();
+  await page.getByRole("option", { name: "自定义表情" }).click();
+  const customInput = settingsRegion.getByLabel("表情标识", { exact: true });
+  await expect(customInput).toBeVisible();
+  await customInput.fill("FINGERHEART");
+  await customInput.press("Enter");
+  await expect
+    .poll(() => settingsPuts[settingsPuts.length - 1]?.reaction)
+    .toBe("FINGERHEART");
+
+  // Enabling group chats reveals group settings + per-group rules inside the unified card.
+  await expect(
+    settingsRegion.getByText("指定群聊规则", { exact: true }),
+  ).toHaveCount(0);
+  await settingsRegion
+    .getByRole("switch", { name: "允许在群聊中使用" })
+    .click();
+  await expect(settingsRegion.getByText("群聊准入范围")).toBeVisible();
+  await expect(settingsRegion.getByText("回复 @ 权限")).toBeVisible();
+  await expect(
+    settingsRegion.getByText("指定群聊规则", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsRegion.getByRole("button", { name: "添加群聊规则" }),
+  ).toBeVisible();
+});
+
 test("ACP runtimes toggle native session titles with immediate auto-save", async ({
   page,
 }) => {
