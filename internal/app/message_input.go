@@ -173,8 +173,11 @@ func (a *App) validateReferences(ctx context.Context, q store.Queryer, reference
 			case "topic":
 				query = "SELECT 1 FROM sessions WHERE id=? AND kind='topic'"
 			case "agent":
-				if session.ParentRunID != "" || session.DelegatedFrom != nil {
+				if !session.DelegationDepthAllowsMore() {
 					return invalid("The referenced Agent is not a configured collaborator for this conversation")
+				}
+				if slices.Contains(session.DelegationChain, a.delegationChainKey(ref.DeviceID, ref.ID)) {
+					return invalid("The referenced Agent is already an ancestor in this delegation chain")
 				}
 				defaults, err := delegationSettings(ctx, q)
 				if err != nil {

@@ -83,10 +83,14 @@ type App struct {
 	feishu               feishuChannel
 	personal                map[string]*personalWorker
 	pluginPreviews          map[string]*packagePreview
-	remoteCollab            RemoteCollaborator
-	remoteDelegationWake    chan struct{}
-	remoteDelegationNotify  chan struct{}
-	remoteDelegationStarted bool
+	remoteCollab             RemoteCollaborator
+	remoteDelegationWake     chan struct{}
+	remoteDelegationNotify   chan struct{}
+	remoteDelegationStarted  bool
+	typingUntil              map[string]time.Time
+	typingDeferSince         map[string]time.Time
+	receiptTimers            map[string]*time.Timer
+	delegationCoalesceWindow time.Duration
 }
 
 // Open embeds provider execution in the caller. The standalone hosts use
@@ -105,6 +109,10 @@ func open(dir string, independent bool) (*App, error) {
 		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1), taskReminderWake: make(chan struct{}, 1),
 		eventAdapters: builtin.EventSourceAdapters(), personal: make(map[string]*personalWorker), pluginPreviews: make(map[string]*packagePreview),
 		remoteDelegationWake: make(chan struct{}, 1),
+		typingUntil:          make(map[string]time.Time),
+		typingDeferSince:     make(map[string]time.Time),
+		receiptTimers:        make(map[string]*time.Timer),
+		delegationCoalesceWindow: 1500 * time.Millisecond,
 	}
 	if err = a.migrateWorkingCopies(ctx); err != nil {
 		cancel()
@@ -173,6 +181,10 @@ func (a *App) Shutdown() {
 	a.cancel()
 	for id := range a.pluginPreviews {
 		a.discardPluginPreviewLocked(id)
+	}
+	for id, timer := range a.receiptTimers {
+		timer.Stop()
+		delete(a.receiptTimers, id)
 	}
 	lease := a.hostLease
 	a.hostLease = nil
@@ -350,6 +362,9 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 	p := &agent.Profile
 	if !p.DelegationPolicy.Valid() {
 		return agent, invalid("Invalid delegation policy")
+	}
+	if p.MaxDelegationDepth != 0 && p.MaxDelegationDepth != 1 && p.MaxDelegationDepth != 2 {
+		return agent, invalid("Max delegation depth must be 1 or 2")
 	}
 	p.Description = strings.TrimSpace(p.Description)
 	if len([]rune(p.Description)) > 240 {
@@ -602,21 +617,45 @@ func (a *App) Send(ctx context.Context, input model.SendInput) (model.Run, error
 }
 
 type sendOrigin struct {
-	remote            *remoteOrigin
-	remoteDelegation  *p.DelegationOrigin
-	idleCompaction    bool
-	parentRunID       string
-	maxPermissionMode string
-	delegationScope   *delegationWorkspace
-	delegationWake    *delegationReceiptWake
-	task              *model.TaskDispatch
-	taskRecord        model.TaskRecord
-	taskQueue         *queuedTask
-	retry             *model.Run
-	channel           *channelInput
-	feishu            *feishuTurn
-	personal          *personalTurn
-	automation        *automationFire
+	remote             *remoteOrigin
+	remoteDelegation   *p.DelegationOrigin
+	idleCompaction     bool
+	parentRunID        string
+	maxPermissionMode  string
+	delegationDepth    int
+	delegationMaxDepth int
+	delegationChain    []string
+	delegationScope    *delegationWorkspace
+	delegationWake     *delegationReceiptWake
+	task               *model.TaskDispatch
+	taskRecord         model.TaskRecord
+	taskQueue          *queuedTask
+	retry              *model.Run
+	channel            *channelInput
+	feishu             *feishuTurn
+	personal           *personalTurn
+	automation         *automationFire
+}
+
+func (o sendOrigin) isZero() bool {
+	return o.remote == nil &&
+		o.remoteDelegation == nil &&
+		!o.idleCompaction &&
+		o.parentRunID == "" &&
+		o.maxPermissionMode == "" &&
+		o.delegationDepth == 0 &&
+		o.delegationMaxDepth == 0 &&
+		len(o.delegationChain) == 0 &&
+		o.delegationScope == nil &&
+		o.delegationWake == nil &&
+		o.task == nil &&
+		o.taskRecord == "" &&
+		o.taskQueue == nil &&
+		o.retry == nil &&
+		o.channel == nil &&
+		o.feishu == nil &&
+		o.personal == nil &&
+		o.automation == nil
 }
 
 var errCommandConflict = conflict("commandId already belongs to a different message")
@@ -793,7 +832,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				chat.SharedTaskRef = &model.SharedTaskRef{SharedScope: origin.remote.scope, TaskID: origin.remote.intent.TaskID, DispatchID: origin.remote.intent.ID}
 			}
 		}
-		if origin.channel == nil {
+		if origin.channel == nil && origin.delegationWake == nil {
 			if err := checkDesktopChat(chat); err != nil {
 				return err
 			}
@@ -949,6 +988,11 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				return err
 			}
 			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: defaultSel, CreatedAt: now()}
+			if origin.parentRunID != "" && origin.remoteDelegation == nil {
+				session.DelegationDepth = max(origin.delegationDepth, 1)
+				session.DelegationMaxDepth = min(origin.delegationMaxDepth, 2)
+				session.DelegationChain = slices.Clone(origin.delegationChain)
+			}
 			if origin.delegationScope != nil {
 				session.ProjectID = origin.delegationScope.projectID
 				session.Scope = cloneScope(origin.delegationScope.scope)
@@ -957,6 +1001,9 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			}
 			if rd := origin.remoteDelegation; rd != nil {
 				session.ParentRunID = "remote:" + rd.DeviceID + ":" + rd.RunID
+				session.DelegationDepth = max(rd.Depth, 1)
+				session.DelegationMaxDepth = min(rd.MaxDepth, 2)
+				session.DelegationChain = slices.Clone(rd.Chain)
 				src := &model.RemoteDelegationSource{
 					DeviceID:   rd.DeviceID,
 					DeviceName: rd.DeviceName,
@@ -1119,7 +1166,7 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			}
 			// Explicit sends can start a new turn while a stored queue hold
 			// still protects existing queued work.
-			startAfterPause = queued && paused && input.Delivery == "" && origin == (sendOrigin{}) && len(afterRunIDs) == 0
+			startAfterPause = queued && paused && input.Delivery == "" && origin.isZero() && len(afterRunIDs) == 0
 			if !queued {
 				if _, err := tx.Exec("UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false')) WHERE id=?", session.ID); err != nil {
 					return err
@@ -1288,6 +1335,21 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 					return err
 				}
 			}
+			if origin.delegationWake != nil && origin.delegationWake.channel != nil {
+				ch := origin.delegationWake.channel
+				if _, err = tx.ExecContext(ctx, "INSERT INTO channel_deliveries(run_id,binding_id,message_id,part) VALUES(?,?,?,'answer')", run.ID, ch.bindingID, ch.messageID); err != nil {
+					return err
+				}
+				if ch.feishuMeta != nil {
+					if _, err = tx.ExecContext(ctx, "INSERT INTO feishu_delivery_meta(run_id,data) VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET data=excluded.data", run.ID, store.JSON(ch.feishuMeta)); err != nil {
+						return err
+					}
+				} else if ch.personalTurn != nil {
+					if err = ch.personalTurn.record(ctx, tx, run.ID); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if err := linkRunAttachments(tx, run); err != nil {
 			return err
@@ -1320,6 +1382,10 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 	}
 	if !fresh {
 		return run, nil
+	}
+	if origin.delegationWake == nil && !origin.idleCompaction {
+		delete(a.typingUntil, run.SessionID)
+		delete(a.typingDeferSince, run.SessionID)
 	}
 	if origin.personal != nil && origin.personal.needsContext {
 		return run, nil
@@ -1372,7 +1438,11 @@ func (a *App) newExecution(run model.Run, session model.Session, profile model.P
 	runCtx, cancel := context.WithCancel(a.ctx)
 	runtimeCtx, interrupt := context.WithCancelCause(runCtx)
 	defaults, _ := delegationSettings(a.ctx, a.Store.DB)
-	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, delegationPolicy: profile.EffectiveDelegationPolicy(defaults), provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
+	maxDepth := profile.EffectiveMaxDelegationDepth(defaults)
+	if session.ParentRunID != "" || session.DelegatedFrom != nil {
+		maxDepth = min(session.DelegationMaxDepth, 2)
+	}
+	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, delegationPolicy: profile.EffectiveDelegationPolicy(defaults), delegationMaxDepth: maxDepth, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
 	if config.Type == "pi" {
 		execution.contextToken = ID() + ID()
 	}
@@ -1401,8 +1471,9 @@ func (a *App) trackLocked(e *execution, run func() error) {
 		if !errors.Is(err, errHostDetached) && !(a.closed && e.hosted) {
 			if e.session.ParentRunID != "" {
 				a.onDelegatedChildFinishedLocked(e.run)
-			} else if e.run.Status == "completed" {
-				a.deliverPendingDelegationReceiptsLocked(sessionID)
+			}
+			if e.run.Status == "completed" {
+				a.scheduleDelegationReceiptsLocked(sessionID, false)
 			}
 		}
 	}()
@@ -1446,18 +1517,8 @@ func (a *App) stopLocked(ctx context.Context, runID string, pause bool) error {
 	if err := e.stop(ctx, pause); err != nil {
 		return err
 	}
-	if !pause {
-		a.cancelParentDelegationWakesLocked(ctx, runID)
-		a.stopRemoteDelegationsForParentLocked(ctx, runID)
-	}
-	childRunIDs := a.delegationChildRunsForParent(ctx, runID)
-	for id, child := range a.active {
-		if child.session.ParentRunID == runID || childRunIDs[id] {
-			if err := a.stopLocked(ctx, id, false); err != nil {
-				return err
-			}
-		}
-	}
+	// Stopping a parent conversation turn must not kill independent background
+	// delegated tasks; users can stop individual or all delegations explicitly.
 	return nil
 }
 

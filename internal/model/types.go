@@ -94,6 +94,22 @@ func (p DelegationPolicy) Valid() bool {
 
 type DelegationSettings struct {
 	DefaultPolicy DelegationPolicy `json:"defaultPolicy" tstype:"'none' | 'all'"`
+	MaxDepth      int              `json:"maxDepth,omitempty"`
+	MaxConcurrent int              `json:"maxConcurrent,omitempty"`
+}
+
+func (s DelegationSettings) EffectiveMaxDepth() int {
+	if s.MaxDepth >= 2 {
+		return 2
+	}
+	return 1
+}
+
+func (s DelegationSettings) EffectiveMaxConcurrent() int {
+	if s.MaxConcurrent >= 1 && s.MaxConcurrent <= 20 {
+		return s.MaxConcurrent
+	}
+	return 5
 }
 
 type DefaultPermissionMode string
@@ -150,6 +166,7 @@ type Profile struct {
 	Delegations              []DelegationRule  `json:"delegations"`
 	AcceptDelegations        *bool             `json:"acceptDelegations,omitempty"`
 	AllowRemoteDelegation    *bool             `json:"allowRemoteDelegation,omitempty"`
+	MaxDelegationDepth       int               `json:"maxDelegationDepth,omitempty"`
 	WorktreeSetup            map[string]string `json:"worktreeSetup,omitempty"` // Keyed by the Git common directory.
 	TaskConcurrency          int               `json:"taskConcurrency,omitempty"`
 	TaskStartIntervalMinutes int               `json:"taskStartIntervalMinutes,omitempty"`
@@ -167,6 +184,16 @@ func (p Profile) EffectiveDelegationPolicy(defaults DelegationSettings) Delegati
 		return DelegationPolicyAll
 	}
 	return DelegationPolicyNone
+}
+
+func (p Profile) EffectiveMaxDelegationDepth(defaults DelegationSettings) int {
+	if p.MaxDelegationDepth >= 2 {
+		return 2
+	}
+	if p.MaxDelegationDepth == 1 {
+		return 1
+	}
+	return defaults.EffectiveMaxDepth()
 }
 
 func (p Profile) CanAcceptDelegations() bool {
@@ -446,26 +473,46 @@ type RemoteDelegationSource struct {
 }
 
 type Session struct {
-	Runtime         *SessionRuntime         `json:"runtime,omitempty"`
-	ProjectID       string                  `json:"projectId,omitempty"`
-	WorkingCopyID   string                  `json:"workingCopyId,omitempty"`
-	WorkingCopyName string                  `json:"workingCopyName,omitempty"`
-	Title           string                  `json:"title,omitempty"`
-	Scope           `tstype:",extends"`
-	ID              string                  `json:"id"`
-	ChatID          string                  `json:"chatId"`
-	AgentID         string                  `json:"agentId"`
-	Kind            string                  `json:"kind"`
-	TaskID          string                  `json:"taskId,omitempty"`
-	Channel         *ChannelOrigin          `json:"channel,omitempty"`
-	NativeID        string                  `json:"nativeId"`
-	Selection       Selection               `json:"selection"`
-	ParentRunID     string                  `json:"parentRunId,omitempty"`
-	DelegatedFrom   *RemoteDelegationSource `json:"delegatedFrom,omitempty"`
-	SourceRunID     string                  `json:"sourceRunId,omitempty"`
-	Comparison      *ComparisonOrigin       `json:"comparison,omitempty"`
-	QueuePaused     bool                    `json:"queuePaused,omitempty"`
-	CreatedAt       string                  `json:"createdAt"`
+	Runtime            *SessionRuntime         `json:"runtime,omitempty"`
+	ProjectID          string                  `json:"projectId,omitempty"`
+	WorkingCopyID      string                  `json:"workingCopyId,omitempty"`
+	WorkingCopyName    string                  `json:"workingCopyName,omitempty"`
+	Title              string                  `json:"title,omitempty"`
+	Scope              `tstype:",extends"`
+	ID                 string                  `json:"id"`
+	ChatID             string                  `json:"chatId"`
+	AgentID            string                  `json:"agentId"`
+	Kind               string                  `json:"kind"`
+	TaskID             string                  `json:"taskId,omitempty"`
+	Channel            *ChannelOrigin          `json:"channel,omitempty"`
+	NativeID           string                  `json:"nativeId"`
+	Selection          Selection               `json:"selection"`
+	ParentRunID        string                  `json:"parentRunId,omitempty"`
+	DelegatedFrom      *RemoteDelegationSource `json:"delegatedFrom,omitempty"`
+	DelegationDepth    int                     `json:"delegationDepth,omitempty"`
+	DelegationMaxDepth int                     `json:"delegationMaxDepth,omitempty"`
+	DelegationChain    []string                `json:"delegationChain,omitempty"`
+	SourceRunID        string                  `json:"sourceRunId,omitempty"`
+	Comparison         *ComparisonOrigin       `json:"comparison,omitempty"`
+	QueuePaused        bool                    `json:"queuePaused,omitempty"`
+	CreatedAt          string                  `json:"createdAt"`
+}
+
+func (s Session) EffectiveDelegationDepth() int {
+	if s.ParentRunID == "" && s.DelegatedFrom == nil {
+		return 0
+	}
+	if s.DelegationDepth > 0 {
+		return s.DelegationDepth
+	}
+	return 1
+}
+
+func (s Session) DelegationDepthAllowsMore() bool {
+	if s.ParentRunID == "" && s.DelegatedFrom == nil {
+		return true
+	}
+	return s.DelegationMaxDepth > s.EffectiveDelegationDepth()
 }
 
 type Item struct {
@@ -1051,6 +1098,7 @@ type DelegationTarget struct {
 type DelegatedRun struct {
 	DelegationTarget `tstype:",extends"`
 	DelegationID     string    `json:"delegationId,omitempty"`
+	ParentSessionID  string    `json:"parentSessionId,omitempty"`
 	RemoteRowID      string    `json:"remoteRowId,omitempty"`
 	Status           string    `json:"status"`
 	Turn             int       `json:"turn,omitempty"`
@@ -1085,6 +1133,7 @@ type RemoteWorkingCopy struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	State string `json:"state,omitempty"`
+	Busy  bool   `json:"busy,omitempty"`
 }
 
 type RemoteAgentTarget struct {
@@ -1102,6 +1151,7 @@ type RemoteAgentTarget struct {
 	Provider       string              `json:"provider,omitempty"`
 	Model          string              `json:"model,omitempty"`
 	PermissionMode string              `json:"permissionMode,omitempty"`
+	DefaultBusy    bool                `json:"defaultBusy,omitempty"`
 	WorkingCopies  []RemoteWorkingCopy `json:"workingCopies,omitempty"`
 }
 

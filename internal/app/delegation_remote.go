@@ -241,11 +241,12 @@ func (a *App) delegateRemote(ctx context.Context, parent *execution, in delegate
 	if !target.Online || target.Draining {
 		return d, conflict("Target remote device is offline or paused")
 	}
+	workingCopyID := strings.TrimSpace(in.WorkingCopyID)
 	workingCopyName := ""
-	if in.WorkingCopyID != "" {
+	if workingCopyID != "" {
 		found := false
 		for _, wc := range target.WorkingCopies {
-			if wc.ID == in.WorkingCopyID && wc.State != "unavailable" {
+			if wc.ID == workingCopyID && wc.State != "unavailable" {
 				found = true
 				workingCopyName = wc.Name
 				break
@@ -253,6 +254,14 @@ func (a *App) delegateRemote(ctx context.Context, parent *execution, in delegate
 		}
 		if !found {
 			return d, invalid("Target workingCopyId is unavailable on the remote Agent")
+		}
+	} else if target.DefaultBusy {
+		for _, wc := range target.WorkingCopies {
+			if (wc.State == "" || wc.State == "ready") && !wc.Busy {
+				workingCopyID = wc.ID
+				workingCopyName = wc.Name
+				break
+			}
 		}
 	}
 	if rule.Confirm {
@@ -294,7 +303,7 @@ func (a *App) delegateRemote(ctx context.Context, parent *execution, in delegate
 		AgentName:       target.Name,
 		Turn:            1,
 		Workspace:       "agent",
-		WorkingCopyID:   in.WorkingCopyID,
+		WorkingCopyID:   workingCopyID,
 		WorkingCopyName: workingCopyName,
 		AutoWake:        autoWake,
 	}
@@ -316,7 +325,7 @@ status,auto_wake,receipt_consumed,wake_run_id,pending_cancel,created_at,updated_
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 			rowID, d.ID, parent.session.ID, parent.run.ID, cmdID, in.RequestKey, digest, 1,
 			target.HubID, target.SpaceID, target.DeviceID, target.DeviceName, target.AgentID, target.Name,
-			title, target.Provider, target.Model, in.WorkingCopyID, workingCopyName, wakeInt, ts, ts); err != nil {
+			title, target.Provider, target.Model, workingCopyID, workingCopyName, wakeInt, ts, ts); err != nil {
 			return err
 		}
 		return store.Event(tx, model.Event{Type: "delegations", ChatID: parent.session.ChatID})
@@ -333,7 +342,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 		Kind:          "send",
 		DeviceID:      target.DeviceID,
 		AgentID:       target.AgentID,
-		WorkingCopyID: in.WorkingCopyID,
+		WorkingCopyID: workingCopyID,
 		Operation:     "main",
 		Text:          in.Task,
 		Delegation: &p.DelegationOrigin{
@@ -346,6 +355,9 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 			RunID:             parent.run.ID,
 			DelegationID:      d.ID,
 			MaxPermissionMode: maxPerm,
+			Depth:             parent.session.EffectiveDelegationDepth() + 1,
+			MaxDepth:          min(parent.delegationMaxDepth, 2),
+			Chain:             parent.nextDelegationChain(),
 		},
 	}
 	scope := model.SharedScope{HubID: target.HubID, SpaceID: target.SpaceID}
@@ -485,6 +497,9 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 			RunID:             parent.run.ID,
 			DelegationID:      d.ID,
 			MaxPermissionMode: maxPerm,
+			Depth:             parent.session.EffectiveDelegationDepth() + 1,
+			MaxDepth:          min(parent.delegationMaxDepth, 2),
+			Chain:             parent.nextDelegationChain(),
 		},
 	}
 	scope := model.SharedScope{HubID: d.HubID, SpaceID: d.SpaceID}
@@ -913,9 +928,7 @@ SET status=?,output=?,summary=?,error=?,requests=?,pending_cancel=?,updated_at=?
 	a.notifyRemoteDelegationWaiters()
 	if terminal {
 		a.mu.Lock()
-		if !a.closed && !a.hasActiveSessionLocked(row.ParentSessionID) {
-			a.deliverPendingDelegationReceiptsLocked(row.ParentSessionID)
-		}
+		a.scheduleDelegationReceiptsLocked(row.ParentSessionID, false)
 		a.mu.Unlock()
 	}
 }
@@ -936,9 +949,7 @@ SET status='failed',error=?,summary=?,requests='[]',pending_cancel=0,updated_at=
 	}
 	a.notifyRemoteDelegationWaiters()
 	a.mu.Lock()
-	if !a.closed && !a.hasActiveSessionLocked(row.ParentSessionID) {
-		a.deliverPendingDelegationReceiptsLocked(row.ParentSessionID)
-	}
+	a.scheduleDelegationReceiptsLocked(row.ParentSessionID, false)
 	a.mu.Unlock()
 }
 

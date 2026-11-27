@@ -54,7 +54,7 @@ func (a *App) advanceQueueLocked(sessionID string) error {
 		if session.QueuePaused {
 			return nil
 		}
-		run, err = store.Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE session_id=? AND status='queued' ORDER BY sequence LIMIT 1", sessionID)
+		run, err = store.Get[model.Run](ctx, tx, "SELECT data FROM runs WHERE session_id=? AND status='queued' ORDER BY CASE WHEN command_id LIKE 'delegation-receipt:%' THEN 1 ELSE 0 END, sequence LIMIT 1", sessionID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -173,7 +173,13 @@ func (a *App) ResumeQueue(ctx context.Context, sessionID string) error {
 	}); err != nil {
 		return err
 	}
-	return a.advanceQueueLocked(sessionID)
+	if err := a.advanceQueueLocked(sessionID); err != nil {
+		return err
+	}
+	if !a.hasActiveSessionLocked(sessionID) {
+		a.scheduleDelegationReceiptsLocked(sessionID, true)
+	}
+	return nil
 }
 
 func (e *execution) checkSteer(ctx context.Context, tx *sql.Tx, current model.Run, selection model.Selection, refs []model.Reference) error {

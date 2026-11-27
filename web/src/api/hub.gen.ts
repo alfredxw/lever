@@ -242,6 +242,9 @@ export interface DelegationOrigin {
   runId: string;
   delegationId: string;
   maxPermissionMode?: string;
+  depth?: number /* int */;
+  maxDepth?: number /* int */;
+  chain?: string[];
 }
 /**
  * Intent is a proposed user action. Execution credentials, providers and paths

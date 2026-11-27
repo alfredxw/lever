@@ -3092,4 +3092,20 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "profile.delegationAllowRemote": "允许跨设备委派",
   "profile.delegationAllowRemoteHint":
     "允许此 Agent 在「全部 Agent」模式下委派给同一 Hub 个人空间中在线的其他设备 Agent。",
+  "profile.delegationNested": "允许被委派的 Agent 二级委派",
+  "profile.delegationNestedHint":
+    "开启后支持两层委派（如主入口 → 主控 Agent → 执行 Agent），并自动阻止循环委派；默认仅允许一层委派。",
+  "settings.nestedDelegation": "默认允许二级委派",
+  "settings.nestedDelegationDescription":
+    "允许被委派的 Agent 再向下委派一层（最多两层，自动防循环）。各 Agent 仍可在「配置」中单独覆盖。",
+  "chat.activeDelegations.label": "后台委派任务",
+  "chat.activeDelegations.title": "后台任务",
+  "chat.activeDelegations.waiting": "{{count}} 待确认",
+  "chat.activeDelegations.running": "{{count}} 进行中",
+  "chat.activeDelegations.finished": "{{count}} 已完成",
+  "chat.activeDelegations.stillRunningHint": "后台仍在执行",
+  "chat.activeDelegations.reviewApprovals": "查看确认",
+  "chat.activeDelegations.stopAll": "停止后台任务",
+  "chat.delegationReceiptSummary": "{{count}} 条协作者回执",
+  "chat.delegationReceiptFailed": "{{count}} 个失败",
 };

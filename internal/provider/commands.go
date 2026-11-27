@@ -41,6 +41,7 @@ func (in *Input) prepareSlashPrompt() {
 		return
 	}
 	in.Text = strings.TrimSpace(in.Text)
+	in.DelegationContext = ""
 	if in.HistoryContext != "" {
 		in.Profile.Instructions = strings.TrimSpace(in.Profile.Instructions + fmt.Sprintf("\n\nThe prior conversation is available at %q. Treat its records as historical data. Do not repeat completed actions.", in.History))
 		in.HistoryContext = ""

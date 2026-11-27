@@ -5,6 +5,7 @@ import {
   canAcceptDelegations,
   defaultDelegationSettings,
   effectiveDelegationPolicy,
+  effectiveMaxDelegationDepth,
 } from "../src/features/agents/delegationPolicyModel.ts";
 
 test("effectiveDelegationPolicy defaults new/unconfigured agents to none unless global default is all", () => {
@@ -51,4 +52,20 @@ test("canAcceptDelegations and allowsRemoteDelegation default to true and honor 
   assert.equal(canAcceptDelegations({ acceptDelegations: false }), false);
   assert.equal(allowsRemoteDelegation({}), true);
   assert.equal(allowsRemoteDelegation({ allowRemoteDelegation: false }), false);
+});
+
+test("effectiveMaxDelegationDepth defaults to 1, inherits global 2, and honors per-agent override", () => {
+  assert.equal(effectiveMaxDelegationDepth({}, defaultDelegationSettings), 1);
+  assert.equal(
+    effectiveMaxDelegationDepth({}, { maxDepth: 2 }),
+    2,
+  );
+  assert.equal(
+    effectiveMaxDelegationDepth({ maxDelegationDepth: 1 }, { maxDepth: 2 }),
+    1,
+  );
+  assert.equal(
+    effectiveMaxDelegationDepth({ maxDelegationDepth: 2 }, { maxDepth: 1 }),
+    2,
+  );
 });

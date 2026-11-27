@@ -46,10 +46,11 @@ func (s *Store) ChatDelegations(ctx context.Context, chatID string) (model.ChatD
 
 	// Collect delegated runs recorded in delegation_runs (multi-turn aware) and
 	// fall back to legacy delegations rows created before delegation_runs existed.
-	rows, err := tx.QueryContext(ctx, `SELECT parent_run_id, delegation_id, run_id, session_id, chat_id, agent_id, title, status,
+	rows, err := tx.QueryContext(ctx, `SELECT parent_run_id, parent_session_id, delegation_id, run_id, session_id, chat_id, agent_id, title, status,
   turn, turns, provider, model, workspace, working_copy_name, run_data
 FROM (
   SELECT dr.parent_run_id AS parent_run_id,
+    dr.parent_session_id AS parent_session_id,
     dr.delegation_id AS delegation_id,
     child.id AS run_id,
     child.session_id AS session_id,
@@ -75,6 +76,7 @@ FROM (
   WHERE parent.chat_id=?
   UNION ALL
   SELECT d.parent_run_id AS parent_run_id,
+    COALESCE(NULLIF(json_extract(d.data,'$.parentSessionId'),''), parent.session_id) AS parent_session_id,
     d.id AS delegation_id,
     child.id AS run_id,
     child.session_id AS session_id,
@@ -107,7 +109,7 @@ FROM (
 		var parentID, rawRun string
 		var child model.DelegatedRun
 		if err := rows.Scan(
-			&parentID, &child.DelegationID, &child.RunID, &child.SessionID, &child.ChatID,
+			&parentID, &child.ParentSessionID, &child.DelegationID, &child.RunID, &child.SessionID, &child.ChatID,
 			&child.AgentID, &child.Title, &child.Status, &child.Turn, &child.Turns,
 			&child.Provider, &child.Model, &child.Workspace, &child.WorkingCopyName, &rawRun,
 		); err != nil {
@@ -123,7 +125,7 @@ FROM (
 		return view, err
 	}
 
-	remoteRows, err := tx.QueryContext(ctx, `SELECT dr.parent_run_id, dr.delegation_id, dr.id, dr.run_id, dr.session_id, dr.chat_id,
+	remoteRows, err := tx.QueryContext(ctx, `SELECT dr.parent_run_id, dr.parent_session_id, dr.delegation_id, dr.id, dr.run_id, dr.session_id, dr.chat_id,
   dr.hub_id, dr.space_id, dr.device_id, dr.device_name, dr.agent_id, dr.agent_name, dr.title, dr.status,
   dr.turn, (SELECT COUNT(*) FROM remote_delegation_runs x WHERE x.delegation_id=dr.delegation_id) AS turns,
   dr.provider, dr.model, dr.working_copy_name, dr.summary, dr.error, dr.requests
@@ -140,7 +142,7 @@ ORDER BY dr.created_at, dr.turn`, chatID)
 		var child model.DelegatedRun
 		child.Workspace = "agent"
 		if err := remoteRows.Scan(
-			&parentID, &child.DelegationID, &child.RemoteRowID, &child.RunID, &child.SessionID, &child.ChatID,
+			&parentID, &child.ParentSessionID, &child.DelegationID, &child.RemoteRowID, &child.RunID, &child.SessionID, &child.ChatID,
 			&child.HubID, &child.SpaceID, &child.DeviceID, &child.DeviceName, &child.AgentID, &child.AgentName,
 			&child.Title, &child.Status, &child.Turn, &child.Turns,
 			&child.Provider, &child.Model, &child.WorkingCopyName, &child.Summary, &errText, &rawReqs,

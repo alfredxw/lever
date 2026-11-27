@@ -28,10 +28,11 @@ type execution struct {
 	interrupt         context.CancelCauseFunc
 	mu                sync.Mutex
 	run               model.Run
-	session           model.Session
-	profile           model.Profile
-	delegationPolicy  model.DelegationPolicy
-	provider          model.Provider
+	session            model.Session
+	profile            model.Profile
+	delegationPolicy   model.DelegationPolicy
+	delegationMaxDepth int
+	provider           model.Provider
 	recovery          *provider.Recovery
 	hosted            bool
 	pendingPermission *hostPermission
@@ -425,6 +426,11 @@ func (e *execution) execute() error {
 		input.ContextToken = e.contextToken
 		input.DelegationEnabled = e.canDelegate()
 		input.RequireMCP = slices.ContainsFunc(run.References, model.Reference.RequiresMCP)
+		if err == nil && !run.Quiet && e.canDelegate() {
+			if cmdName, _ := provider.Command(run.Input, len(run.Attachments) != 0, len(run.References) != 0); cmdName == "" {
+				input.DelegationContext = e.app.sessionDelegationSnapshot(e.ctx, e.session.ID)
+			}
+		}
 		if err == nil && input.Provider.Type == "antigravity" {
 			err = e.app.prepareAntigravitySkillReferences(e.ctx, &input)
 		}

@@ -894,6 +894,8 @@ export const DelegationPolicySelected = "selected";
 export type DelegationPolicy = typeof DelegationPolicyNone | typeof DelegationPolicyAll | typeof DelegationPolicySelected;
 export interface DelegationSettings {
   defaultPolicy: 'none' | 'all';
+  maxDepth?: number /* int */;
+  maxConcurrent?: number /* int */;
 }
 export type DefaultPermissionMode = string;
 export const DefaultPermissionAuto: DefaultPermissionMode = "auto";
@@ -937,6 +939,7 @@ export interface Profile extends Scope {
   delegations: DelegationRule[];
   acceptDelegations?: boolean;
   allowRemoteDelegation?: boolean;
+  maxDelegationDepth?: number /* int */;
   worktreeSetup?: { [key: string]: string}; // Keyed by the Git common directory.
   taskConcurrency?: number /* int */;
   taskStartIntervalMinutes?: number /* int */;
@@ -1198,6 +1201,9 @@ export interface Session extends Scope {
   selection: Selection;
   parentRunId?: string;
   delegatedFrom?: RemoteDelegationSource;
+  delegationDepth?: number /* int */;
+  delegationMaxDepth?: number /* int */;
+  delegationChain?: string[];
   sourceRunId?: string;
   comparison?: ComparisonOrigin;
   queuePaused?: boolean;
@@ -1740,6 +1746,7 @@ export interface DelegationTarget extends RunLocation {
 }
 export interface DelegatedRun extends DelegationTarget {
   delegationId?: string;
+  parentSessionId?: string;
   remoteRowId?: string;
   status: string;
   turn?: number /* int */;
@@ -1772,6 +1779,7 @@ export interface RemoteWorkingCopy {
   id: string;
   name: string;
   state?: string;
+  busy?: boolean;
 }
 export interface RemoteAgentTarget {
   hubId: string;
@@ -1788,6 +1796,7 @@ export interface RemoteAgentTarget {
   provider?: string;
   model?: string;
   permissionMode?: string;
+  defaultBusy?: boolean;
   workingCopies?: RemoteWorkingCopy[];
 }
 export interface ChatDelegations {

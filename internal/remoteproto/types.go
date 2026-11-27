@@ -240,15 +240,18 @@ type Dispatch struct {
 }
 
 type DelegationOrigin struct {
-	DeviceID          string `json:"deviceId"`
-	DeviceName        string `json:"deviceName,omitempty"`
-	AgentID           string `json:"agentId"`
-	AgentName         string `json:"agentName,omitempty"`
-	ChatID            string `json:"chatId"`
-	SessionID         string `json:"sessionId"`
-	RunID             string `json:"runId"`
-	DelegationID      string `json:"delegationId"`
-	MaxPermissionMode string `json:"maxPermissionMode,omitempty"`
+	DeviceID          string   `json:"deviceId"`
+	DeviceName        string   `json:"deviceName,omitempty"`
+	AgentID           string   `json:"agentId"`
+	AgentName         string   `json:"agentName,omitempty"`
+	ChatID            string   `json:"chatId"`
+	SessionID         string   `json:"sessionId"`
+	RunID             string   `json:"runId"`
+	DelegationID      string   `json:"delegationId"`
+	MaxPermissionMode string   `json:"maxPermissionMode,omitempty"`
+	Depth             int      `json:"depth,omitempty"`
+	MaxDepth          int      `json:"maxDepth,omitempty"`
+	Chain             []string `json:"chain,omitempty"`
 }
 
 // Intent is a proposed user action. Execution credentials, providers and paths

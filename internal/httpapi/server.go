@@ -547,6 +547,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/delegations/remote/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"accepted": true}, a.StopRemoteDelegation(r.Context(), r.PathValue("id")))
 	})
+	mux.HandleFunc("POST /api/delegations/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"accepted": true}, a.StopDelegation(r.Context(), r.PathValue("id")))
+	})
 	mux.HandleFunc("GET /api/chats/{id}/topics", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Store.ChatTopics(r.Context(), r.PathValue("id"), -1)
 		respond(w, v, err)
@@ -690,6 +693,20 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 	})
 	mux.HandleFunc("POST /api/sessions/{id}/queue/resume", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"accepted": true}, a.ResumeQueue(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/delegations/stop", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"accepted": true}, a.StopSessionDelegations(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/typing", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Active bool `json:"active"`
+		}
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		a.SetSessionTyping(r.PathValue("id"), in.Active)
+		respond(w, map[string]bool{"ok": true}, nil)
 	})
 	mux.HandleFunc("POST /api/runs/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {

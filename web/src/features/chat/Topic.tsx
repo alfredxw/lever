@@ -48,6 +48,11 @@ import { isWorking, RunStatus } from "./RunStatus";
 import { useRevealEntry } from "./useRevealEntry";
 import { useUnreadStart } from "./useUnreadStart";
 import type { OpenRun } from "./DelegatedTasks";
+import {
+  ActiveDelegationsBar,
+  isDelegatedRunActive,
+  selectSessionDelegations,
+} from "./ActiveDelegationsBar";
 import { useFocusComposer } from "./useFocusComposer";
 import { TopicSourceContent } from "./TopicSourceContent";
 import { WaitingDependencies } from "./WaitingDependencies";
@@ -663,6 +668,15 @@ function TopicConversationContent({
         </MessageTimeline>
       )}
       <footer className="topic-composer-wrap">
+        <ActiveDelegationsBar
+          chatId={session.chatId}
+          sessionId={session.id}
+          delegations={delegations}
+          sessionRuns={runs}
+          agents={overview.agents}
+          requests={overview.requests}
+          onOpenRun={onOpenRun}
+        />
         <Composer
           agentId={agent.id}
           chatId={session.chatId}
@@ -678,6 +692,11 @@ function TopicConversationContent({
               run.status === "queued" &&
               !(props.root?.status === "queued" && run.id === props.root.id),
           )}
+          hasActiveDelegations={selectSessionDelegations(
+            delegations,
+            session.id,
+            runs,
+          ).some((d) => isDelegatedRunActive(d.status))}
           archived={agent.archived}
           visible={enabled}
           onSent={() =>

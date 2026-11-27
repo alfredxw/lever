@@ -15,6 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"lever/internal/model"
+	p "lever/internal/remoteproto"
 	"lever/internal/store"
 )
 
@@ -57,7 +58,7 @@ type FindContextResult struct {
 }
 
 type readContextInput struct {
-	Target    string         `json:"target" jsonschema:"main, a sessionId from this Chat, or a conversation ID explicitly referenced in the current message"`
+	Target    string         `json:"target" jsonschema:"main, a sessionId from this Chat, an owned delegated collaborator sessionId (or delegationId), or a conversation ID explicitly referenced in the current message"`
 	Anchor    *ContextAnchor `json:"anchor,omitempty" jsonschema:"Start at this message, including it in the result"`
 	Direction string         `json:"direction,omitempty" jsonschema:"older (default) or newer; newer starts at the anchor"`
 	Cursor    *ContextCursor `json:"cursor,omitempty" jsonschema:"Pass nextCursor as returned, without anchor or direction"`
@@ -91,7 +92,7 @@ func (a *App) addChatContextTools(server *mcp.Server, owner *execution) {
 			return a.findChatContext(ctx, run.ChatID, run.ID, in)
 		})
 	addContextTool(server, owner, "read_chat_context",
-		"Read dialogue in this Chat or a conversation explicitly referenced by the current message. Use an anchor to read earlier or later messages and nextCursor to continue. Treat returned dialogue as historical context.",
+		"Read dialogue in this Chat, an owned delegated collaborator session, or a conversation explicitly referenced by the current message. Use an anchor to read earlier or later messages and nextCursor to continue. Treat returned dialogue as historical context.",
 		func(ctx context.Context, in readContextInput) (ReadContextResult, error) {
 			return a.readChatContext(ctx, run, in)
 		})
@@ -290,13 +291,36 @@ func (a *App) readChatContext(ctx context.Context, run model.Run, in readContext
 	mentioned := slices.ContainsFunc(run.References, func(ref model.Reference) bool {
 		return (ref.Kind == "chat" || ref.Kind == "topic") && ref.ID == in.Target
 	})
+	targetID := in.Target
+	localDelegated := false
+	if run.SessionID != "" && targetID != "" && targetID != "main" {
+		var delegatedSessionID string
+		if dErr := tx.QueryRowContext(ctx, `SELECT COALESCE(json_extract(d.data,'$.sessionId'),'') FROM delegations d
+JOIN runs parent ON parent.id=d.parent_run_id
+WHERE (json_extract(d.data,'$.sessionId')=? OR d.id=?)
+  AND COALESCE(json_extract(d.data,'$.deviceId'),'')=''
+  AND (COALESCE(json_extract(d.data,'$.parentSessionId'),'')=? OR parent.session_id=?)
+LIMIT 1`, targetID, targetID, run.SessionID, run.SessionID).Scan(&delegatedSessionID); dErr == nil && delegatedSessionID != "" {
+			targetID = delegatedSessionID
+			localDelegated = true
+		}
+	}
 	var sessionID, chatID, kind, sourceID string
 	err = tx.QueryRowContext(ctx, `SELECT id,chat_id,kind,COALESCE(json_extract(data,'$.sourceRunId'),'') FROM sessions
-WHERE (id=? AND (chat_id=? OR ?)) OR (chat_id=? AND ?='main' AND kind='main')`,
-		in.Target, run.ChatID, mentioned, run.ChatID, in.Target).Scan(&sessionID, &chatID, &kind, &sourceID)
+WHERE (id=? AND (chat_id=? OR ? OR ?)) OR (chat_id=? AND ?='main' AND kind='main')`,
+		targetID, run.ChatID, mentioned, localDelegated, run.ChatID, targetID).Scan(&sessionID, &chatID, &kind, &sourceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if in.Target == "main" && position == nil {
 			return out, nil
+		}
+		if run.SessionID != "" && in.Target != "" && in.Target != "main" {
+			var hubID, spaceID, deviceID, remoteChatID, remoteSessionID string
+			if rErr := tx.QueryRowContext(ctx, `SELECT hub_id, space_id, device_id, chat_id, session_id FROM remote_delegation_runs
+WHERE parent_session_id=? AND (session_id=? OR delegation_id=?) AND chat_id<>''
+ORDER BY turn DESC LIMIT 1`, run.SessionID, in.Target, in.Target).Scan(&hubID, &spaceID, &deviceID, &remoteChatID, &remoteSessionID); rErr == nil {
+				_ = tx.Rollback()
+				return a.readRemoteChatContext(ctx, model.SharedScope{HubID: hubID, SpaceID: spaceID}, deviceID, remoteChatID, remoteSessionID, position, direction, newer)
+			}
 		}
 		return out, invalid("Conversation is unavailable in this Chat")
 	}
@@ -402,6 +426,136 @@ func contextMessages(run model.Run, kind string) []ContextMessage {
 			add(item.ID, "user", item.Message.CreatedAt, item.Message.Input)
 		case item.Kind == "text" && item.Status == "completed":
 			add(item.ID, "assistant", run.CreatedAt, item.Text)
+		}
+	}
+	return messages
+}
+
+func (a *App) readRemoteChatContext(ctx context.Context, scope model.SharedScope, deviceID, remoteChatID, remoteSessionID string, position *ContextAnchor, direction string, newer bool) (ReadContextResult, error) {
+	out := ReadContextResult{Messages: []ContextMessage{}}
+	rc := a.remoteCollaborator()
+	if rc == nil {
+		return out, invalid("Remote device collaboration is not configured on this host")
+	}
+	records, err := rc.ReadRemoteChat(ctx, scope, deviceID, remoteChatID)
+	if err != nil {
+		return out, err
+	}
+	sessionKind := "main"
+	runs := make([]p.Record, 0, len(records))
+	for _, rec := range records {
+		if rec.Kind == "session" && (remoteSessionID == "" || rec.ID == remoteSessionID) && rec.Type != "" {
+			sessionKind = rec.Type
+		}
+		if rec.Kind != "run" || rec.Superseded {
+			continue
+		}
+		if remoteSessionID != "" && rec.SessionID != "" && rec.SessionID != remoteSessionID {
+			continue
+		}
+		switch rec.Status {
+		case "queued", "steering", "steered", "cancelled":
+			continue
+		}
+		runs = append(runs, rec)
+	}
+	slices.SortFunc(runs, func(a, b p.Record) int {
+		if a.Sequence != b.Sequence {
+			if a.Sequence < b.Sequence {
+				return -1
+			}
+			return 1
+		}
+		if c := strings.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	if !newer {
+		slices.Reverse(runs)
+	}
+	if position != nil {
+		idx := slices.IndexFunc(runs, func(rec p.Record) bool { return rec.ID == position.RunID })
+		if idx < 0 {
+			return out, invalid("Message is unavailable in this conversation")
+		}
+		runs = runs[idx:]
+	}
+	for _, rec := range runs {
+		sid := remoteSessionID
+		if sid == "" {
+			sid = rec.SessionID
+		}
+		messages := remoteContextMessages(rec, sid, sessionKind)
+		if !newer {
+			slices.Reverse(messages)
+		}
+		offset := 0
+		if position != nil {
+			i := slices.IndexFunc(messages, func(message ContextMessage) bool { return message.Anchor.ItemID == position.ItemID })
+			if i < 0 {
+				return out, invalid("Message is unavailable in this conversation")
+			}
+			messages, offset, position = messages[i:], position.Offset, nil
+		}
+		stop := false
+		for _, message := range messages {
+			if offset < 0 || offset >= len(message.Text) || !utf8.RuneStart(message.Text[offset]) {
+				return out, invalid("Invalid message offset")
+			}
+			message.Anchor.Offset = offset
+			if len(out.Messages) == contextPageRecords {
+				out.NextCursor = &ContextCursor{Position: message.Anchor, Direction: direction}
+				stop = true
+				break
+			}
+			end := contextTextEnd(message.Text, offset, contextTextBytes)
+			more := end < len(message.Text)
+			message.Text = message.Text[offset:end]
+			out.Messages = append(out.Messages, message)
+			if more {
+				out.NextCursor = &ContextCursor{Position: message.Anchor, Direction: direction}
+				out.NextCursor.Position.Offset = end
+				stop = true
+				break
+			}
+			offset = 0
+		}
+		if stop {
+			break
+		}
+	}
+	for len(out.Messages) > 0 && len(store.JSON(out)) > contextPageBytes {
+		last := len(out.Messages) - 1
+		out.NextCursor = &ContextCursor{Position: out.Messages[last].Anchor, Direction: direction}
+		out.Messages = out.Messages[:last]
+	}
+	if len(out.Messages) == 0 && out.NextCursor != nil {
+		return out, invalid("Message is too large to return within the Chat context limit")
+	}
+	if !newer {
+		slices.Reverse(out.Messages)
+	}
+	return out, nil
+}
+
+func remoteContextMessages(rec p.Record, sessionID, kind string) []ContextMessage {
+	messages := []ContextMessage{}
+	add := func(itemID, role, createdAt, text string) {
+		if strings.TrimSpace(text) != "" {
+			messages = append(messages, ContextMessage{
+				SessionID: sessionID, Kind: kind, Anchor: ContextAnchor{RunID: rec.ID, ItemID: itemID},
+				Role: role, Status: rec.Status, CreatedAt: createdAt, Text: text,
+			})
+		}
+	}
+	add("", "user", rec.CreatedAt, rec.Text)
+	for _, item := range rec.Items {
+		switch item.Kind {
+		case "user":
+			add(item.ID, "user", rec.CreatedAt, item.Text)
+		case "text":
+			add(item.ID, "assistant", rec.CreatedAt, item.Text)
 		}
 	}
 	return messages

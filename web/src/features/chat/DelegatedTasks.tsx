@@ -1,6 +1,8 @@
 import { useState } from "react";
 import {
   ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
   CircleUser,
   GitBranch,
   Monitor,
@@ -259,13 +261,52 @@ export function DelegationReceiptsBanner({
   const { t } = useTranslation();
   const [remoteTarget, setRemoteTarget] =
     useState<RemoteDelegationTarget | null>(null);
+  const [expanded, setExpanded] = useState(receipts.length <= 2);
+  const grouped = receipts.length > 1;
+  const failedCount = receipts.filter((r) => r.status === "failed").length;
   return (
     <div
-      className="flex min-w-0 flex-col gap-2"
+      className="flex min-w-0 flex-col gap-1.5"
       role="group"
       aria-label={t("chat.delegationReceiptGroup")}
     >
-      {receipts.map((receipt) => {
+      {grouped && (
+        <button
+          type="button"
+          className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground focus-visible:outline-none"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((prev) => !prev)}
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0" aria-hidden />
+          )}
+          <span className="font-medium text-foreground tabular-nums">
+            {t("chat.delegationReceiptSummary", { count: receipts.length })}
+          </span>
+          {failedCount > 0 && (
+            <span className="text-destructive tabular-nums">
+              · {t("chat.delegationReceiptFailed", { count: failedCount })}
+            </span>
+          )}
+          {!expanded && (
+            <span className="truncate text-muted-foreground">
+              ·{" "}
+              {receipts
+                .map((r) => {
+                  const local = !r.deviceId
+                    ? agents.find((a) => a.id === r.agentId)
+                    : undefined;
+                  return local?.name ?? r.agentName ?? t("chat.delegationAgent");
+                })
+                .join(", ")}
+            </span>
+          )}
+        </button>
+      )}
+      {(!grouped || expanded) &&
+        receipts.map((receipt) => {
         const isRemote = Boolean(receipt.deviceId);
         const agent = isRemote
           ? undefined

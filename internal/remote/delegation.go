@@ -41,6 +41,28 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 			if err := st.Do(ctx, "GET", st.SpacePath()+"/archive/"+url.PathEscape(d.ID), nil, &records); err != nil {
 				continue
 			}
+			// Track which pre-created working copies and agent default checkouts currently have active runs.
+			sessionByID := make(map[string]p.Record)
+			for _, rec := range records {
+				if rec.Kind == "session" {
+					sessionByID[rec.ID] = rec
+				}
+			}
+			busyGroups := map[string]bool{}
+			busyAgentDefault := map[string]bool{}
+			for _, rec := range records {
+				if rec.Kind == "run" && model.Active(rec.Status) {
+					if sess, ok := sessionByID[rec.SessionID]; ok {
+						if sess.WorkingCopyID != "" {
+							busyGroups[sess.WorkingCopyID] = true
+						} else if sess.AgentID != "" {
+							busyAgentDefault[sess.AgentID] = true
+						}
+					} else if rec.AgentID != "" {
+						busyAgentDefault[rec.AgentID] = true
+					}
+				}
+			}
 			for _, rec := range records {
 				if rec.Kind != "agent" {
 					continue
@@ -50,7 +72,7 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 				}
 				wcs := make([]model.RemoteWorkingCopy, 0, len(rec.Groups))
 				for _, g := range rec.Groups {
-					wcs = append(wcs, model.RemoteWorkingCopy{ID: g.ID, Name: g.Name, State: g.State})
+					wcs = append(wcs, model.RemoteWorkingCopy{ID: g.ID, Name: g.Name, State: g.State, Busy: busyGroups[g.ID]})
 				}
 				out = append(out, model.RemoteAgentTarget{
 					HubID:          b.HubID,
@@ -67,6 +89,7 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 					Provider:       rec.Provider,
 					Model:          rec.Model,
 					PermissionMode: rec.Permission,
+					DefaultBusy:    busyAgentDefault[rec.ID],
 					WorkingCopies:  wcs,
 				})
 			}

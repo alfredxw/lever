@@ -151,6 +151,7 @@ export function Composer({
   activeRun,
   resumableRun,
   queuedRuns = [],
+  hasActiveDelegations,
   archived,
   autoFocus,
   visible,
@@ -170,6 +171,7 @@ export function Composer({
   activeRun?: Run;
   resumableRun?: Run;
   queuedRuns?: Run[];
+  hasActiveDelegations?: boolean;
   archived?: boolean;
   autoFocus?: boolean;
   visible?: boolean;
@@ -235,6 +237,34 @@ export function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const textbox = useRef<ComposerInputHandle>(null);
   const composerRoot = useRef<HTMLDivElement>(null);
+  const typingState = useRef<{ sessionId?: string; active: boolean; lastSent: number }>({
+    active: false,
+    lastSent: 0,
+  });
+  const notifyTyping = useEffectEvent((targetSessionId: string | undefined, active: boolean) => {
+    const state = typingState.current;
+    if (!active) {
+      const clearId = targetSessionId ?? state.sessionId;
+      if (state.active && clearId) {
+        state.active = false;
+        state.lastSent = 0;
+        state.sessionId = undefined;
+        void api(`/sessions/${clearId}/typing`, { active: false }).catch(() => {});
+      }
+      return;
+    }
+    if (!targetSessionId || !hasActiveDelegations || topicMode || archived || visible === false) {
+      return;
+    }
+    const nowMs = Date.now();
+    if (state.active && state.sessionId === targetSessionId && nowMs - state.lastSent < 3500) {
+      return;
+    }
+    state.active = true;
+    state.sessionId = targetSessionId;
+    state.lastSent = nowMs;
+    void api(`/sessions/${targetSessionId}/typing`, { active: true }).catch(() => {});
+  });
   const choosingDirectory = topicMode && !draft.editing && !comparisonAgents;
   const copyId = choosingDirectory ? draft.workingCopyId : undefined;
   const copies = useWorkingCopies(
@@ -248,6 +278,17 @@ export function Composer({
   const scopeSession = !topicMode || shareScope ? session : undefined;
   const currentScope = scopeSession ?? copy ?? profile;
   const cwd = primaryDirectory(currentScope);
+  useEffect(() => {
+    const currentId = scopeSession?.id;
+    if (!hasActiveDelegations || topicMode || !currentId || visible === false) {
+      notifyTyping(undefined, false);
+    } else if (typingState.current.sessionId && typingState.current.sessionId !== currentId) {
+      notifyTyping(typingState.current.sessionId, false);
+    }
+    return () => {
+      notifyTyping(undefined, false);
+    };
+  }, [hasActiveDelegations, scopeSession?.id, topicMode, visible]);
   const profileSelection = agentProfileSelection(profile);
   const sessionSelection =
     !topicMode && session?.selection.provider ? session.selection : undefined;
@@ -1209,6 +1250,15 @@ export function Composer({
       ref={composerRoot}
       data-composer-compact={compact || undefined}
       onCompositionStart={keepOpen}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget;
+        if (
+          !(next instanceof globalThis.Node) ||
+          !event.currentTarget.contains(next)
+        ) {
+          notifyTyping(scopeSession?.id, false);
+        }
+      }}
       onDragEnter={(event) => {
         if (!hasDraggedFiles(event.dataTransfer)) return;
         event.preventDefault();
@@ -1529,6 +1579,13 @@ export function Composer({
           onChange={(content) => {
             keepOpen?.();
             setDraft((d) => ({ ...d, content, topic: launchTopic || d.topic }));
+            if (hasActiveDelegations && scopeSession?.id && !topicMode) {
+              const serialized = serializePrompt(content);
+              const nonEmpty =
+                Boolean(serialized.text.trim()) ||
+                serialized.references.length > 0;
+              notifyTyping(scopeSession.id, nonEmpty);
+            }
           }}
           disabled={sending}
           visible={visible}

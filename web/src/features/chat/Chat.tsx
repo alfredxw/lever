@@ -66,6 +66,11 @@ import {
 } from "./queries";
 import type { OpenRun } from "./DelegatedTasks";
 import {
+  ActiveDelegationsBar,
+  isDelegatedRunActive,
+  selectSessionDelegations,
+} from "./ActiveDelegationsBar";
+import {
   ImagePreview,
   ImagePreviewProvider,
   useImagePreview,
@@ -319,6 +324,13 @@ function ChatContent(props: ChatProps) {
         .map((entry) => liveRuns.get(entry.runId) ?? runs.get(entry.runId))
         .filter((run): run is Run => !!run),
     [entries, liveRuns, runs],
+  );
+  const hasActiveMainDelegations = useMemo(
+    () =>
+      selectSessionDelegations(delegations, main?.id, mainRuns).some((d) =>
+        isDelegatedRunActive(d.status),
+      ),
+    [delegations, main?.id, mainRuns],
   );
   useFocusComposer(panel, focus && !inlineTopic && !!latestPage, onFocused);
   useUnreadStart({
@@ -646,6 +658,15 @@ function ChatContent(props: ChatProps) {
       </motion.div>
       {botChat ? (
         <div className="chat-composer-wrap">
+          <ActiveDelegationsBar
+            chatId={chatId}
+            sessionId={main?.id}
+            delegations={delegations}
+            sessionRuns={mainRuns}
+            agents={overview.agents}
+            requests={overview.requests}
+            onOpenRun={onOpenRun}
+          />
           <QueuedMessages
             runs={queuedRuns}
             activeRun={activeRun}
@@ -685,6 +706,15 @@ function ChatContent(props: ChatProps) {
               setWritingChat(true);
           }}
         >
+          <ActiveDelegationsBar
+            chatId={chatId}
+            sessionId={main?.id}
+            delegations={delegations}
+            sessionRuns={mainRuns}
+            agents={overview.agents}
+            requests={overview.requests}
+            onOpenRun={onOpenRun}
+          />
           <Composer
             agentId={agent.id}
             agents={overview.agents}
@@ -696,6 +726,7 @@ function ChatContent(props: ChatProps) {
             activeRun={activeRun}
             resumableRun={resumableMainRun}
             queuedRuns={queuedRuns}
+            hasActiveDelegations={hasActiveMainDelegations}
             archived={agent.archived}
             visible={enabled}
             onSent={onSent}

@@ -123,6 +123,7 @@ import {
   canAcceptDelegations,
   defaultDelegationSettings,
   effectiveDelegationPolicy,
+  effectiveMaxDelegationDepth,
   useDelegationSettings,
   useRemoteDelegationTargets,
 } from "./delegationPolicy";
@@ -156,6 +157,7 @@ function profileContentSignature(agent: Agent, homeDir: string) {
       delegationPolicy: rest.profile.delegationPolicy || "",
       acceptDelegations: rest.profile.acceptDelegations !== false,
       allowRemoteDelegation: rest.profile.allowRemoteDelegation !== false,
+      maxDelegationDepth: rest.profile.maxDelegationDepth || 0,
       delegations: (rest.profile.delegations ?? []).map((rule) => ({
         deviceId: rule.deviceId || "",
         agentId: rule.agentId,
@@ -1727,6 +1729,31 @@ export function Profile({
             )}
           </div>
         ))}
+
+      {effectivePolicy !== "none" && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-border/70 px-3 py-2.5">
+          <div className="min-w-0">
+            <label
+              htmlFor={`${scopeId}-nested-delegation`}
+              className="text-xs font-medium"
+            >
+              {t("profile.delegationNested")}
+            </label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t("profile.delegationNestedHint")}
+            </p>
+          </div>
+          <Switch
+            id={`${scopeId}-nested-delegation`}
+            size="sm"
+            disabled={busy}
+            checked={effectiveMaxDelegationDepth(p, delegationDefaults) === 2}
+            onCheckedChange={(checked) =>
+              change({ maxDelegationDepth: checked ? 2 : 1 }, "immediate")
+            }
+          />
+        </div>
+      )}
 
       <div className="flex items-start justify-between gap-3 border-t border-border/70 pt-3">
         <div className="min-w-0">

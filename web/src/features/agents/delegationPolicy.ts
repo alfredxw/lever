@@ -7,6 +7,7 @@ export {
   canAcceptDelegations,
   defaultDelegationSettings,
   effectiveDelegationPolicy,
+  effectiveMaxDelegationDepth,
 } from "./delegationPolicyModel";
 
 export function useDelegationSettings(enabled = true) {

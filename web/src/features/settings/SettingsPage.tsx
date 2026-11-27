@@ -154,6 +154,8 @@ const sectionGroups = [
           "agentDefaultsDescription",
           "defaultDelegationPolicy",
           "defaultDelegationPolicyDescription",
+          "nestedDelegation",
+          "nestedDelegationDescription",
           "permissions",
           "permissionsDescription",
           "defaultPermissionMode.auto",
@@ -740,7 +742,7 @@ export function SettingsPage({
                     if (value !== "none" && value !== "all") return;
                     if (value === delegationSettings.defaultPolicy) return;
                     saveDelegationSettings.mutate(
-                      { defaultPolicy: value },
+                      { ...delegationSettings, defaultPolicy: value },
                       { onError: (error) => toast.error(error.message) },
                     );
                   }}
@@ -758,6 +760,22 @@ export function SettingsPage({
                     {t("settings.defaultDelegationPolicy.all")}
                   </ToggleGroupItem>
                 </ToggleGroup>
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.nestedDelegation")}
+                description={t("settings.nestedDelegationDescription")}
+              >
+                <Switch
+                  aria-label={t("settings.nestedDelegation")}
+                  checked={delegationSettings.maxDepth === 2}
+                  disabled={saveDelegationSettings.isPending}
+                  onCheckedChange={(checked) =>
+                    saveDelegationSettings.mutate(
+                      { ...delegationSettings, maxDepth: checked ? 2 : 1 },
+                      { onError: (error) => toast.error(error.message) },
+                    )
+                  }
+                />
               </SettingsRow>
               <SettingsRow
                 title={t("settings.agentDefaults")}

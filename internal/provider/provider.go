@@ -44,6 +44,7 @@ type Input struct {
 	RunID, Text, Assets, MCPURL, MCPToken, History string
 	ContextToken                                   string `json:",omitempty"`
 	HistoryContext                                 string
+	DelegationContext                              string `json:",omitempty"`
 	RequireMCP                                     bool
 	DelegationEnabled                              bool
 	Recovery                                       *Recovery
@@ -92,8 +93,15 @@ type Attachment struct {
 
 func (in Input) Message() string {
 	text := in.Text
+	var prefix []string
 	if in.HistoryContext != "" {
-		text = in.HistoryContext + "\n\nCurrent user message:\n" + text
+		prefix = append(prefix, in.HistoryContext)
+	}
+	if in.DelegationContext != "" {
+		prefix = append(prefix, in.DelegationContext)
+	}
+	if len(prefix) > 0 {
+		text = strings.Join(prefix, "\n\n") + "\n\nCurrent user message:\n" + text
 	}
 	for _, file := range in.Attachments {
 		text += fmt.Sprintf("\n\n[Attached file %q (%s), saved at %q]", file.Name, file.MediaType, file.Path)
