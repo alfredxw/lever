@@ -62,7 +62,7 @@ const defaults: Preferences = {
   agentSidebarLayout: "single",
   expandAgentActivity: true,
   secondarySidebarWidth: null,
-  maxWorkspaceTabs: null,
+  maxWorkspaceTabs: 5,
   shortcutOverrides: {},
   hiddenWorkspaceTools: ["browser", "profile"],
 };
@@ -113,9 +113,12 @@ function readPreferences(): Preferences {
         saved.secondarySidebarWidth > 0
           ? saved.secondarySidebarWidth
           : defaults.secondarySidebarWidth,
-      maxWorkspaceTabs: isWorkspaceTabLimit(saved?.maxWorkspaceTabs)
-        ? saved.maxWorkspaceTabs
-        : defaults.maxWorkspaceTabs,
+      maxWorkspaceTabs:
+        saved?.maxWorkspaceTabs === null
+          ? null
+          : isWorkspaceTabLimit(saved?.maxWorkspaceTabs)
+            ? saved.maxWorkspaceTabs
+            : defaults.maxWorkspaceTabs,
       shortcutOverrides,
       hiddenWorkspaceTools: Array.isArray(saved?.hiddenWorkspaceTools)
         ? toolbarTools.filter((tool) =>

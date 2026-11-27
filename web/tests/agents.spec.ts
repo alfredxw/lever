@@ -6995,6 +6995,10 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
   await expect(
     page.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
+  const maxTabs = page.getByLabel("Maximum tabs per pane", { exact: true });
+  await expect(maxTabs).toHaveValue("5");
+  await maxTabs.fill("");
+  await maxTabs.press("Enter");
   const enNav = page.getByRole("navigation", {
     name: "Main navigation",
     exact: true,
@@ -9384,7 +9388,9 @@ test("browsing reuses a conversation preview and keeps edits and partial answers
   await page.reload();
   await openTopic("检查五");
   await expect(preview).toHaveText("检查五");
-  await expect(tabs).toHaveCount(6);
+  await expect(tabs).toHaveCount(5);
+  await expect(tabs.filter({ hasText: "检查四" })).toHaveCount(1);
+  await expect(tabs.filter({ hasText: "选颜色" })).toHaveCount(0);
   const run = runs.get(running)!;
   await expect(
     page.locator(`.topic-thread[data-session-id="${run.sessionId}"]`),
@@ -11299,6 +11305,17 @@ test("per-pane tab limit applies independently per Agent and pane and evicts ear
   await page.goto(context().url);
   const { scope } = context();
 
+  // Default per-pane tab limit is 5, and clearing it to unlimited persists across reload.
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const initialLimitInput = page.getByLabel("单分栏标签页上限", { exact: true });
+  await expect(initialLimitInput).toHaveValue("5");
+  await initialLimitInput.fill("");
+  await initialLimitInput.press("Enter");
+  await page.reload();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(initialLimitInput).toHaveValue("");
+  await page.getByRole("button", { name: "Agents", exact: true }).click();
+
   const createApiAgent = async (name: string) => {
     const response = await page.request.post("/api/agents", {
       data: {
@@ -11372,10 +11389,20 @@ test("per-pane tab limit applies independently per Agent and pane and evicts ear
       .click();
   };
 
+  const selectAgent = async (target: Agent) => {
+    const group = sidebar.locator(`[data-agent-id="${target.id}"]`);
+    await group.locator(".agent-select").click();
+    const toggle = group.getByRole("button", {
+      name: `展开或收起 ${target.name} 的活动会话`,
+      exact: true,
+    });
+    if ((await toggle.getAttribute("aria-expanded")) === "false") {
+      await toggle.click();
+    }
+  };
+
   // Agent A: open 2 tabs in main (chatA1, chatA2), then revisit chatA1 so chatA2 is left earlier.
-  await sidebar
-    .locator(`[data-agent-id="${agentA.id}"] .agent-select`)
-    .click();
+  await selectAgent(agentA);
   await openKeptInMain(chatA1.id);
   await openKeptInMain(chatA2.id);
   await expect(mainStrip.getByRole("tab")).toHaveCount(2);
@@ -11407,9 +11434,7 @@ test("per-pane tab limit applies independently per Agent and pane and evicts ear
   ).toBeVisible();
 
   // Switch to Agent B and open 2 main tabs + 2 side tabs: Agent A's tabs must NOT be closed.
-  await sidebar
-    .locator(`[data-agent-id="${agentB.id}"] .agent-select`)
-    .click();
+  await selectAgent(agentB);
   await openKeptInMain(chatB1.id);
   await openKeptInMain(chatB2.id);
   await page.getByRole("button", { name: "展开侧边分栏", exact: true }).click();
@@ -11420,9 +11445,7 @@ test("per-pane tab limit applies independently per Agent and pane and evicts ear
   await expect(sideStrip.getByRole("tab")).toHaveCount(2);
 
   // Switch back to Agent A: both panes still retain their 2 tabs.
-  await sidebar
-    .locator(`[data-agent-id="${agentA.id}"] .agent-select`)
-    .click();
+  await selectAgent(agentA);
   await expect(mainStrip.getByRole("tab")).toHaveCount(2);
   await expect(sideStrip.getByRole("tab")).toHaveCount(2);
 
