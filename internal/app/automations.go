@@ -101,12 +101,15 @@ func mergeAutomationSelection(override *model.Selection, base model.Selection) *
 	if sel.Provider == base.Provider {
 		if sel.Model == "" {
 			sel.Model = base.Model
+			if sel.Effort == "" {
+				sel.Effort = base.Effort
+			}
+			if !sel.Fast {
+				sel.Fast = base.Fast
+			}
 		}
 		if sel.Permission == "" {
 			sel.Permission = base.Permission
-		}
-		if sel.Effort == "" {
-			sel.Effort = base.Effort
 		}
 	}
 	return &sel
@@ -354,12 +357,18 @@ func (a *App) validateAutomationDestination(ctx context.Context, destination *mo
 		}
 	}
 	if selection != nil {
-		base := model.Selection{
-			Provider:   agent.Profile.Provider,
-			Model:      agent.Profile.Model,
-			Permission: agent.Profile.Permission,
+		base, err := agentDefaultSelection(ctx, a.Store.DB, agent)
+		if err != nil {
+			return err
 		}
 		merged := mergeAutomationSelection(selection, base)
+		if merged.Permission == "" && merged.Provider != "" && merged.Provider != base.Provider {
+			if targetCfg, err := configuredProvider(ctx, a.Store.DB, merged.Provider); err == nil {
+				if perm, err := agentPermissionForProvider(ctx, a.Store.DB, agent.Profile, targetCfg); err == nil && perm != "" {
+					merged.Permission = perm
+				}
+			}
+		}
 		if _, _, err := resolveSelection(ctx, a.Store.DB, *merged, base); err != nil {
 			return err
 		}

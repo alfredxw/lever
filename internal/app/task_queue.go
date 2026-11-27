@@ -389,12 +389,19 @@ func (a *App) prepareQueuedTask(ctx context.Context, tx *sql.Tx, note model.Task
 		return conflict("Agent is archived")
 	}
 	if entry.Selection != nil {
-		fallback := model.Selection{
-			Provider:   agent.Profile.Provider,
-			Model:      agent.Profile.Model,
-			Permission: agent.Profile.Permission,
+		fallback, err := agentDefaultSelection(ctx, tx, agent)
+		if err != nil {
+			return err
 		}
-		resolved, _, err := resolveSelection(ctx, tx, *entry.Selection, fallback)
+		sel := *entry.Selection
+		if sel.Permission == "" && sel.Provider != "" && sel.Provider != fallback.Provider {
+			if targetCfg, err := configuredProvider(ctx, tx, sel.Provider); err == nil {
+				if perm, err := agentPermissionForProvider(ctx, tx, agent.Profile, targetCfg); err == nil && perm != "" {
+					sel.Permission = perm
+				}
+			}
+		}
+		resolved, _, err := resolveSelection(ctx, tx, sel, fallback)
 		if err != nil {
 			return err
 		}

@@ -81,7 +81,7 @@ func TestAutomationSelectionOverridesAndPermissions(t *testing.T) {
 		t.Fatalf("permission-only override did not merge cleanly: %+v", permRun.Selection)
 	}
 
-	// 3. Cross-provider override uses the target provider's default permission when omitted.
+	// 3. Cross-provider override maps the Agent's permission policy when omitted.
 	cross := f.createAutomation(model.AutomationInput{
 		Name:   "Cross provider",
 		Prompt: "run on claude",
@@ -95,7 +95,7 @@ func TestAutomationSelectionOverridesAndPermissions(t *testing.T) {
 	f.request("POST", "/tasks/automations/"+cross.ID+"/run", map[string]string{"commandId": app.ID()}, http.StatusOK, nil)
 	crossRun := f.wait(f.waitAutomationRuns(cross.ID, 1)[0].Execution.RunID, "completed")
 	if crossRun.Selection.Provider != "claude" || crossRun.Selection.Model != "claude-sonnet" ||
-		crossRun.Selection.Effort != "high" || crossRun.Selection.Permission != "accept_edits" {
+		crossRun.Selection.Effort != "high" || crossRun.Selection.Permission != "ask" {
 		t.Fatalf("cross-provider automation selection mismatch: %+v", crossRun.Selection)
 	}
 

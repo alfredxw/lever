@@ -918,9 +918,6 @@ func runImportCodexAutomations(args []string, dataDir string, out, errOut io.Wri
 				continue
 			}
 			agentPerm := permission
-			if agentPerm == "" {
-				agentPerm = "auto_review"
-			}
 			roots := make([]model.Root, 0, len(rec.CWDs))
 			for _, cwd := range rec.CWDs {
 				roots = append(roots, model.Root{Path: cwd})

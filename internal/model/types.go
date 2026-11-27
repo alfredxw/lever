@@ -96,6 +96,22 @@ type DelegationSettings struct {
 	DefaultPolicy DelegationPolicy `json:"defaultPolicy" tstype:"'none' | 'all'"`
 }
 
+type DefaultPermissionMode string
+
+const (
+	DefaultPermissionAuto DefaultPermissionMode = "auto"
+	DefaultPermissionYOLO DefaultPermissionMode = "yolo"
+)
+
+func (m DefaultPermissionMode) Valid() bool {
+	return m == DefaultPermissionAuto || m == DefaultPermissionYOLO
+}
+
+type PermissionSettings struct {
+	DefaultMode DefaultPermissionMode `json:"defaultMode" tstype:"'auto' | 'yolo'"`
+	NeedsSetup  bool                  `json:"needsSetup,omitempty"`
+}
+
 type DelegationRule struct {
 	DeviceID string `json:"deviceId,omitempty"`
 	AgentID  string `json:"agentId"`
@@ -125,6 +141,8 @@ type Profile struct {
 	Instructions             string            `json:"instructions"`
 	Provider                 string            `json:"provider"`
 	Model                    string            `json:"model"`
+	Effort                   string            `json:"effort,omitempty"`
+	Fast                     bool              `json:"fast,omitempty"`
 	Permission               string            `json:"permission"`
 	Skills                   []string          `json:"skills"`
 	DisabledSkills           []string          `json:"disabledSkills,omitempty"`
@@ -930,6 +948,8 @@ type Overview struct {
 	Runs               []Run              `json:"runs"`
 	Requests           []Request          `json:"requests"`
 	DelegationSettings DelegationSettings `json:"delegationSettings"`
+	PermissionSettings PermissionSettings `json:"permissionSettings"`
+	LastSelection      *Selection         `json:"lastSelection,omitempty"`
 	DataDir            string             `json:"dataDir"`
 	HomeDir            string             `json:"homeDir"`
 	DeviceID           string             `json:"deviceId"`

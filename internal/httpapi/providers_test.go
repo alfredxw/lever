@@ -377,7 +377,7 @@ func TestPiModelsAndNativeResume(t *testing.T) {
 	for _, permission := range catalog.Permissions {
 		policies = append(policies, permission.ID)
 	}
-	if catalog.DefaultPermission != "ask" || !slices.Equal(policies, []string{"ask", "accept_edits", "full_access"}) || catalog.Models[0].Fast || !reasoner.Fast {
+	if catalog.DefaultPermission != "accept_edits" || !slices.Equal(policies, []string{"ask", "accept_edits", "full_access"}) || catalog.Models[0].Fast || !reasoner.Fast {
 		t.Fatal("Pi policy or model-specific Fast did not match the runtime", catalog)
 	}
 	if !catalog.Capabilities.Images || catalog.Models[0].Images == nil || *catalog.Models[0].Images ||

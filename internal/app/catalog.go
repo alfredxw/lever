@@ -59,7 +59,7 @@ func (a *App) Catalog(ctx context.Context, id, cwd string, refresh bool) (*model
 	cached := entry.value
 	if !refresh && cached != nil && time.Now().Before(entry.expires) {
 		a.mu.Unlock()
-		return cached, nil
+		return a.catalogWithPermissions(ctx, config, cached), nil
 	}
 	load := entry.loading
 	if load == nil {
@@ -76,15 +76,27 @@ func (a *App) Catalog(ctx context.Context, id, cwd string, refresh bool) (*model
 		if _, err := provider.Executable(a.ctx, config); !provider.IsExecutableMissing(err) {
 			pending := *cached
 			pending.Provisional = true
-			return &pending, nil
+			return a.catalogWithPermissions(ctx, config, &pending), nil
 		}
 	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-load.done:
-		return load.value, load.err
+		return a.catalogWithPermissions(ctx, config, load.value), load.err
 	}
+}
+
+func (a *App) catalogWithPermissions(ctx context.Context, config model.Provider, value *model.Catalog) *model.Catalog {
+	if value == nil {
+		return nil
+	}
+	settings, err := permissionSettings(ctx, a.Store.DB)
+	if err != nil {
+		return value
+	}
+	updated := provider.ApplyDefaultPermission(config, *value, settings.DefaultMode)
+	return &updated
 }
 
 func (a *App) catalogEntryLocked(key catalogKey, config model.Provider) *catalogEntry {

@@ -378,11 +378,7 @@ func (a *App) automationSelectionBase(ctx context.Context, chatID, agentID, mode
 	if err != nil {
 		return model.Selection{}, err
 	}
-	return model.Selection{
-		Provider:   agent.Profile.Provider,
-		Model:      agent.Profile.Model,
-		Permission: agent.Profile.Permission,
-	}, nil
+	return agentDefaultSelection(ctx, a.Store.DB, agent)
 }
 
 func advanceAutomation(ctx context.Context, tx *sql.Tx, fire automationFire) error {

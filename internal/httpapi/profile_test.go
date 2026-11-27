@@ -269,7 +269,7 @@ func TestAgentCreationToolUsesSessionScopeAndIsIdempotent(t *testing.T) {
 	}
 	profile := created.Profile
 	if created.ID == parent.ID || created.Name != "Release Notes" || profile.Instructions != "Summarize merged changes." ||
-		profile.Provider != "codex" || profile.Permission != "auto_review" || len(profile.Roots) != len(session.Roots) {
+		profile.Provider != "codex" || profile.Permission != "" || len(profile.Roots) != len(session.Roots) {
 		t.Fatalf("unexpected created Agent: %+v", created)
 	}
 	for i, root := range profile.Roots {

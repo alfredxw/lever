@@ -77,8 +77,14 @@ func (a *App) createAgentFromRun(ctx context.Context, owner *execution, input ag
 		}
 	}
 	agent := model.Agent{Name: input.Name, Profile: model.Profile{
-		Scope: scope, Provider: owner.run.Selection.Provider, Instructions: input.Instructions,
-		Skills: []string{}, Delegations: []model.DelegationRule{},
+		Scope:        scope,
+		Provider:     owner.run.Selection.Provider,
+		Model:        owner.run.Selection.Model,
+		Effort:       owner.run.Selection.Effort,
+		Fast:         owner.run.Selection.Fast,
+		Instructions: input.Instructions,
+		Skills:       []string{},
+		Delegations:  []model.DelegationRule{},
 	}}
 	next := owner.run
 	_, err := a.saveAgentLocked(ctx, agent, func(tx *sql.Tx, saved model.Agent) error {

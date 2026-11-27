@@ -449,6 +449,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 		v, err := a.SaveAgent(r.Context(), v)
 		respond(w, v, err)
 	})
+	mux.HandleFunc("PUT /api/agents/{id}/selection", func(w http.ResponseWriter, r *http.Request) {
+		var sel model.Selection
+		if err := read(w, r, &sel); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SaveAgentSelection(r.Context(), r.PathValue("id"), sel)
+		respond(w, v, err)
+	})
 	mux.HandleFunc("POST /api/chats", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			AgentID string `json:"agentId"`
@@ -501,6 +510,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 			return
 		}
 		v, err := a.SaveDelegationSettings(r.Context(), in)
+		respond(w, v, err)
+	})
+	mux.HandleFunc("GET /api/settings/permissions", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.PermissionSettings(r.Context())
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/settings/permissions", func(w http.ResponseWriter, r *http.Request) {
+		var in model.PermissionSettings
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SavePermissionSettings(r.Context(), in)
 		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/delegation/remote-targets", func(w http.ResponseWriter, r *http.Request) {

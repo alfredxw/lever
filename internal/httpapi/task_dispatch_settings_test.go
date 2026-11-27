@@ -315,7 +315,7 @@ func TestTaskDispatchModelSelection(t *testing.T) {
 		CommandID: cmd1, AgentID: agent.ID, Selection: &model.Selection{Provider: "codex", Model: "gpt-5.3-codex"},
 	}, 409, nil)
 
-	// 2. Direct dispatch switching provider uses the new provider's safe default permission (accept_edits), not full_access.
+	// 2. Direct dispatch switching provider maps the Agent's cross-provider permission policy (full_access -> full_access).
 	var item2 model.WorkItem
 	f.request("POST", "/tasks/work-items", model.UserWorkItemCreate{Title: "Cross provider override"}, 200, &item2)
 	var run2 model.Run
@@ -325,11 +325,11 @@ func TestTaskDispatchModelSelection(t *testing.T) {
 	}, 200, &run2)
 	done2 := f.wait(run2.ID, "completed")
 	if done2.Selection.Provider != "claude" || done2.Selection.Model != "claude-opus-4-6" ||
-		done2.Selection.Effort != "medium" || done2.Selection.Permission != "accept_edits" || done2.Handoff {
+		done2.Selection.Effort != "medium" || done2.Selection.Permission != "full_access" || done2.Handoff {
 		t.Fatalf("unexpected cross-provider task selection: %+v handoff=%v", done2.Selection, done2.Handoff)
 	}
 
-	// 3. Direct note dispatch also honors Selection.
+	// 3. Direct note dispatch also honors Selection and Agent permission policy.
 	var note model.TaskNote
 	f.request("POST", "/tasks/notes", model.TaskNoteSummary{ID: app.ID(), Title: "Models"}, 200, &note)
 	noteTaskID := app.ID()
@@ -342,7 +342,7 @@ func TestTaskDispatchModelSelection(t *testing.T) {
 		Selection: &model.Selection{Provider: "claude", Model: "claude-sonnet-4-6"},
 	}, 200, &noteRun)
 	noteDone := f.wait(noteRun.ID, "completed")
-	if noteDone.Selection.Provider != "claude" || noteDone.Selection.Model != "claude-sonnet-4-6" || noteDone.Selection.Permission != "accept_edits" {
+	if noteDone.Selection.Provider != "claude" || noteDone.Selection.Model != "claude-sonnet-4-6" || noteDone.Selection.Permission != "full_access" {
 		t.Fatalf("note dispatch did not honor selection: %+v", noteDone.Selection)
 	}
 
@@ -403,7 +403,7 @@ func TestTaskDispatchModelSelection(t *testing.T) {
 	}
 	if queuedRun == nil || queuedRun.Selection.Provider != "claude" ||
 		queuedRun.Selection.Model != "claude-opus-4-6" || queuedRun.Selection.Effort != "high" ||
-		queuedRun.Selection.Permission != "accept_edits" {
+		queuedRun.Selection.Permission != "full_access" {
 		t.Fatalf("queued task lost its selection after restart: %+v", queuedRun)
 	}
 }

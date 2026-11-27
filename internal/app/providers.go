@@ -57,7 +57,12 @@ func resolveSelection(ctx context.Context, q store.Queryer, selection, fallback 
 	if err != nil {
 		return selection, config, err
 	}
-	selection, err = provider.ResolveSelection(selection, fallback, config)
+	permSettings, err := permissionSettings(ctx, q)
+	if err != nil {
+		return selection, config, err
+	}
+	defaultPerm := defaultPermissionForProvider(ctx, q, config, permSettings.DefaultMode)
+	selection, err = provider.ResolveSelectionWithDefault(selection, fallback, config, defaultPerm)
 	if err != nil {
 		err = invalid(err.Error())
 	}

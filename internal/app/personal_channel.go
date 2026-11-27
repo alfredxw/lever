@@ -158,7 +158,10 @@ func (a *App) ConfigurePersonal(ctx context.Context, id string, settings model.P
 // Resolve every command from its route and current Agent, even in an existing thread.
 // The desktop session's last choice and earlier channel overrides are not defaults.
 func (a *App) personalSelection(ctx context.Context, route model.PersonalChannelRoute, profile model.Profile) (model.Selection, error) {
-	base := model.Selection{Provider: profile.Provider, Model: profile.Model, Permission: profile.Permission}
+	base, err := agentDefaultSelection(ctx, a.Store.DB, model.Agent{Profile: profile})
+	if err != nil {
+		return model.Selection{}, err
+	}
 	if route.Selection == nil {
 		choice, _, err := resolveSelection(ctx, a.Store.DB, base, base)
 		return choice, err
@@ -180,29 +183,27 @@ func (a *App) personalSelection(ctx context.Context, route model.PersonalChannel
 }
 
 func (a *App) personalPermission(ctx context.Context, profile model.Profile, target model.Provider) (string, error) {
-	if profile.Provider == target.ID {
-		return profile.Permission, nil
+	if profile.Permission == "" || profile.Provider == target.ID {
+		return agentPermissionForProvider(ctx, a.Store.DB, profile, target)
 	}
 	source, err := store.Get[model.Provider](ctx, a.Store.DB, "SELECT data FROM providers WHERE id=?", profile.Provider)
 	if err != nil {
 		return "", err
 	}
 	if source.Type == target.Type {
-		return profile.Permission, nil
+		return agentPermissionForProvider(ctx, a.Store.DB, profile, target)
 	}
 	from := a.personalPermissionCatalog(source, profile.Scope)
 	permission := profile.Permission
-	if permission == "" {
-		permission = from.DefaultPermission
-	}
-	if permission == "" {
-		return "", nil
-	}
 	mode := ""
-	for _, option := range slices.Concat(from.Permissions, from.LegacyPermissions) {
-		if option.ID == permission {
-			mode = option.Mode
-			break
+	if provider.IsCanonicalPermissionPolicy(permission) {
+		mode = permission
+	} else {
+		for _, option := range slices.Concat(from.Permissions, from.LegacyPermissions) {
+			if option.ID == permission {
+				mode = option.Mode
+				break
+			}
 		}
 	}
 	ask := ""
@@ -216,7 +217,7 @@ func (a *App) personalPermission(ctx context.Context, profile model.Profile, tar
 	}
 	switch {
 	case mode == "full_access":
-		return "", nil
+		return agentPermissionForProvider(ctx, a.Store.DB, profile, target)
 	case ask != "" && (mode == "auto" || mode == "accept_edits"):
 		return ask, nil
 	default:
@@ -229,8 +230,11 @@ func (a *App) personalPermissionCatalog(config model.Provider, scope model.Scope
 	if config.Type == "acp" || config.Type == "antigravity" {
 		key := catalogKey{config.ID, provider.ConfigurationDirectory(config), workspace.CWD(scope)}
 		if cached := a.catalogEntryLocked(key, config).value; cached != nil {
-			return *cached
+			catalog = *cached
 		}
+	}
+	if settings, err := permissionSettings(a.ctx, a.Store.DB); err == nil {
+		catalog = provider.ApplyDefaultPermission(config, catalog, settings.DefaultMode)
 	}
 	return catalog
 }

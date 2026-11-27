@@ -225,13 +225,17 @@ func (a *App) listEligibleTargets(ctx context.Context, owner *execution, query, 
 				if err := a.Store.DB.QueryRowContext(ctx, `SELECT json_type(c.data,'$.sharedScope') IS NULL OR EXISTS(SELECT 1 FROM remote_memberships m WHERE m.hub=json_extract(c.data,'$.sharedScope.hubId') AND m.space=json_extract(c.data,'$.sharedScope.spaceId') AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=?))) FROM chats c WHERE c.id=?`, target.ID, owner.session.ChatID).Scan(&visible); err != nil || !visible {
 					continue
 				}
+				effectivePerm := target.Profile.Permission
+				if defSel, err := agentDefaultSelection(ctx, a.Store.DB, target); err == nil && defSel.Permission != "" {
+					effectivePerm = defSel.Permission
+				}
 				info := delegateTargetInfo{
 					ID:          target.ID,
 					Name:        target.Name,
 					Description: target.Profile.Description,
 					Provider:    target.Profile.Provider,
 					Model:       target.Profile.Model,
-					Permission:  target.Profile.Permission,
+					Permission:  effectivePerm,
 				}
 				if matchesQuery(info) {
 					targets = append(targets, info)

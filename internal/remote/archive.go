@@ -118,7 +118,17 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		r.Model = a.Profile.Model
 		var providerType string
 		_ = tx.QueryRowContext(ctx, "SELECT coalesce(json_extract(data,'$.type'),'') FROM providers WHERE id=?", a.Profile.Provider).Scan(&providerType)
-		r.Permission = provider.NormalizePermissionMode(providerType, a.Profile.Permission)
+		effectivePermission := a.Profile.Permission
+		if effectivePermission == "" {
+			var defaultMode string
+			_ = tx.QueryRowContext(ctx, "SELECT coalesce(json_extract(value,'$.defaultMode'),'') FROM settings WHERE key='permission_settings'").Scan(&defaultMode)
+			if defaultMode == string(model.DefaultPermissionYOLO) {
+				effectivePermission = "full_access"
+			} else {
+				effectivePermission = "auto"
+			}
+		}
+		r.Permission = provider.NormalizePermissionMode(providerType, effectivePermission)
 		if !a.Profile.CanAcceptDelegations() {
 			accept := false
 			r.AcceptDelegations = &accept

@@ -32,6 +32,10 @@ const taskSourceSyncKindColumn = "sync_kind TEXT NOT NULL DEFAULT 'both' CHECK(s
 // StarterAgentPending is recorded before the agents table is first created.
 const StarterAgentPending = "starter_agent_pending"
 
+// PermissionSetupPending is recorded before the agents table is first created
+// so a fresh installation can prompt the user to choose Auto or YOLO defaults.
+const PermissionSetupPending = "permission_setup_pending"
+
 var ErrInUse = errors.New("data directory is already in use")
 
 // OpenConnection opens the WAL database without taking the backend's instance
@@ -81,6 +85,8 @@ func Open(dir string) (*Store, error) {
 	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT OR IGNORE INTO settings(key,value) SELECT '` + StarterAgentPending + `','1'
+WHERE NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agents');
+INSERT OR IGNORE INTO settings(key,value) SELECT '` + PermissionSetupPending + `','1'
 WHERE NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agents');
 CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);

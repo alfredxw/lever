@@ -14,7 +14,7 @@ func TestRuntimeDefaultsAndChatPermissionOverrides(t *testing.T) {
 		t.Run(runtime, func(t *testing.T) {
 			f := newFixture(t)
 			agent := f.agent(runtime)
-			defaultPermission, override, other, otherDefault, invalidPermission := "read_only", "full_access", "claude", "accept_edits", "accept_edits"
+			defaultPermission, override, other, otherDefault, invalidPermission := "read_only", "full_access", "claude", "auto", "accept_edits"
 			if runtime == "claude" {
 				defaultPermission, other, otherDefault, invalidPermission = "accept_edits", "codex", "auto_review", "read_only"
 			}
@@ -110,8 +110,14 @@ func TestRuntimeDefaultsAndChatPermissionOverrides(t *testing.T) {
 				t.Fatal("Agent defaults changed the conversation's settings")
 			}
 			f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: secondChat.ID, Operation: "main", Text: "invalid", Selection: &model.Selection{Provider: runtime, Permission: invalidPermission}}, 400, nil)
-			agent.Profile.Permission = invalidPermission
+			agent.Profile.Permission = "unsupported_policy"
 			f.request("PUT", "/agents/"+agent.ID, agent, 400, nil)
+			if runtime == "claude" {
+				// Canonical cross-provider read_only policy is valid on Claude and resolves to plan.
+				agent.Profile.Permission = "read_only"
+				f.request("PUT", "/agents/"+agent.ID, agent, 200, &agent)
+				assertPolicy(send(f.chat(agent), nil), "plan")
+			}
 		})
 	}
 }

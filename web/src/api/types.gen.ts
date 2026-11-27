@@ -863,6 +863,13 @@ export type DelegationPolicy = typeof DelegationPolicyNone | typeof DelegationPo
 export interface DelegationSettings {
   defaultPolicy: 'none' | 'all';
 }
+export type DefaultPermissionMode = string;
+export const DefaultPermissionAuto: DefaultPermissionMode = "auto";
+export const DefaultPermissionYOLO: DefaultPermissionMode = "yolo";
+export interface PermissionSettings {
+  defaultMode: 'auto' | 'yolo';
+  needsSetup?: boolean;
+}
 export interface DelegationRule {
   deviceId?: string;
   agentId: string;
@@ -889,6 +896,8 @@ export interface Profile extends Scope {
   instructions: string;
   provider: string;
   model: string;
+  effort?: string;
+  fast?: boolean;
   permission: string;
   skills: string[];
   disabledSkills?: string[];
@@ -1609,6 +1618,8 @@ export interface Overview {
   runs: Run[];
   requests: Request[];
   delegationSettings: DelegationSettings;
+  permissionSettings: PermissionSettings;
+  lastSelection?: Selection;
   dataDir: string;
   homeDir: string;
   deviceId: string;

@@ -160,9 +160,20 @@ func (a *App) SendComparison(ctx context.Context, input model.ComparisonInput) (
 func (a *App) addComparisonTopic(ctx context.Context, tx *sql.Tx, comparisonID string, source model.Chat, sourceSession model.Session, ownerProfile model.Profile, agent model.Agent, input model.ComparisonInput, files []model.Attachment, quote *model.MessageQuote) (model.Run, error) {
 	var run model.Run
 	profile := agent.Profile
-	defaults := model.Selection{Provider: profile.Provider, Model: profile.Model, Permission: profile.Permission}
+	defaults, err := agentDefaultSelection(ctx, tx, agent)
+	if err != nil {
+		return run, err
+	}
 	choice := input.Selections[agent.ID]
-	selection, config, err := resolveSelection(ctx, tx, choice.Selection, defaults)
+	sel := choice.Selection
+	if sel.Permission == "" && sel.Provider != "" && sel.Provider != defaults.Provider {
+		if targetCfg, err := configuredProvider(ctx, tx, sel.Provider); err == nil {
+			if perm, err := agentPermissionForProvider(ctx, tx, profile, targetCfg); err == nil && perm != "" {
+				sel.Permission = perm
+			}
+		}
+	}
+	selection, config, err := resolveSelection(ctx, tx, sel, defaults)
 	if err != nil {
 		return run, err
 	}

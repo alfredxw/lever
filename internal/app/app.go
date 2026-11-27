@@ -276,6 +276,14 @@ WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','q
 	if err != nil {
 		return o, err
 	}
+	o.PermissionSettings, err = permissionSettings(ctx, tx)
+	if err != nil {
+		return o, err
+	}
+	o.LastSelection, err = lastRuntimeSelection(ctx, tx)
+	if err != nil {
+		return o, err
+	}
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&o.Cursor); err != nil {
 		return o, err
 	}
@@ -351,12 +359,34 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 		int64(p.TaskStartIntervalMinutes) > math.MaxInt64/int64(time.Minute) {
 		return agent, invalid("Choose a positive task concurrency and a valid start interval")
 	}
+	p.Provider = strings.TrimSpace(p.Provider)
+	p.Model = strings.TrimSpace(p.Model)
+	p.Effort = strings.TrimSpace(p.Effort)
+	p.Permission = strings.TrimSpace(p.Permission)
+	if creating && p.Provider == "" {
+		defSel, err := defaultRuntimeSelectionForNewAgent(ctx, a.Store.DB)
+		if err != nil {
+			return agent, err
+		}
+		p.Provider = defSel.Provider
+		if p.Model == "" {
+			p.Model = defSel.Model
+		}
+		if p.Effort == "" {
+			p.Effort = defSel.Effort
+		}
+		if !p.Fast {
+			p.Fast = defSel.Fast
+		}
+	}
 	config, err := store.Get[model.Provider](ctx, a.Store.DB, "SELECT data FROM providers WHERE id=?", p.Provider)
 	if err != nil {
 		return agent, err
 	}
-	selection, err := provider.ResolveSelection(model.Selection{Provider: p.Provider, Permission: p.Permission}, model.Selection{}, config)
-	if err != nil {
+	if err := provider.ValidateAgentPermission(config, p.Permission); err != nil {
+		return agent, invalid(err.Error())
+	}
+	if _, err := provider.ResolveSelectionWithDefault(model.Selection{Provider: p.Provider, Model: p.Model, Effort: p.Effort, Fast: p.Fast}, model.Selection{}, config, ""); err != nil {
 		return agent, invalid(err.Error())
 	}
 	_, available, err := runtimeProvider(ctx, a.Store.DB, config)
@@ -366,7 +396,6 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 	if creating && !available {
 		return agent, invalid("Runtime is disabled")
 	}
-	p.Permission = selection.Permission
 	p.DisabledSkills, err = normalizeDisabledSkills(p.DisabledSkills)
 	if err != nil {
 		return agent, err
@@ -915,7 +944,11 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		}
 		if create {
 			kind := input.Operation
-			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: model.Selection{Provider: agent.Profile.Provider, Model: agent.Profile.Model, Permission: agent.Profile.Permission}, CreatedAt: now()}
+			defaultSel, err := agentDefaultSelection(ctx, tx, agent)
+			if err != nil {
+				return err
+			}
+			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: defaultSel, CreatedAt: now()}
 			if origin.delegationScope != nil {
 				session.ProjectID = origin.delegationScope.projectID
 				session.Scope = cloneScope(origin.delegationScope.scope)
@@ -1002,6 +1035,13 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			selection = *input.Selection
 		} else if replaced.ID != "" {
 			selection = replaced.Selection
+		}
+		if create && selection.Permission == "" && selection.Provider != "" && selection.Provider != session.Selection.Provider {
+			if targetCfg, err := configuredProvider(ctx, tx, selection.Provider); err == nil {
+				if perm, err := agentPermissionForProvider(ctx, tx, agent.Profile, targetCfg); err == nil && perm != "" {
+					selection.Permission = perm
+				}
+			}
 		}
 		selection, config, err := resolveSelection(ctx, tx, selection, session.Selection)
 		if err != nil {
