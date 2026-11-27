@@ -1,136 +1,209 @@
 import SwiftUI
 
-/// Scheme 1 Home: Feishu-style IM feed with filter capsules, pinned quick-access strip,
-/// swipe-to-read / pin actions, and inline active # Topic cue strips.
+enum NavDestination: Hashable {
+    case chat(ChatRoute)
+    case topic(TopicRoute)
+}
+
+/// Scheme A Home: WeChat-calm monochrome Agent feed with:
+/// - Smooth in-place Expand/Collapse Topics animation (ScrollView + LazyVStack, zero UITableView jump)
+/// - Global top-right toggle (expanded by default) + per-Agent manual collapse/expand chevron
+/// - Global Agent / Chat / Topic search & authentic 5-kind Desktop avatars
+/// - Seamless integration with native iOS Liquid Glass TabView
 struct FeedView: View {
     @Bindable var store: LeverStore
-    @State private var selectedFilter: FeedFilter = .all
+
     @State private var searchText = ""
-    @State private var navPath: [ChatRoute] = []
+    @State private var navPath: [NavDestination] = []
+    @State private var manuallyCollapsedAgentIds: Set<String> = []
+    @State private var manuallyExpandedAgentIds: Set<String> = []
 
     private var allRows: [AgentFeedRow] {
-        store.allAgentFeedRows
+        store.cachedFeedRows
     }
 
-    private var pinnedRows: [AgentFeedRow] {
-        allRows.filter { store.isPinned($0.id) }
+    private var trimmedQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var filteredRows: [AgentFeedRow] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return allRows.filter { row in
-            switch selectedFilter {
-            case .all: break
-            case .approval: if row.pendingApprovalCount == 0 { return false }
-            case .running: if !row.isRunning { return false }
-            case .unread: if row.unreadSessionCount == 0 { return false }
+    private var searchHits: [GlobalSearchHit] {
+        guard !trimmedQuery.isEmpty else { return [] }
+        return store.globalSearch(query: trimmedQuery)
+    }
+
+    private func isAgentTopicsExpanded(_ row: AgentFeedRow) -> Bool {
+        guard !row.activeTopics.isEmpty else { return false }
+        if store.homeTopicsExpanded {
+            return !manuallyCollapsedAgentIds.contains(row.id)
+        } else {
+            return manuallyExpandedAgentIds.contains(row.id)
+        }
+    }
+
+    private func toggleAgentTopics(_ row: AgentFeedRow) {
+        Haptics.light()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            if store.homeTopicsExpanded {
+                if manuallyCollapsedAgentIds.contains(row.id) {
+                    manuallyCollapsedAgentIds.remove(row.id)
+                } else {
+                    manuallyCollapsedAgentIds.insert(row.id)
+                }
+            } else {
+                if manuallyExpandedAgentIds.contains(row.id) {
+                    manuallyExpandedAgentIds.remove(row.id)
+                } else {
+                    manuallyExpandedAgentIds.insert(row.id)
+                }
             }
-            guard !q.isEmpty else { return true }
-            return row.name.lowercased().contains(q)
-                || row.preview.lowercased().contains(q)
-                || row.device.name.lowercased().contains(q)
-                || (row.activeTopicCue?.title.lowercased().contains(q) ?? false)
         }
     }
 
     var body: some View {
         NavigationStack(path: $navPath) {
             VStack(spacing: 0) {
-                feedTopBar
-                filterBar
+                feedHeader
 
                 if let banner = store.lastSyncBanner {
                     syncToastBanner(banner)
                 }
 
-                List {
-                    if !pinnedRows.isEmpty && searchText.isEmpty && selectedFilter == .all {
-                        pinnedStrip
-                            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
-                            .listRowBackground(LeverTheme.surface)
-                            .listRowSeparatorTint(LeverTheme.hairline)
-                    }
-
-                    if filteredRows.isEmpty {
-                        emptyFeedView
-                            .listRowInsets(EdgeInsets(top: 44, leading: 24, bottom: 44, trailing: 24))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                    } else {
-                        ForEach(filteredRows) { row in
-                            AgentFeedRowView(
-                                row: row,
-                                isPinned: store.isPinned(row.id),
-                                onOpenMain: {
-                                    openAgent(row, topicId: nil)
-                                },
-                                onOpenTopic: { cue in
-                                    openAgent(row, topicId: cue.id, chatIdOverride: cue.chatId, isPrivateOverride: cue.isPrivate)
-                                }
-                            )
-                            .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16))
-                            .listRowBackground(LeverTheme.surface)
-                            .listRowSeparatorTint(LeverTheme.hairline)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: row.unreadSessionCount > 0) {
-                                if row.unreadSessionCount > 0 {
-                                    Button {
-                                        store.markAgentRead(row)
-                                    } label: {
-                                        Label("标已读", systemImage: "checkmark.circle")
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if !trimmedQuery.isEmpty {
+                            searchResultsSection
+                        } else if allRows.isEmpty {
+                            emptyFeedView
+                                .padding(.top, 72)
+                                .padding(.horizontal, 24)
+                        } else {
+                            ForEach(Array(allRows.enumerated()), id: \.element.id) { index, row in
+                                let expanded = isAgentTopicsExpanded(row)
+                                AgentWeChatGroupView(
+                                    store: store,
+                                    row: row,
+                                    isPinned: store.isPinned(row.id),
+                                    isTopicsExpanded: expanded,
+                                    onOpenChat: {
+                                        openAgent(row, topicId: nil)
+                                    },
+                                    onOpenTopic: { cue in
+                                        openAgent(
+                                            row,
+                                            topicId: cue.id,
+                                            chatIdOverride: cue.chatId,
+                                            isPrivateOverride: cue.isPrivate
+                                        )
+                                    },
+                                    onToggleTopics: {
+                                        toggleAgentTopics(row)
                                     }
-                                    .tint(LeverTheme.inkPrimary)
+                                )
+                                .contextMenu {
+                                    if row.unreadSessionCount > 0 {
+                                        Button {
+                                            store.markAgentRead(row)
+                                        } label: {
+                                            Label("标为已读", systemImage: "checkmark.circle")
+                                        }
+                                    }
+                                    Button {
+                                        store.togglePin(row.id)
+                                    } label: {
+                                        Label(
+                                            store.isPinned(row.id) ? "取消置顶" : "置顶",
+                                            systemImage: store.isPinned(row.id) ? "pin.slash" : "pin"
+                                        )
+                                    }
+                                    if !row.activeTopics.isEmpty {
+                                        Button {
+                                            toggleAgentTopics(row)
+                                        } label: {
+                                            Label(
+                                                expanded ? "收起话题" : "展开话题",
+                                                systemImage: expanded ? "chevron.up" : "chevron.down"
+                                            )
+                                        }
+                                    }
                                 }
-                                Button {
-                                    store.togglePin(row.id)
-                                } label: {
-                                    Label(store.isPinned(row.id) ? "取消置顶" : "置顶", systemImage: store.isPinned(row.id) ? "pin.slash" : "pin")
+
+                                if index < allRows.count - 1 {
+                                    Rectangle()
+                                        .fill(LeverTheme.hairline)
+                                        .frame(height: 0.5)
+                                        .padding(.leading, 76)
+                                        .background(LeverTheme.surface)
                                 }
-                                .tint(Color(.systemGray))
                             }
+
+                            Rectangle()
+                                .fill(LeverTheme.hairline)
+                                .frame(height: 0.5)
                         }
                     }
+                    .padding(.bottom, 20)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
                 .background(LeverTheme.canvas)
+                .scrollDismissesKeyboard(.interactively)
                 .refreshable {
                     await store.refreshAll(silent: false)
                 }
             }
             .background(LeverTheme.canvas)
-            .navigationBarHidden(true)
-            .navigationDestination(for: ChatRoute.self) { route in
-                ChatDetailView(store: store, route: route)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: NavDestination.self) { dest in
+                switch dest {
+                case .chat(let route):
+                    ChatDetailView(
+                        store: store,
+                        route: route,
+                        onOpenTopic: { topicRoute in
+                            navPath.append(.topic(topicRoute))
+                        }
+                    )
+                case .topic(let topicRoute):
+                    TopicDetailView(store: store, route: topicRoute)
+                }
             }
             .onChange(of: store.pendingNavigationRoute, initial: true) { _, route in
                 guard let route else { return }
-                navPath = [route]
+                var next: [NavDestination] = [.chat(route)]
+                if let cid = route.chatId, let tid = route.initialTopicId, !tid.isEmpty {
+                    next.append(.topic(TopicRoute(
+                        deviceId: route.deviceId,
+                        agentId: route.agentId,
+                        chatId: cid,
+                        isPrivate: route.isPrivate,
+                        topicId: tid
+                    )))
+                }
+                navPath = next
                 store.pendingNavigationRoute = nil
             }
         }
     }
 
-    // MARK: - Header & Feishu Filter Capsules
+    // MARK: - Top Header (Title + Expand/Collapse Topics Toggle + Search)
 
-    private var feedTopBar: some View {
+    private var feedHeader: some View {
         VStack(spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("消息")
-                    .font(.system(size: 28, weight: .bold))
+            HStack(alignment: .center, spacing: 8) {
+                Text("聊天")
+                    .font(.system(size: 27, weight: .bold))
                     .foregroundStyle(LeverTheme.inkPrimary)
 
-                connectionBadge
+                connectionDotPill
 
-                Spacer()
+                Spacer(minLength: 6)
 
-                if store.totalUnreadSessions > 0 {
+                if store.cachedTotalUnread > 0 {
                     Button {
                         store.markAllRead()
                     } label: {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(LeverTheme.inkPrimary)
-                            .frame(width: 34, height: 34)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(LeverTheme.inkSecondary)
+                            .frame(width: 32, height: 32)
                             .background(LeverTheme.surfaceInset)
                             .clipShape(Circle())
                     }
@@ -138,32 +211,36 @@ struct FeedView: View {
                     .accessibilityLabel("全部标为已读")
                 }
 
+                // Global Expand / Collapse Topics Toggle (Default: Expanded)
                 Button {
-                    Task { await store.refreshAll(silent: false) }
-                } label: {
-                    Group {
-                        if store.isSyncing {
-                            ProgressView()
-                                .scaleEffect(0.75)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .medium))
-                        }
+                    Haptics.light()
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                        store.homeTopicsExpanded.toggle()
+                        manuallyCollapsedAgentIds.removeAll()
+                        manuallyExpandedAgentIds.removeAll()
                     }
-                    .foregroundStyle(LeverTheme.inkPrimary)
-                    .frame(width: 34, height: 34)
-                    .background(LeverTheme.surfaceInset)
-                    .clipShape(Circle())
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: store.homeTopicsExpanded ? "list.bullet.indent" : "list.bullet")
+                            .font(.system(size: 12.5, weight: .semibold))
+                        Text(store.homeTopicsExpanded ? "收起话题" : "展开话题")
+                            .font(.system(size: 12.5, weight: .medium))
+                    }
+                    .foregroundStyle(store.homeTopicsExpanded ? LeverTheme.surface : LeverTheme.inkSecondary)
+                    .padding(.horizontal, 11)
+                    .frame(height: 32)
+                    .background(store.homeTopicsExpanded ? LeverTheme.inkPrimary : LeverTheme.surfaceInset)
+                    .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("刷新同步")
+                .accessibilityLabel(store.homeTopicsExpanded ? "收起子话题列表" : "展开子话题列表")
             }
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(LeverTheme.inkTertiary)
-                TextField("搜索 Agent、对话或话题…", text: $searchText)
+                TextField("搜索 Agent、历史对话或话题", text: $searchText)
                     .font(.system(size: 14.5))
                     .foregroundStyle(LeverTheme.inkPrimary)
                     .textInputAutocapitalization(.never)
@@ -172,7 +249,7 @@ struct FeedView: View {
                         searchText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
+                            .font(.system(size: 15))
                             .foregroundStyle(LeverTheme.inkTertiary)
                     }
                     .buttonStyle(.plain)
@@ -185,75 +262,27 @@ struct FeedView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 8)
-        .background(LeverTheme.surface)
-    }
-
-    private var connectionBadge: some View {
-        let online = store.hostDevices.contains(where: \.online)
-        return HStack(spacing: 5) {
-            Circle()
-                .fill(online ? LeverTheme.runningEmerald : LeverTheme.inkTertiary)
-                .frame(width: 6.5, height: 6.5)
-            Text(store.connectionSummary)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(LeverTheme.inkSecondary)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(LeverTheme.surfaceInset)
-        .clipShape(Capsule())
-    }
-
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 7) {
-                ForEach(FeedFilter.allCases) { filter in
-                    let count = badgeCount(for: filter)
-                    let active = selectedFilter == filter
-                    Button {
-                        Haptics.light()
-                        selectedFilter = filter
-                    } label: {
-                        HStack(spacing: 5) {
-                            if filter == .approval && count > 0 && !active {
-                                Circle().fill(LeverTheme.approvalAmberDot).frame(width: 6, height: 6)
-                            } else if filter == .running && count > 0 && !active {
-                                Circle().fill(LeverTheme.runningEmerald).frame(width: 6, height: 6)
-                            }
-                            Text(filter.rawValue)
-                                .font(.system(size: 13, weight: active ? .semibold : .medium))
-                            if count > 0 && filter != .all {
-                                Text("\(count)")
-                                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                                    .opacity(active ? 0.85 : 0.7)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(height: 30)
-                        .background(active ? LeverTheme.inkPrimary : LeverTheme.surfaceInset)
-                        .foregroundStyle(active ? LeverTheme.surface : LeverTheme.inkSecondary)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
+        .padding(.bottom, 10)
         .background(LeverTheme.surface)
         .overlay(alignment: .bottom) {
             Rectangle().fill(LeverTheme.hairline).frame(height: 0.5)
         }
     }
 
-    private func badgeCount(for filter: FeedFilter) -> Int {
-        switch filter {
-        case .all: return allRows.count
-        case .approval: return store.totalPendingApprovals
-        case .running: return store.totalRunningAgents
-        case .unread: return store.totalUnreadSessions
+    private var connectionDotPill: some View {
+        let online = store.hostDevices.contains(where: \.online)
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(online ? LeverTheme.runningEmerald : LeverTheme.inkTertiary)
+                .frame(width: 6, height: 6)
+            Text(store.connectionSummary)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(LeverTheme.inkTertiary)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3.5)
+        .background(LeverTheme.surfaceInset)
+        .clipShape(Capsule())
     }
 
     private func syncToastBanner(_ message: String) -> some View {
@@ -265,81 +294,111 @@ struct FeedView: View {
                 .lineLimit(1)
             Spacer()
         }
-        .foregroundStyle(LeverTheme.syncBlue)
-        .padding(.horizontal, 14)
+        .foregroundStyle(LeverTheme.inkPrimary)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(LeverTheme.syncBlueSoft)
+        .background(LeverTheme.surfaceElevated)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(LeverTheme.hairline).frame(height: 0.5)
+        }
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    // MARK: - Pinned Quick-Access Strip
+    // MARK: - Search Results
 
-    private var pinnedStrip: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("置顶捷径")
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(LeverTheme.inkTertiary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    ForEach(pinnedRows) { row in
-                        Button {
-                            openAgent(row, topicId: nil)
-                        } label: {
-                            VStack(spacing: 5) {
-                                ZStack(alignment: .topTrailing) {
-                                    AgentAvatarView(name: row.name, avatar: row.avatar, seed: row.id, size: 46)
-                                        .overlay(alignment: .bottomTrailing) {
-                                            if row.pendingApprovalCount > 0 {
-                                                Circle()
-                                                    .fill(LeverTheme.approvalAmberDot)
-                                                    .frame(width: 12, height: 12)
-                                                    .overlay(Circle().stroke(LeverTheme.surface, lineWidth: 2))
-                                                    .offset(x: 2, y: 2)
-                                            } else if row.isRunning {
-                                                Circle()
-                                                    .fill(LeverTheme.runningEmerald)
-                                                    .frame(width: 12, height: 12)
-                                                    .overlay(Circle().stroke(LeverTheme.surface, lineWidth: 2))
-                                                    .offset(x: 2, y: 2)
-                                            }
-                                        }
-
-                                    if row.unreadSessionCount > 0 {
-                                        UnreadBadgePill(count: row.unreadSessionCount)
-                                            .offset(x: 5, y: -4)
-                                    }
-                                }
-                                Text(row.name)
-                                    .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(LeverTheme.inkSecondary)
+    @ViewBuilder
+    private var searchResultsSection: some View {
+        if searchHits.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(LeverTheme.inkTertiary)
+                Text("未找到与「\(trimmedQuery)」相关的内容")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(LeverTheme.inkSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 64)
+            .padding(.horizontal, 24)
+        } else {
+            ForEach(Array(searchHits.enumerated()), id: \.element.id) { idx, hit in
+                Button {
+                    openSearchHit(hit)
+                } label: {
+                    HStack(spacing: 12) {
+                        AgentAvatarView(
+                            name: hit.agentName,
+                            avatar: hit.avatar,
+                            avatarSpec: hit.avatarSpec,
+                            deviceId: hit.deviceId,
+                            store: store,
+                            seed: "\(hit.deviceId):\(hit.agentId)",
+                            size: 40
+                        )
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(hit.title)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(LeverTheme.inkPrimary)
                                     .lineLimit(1)
-                                    .frame(width: 58)
+                                Spacer(minLength: 4)
+                                Text(hit.kind.rawValue)
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(LeverTheme.inkSecondary)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2.5)
+                                    .background(LeverTheme.surfaceInset)
+                                    .clipShape(Capsule())
+                            }
+                            HStack {
+                                Text(hit.subtitle)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(LeverTheme.inkTertiary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 6)
+                                if !hit.timeText.isEmpty {
+                                    Text(hit.timeText)
+                                        .font(.system(size: 11.5).monospacedDigit())
+                                        .foregroundStyle(LeverTheme.inkTertiary)
+                                }
                             }
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .background(LeverTheme.surface)
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, 2)
+                .buttonStyle(.plain)
+
+                if idx < searchHits.count - 1 {
+                    Rectangle()
+                        .fill(LeverTheme.hairline)
+                        .frame(height: 0.5)
+                        .padding(.leading, 68)
+                        .background(LeverTheme.surface)
+                }
             }
         }
     }
 
     private var emptyFeedView: some View {
         VStack(spacing: 10) {
-            Image(systemName: selectedFilter == .all ? "bubble.left.and.bubble.right" : "checkmark.circle")
+            Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(LeverTheme.inkTertiary)
-            Text(selectedFilter == .all ? "暂无已开放的 Agent 对话" : "当前筛选下没有会话")
+            Text("暂无已开放的 Agent 对话")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(LeverTheme.inkPrimary)
-            Text(selectedFilter == .all ? "在电脑端开放 Agent 或新建对话后下拉刷新即可同步" : "所有待处理事项均已与电脑端同步")
+            Text("在电脑端开放 Agent 或新建对话后下拉刷新即可同步")
                 .font(.system(size: 13))
                 .foregroundStyle(LeverTheme.inkTertiary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
     }
+
+    // MARK: - Navigation Helpers
 
     private func openAgent(
         _ row: AgentFeedRow,
@@ -348,128 +407,267 @@ struct FeedView: View {
         isPrivateOverride: Bool? = nil
     ) {
         Haptics.light()
-        let route = ChatRoute(
+        let chatId = chatIdOverride ?? row.latestChat?.id
+        let isPrivate = isPrivateOverride ?? row.isPrivate
+        let chatRoute = ChatRoute(
             deviceId: row.device.id,
             agentId: row.agentId,
-            chatId: chatIdOverride ?? row.latestChat?.id,
-            isPrivate: isPrivateOverride ?? row.isPrivate,
-            initialTopicId: topicId
+            chatId: chatId,
+            isPrivate: isPrivate,
+            initialTopicId: nil
         )
-        navPath.append(route)
-    }
-}
-
-// MARK: - IM Feed Row with Nested Active Topic Cue
-
-private struct AgentFeedRowView: View {
-    let row: AgentFeedRow
-    let isPinned: Bool
-    let onOpenMain: () -> Void
-    let onOpenTopic: (ActiveTopicCue) -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack(alignment: .topTrailing) {
-                AgentAvatarView(name: row.name, avatar: row.avatar, seed: row.id, size: 48)
-                if row.unreadSessionCount > 0 {
-                    UnreadBadgePill(count: row.unreadSessionCount)
-                        .offset(x: 6, y: -5)
-                }
-            }
-            .onTapGesture(perform: onOpenMain)
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(row.name)
-                        .font(.system(size: 15.5, weight: .semibold))
-                        .foregroundStyle(LeverTheme.inkPrimary)
-                        .lineLimit(1)
-
-                    Text(row.device.name)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(LeverTheme.inkTertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(LeverTheme.surfaceInset)
-                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        .lineLimit(1)
-
-                    if isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(LeverTheme.inkTertiary)
-                    }
-
-                    Spacer(minLength: 4)
-
-                    Text(row.timeText)
-                        .font(.system(size: 11.5).monospacedDigit())
-                        .foregroundStyle(LeverTheme.inkTertiary)
-                }
-
-                HStack(spacing: 4) {
-                    if row.pendingApprovalCount > 0 {
-                        Text("[待审批]")
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .foregroundStyle(LeverTheme.approvalAmber)
-                    } else if row.isRunning {
-                        Text("[运行中]")
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .foregroundStyle(LeverTheme.runningEmerald)
-                    }
-                    Text(row.preview)
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(LeverTheme.inkSecondary)
-                        .lineLimit(1)
-                }
-
-                // Scheme 1 Signature: Nested active # Topic cue strip
-                if let cue = row.activeTopicCue {
-                    Button {
-                        onOpenTopic(cue)
-                    } label: {
-                        let isAppr = cue.status == "approval"
-                        let accent = isAppr ? LeverTheme.approvalAmber : LeverTheme.runningEmerald
-                        HStack(spacing: 6) {
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(accent)
-                                .frame(width: 2.5, height: 15)
-
-                            Text("#")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(accent)
-
-                            Text(cue.title)
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(LeverTheme.inkPrimary)
-                                .lineLimit(1)
-
-                            Spacer(minLength: 4)
-
-                            Text(cueMetaText(cue))
-                                .font(.system(size: 11.5, weight: .semibold))
-                                .foregroundStyle(accent)
-                                .fixedSize()
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 6)
-                        .background(isAppr ? LeverTheme.approvalAmberSoft : LeverTheme.runningEmeraldSoft)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 2)
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onOpenMain)
+        if let topicId, let chatId {
+            navPath = [
+                .chat(chatRoute),
+                .topic(TopicRoute(
+                    deviceId: row.device.id,
+                    agentId: row.agentId,
+                    chatId: chatId,
+                    isPrivate: isPrivate,
+                    topicId: topicId
+                )),
+            ]
+        } else {
+            navPath = [.chat(chatRoute)]
         }
     }
 
-    private func cueMetaText(_ cue: ActiveTopicCue) -> String {
-        if cue.status == "approval" { return "等你审批 ›" }
-        if cue.status == "running" { return "运行中 ›" }
-        if cue.isUnread { return "新回复 ›" }
-        return "\(cue.replyCount) 回复 ›"
+    private func openSearchHit(_ hit: GlobalSearchHit) {
+        Haptics.light()
+        let chatRoute = ChatRoute(
+            deviceId: hit.deviceId,
+            agentId: hit.agentId,
+            chatId: hit.chatId,
+            isPrivate: hit.isPrivate,
+            initialTopicId: nil
+        )
+        if let tid = hit.topicId, let cid = hit.chatId {
+            navPath = [
+                .chat(chatRoute),
+                .topic(TopicRoute(
+                    deviceId: hit.deviceId,
+                    agentId: hit.agentId,
+                    chatId: cid,
+                    isPrivate: hit.isPrivate,
+                    topicId: tid
+                )),
+            ]
+        } else {
+            navPath = [.chat(chatRoute)]
+        }
+    }
+}
+
+// MARK: - Scheme A Agent Row + Smooth In-Place Collapsible Sub-Topics
+
+private struct AgentWeChatGroupView: View {
+    let store: LeverStore
+    let row: AgentFeedRow
+    let isPinned: Bool
+    let isTopicsExpanded: Bool
+    let onOpenChat: () -> Void
+    let onOpenTopic: (ActiveTopicCue) -> Void
+    let onToggleTopics: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Button(action: onOpenChat) {
+                    ZStack(alignment: .topTrailing) {
+                        AgentAvatarView(
+                            name: row.name,
+                            avatar: row.avatar,
+                            avatarSpec: row.avatarSpec,
+                            deviceId: row.device.id,
+                            store: store,
+                            seed: row.id,
+                            size: 48
+                        )
+
+                        if row.unreadSessionCount > 0 {
+                            UnreadBadgePill(count: row.unreadSessionCount)
+                                .offset(x: 6, y: -5)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    // Row 1: Name + Pin + Right-aligned Timestamp (aligns uniformly across all rows)
+                    Button(action: onOpenChat) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(row.name)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(LeverTheme.inkPrimary)
+                                .lineLimit(1)
+
+                            if isPinned {
+                                Image(systemName: "pin.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(LeverTheme.inkTertiary)
+                            }
+
+                            Spacer(minLength: 6)
+
+                            if !row.timeText.isEmpty {
+                                Text(row.timeText)
+                                    .font(.system(size: 12).monospacedDigit())
+                                    .foregroundStyle(LeverTheme.inkTertiary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    // Row 2: Status + Preview + Independent right-aligned Topic fold/unfold pill
+                    HStack(alignment: .center, spacing: 6) {
+                        Button(action: onOpenChat) {
+                            HStack(spacing: 5) {
+                                if row.pendingApprovalCount > 0 {
+                                    Circle()
+                                        .fill(LeverTheme.approvalAmberDot)
+                                        .frame(width: 6.5, height: 6.5)
+                                    Text("[待审批]")
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(LeverTheme.approvalAmber)
+                                        .fixedSize()
+                                } else if row.isRunning {
+                                    Circle()
+                                        .fill(LeverTheme.runningEmerald)
+                                        .frame(width: 6.5, height: 6.5)
+                                }
+
+                                Text(stripMarkdownPreview(row.preview))
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(LeverTheme.inkTertiary)
+                                    .lineLimit(1)
+
+                                Spacer(minLength: 4)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if !row.activeTopics.isEmpty {
+                            Button(action: onToggleTopics) {
+                                HStack(spacing: 3) {
+                                    Text("\(row.activeTopics.count)")
+                                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .rotationEffect(.degrees(isTopicsExpanded ? 0 : -90))
+                                }
+                                .foregroundStyle(LeverTheme.inkSecondary)
+                                .padding(.horizontal, 7.5)
+                                .frame(height: 22)
+                                .background(LeverTheme.surfaceInset)
+                                .clipShape(Capsule())
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isTopicsExpanded ? "收起 \(row.name) 的话题" : "展开 \(row.name) 的话题")
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+
+            // Smooth in-place expandable sub-topics (no UITableView jump!)
+            if isTopicsExpanded && !row.activeTopics.isEmpty {
+                VStack(spacing: 5) {
+                    ForEach(row.activeTopics) { cue in
+                        Button {
+                            onOpenTopic(cue)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Circle()
+                                    .fill(subTopicDotColor(cue))
+                                    .frame(width: 6, height: 6)
+
+                                Text(cue.title)
+                                    .font(.system(size: 13, weight: cue.isUnread ? .medium : .regular))
+                                    .foregroundStyle(cue.isUnread ? LeverTheme.inkPrimary : LeverTheme.inkSecondary)
+                                    .lineLimit(1)
+
+                                Spacer(minLength: 6)
+
+                                if cue.status == "approval" {
+                                    Text("待审批")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(LeverTheme.approvalAmber)
+                                } else if cue.status == "running" {
+                                    Text("运行中")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(LeverTheme.runningEmerald)
+                                } else if !cue.updatedText.isEmpty {
+                                    Text(cue.updatedText)
+                                        .font(.system(size: 11).monospacedDigit())
+                                        .foregroundStyle(LeverTheme.inkTertiary)
+                                }
+
+                                if cue.isUnread {
+                                    Circle()
+                                        .fill(LeverTheme.unreadRed)
+                                        .frame(width: 6, height: 6)
+                                }
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 8)
+                            .background(LeverTheme.surfaceElevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            if cue.isUnread && cue.unreadSequence > 0 {
+                                Button {
+                                    store.markSessionsRead(
+                                        deviceId: row.device.id,
+                                        marks: [ReadMark(sessionId: cue.id, sequence: cue.unreadSequence)],
+                                        banner: "已将话题「\(cue.title)」标为已读"
+                                    )
+                                } label: {
+                                    Label("标为已读", systemImage: "checkmark.circle")
+                                }
+                            }
+                            if cue.canClear {
+                                Button {
+                                    store.clearSingleTopic(
+                                        deviceId: row.device.id,
+                                        topicId: cue.id,
+                                        unreadSequence: cue.unreadSequence,
+                                        title: cue.title
+                                    )
+                                } label: {
+                                    Label("清理话题", systemImage: "archivebox")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 76)
+                .padding(.trailing, 16)
+                .padding(.bottom, 12)
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity.combined(with: .move(edge: .top))
+                    )
+                )
+            }
+        }
+        .background(LeverTheme.surface)
+        .clipped()
+    }
+
+    private func subTopicDotColor(_ cue: ActiveTopicCue) -> Color {
+        switch cue.status {
+        case "approval": return LeverTheme.approvalAmberDot
+        case "running": return LeverTheme.runningEmerald
+        case "unread": return LeverTheme.inkPrimary
+        default: return LeverTheme.inkTertiary.opacity(0.6)
+        }
     }
 }
 
@@ -480,10 +678,9 @@ struct UnreadBadgePill: View {
         Text(count > 99 ? "99+" : "\(count)")
             .font(.system(size: 11, weight: .bold).monospacedDigit())
             .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .frame(minWidth: 18, minHeight: 18)
-            .background(LeverTheme.unreadRed)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(LeverTheme.surface, lineWidth: 1.8))
+            .padding(.horizontal, count > 9 ? 5.5 : 0)
+            .frame(minWidth: 19, minHeight: 19)
+            .background(LeverTheme.unreadRed, in: Capsule())
+            .overlay(Capsule().stroke(LeverTheme.surface, lineWidth: 2))
     }
 }

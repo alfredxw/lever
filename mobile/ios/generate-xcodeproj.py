@@ -3,6 +3,8 @@
 
 import hashlib
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 IOS_DIR = Path(__file__).resolve().parent
@@ -21,6 +23,29 @@ def copy_icon() -> None:
     if src.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+    preset_src = IOS_DIR.parent.parent / "cmd" / "lever-desktop" / "icon.png"
+    if not preset_src.exists():
+        preset_src = src
+    preset_dst = APP_DIR / "Resources" / "Assets.xcassets" / "LeverPresetLogo.imageset" / "LeverPresetLogo.png"
+    if preset_src.exists():
+        preset_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(preset_src, preset_dst)
+        contents = preset_dst.parent / "Contents.json"
+        contents.write_text(
+            '{\n'
+            '  "images": [\n'
+            '    {\n'
+            '      "filename": "LeverPresetLogo.png",\n'
+            '      "idiom": "universal"\n'
+            '    }\n'
+            '  ],\n'
+            '  "info": {\n'
+            '    "author": "xcode",\n'
+            '    "version": 1\n'
+            '  }\n'
+            '}\n',
+            encoding="utf-8",
+        )
 
 
 def generate() -> None:
@@ -53,10 +78,14 @@ def generate() -> None:
     ID_ENTITLEMENTS_REF = uid("fileref:Lever.entitlements")
     ID_LIBRESOLV_REF = uid("fileref:libresolv.tbd")
     ID_LIBRESOLV_BUILD = uid("buildfile:libresolv.tbd")
+    ID_TEXTUAL_PKG = uid("pkg:textual")
+    ID_TEXTUAL_PROD = uid("pkgprod:Textual")
+    ID_TEXTUAL_BUILD = uid("buildfile:Textual")
 
     build_files = [
         f"\t\t{ID_XCFRAMEWORK_BUILD} /* LeverCore.xcframework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ID_XCFRAMEWORK_REF} /* LeverCore.xcframework */; }};",
         f"\t\t{ID_LIBRESOLV_BUILD} /* libresolv.tbd in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ID_LIBRESOLV_REF} /* libresolv.tbd */; }};",
+        f"\t\t{ID_TEXTUAL_BUILD} /* Textual in Frameworks */ = {{isa = PBXBuildFile; productRef = {ID_TEXTUAL_PROD} /* Textual */; }};",
         f"\t\t{ID_ASSETS_BUILD} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {ID_ASSETS_REF} /* Assets.xcassets */; }};",
     ]
     file_refs = [
@@ -101,7 +130,7 @@ def generate() -> None:
 				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Lever/Resources/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -155,6 +184,7 @@ def generate() -> None:
 			files = (
 				{ID_XCFRAMEWORK_BUILD} /* LeverCore.xcframework in Frameworks */,
 				{ID_LIBRESOLV_BUILD} /* libresolv.tbd in Frameworks */,
+				{ID_TEXTUAL_BUILD} /* Textual in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
@@ -211,6 +241,9 @@ def generate() -> None:
 			dependencies = (
 			);
 			name = Lever;
+			packageProductDependencies = (
+				{ID_TEXTUAL_PROD} /* Textual */,
+			);
 			productName = Lever;
 			productReference = {ID_PRODUCT_APP} /* Lever.app */;
 			productType = "com.apple.product-type.application";
@@ -235,6 +268,9 @@ def generate() -> None:
 				Base,
 			);
 			mainGroup = {ID_MAIN_GROUP};
+			packageReferences = (
+				{ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */,
+			);
 			productRefGroup = {ID_PRODUCTS_GROUP} /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -278,7 +314,7 @@ def generate() -> None:
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -297,7 +333,7 @@ def generate() -> None:
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -337,6 +373,25 @@ def generate() -> None:
 			defaultConfigurationName = Release;
 		}};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		{ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */ = {{
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/textual";
+			requirement = {{
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.5.0;
+			}};
+		}};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		{ID_TEXTUAL_PROD} /* Textual */ = {{
+			isa = XCSwiftPackageProductDependency;
+			package = {ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		}};
+/* End XCSwiftPackageProductDependency section */
 	}};
 	rootObject = {ID_PROJECT} /* Project object */;
 }}

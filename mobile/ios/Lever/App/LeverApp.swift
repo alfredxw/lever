@@ -96,9 +96,14 @@ struct LeverApp: App {
     }
 }
 
+private enum RootTab: Hashable {
+    case chats
+    case settings
+}
+
 private struct RootContainerView: View {
     @Bindable var store: LeverStore
-    @State private var selectedTab = 0
+    @State private var selectedTab: RootTab = .chats
 
     var body: some View {
         Group {
@@ -114,35 +119,34 @@ private struct RootContainerView: View {
             } else if !store.isPaired {
                 PairingView(store: store)
             } else {
-                TabView(selection: $selectedTab) {
-                    FeedView(store: store)
-                        .tabItem {
-                            Label("消息", systemImage: "bubble.left.and.bubble.right.fill")
-                        }
-                        .badge(store.totalUnreadSessions)
-                        .tag(0)
-
-                    if !store.isDirectMode {
-                        TasksView(store: store)
-                            .tabItem {
-                                Label("任务", systemImage: "checklist")
-                            }
-                            .tag(1)
-                    }
-
-                    SettingsView(store: store)
-                        .tabItem {
-                            Label("设置", systemImage: "gearshape")
-                        }
-                        .tag(2)
-                }
-                .tint(LeverTheme.inkPrimary)
+                nativeTabView
             }
         }
         .onChange(of: store.pendingNavigationRoute, initial: true) { _, route in
             if route != nil {
-                selectedTab = 0
+                selectedTab = .chats
             }
+        }
+    }
+
+    @ViewBuilder
+    private var nativeTabView: some View {
+        let baseTabView = TabView(selection: $selectedTab) {
+            Tab("聊天", systemImage: "bubble.left.and.bubble.right", value: RootTab.chats) {
+                FeedView(store: store)
+            }
+            .badge(store.cachedTotalUnread)
+
+            Tab("设置", systemImage: "gearshape", value: RootTab.settings) {
+                SettingsView(store: store)
+            }
+        }
+        .tint(LeverTheme.inkPrimary)
+
+        if #available(iOS 26.0, *) {
+            baseTabView.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            baseTabView
         }
     }
 }
@@ -151,13 +155,14 @@ struct LeverBrandMark: View {
     var size: CGFloat = 56
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                .fill(LeverTheme.inkPrimary)
-            Image(systemName: "bolt.horizontal.fill")
-                .font(.system(size: size * 0.44, weight: .bold))
-                .foregroundStyle(LeverTheme.surface)
-        }
-        .frame(width: size, height: size)
+        Image("LeverPresetLogo")
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5)
+            )
     }
 }

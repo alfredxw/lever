@@ -1,7 +1,7 @@
 import Foundation
 
-/// Lightweight disk cache under Application Support so opening Lever Mobile
-/// shows cached devices, conversations, and local read cursors instantly.
+/// Off-main-thread disk cache under Application Support so opening Lever Mobile
+/// shows cached devices, conversations, and local cursors instantly with zero UI hitching.
 final class LocalCache: @unchecked Sendable {
     static let shared = LocalCache()
 
@@ -25,9 +25,23 @@ final class LocalCache: @unchecked Sendable {
         }
     }
 
-    func save<T: Encodable>(_ value: T, as name: String) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
+    func loadAsync<T: Decodable & Sendable>(_ name: String, as type: T.Type = T.self) async -> T? {
+        await withCheckedContinuation { continuation in
+            queue.async { [baseURL] in
+                let url = baseURL.appendingPathComponent(Self.sanitize(name) + ".json")
+                guard let data = try? Data(contentsOf: url),
+                      let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: decoded)
+            }
+        }
+    }
+
+    func save<T: Encodable & Sendable>(_ value: T, as name: String) {
         queue.async { [baseURL] in
+            guard let data = try? JSONEncoder().encode(value) else { return }
             let safe = Self.sanitize(name)
             let url = baseURL.appendingPathComponent(safe + ".json")
             try? data.write(to: url, options: .atomic)
