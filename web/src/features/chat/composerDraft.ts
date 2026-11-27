@@ -51,6 +51,8 @@ type SavedDraft = Omit<Partial<Draft>, "editing"> & {
   };
 };
 
+export const defaultComposerTopic = true;
+
 const composerPrefix = "lever:composer:";
 const submissionPrefix = "lever:submission:";
 const legacyDraftPrefix = "lever:draft:";
@@ -192,7 +194,9 @@ function restoreDraft(
         saved?.text ?? legacyText,
         saved?.references ?? pending?.references,
       ),
-    topic: saved?.topic ?? (!!comparison || send?.operation === "topic"),
+    topic:
+      saved?.topic ??
+      (send ? send.operation === "topic" : defaultComposerTopic),
     sessionSelection: saved?.sessionSelection,
     topicSelection: saved?.topicSelection,
     files: saved?.files ?? [],
@@ -427,7 +431,9 @@ export function clearComposerDraft(key: string) {
   localStorage.removeItem(legacyDraftStorageKey(key));
   if (
     current &&
-    (current.sessionSelection || current.topicSelection || current.topic)
+    (current.sessionSelection ||
+      current.topicSelection ||
+      current.topic !== defaultComposerTopic)
   ) {
     const cleared: Draft = {
       content: textPrompt(""),

@@ -31,6 +31,8 @@ async function createAgent(page: Page, name: string, scope: string) {
 }
 
 async function send(page: Page, text: string) {
+  const mode = page.getByRole("button", { name: "话题", exact: true });
+  if ((await mode.getAttribute("aria-pressed")) === "true") await mode.click();
   const input = page.getByRole("textbox", { name: "发送消息", exact: true });
   await input.click();
   await input.fill(text);

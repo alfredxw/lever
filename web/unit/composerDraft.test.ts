@@ -45,7 +45,7 @@ Object.defineProperty(globalThis, "localStorage", {
 function emptyDraft(overrides: Partial<Draft> = {}): Draft {
   return {
     content: textPrompt(""),
-    topic: false,
+    topic: true,
     files: [],
     quote: null,
     ...overrides,
@@ -231,6 +231,17 @@ test("clearComposerDraft clears unsent input and preserves explicit model select
   clearComposerDraft("draft:agent-1");
   assert.equal(hasStoredComposerInput("draft:agent-1"), false);
   assert.equal(storage.getItem("lever:composer:draft:agent-1"), null);
+
+  saveComposerDraft(
+    "chat-continuous",
+    emptyDraft({ content: textPrompt("连续对话草稿"), topic: false }),
+  );
+  clearComposerDraft("chat-continuous");
+  assert.equal(hasStoredComposerInput("chat-continuous"), false);
+  const keptMode = JSON.parse(
+    storage.getItem("lever:composer:chat-continuous") ?? "null",
+  );
+  assert.equal(keptMode?.topic, false);
 });
 
 test("formatDraftPreview falls back cleanly across draft content kinds", () => {

@@ -81,6 +81,18 @@ async function createAgent(page: Page, name: string, scope = context().scope) {
     page.getByRole("button", { name: "选择模型和运行时", exact: true }),
   ).toContainText("GPT Test");
 }
+async function setComposerMode(
+  scope: Page | Locator,
+  mode: "topic" | "chat",
+) {
+  const button = scope.getByRole("button", { name: "话题", exact: true });
+  const expected = mode === "topic" ? "true" : "false";
+  if ((await button.getAttribute("aria-pressed")) !== expected) {
+    await button.click();
+    await expect(button).toHaveAttribute("aria-pressed", expected);
+  }
+}
+
 async function send(page: Page, text?: string) {
   const composer = page.locator(".chat-composer-wrap");
   if (text !== undefined)
@@ -898,6 +910,8 @@ test("compares ordinary replies from multiple Agents and continues the selected 
     .press("ArrowRight");
   await models.getByRole("radio", { name: "高", exact: true }).click();
   await expect(textbox).toBeFocused();
+  await expect(topicMode).toHaveAttribute("aria-pressed", "true");
+  await topicMode.click();
   await expect(topicMode).toHaveAttribute("aria-pressed", "false");
   await expect(compare).toHaveCount(0);
   await textbox.fill("、compare");
@@ -1350,6 +1364,7 @@ test("chat previews HTML inline, resolves report images and copies the actual fi
   });
   await createAgent(page, "内嵌报告 Agent");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   await composer.getByLabel("选择附件", { exact: true }).setInputFiles(path);
   await expect(
     composer.getByRole("button", { name: report, exact: true }),
@@ -1967,14 +1982,16 @@ test("sidebar search finds Agents, scoped Topics and historical message text", a
   page,
 }) => {
   await createAgent(page, "搜索测试 Agent A");
+  await setComposerMode(page, "chat");
   await send(page, "发布计划 A");
   await send(page, "正文检索专用内容");
   await send(page, "更新活动预览");
-  await page.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(page, "topic");
   await send(page, "发布排查");
   await createAgent(page, "搜索测试 Agent B");
+  await setComposerMode(page, "chat");
   await send(page, "发布计划 B");
-  await page.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(page, "topic");
   await send(page, "发布排查");
   const agentId = await page.evaluate(() =>
     localStorage.getItem("lever:agent"),
@@ -2331,6 +2348,7 @@ test("Last Turn stays in its Chat and pins its patch until refresh", async ({
   page,
 }) => {
   await createAgent(page, "本轮变更");
+  await setComposerMode(page, "chat");
   const first = page.waitForResponse(
     (r) => r.url().endsWith("/api/messages") && r.request().method() === "POST",
   );
@@ -2631,6 +2649,7 @@ test("Agent activity stays compact, preserves navigation and supports default co
   await expect(group.locator(".agent-activity-item")).toHaveCount(0);
   const nameWidth = (await group.locator(".agent-select").boundingBox())!.width;
   const mainTitle = String.raw`/web/test-results*/ [配置] \[保留]`;
+  await setComposerMode(page, "chat");
   await send(page, mainTitle);
   const overview = (await (
     await page.request.get("/api/overview")
@@ -2976,6 +2995,7 @@ test("Agent sidebar supports single-row steady actions, whole-row toggle, steady
   const agentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
   );
+  await setComposerMode(page, "chat");
   await send(page, "主会话消息");
   const overview = (await (
     await page.request.get("/api/overview")
@@ -3484,6 +3504,7 @@ test("a slow Topic cannot take selection back from a sidebar Chat", async ({
   page,
 }) => {
   await createAgent(page, "侧栏单击切换");
+  await setComposerMode(page, "chat");
   await send(page, "主会话");
   const agentId = await page.evaluate(() =>
     localStorage.getItem("lever:agent"),
@@ -3739,6 +3760,7 @@ test("Recent clears read completed conversations and restores priority on a new 
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await createAgent(page, "最近分组");
+  await setComposerMode(page, "chat");
   await send(page, "已读的主会话");
   const readOverview = async () =>
     (await (await page.request.get("/api/overview")).json()) as Overview;
@@ -4040,6 +4062,7 @@ test("unsent drafts surface cleared conversations and new-chat drafts in the Age
     page.getByRole("menuitem", { name, exact: true });
 
   await createAgent(page, "草稿回溯甲");
+  await setComposerMode(page, "chat");
   await send(page, "主会话历史消息");
   const firstAgentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
@@ -4214,6 +4237,7 @@ test("first-send rejection leaves no Chat and a lost response retries exactly on
   page,
 }) => {
   await createAgent(page, "首次发送重试");
+  await setComposerMode(page, "chat");
   const agentId = await page.evaluate(
     () => localStorage.getItem("lever:agent")!,
   );
@@ -4333,7 +4357,9 @@ test("a new Chat moves between panes and accepts a Topic as its first message", 
   await input.fill("@hello");
   await page.getByRole("option", { name: "hello.go", exact: true }).click();
   await input.pressSequentially(" 先开启一个话题");
-  await draft.getByRole("button", { name: "话题", exact: true }).click();
+  await expect(
+    draft.getByRole("button", { name: "话题", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
   await draft.getByRole("button", { name: "发送", exact: true }).click();
   const chat = page.locator('.tab-panel[data-visible="true"]:has(.chat-panel)');
   await expect(chat).toHaveAttribute("data-pane", "side");
@@ -4458,6 +4484,7 @@ for (const runtime of ["Antigravity", "Pi", "DeepSeek Harness"]) {
     await page.getByRole("radio", { name: runtime, exact: true }).click();
     await page.keyboard.press("Escape");
     const composer = page.locator(".chat-composer-wrap:visible");
+    await setComposerMode(composer, "chat");
     const input = composer.getByRole("textbox", {
       name: "发送消息",
       exact: true,
@@ -4496,6 +4523,7 @@ test("Antigravity delivers a startup Steer to the original turn", async ({ page 
     await page.getByRole("radio", { name: "Antigravity", exact: true }).click();
     await page.keyboard.press("Escape");
     const composer = page.locator(".chat-composer-wrap:visible");
+    await setComposerMode(composer, "chat");
     const input = composer.getByRole("textbox", { name: "发送消息", exact: true });
     await input.fill("[defer-steer] [steer-open]");
     await composer.getByRole("button", { name: "发送", exact: true }).click();
@@ -4519,6 +4547,7 @@ test("running sends default to Steer and honor the saved action and shortcut", a
 }) => {
   await createAgent(page, "运行中发送偏好");
   const composer = page.locator(".chat-composer-wrap:visible");
+  await setComposerMode(composer, "chat");
   const input = composer.getByRole("textbox", {
     name: "发送消息",
     exact: true,
@@ -4586,9 +4615,7 @@ test("Topic steering uses the active model and saves the selected model for the 
 }) => {
   await createAgent(page, "追加消息的模型提示");
   const mainComposer = page.locator(".chat-composer-wrap:visible");
-  await mainComposer
-    .getByRole("button", { name: "话题", exact: true })
-    .click();
+  await setComposerMode(mainComposer, "topic");
   await mainComposer
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill("[hang] Topic with a running turn");
@@ -4671,6 +4698,7 @@ test("main and Topics execute independently with isolated queues, approvals and 
 }) => {
   await createAgent(page, "并行搭档");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const input = composer.getByRole("textbox", {
     name: "发送消息",
     exact: true,
@@ -4835,6 +4863,7 @@ test("message actions preserve drafts and forward to an Agent with a note exactl
   page,
 }) => {
   await createAgent(page, "消息操作");
+  await setComposerMode(page, "chat");
   await send(page, "请检查这段 **原始内容**。");
   const run = page.locator(".run-content").first();
   const answer = run.locator(".agent-message");
@@ -4973,7 +5002,7 @@ test("quoting a topic message targets its reply and preserves the main draft", a
   const mode = page
     .locator(".chat-composer-wrap")
     .getByRole("button", { name: "话题", exact: true });
-  await mode.click();
+  await expect(mode).toHaveAttribute("aria-pressed", "true");
   await send(page, "这个话题需要独立讨论。");
   await mode.click();
   await main.fill("主聊天草稿");
@@ -5032,6 +5061,7 @@ test("message actions omit quote-to and keep the topic action in a stable leadin
   page,
 }) => {
   await createAgent(page, "话题入口位置");
+  await setComposerMode(page, "chat");
   await send(page, "主线确定了接口约定。");
   const run = page.locator(".chat-panel:visible .run-content").first();
   const userActions = run.locator(".user-message .message-actions");
@@ -5259,6 +5289,7 @@ test("same Chat mixes main messages and topic replies, survives reload, previews
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await createAgent(page, "代码搭档");
+  await setComposerMode(page, "chat");
   await send(page, "先梳理这个项目的结构。");
   const mode = page
     .locator(".chat-composer-wrap")
@@ -5441,6 +5472,7 @@ test("one Chat expands, switches and creates independent Topics beside Notes", a
 }, testInfo) => {
   await page.setViewportSize({ width: 1680, height: 900 });
   await createAgent(page, "分栏讨论");
+  await setComposerMode(page, "chat");
   await send(page, "发布总览");
   const mode = page.getByRole("button", { name: "话题", exact: true });
   await mode.click();
@@ -5766,6 +5798,7 @@ test("disabling automatic Topic opening persists and keeps the current Topic", a
   await navigation.getByRole("button", { name: "Agents", exact: true }).click();
   await page.reload();
 
+  await setComposerMode(page, "chat");
   await send(page, "工作总览");
   await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "当前话题");
@@ -5788,6 +5821,7 @@ test("a pending Topic creation does not replace a Topic selected while waiting",
   page,
 }) => {
   await createAgent(page, "话题切换保护");
+  await setComposerMode(page, "chat");
   await send(page, "工作总览");
   await page.getByRole("button", { name: "话题", exact: true }).click();
   await send(page, "出发话题");
@@ -5832,7 +5866,7 @@ test("a long Topic title keeps Back visible and scrolls older choices into the s
 }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 800 });
   await createAgent(page, "话题导航");
-  await page.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(page, "topic");
   const rootTitle =
     "@docs/remote-devices.md 基于这个方案重新 review，看看交互能否更优雅通用。".repeat(
       4,
@@ -5936,10 +5970,7 @@ test("topic previews stay recent while its tab loads full history and preserves 
   page,
 }) => {
   await createAgent(page, "话题记录");
-  await page
-    .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "话题", exact: true })
-    .click();
+  await setComposerMode(page.locator(".chat-composer-wrap"), "topic");
   await send(page, "完整保留这个话题的讨论记录。");
   const topic = page.locator(".topic-thread");
   const sessionId = await topic.getAttribute("data-session-id");
@@ -6119,7 +6150,7 @@ test("a delegation opens its Agent's Chat while native subagents stay in the Top
   expect(updated.ok()).toBe(true);
 
   const composer = page.locator(".chat-composer-wrap");
-  await composer.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(composer, "topic");
   await composer
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill(`[delegate:${buyer.id}] [subagents]`);
@@ -6184,6 +6215,7 @@ test("approval and pause controls operate on the owning run", async ({
   page,
 }) => {
   await createAgent(page, "审阅搭档");
+  await setComposerMode(page, "chat");
   await page
     .getByRole("textbox", { name: "发送消息", exact: true })
     .fill("[approval]");
@@ -6290,6 +6322,7 @@ test("approval and pause controls operate on the owning run", async ({
 test("Claude Code continues a paused reply after reload", async ({ page }) => {
   await createAgent(page, "Claude 续接");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   await composer.getByRole("button", { name: "选择模型和运行时" }).click();
   await page.getByRole("radio", { name: "Claude Code", exact: true }).click();
   await page.keyboard.press("Escape");
@@ -6318,6 +6351,7 @@ test("sending and editing a paused reply start new executions", async ({
 }) => {
   await createAgent(page, "暂停后发送");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const input = composer.getByRole("textbox", {
     name: "发送消息",
     exact: true,
@@ -6350,6 +6384,7 @@ test("editing a sent Chat message restores the draft and resends once after a lo
   page,
 }) => {
   await createAgent(page, "Edit sent Chat");
+  await setComposerMode(page, "chat");
   await send(page, "Retained Chat prompt");
   const composer = page.locator(".chat-composer-wrap");
   const input = composer.getByRole("textbox", { name: "发送消息" });
@@ -6440,6 +6475,7 @@ test("editing a Topic root from its preview keeps its place in the Chat", async 
   page,
 }) => {
   await createAgent(page, "Edit sent Topic");
+  await setComposerMode(page, "chat");
   await send(page, "Main before Topic");
   const mainComposer = page.locator(".chat-composer-wrap");
   await mainComposer
@@ -6493,6 +6529,7 @@ test("retrying a failed Chat message reuses its payload and leaves the queue pau
   page,
 }) => {
   await createAgent(page, "消息重试");
+  await setComposerMode(page, "chat");
   await send(page, "供后续消息引用的内容");
   const runs = page.locator(".chat-panel .conversation > .run-content");
   const composer = page.locator(".chat-composer-wrap");
@@ -6613,6 +6650,7 @@ test("continuing a failed Chat message with partial output resumes the same turn
 }) => {
   await createAgent(page, "中断续接");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const input = composer.getByRole("textbox", { name: "发送消息" });
   const runs = page.locator(".chat-panel .conversation > .run-content");
   await input.fill("[fail-after-partial] 保留已生成内容并继续");
@@ -6672,7 +6710,7 @@ test("retrying a Topic stopped before runtime binding starts it in the same Topi
   mkdirSync(scope, { recursive: true });
   await createAgent(page, "话题重试", scope);
   const main = page.locator(".chat-composer-wrap");
-  await main.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(main, "topic");
   await main.getByRole("textbox", { name: "发送消息" }).fill("[hang] 话题请求");
   await main.getByRole("button", { name: "发送", exact: true }).click();
   const topic = page.locator(".topic-thread");
@@ -6713,10 +6751,7 @@ test("topic submission stays pending across closing and reopening its tab", asyn
   page,
 }) => {
   await createAgent(page, "话题发送");
-  await page
-    .locator(".chat-composer-wrap")
-    .getByRole("button", { name: "话题", exact: true })
-    .click();
+  await setComposerMode(page.locator(".chat-composer-wrap"), "topic");
   await send(page, "测试话题发送过程。");
   const topic = page.locator(".topic-thread");
   const open = topic.getByRole("button", { name: "回复", exact: true });
@@ -6761,6 +6796,7 @@ test("lost submit response remains idempotent after a browser reload", async ({
   page,
 }) => {
   await createAgent(page, "可靠发送");
+  await setComposerMode(page, "chat");
   await send(page, "先建立主对话。");
   await page.route("**/api/messages", async (route) => {
     await route.fetch();
@@ -6920,6 +6956,10 @@ test("language switches live, preserves drafts and tab overflow stays usable", a
   page,
 }) => {
   await createAgent(page, "语言验证");
+  await expect(
+    page.getByRole("button", { name: "话题", exact: true }),
+  ).toHaveText("话题");
+  await setComposerMode(page, "chat");
   await send(page, "保留用户的中文消息。");
   await page
     .getByRole("textbox", { name: "发送消息", exact: true })
@@ -7074,6 +7114,7 @@ test("composer uploads, pastes and drops files, persists choices, switches runti
 }) => {
   await createAgent(page, "界面搭档");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
     "base64",
@@ -7594,6 +7635,7 @@ test("new Chats and Topics remember each Agent’s model and permission choices"
   await profilePermissions.getByRole("radio", { name: "按需审批" }).click();
   expect((await saveAsk).ok()).toBeTruthy();
   await newChat.click();
+  await setComposerMode(composer, "chat");
   await send(page, "Main session uses GPT Test");
   await topic.click();
   await expect(permission).toHaveAccessibleName("权限 · 按需审批");
@@ -7818,6 +7860,7 @@ test("composer permissions follow the selected provider and apply to the next ru
     await page.request.post(`/api/provider-candidates/${id}/agent`),
   ).toBeOK();
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const trigger = composer.getByRole("button", { name: /^权限 · / });
   const input = composer.getByRole("textbox", { name: "发送消息" });
   const menu = page.getByRole("menu", { name: "权限" });
@@ -8037,6 +8080,7 @@ test("consecutive tools and thoughts share one activity row that shimmers while 
 }) => {
   await createAgent(page, "执行过程");
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   await composer
     .getByRole("textbox", { name: "发送消息" })
     .fill("[tool-activity]");
@@ -8093,6 +8137,7 @@ test("command exit codes and tool errors stay in their own rows", async ({
   page,
 }) => {
   await createAgent(page, "命令结果");
+  await setComposerMode(page, "chat");
   await send(page, "[command-exits]");
   await page.reload();
 
@@ -8141,6 +8186,7 @@ for (const provider of ["Codex", "Claude Code", "Antigravity"]) {
     page,
   }) => {
     await createAgent(page, `${provider} thinking`);
+    await setComposerMode(page, "chat");
     const runs = page.locator(".chat-panel .conversation > .run-content");
     const paragraphs =
       provider === "Codex"
@@ -8199,6 +8245,7 @@ test("Antigravity auto-expands pure thinking stream and uses single-line tool st
   await page.keyboard.press("Escape");
 
   const composer = page.locator(".chat-composer-wrap");
+  await setComposerMode(composer, "chat");
   const runs = page.locator(".chat-panel .conversation > .run-content");
 
   // 1. Pure thinking stage auto-expands into a scrollable reasoning region.
@@ -8417,7 +8464,11 @@ test("composer toggles directly and keeps inline references through copy, retry 
   });
   const references = input.locator("[data-reference]");
   const mode = composer.getByRole("button", { name: "话题", exact: true });
+  await expect(mode).toHaveText("话题");
+  await expect(mode).toHaveAttribute("aria-pressed", "true");
+  await mode.click();
   await expect(mode).toHaveText("对话");
+  await expect(mode).toHaveAttribute("aria-pressed", "false");
   await mode.click();
   await expect(mode).toHaveText("话题");
   await expect(mode).toHaveAttribute("aria-pressed", "true");
@@ -8880,6 +8931,7 @@ test("inline references edit at the caret, delete atomically and undo without gh
   page,
 }) => {
   await createAgent(page, "行内编辑");
+  await setComposerMode(page, "chat");
   const input = page.getByRole("textbox", { name: "发送消息", exact: true });
   const references = input.locator("[data-reference]");
   await input.fill("前文 后文");
@@ -8995,6 +9047,7 @@ test("skills refresh between turns and respect runtime changes in both Chat and 
   ).toBeVisible();
   const reviewURL = "https://example.test/review/42?file=main.go";
   await input.pressSequentially(`[wire] ${reviewURL}`);
+  await setComposerMode(composer, "chat");
   await send(page);
   const receipt = page
     .locator(".chat-panel .conversation > .run-content")
@@ -9064,6 +9117,7 @@ test("file suggestions and accepted references follow the selected session scope
   page,
 }) => {
   await createAgent(page, "文件范围");
+  await setComposerMode(page, "chat");
   await send(page, "建立连续会话");
   const result = await page.evaluate(async (otherScope) => {
     const overview = await (await fetch("/api/overview")).json();
@@ -9193,7 +9247,7 @@ test("a narrow Chat pane keeps composer actions in one icon row", async ({
     exact: true,
   });
   const modelName = model.locator(".model-trigger-name");
-  await mode.click();
+  await expect(mode).toHaveAttribute("aria-pressed", "true");
   await send(page, "分栏 Topic");
   await page.getByRole("button", { name: "回复", exact: true }).click();
   const divider = page.getByRole("separator", { name: "调整分区宽度" });
@@ -9236,7 +9290,9 @@ test("a narrow Chat pane keeps composer actions in one icon row", async ({
 test("browsing reuses a conversation preview and keeps edits and partial answers", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1360, height: 1200 });
   await createAgent(page, "巡看会话");
+  await setComposerMode(page, "chat");
   await send(page, "巡看工作的父 Chat");
   const overview = (await (
     await page.request.get("/api/overview")
@@ -9345,6 +9401,7 @@ test("topic tabs share panes, animate without scaling, and restore without their
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await createAgent(page, "话题标签");
+  await setComposerMode(page, "chat");
   await send(page, "父 Chat 上下文");
   await page
     .locator(".chat-composer-wrap")
@@ -9725,7 +9782,7 @@ test("Worktree setup reconnects on reload and retries only the failed repository
     name: "发送消息",
     exact: true,
   });
-  await composer.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(composer, "topic");
   await textbox.fill("[worktree-setup]");
   const worktrees = composer.getByRole("button", {
     name: "工作目录组",
@@ -9938,11 +9995,12 @@ test("directory groups reuse worktrees and keep Topic tools in the selected Scop
   await expect(
     composer.getByRole("button", { name: "工作目录组", exact: true }),
   ).toHaveCount(0);
+  await setComposerMode(composer, "chat");
   await send(page, "普通发送");
   expect(
     git(app, "worktree", "list", "--porcelain").match(/^worktree /gm),
   ).toHaveLength(1);
-  await composer.getByRole("button", { name: "话题", exact: true }).click();
+  await setComposerMode(composer, "topic");
   const workspace = composer.getByRole("button", {
     name: "工作目录组",
     exact: true,
@@ -11129,6 +11187,7 @@ test("sidebar Chats fill main instead of side and side Topic details open opposi
   page,
 }) => {
   await createAgent(page, "分栏归属规则");
+  await setComposerMode(page, "chat");
   await send(page, "对话 A 首条消息");
   const overview: Overview = await (
     await page.request.get("/api/overview")

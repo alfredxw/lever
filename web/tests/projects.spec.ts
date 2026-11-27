@@ -155,7 +155,9 @@ test("Shared Project scope is managed inside Agent Profile without Projects tab 
   await page.keyboard.press("Escape");
 
   // Verify Topic directory picker in Codex 后端 sees the shared Project's worktree group.
-  await composer.getByRole("button", { name: "话题", exact: true }).click();
+  await expect(
+    composer.getByRole("button", { name: "话题", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
   await composer
     .getByRole("button", { name: "工作目录组", exact: true })
     .click();
