@@ -1,0 +1,2155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>融合方案 · Lever 本机数据统计预览</title>
+<style>
+  :root {
+    --font-sans: "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    --canvas-bg: #ececec;
+    --bg: #ffffff;
+    --sidebar: #fafafa;
+    --panel-bg: #f8f8f8;
+    --popover: rgba(255, 255, 255, 0.94);
+    --fg: #171717;
+    --fg-2: #404040;
+    --muted-fg: #737373;
+    --faint-fg: #a3a3a3;
+    --primary: #262626;
+    --primary-fg: #fafafa;
+    --border: rgba(23, 23, 23, 0.09);
+    --border-subtle: rgba(23, 23, 23, 0.06);
+    --border-strong: rgba(23, 23, 23, 0.17);
+    --control-bg: #ffffff;
+    --control-hover: rgba(23, 23, 23, 0.055);
+    --control-selected: rgba(23, 23, 23, 0.095);
+    --control-focus: rgba(23, 23, 23, 0.14);
+    --surface-highlight: rgba(255, 255, 255, 0.9);
+    --surface-shadow: rgba(0, 0, 0, 0.06);
+    --overlay-shadow: rgba(0, 0, 0, 0.16);
+    --shadow-surface: inset 0 1px 0 var(--surface-highlight), 0 1px 2px var(--surface-shadow), 0 4px 12px -6px var(--surface-shadow);
+    --shadow-overlay: inset 0 1px 0 var(--surface-highlight), 0 2px 5px var(--surface-shadow), 0 14px 30px -10px var(--overlay-shadow);
+    --scrim: rgba(0, 0, 0, 0.22);
+
+    /* Provider & Series Accent Dots (Lever restrained palette) */
+    --usage-clay: #ad604a;
+    --usage-clay-soft: #cf8a74;
+    --usage-blue: #4169ba;
+    --usage-blue-soft: #7b9bd6;
+    --usage-violet: #7962aa;
+    --usage-teal: #2e7d7b;
+    --usage-slate: #6b7280;
+
+    --status-positive: #1f8a52;
+    --status-attention: #9a6700;
+    --diff-added: #1f8a52;
+    --diff-removed: #c53b3b;
+
+    /* Monochrome ink ramp for ShareBars */
+    --ink-100: #171717;
+    --ink-72: #525252;
+    --ink-50: #858585;
+    --ink-28: #c4c4c4;
+
+    /* Monochrome heat ramp for 7x24 Hourly Matrix */
+    --heat-0: rgba(23, 23, 23, 0.055);
+    --heat-1: rgba(23, 23, 23, 0.21);
+    --heat-2: rgba(23, 23, 23, 0.43);
+    --heat-3: rgba(23, 23, 23, 0.67);
+    --heat-4: rgba(23, 23, 23, 0.90);
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius: 8px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+  }
+
+  .dark {
+    --canvas-bg: #1f1f1f;
+    --bg: #141414;
+    --sidebar: #1a1a1a;
+    --panel-bg: #1c1c1c;
+    --popover: rgba(32, 32, 32, 0.94);
+    --fg: #fafafa;
+    --fg-2: #d4d4d4;
+    --muted-fg: #a1a1a1;
+    --faint-fg: #666666;
+    --primary: #e5e5e5;
+    --primary-fg: #171717;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.19);
+    --control-bg: rgba(255, 255, 255, 0.05);
+    --control-hover: rgba(255, 255, 255, 0.06);
+    --control-selected: rgba(255, 255, 255, 0.11);
+    --control-focus: rgba(255, 255, 255, 0.16);
+    --surface-highlight: rgba(255, 255, 255, 0.06);
+    --surface-shadow: rgba(0, 0, 0, 0.28);
+    --overlay-shadow: rgba(0, 0, 0, 0.50);
+    --scrim: rgba(0, 0, 0, 0.46);
+
+    --usage-clay: #e69a81;
+    --usage-clay-soft: #c4765e;
+    --usage-blue: #87a8f0;
+    --usage-blue-soft: #5c7fc9;
+    --usage-violet: #b79aee;
+    --usage-teal: #5cb5b2;
+    --usage-slate: #9ca3af;
+
+    --status-positive: #4cc38a;
+    --status-attention: #e5b567;
+    --diff-added: #4cc38a;
+    --diff-removed: #e57373;
+
+    --ink-100: #f0f0f0;
+    --ink-72: #adadad;
+    --ink-50: #787878;
+    --ink-28: #444444;
+
+    --heat-0: rgba(255, 255, 255, 0.06);
+    --heat-1: rgba(255, 255, 255, 0.22);
+    --heat-2: rgba(255, 255, 255, 0.44);
+    --heat-3: rgba(255, 255, 255, 0.68);
+    --heat-4: rgba(255, 255, 255, 0.92);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    color: var(--fg);
+    background: var(--canvas-bg);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  /* AGENTS.md: No focus rings/glows on any button */
+  button:focus-visible { outline: none; box-shadow: none; background: var(--control-focus); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); }
+
+  /* Lever App Shell */
+  .app-shell { display: flex; height: 100dvh; background: var(--canvas-bg); }
+  .primary-nav {
+    width: 160px; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px;
+    padding: 8px; color: var(--muted-fg); user-select: none;
+  }
+  .nav-wordmark {
+    height: 36px; display: flex; align-items: center; padding: 0 10px;
+    font-size: 13px; font-weight: 600; letter-spacing: -0.02em; color: var(--fg); gap: 8px;
+  }
+  .nav-wordmark .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--fg); }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 10px;
+    border-radius: var(--radius); font-size: 13px; font-weight: 500;
+    color: var(--muted-fg); transition: background-color 150ms, color 150ms; width: 100%; text-align: left;
+  }
+  .nav-item:hover, .nav-item.open { background: var(--control-hover); color: var(--fg); }
+  .nav-item.active { background: var(--control-selected); color: var(--fg); }
+  .nav-spacer { flex: 1; }
+
+  /* Workspace Inset Surface */
+  .workspace-frame {
+    flex: 1; min-width: 0; display: flex; margin: 8px 8px 8px 0;
+    border: 1px solid var(--border); border-radius: var(--radius-xl);
+    background: var(--bg); box-shadow: var(--shadow-surface); overflow: hidden;
+  }
+
+  /* Secondary Sidebar */
+  .secondary-sidebar {
+    width: 232px; flex-shrink: 0; background: var(--sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column; user-select: none;
+  }
+  .sidebar-header { height: 44px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-header h1 { font-size: 13px; font-weight: 600; letter-spacing: -0.015em; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: var(--radius-md);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted-fg); transition: background-color 150ms, color 150ms;
+  }
+  .icon-btn:hover { background: var(--control-hover); color: var(--fg); }
+  .sidebar-search { padding: 4px 12px 14px; }
+  .search-box {
+    display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--control-bg);
+    color: var(--muted-fg); font-size: 13px;
+  }
+  .sidebar-nav { padding: 0 12px 24px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+  .sidebar-group h2 { font-size: 12px; font-weight: 500; color: var(--muted-fg); padding: 2px 9px 6px; }
+  .sidebar-group-list { display: flex; flex-direction: column; gap: 2px; }
+  .sidebar-link {
+    display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 9px;
+    border-radius: var(--radius); font-size: 13px; font-weight: 500;
+    color: var(--muted-fg); width: 100%; text-align: left; transition: background-color 150ms, color 150ms;
+  }
+  .sidebar-link:hover { background: var(--control-hover); color: var(--fg); }
+  .sidebar-link[aria-current="page"] { background: var(--control-selected); color: var(--fg); }
+
+  /* Main Scroll Area */
+  .settings-scroll { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; }
+  .settings-content {
+    max-width: 940px; margin: 0 auto;
+    padding: 26px clamp(20px, 4%, 36px) 56px;
+    display: flex; flex-direction: column; gap: 28px;
+  }
+
+  /* Preview Utility Bar */
+  .prototype-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 12px; border-radius: var(--radius); background: var(--panel-bg);
+    border: 1px solid var(--border); font-size: 12px; color: var(--muted-fg);
+  }
+  .prototype-bar strong { color: var(--fg); font-weight: 600; }
+  .prototype-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .btn-outline {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--control-bg);
+    color: var(--fg); font-size: 12px; font-weight: 500; transition: background-color 150ms, border-color 150ms;
+  }
+  .btn-outline:hover { background: var(--control-hover); border-color: var(--border-strong); }
+  .btn-outline.active { background: var(--control-selected); border-color: var(--border-strong); }
+
+  /* Page Header */
+  .page-header {
+    display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+    gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  .page-title-block h2 { font-size: 22px; font-weight: 600; line-height: 1.3; letter-spacing: -0.025em; }
+  .page-subtitle {
+    margin-top: 4px; font-size: 12px; color: var(--muted-fg);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .controls-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+  /* ToggleGroup */
+  .toggle-group {
+    display: inline-flex; align-items: center; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--control-bg); padding: 2px; gap: 1px;
+  }
+  .toggle-item {
+    height: 26px; padding: 0 9px; border-radius: calc(var(--radius) - 2px);
+    font-size: 12px; font-weight: 500; color: var(--muted-fg);
+    transition: background-color 150ms, color 150ms; white-space: nowrap;
+  }
+  .toggle-item:hover { color: var(--fg); background: var(--control-hover); }
+  .toggle-item[aria-pressed="true"] { background: var(--control-selected); color: var(--fg); }
+
+  /* Hero + Trend Split (Option 1 core, enhanced with Provider / Model switch) */
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 274px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 840px) { .hero-grid { grid-template-columns: 1fr; } }
+
+  .hero-summary { display: flex; flex-direction: column; gap: 16px; }
+  .hero-figure { font-size: 38px; font-weight: 600; letter-spacing: -0.035em; line-height: 1.1; color: var(--fg); }
+  .hero-meta { margin-top: 6px; font-size: 12px; color: var(--muted-fg); display: flex; align-items: center; gap: 6px; }
+
+  .series-rank { display: flex; flex-direction: column; gap: 8px; }
+  .series-row {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 6px 8px; margin: 0 -8px; border-radius: var(--radius);
+    text-align: left; width: calc(100% + 16px);
+    transition: background-color 140ms, opacity 140ms;
+  }
+  .series-row:hover { background: var(--control-hover); }
+  .series-row.selected { background: var(--control-selected); }
+  .series-row.dimmed { opacity: 0.38; }
+  .series-row-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .series-name { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; color: var(--fg); min-width: 0; }
+  .series-name .label-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .series-dot { width: 7px; height: 7px; border-radius: 99px; flex-shrink: 0; }
+  .series-sessions { font-size: 11px; font-weight: 400; color: var(--muted-fg); flex-shrink: 0; }
+  .series-val { font-size: 13px; font-weight: 600; color: var(--fg); flex-shrink: 0; }
+  .series-sub { padding-left: 14px; font-size: 11.5px; color: var(--muted-fg); }
+
+  /* Trend Chart Column */
+  .chart-column { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .chart-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+  .chart-header-left { display: flex; align-items: baseline; gap: 10px; }
+  .section-title { font-size: 14px; font-weight: 600; color: var(--fg); }
+  .chart-hint { font-size: 11.5px; color: var(--muted-fg); }
+  .chart-wrap { position: relative; height: 244px; width: 100%; user-select: none; }
+  .chart-wrap svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .chart-axis-text { fill: var(--muted-fg); font-size: 11px; font-family: var(--font-sans); }
+  .chart-grid-line { stroke: var(--border); stroke-dasharray: 2 3; stroke-width: 1; }
+  .chart-tooltip {
+    position: absolute; z-index: 12; pointer-events: none; min-width: 184px;
+    padding: 9px 11px; border-radius: var(--radius-xl); border: 1px solid var(--border);
+    background: var(--popover); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-overlay); font-size: 12px; opacity: 0;
+    transform: translateY(2px); transition: opacity 100ms ease-out, transform 100ms ease-out;
+  }
+  .chart-tooltip.visible { opacity: 1; transform: translateY(0); }
+  .chart-tooltip-date { font-size: 11px; color: var(--muted-fg); margin-bottom: 6px; }
+  .chart-tooltip-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; line-height: 1.6; }
+  .chart-tooltip-label { display: flex; align-items: center; gap: 6px; color: var(--muted-fg); }
+  .chart-tooltip-total {
+    margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; font-weight: 600;
+  }
+
+  /* Totals 5-col */
+  .totals-section {
+    display: flex; flex-direction: column; gap: 12px;
+    padding-top: 20px; border-top: 1px solid var(--border-subtle);
+  }
+  .totals-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 720px) { .totals-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .metric-cell dt { font-size: 12px; color: var(--muted-fg); margin-bottom: 4px; }
+  .metric-cell dd { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--fg); }
+  .metric-cell dd.positive { color: var(--status-positive); }
+  .metric-sub { margin-top: 2px; font-size: 11px; color: var(--muted-fg); }
+
+  /* ShareBar Section */
+  .sharebars-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+  @media (max-width: 720px) { .sharebars-grid { grid-template-columns: 1fr; } }
+  .sharebar-block { display: flex; flex-direction: column; gap: 10px; }
+  .sharebar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .sharebar-aside { font-size: 12px; color: var(--muted-fg); }
+  .sharebar-track { display: flex; height: 8px; gap: 2px; }
+  .sharebar-seg { height: 100%; min-width: 4px; border-radius: 2px; }
+  .sharebar-seg:first-child { border-top-left-radius: 99px; border-bottom-left-radius: 99px; }
+  .sharebar-seg:last-child { border-top-right-radius: 99px; border-bottom-right-radius: 99px; }
+  .sharebar-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; list-style: none; font-size: 12px; }
+  .sharebar-legend li { display: flex; align-items: center; gap: 6px; }
+  .sharebar-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+  .sharebar-legend .lbl { color: var(--muted-fg); }
+  .sharebar-legend .num { color: var(--fg); font-weight: 500; }
+
+  /* 7x24 Hourly Activity Distribution (Option 2 integrated into Option 1 aesthetic) */
+  .hourly-section {
+    display: flex; flex-direction: column; gap: 12px;
+    padding-top: 20px; border-top: 1px solid var(--border-subtle);
+  }
+  .hourly-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px;
+  }
+  .hourly-readout {
+    font-size: 12px; color: var(--muted-fg); min-height: 18px;
+  }
+  .hourly-readout strong { color: var(--fg); font-weight: 600; }
+  .hourly-right-meta {
+    display: flex; align-items: center; gap: 12px; font-size: 11.5px; color: var(--muted-fg);
+  }
+  .heat-legend { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted-fg); }
+  .heat-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2.5px; }
+
+  .hourly-card {
+    padding: 16px 18px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-surface);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .hour-matrix-wrap {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 6px 10px;
+    align-items: center;
+  }
+  .hour-day-labels {
+    display: grid;
+    grid-template-rows: repeat(7, 20px);
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--muted-fg);
+    text-align: right;
+  }
+  .hour-day-labels span { line-height: 20px; }
+  .hour-day-labels span.today-lbl { color: var(--fg); font-weight: 500; }
+  .hour-grid {
+    display: grid;
+    grid-template-columns: repeat(24, minmax(0, 1fr));
+    grid-template-rows: repeat(7, 20px);
+    gap: 4px;
+  }
+  .hour-cell {
+    border-radius: 4px;
+    background: var(--heat-0);
+    transition: transform 90ms, box-shadow 120ms;
+    cursor: pointer;
+  }
+  .hour-cell[data-level="1"] { background: var(--heat-1); }
+  .hour-cell[data-level="2"] { background: var(--heat-2); }
+  .hour-cell[data-level="3"] { background: var(--heat-3); }
+  .hour-cell[data-level="4"] { background: var(--heat-4); }
+  .hour-cell[data-level="-1"] {
+    background: transparent; border: 1px dashed var(--border); pointer-events: none; cursor: default;
+  }
+  .hour-cell:hover { transform: scale(1.12); z-index: 2; }
+  .hour-cell.locked { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--fg); z-index: 3; }
+  .hour-axis {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: repeat(24, minmax(0, 1fr));
+    gap: 4px;
+    font-size: 10.5px;
+    color: var(--muted-fg);
+  }
+  .hour-axis span { grid-column: span 1; white-space: nowrap; }
+
+  /* Breakdown Section (Model / Agent / Project / Session / Date + Sortable) */
+  .breakdown-section {
+    display: flex; flex-direction: column; gap: 12px;
+    padding-top: 20px; border-top: 1px solid var(--border-subtle);
+  }
+  .breakdown-head {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .breakdown-head-left { display: flex; align-items: center; gap: 10px; }
+  .breakdown-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sort-pill {
+    display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px;
+    border-radius: var(--radius); border: 1px solid var(--border); background: var(--control-bg);
+    font-size: 12px; color: var(--muted-fg); transition: background-color 140ms, color 140ms;
+  }
+  .sort-pill:hover { background: var(--control-hover); color: var(--fg); }
+  .sort-pill strong { color: var(--fg); font-weight: 500; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table th {
+    padding: 8px 8px; border-bottom: 1px solid var(--border);
+    font-size: 12px; font-weight: 500; color: var(--muted-fg);
+    text-align: right; white-space: nowrap;
+  }
+  .data-table th:first-child, .data-table th:nth-child(2) { text-align: left; }
+  .th-sort-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    font: inherit; color: inherit; padding: 2px 4px; margin: -2px -4px;
+    border-radius: var(--radius-sm); transition: background-color 120ms, color 120ms;
+  }
+  .th-sort-btn:hover { background: var(--control-hover); color: var(--fg); }
+  .th-sort-btn.active { color: var(--fg); font-weight: 600; }
+  .sort-arrow { font-size: 10px; opacity: 0.85; }
+
+  .data-table td {
+    padding: 10px 8px; border-bottom: 1px solid var(--border-subtle);
+    text-align: right; color: var(--muted-fg); white-space: nowrap; vertical-align: middle;
+  }
+  .data-table td:first-child, .data-table td:nth-child(2) { text-align: left; }
+  .data-table tbody tr { transition: background-color 120ms; }
+  .data-table tbody tr.clickable { cursor: pointer; }
+  .data-table tbody tr:hover { background: var(--control-hover); }
+  .data-table td.strong { color: var(--fg); font-weight: 500; }
+
+  .primary-cell { display: flex; align-items: center; gap: 8px; color: var(--fg); font-weight: 500; min-width: 0; }
+  .primary-cell-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+  .sub-meta-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 2px;
+    font-size: 11.5px; color: var(--muted-fg); font-weight: 400;
+  }
+  .inline-bar-track { margin-top: 5px; height: 2px; width: 170px; max-width: 100%; }
+  .inline-bar-fill { height: 100%; border-radius: 99px; }
+
+  .agent-chip-avatar {
+    width: 22px; height: 22px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: #fff; flex-shrink: 0;
+  }
+  .soft-badge {
+    font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 5px;
+    background: var(--control-hover); color: var(--fg-2); display: inline-flex; align-items: center; gap: 4px;
+  }
+  .diff-stat { font-size: 12px; font-family: var(--font-mono); }
+  .diff-add { color: var(--diff-added); }
+  .diff-del { color: var(--diff-removed); margin-left: 4px; }
+
+  /* Limits View (when metric = limits) */
+  .limits-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 720px) { .limits-grid { grid-template-columns: 1fr; } }
+  .panel-surface {
+    border: 1px solid var(--border); border-radius: var(--radius-xl);
+    background: var(--panel-bg); box-shadow: var(--shadow-surface);
+  }
+  .limit-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .limit-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .limit-card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+  .limit-badge {
+    font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 99px;
+    border: 1px solid var(--border); color: var(--muted-fg); background: var(--control-bg);
+  }
+  .limit-win { display: flex; flex-direction: column; gap: 6px; }
+  .limit-win-row { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; }
+  .limit-win-meta { color: var(--muted-fg); display: flex; align-items: baseline; gap: 8px; }
+  .limit-win-pct { font-weight: 600; color: var(--fg); }
+
+  .pace-bar { position: relative; height: 6px; border-radius: 99px; background: var(--control-selected); }
+  .pace-bar-fill { height: 100%; border-radius: 99px; transition: width 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .pace-tick {
+    position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 2px;
+    background: var(--fg); opacity: 0.55; transform: translateX(-50%); pointer-events: none;
+  }
+  .pace-note { font-size: 11px; color: var(--muted-fg); display: flex; justify-content: space-between; }
+  .pace-fast { color: var(--status-attention); }
+  .pace-ok { color: var(--status-positive); }
+
+  /* Sources Collapsible */
+  .sources-panel { padding: 0 18px; }
+  .sources-summary {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 0; cursor: pointer; list-style: none; font-size: 13px; font-weight: 500;
+  }
+  .sources-summary::-webkit-details-marker { display: none; }
+  .sources-meta { font-size: 12px; font-weight: 400; color: var(--muted-fg); }
+  .source-list {
+    border-top: 1px solid var(--border); padding: 8px 0 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .source-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+  .source-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-fg); }
+  .source-status { display: flex; align-items: center; gap: 6px; color: var(--muted-fg); }
+  .status-dot { width: 6px; height: 6px; border-radius: 99px; background: var(--status-positive); }
+
+  /* Entry 1: Option 1 Exact Usage Popover */
+  .usage-popover {
+    position: fixed;
+    left: 168px;
+    bottom: 52px;
+    width: 292px;
+    z-index: 60;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--popover);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: var(--shadow-overlay);
+    color: var(--fg);
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(-6px) scale(0.97);
+    transform-origin: bottom left;
+    pointer-events: none;
+    transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1), transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .usage-popover.open { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
+  .pop-body { padding: 13px 14px 12px; }
+  .pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .pop-label { font-size: 11px; font-weight: 500; color: var(--muted-fg); }
+  .pop-sub-list { display: flex; flex-direction: column; }
+  .pop-provider { padding: 9px 0; border-top: 1px solid var(--border-subtle); }
+  .pop-provider:first-child { border-top: 0; padding-top: 0; }
+  .pop-provider-name {
+    font-size: 13px; font-weight: 500; margin-bottom: 7px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .pop-provider-pace { font-size: 11px; font-weight: 400; color: var(--muted-fg); }
+  .pop-win { margin-bottom: 7px; }
+  .pop-win:last-child { margin-bottom: 0; }
+  .pop-win-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+  .pop-win-left { color: var(--muted-fg); display: flex; gap: 6px; align-items: baseline; }
+  .pop-win-left time { font-size: 11px; }
+  .pop-win-right { font-weight: 500; }
+
+  .pop-stats { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .pop-stats-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .mini-seg { display: inline-flex; gap: 2px; background: var(--control-hover); padding: 2px; border-radius: 6px; }
+  .mini-seg button { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; color: var(--muted-fg); }
+  .mini-seg button.active { background: var(--control-bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+  .pop-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .pop-stat-item .k { font-size: 11px; color: var(--muted-fg); }
+  .pop-stat-item .v { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; margin-top: 1px; }
+  .pop-stat-item .s { font-size: 11px; color: var(--muted-fg); }
+
+  .pop-footer { border-top: 1px solid var(--border); padding: 6px; background: var(--panel-bg); }
+  .pop-footer-btn {
+    width: 100%; height: 30px; padding: 0 9px; border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; font-weight: 500; color: var(--fg); transition: background-color 150ms;
+  }
+  .pop-footer-btn:hover { background: var(--control-hover); }
+
+  /* Drilldown Dialog */
+  .modal-scrim {
+    position: fixed; inset: 0; z-index: 80; background: var(--scrim);
+    backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-scrim.open { display: flex; }
+  .dialog-surface {
+    width: 100%; max-width: 490px; border: 1px solid var(--border);
+    border-radius: var(--radius-2xl); background: var(--bg); box-shadow: var(--shadow-overlay);
+    padding: 20px 22px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .dialog-title { font-size: 15.5px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.35; }
+  .dialog-sub { font-size: 12px; color: var(--muted-fg); margin-top: 3px; }
+  .dialog-metrics {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    padding: 12px 14px; border-radius: var(--radius-xl);
+    background: var(--panel-bg); border: 1px solid var(--border);
+  }
+  .dialog-metrics .k { font-size: 11px; color: var(--muted-fg); }
+  .dialog-metrics .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .dialog-rows { display: flex; flex-direction: column; }
+  .dialog-row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 8px 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px;
+  }
+  .dialog-row:last-child { border-bottom: 0; }
+  .dialog-row .k { color: var(--muted-fg); }
+  .dialog-row .v { font-weight: 500; text-align: right; }
+
+  .flash-highlight { animation: flashPanel 700ms ease-out; }
+  @keyframes flashPanel {
+    0% { background-color: var(--control-selected); border-radius: 10px; }
+    100% { background-color: transparent; }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <!-- Primary Navigation -->
+  <nav class="primary-nav" aria-label="主导航">
+    <div class="nav-wordmark"><span class="dot"></span>Lever</div>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span>Agents</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+      <span>任务</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"/></svg>
+      <span>自动化</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+      <span>Skills</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/></svg>
+      <span>插件</span>
+    </button>
+
+    <div class="nav-spacer"></div>
+
+    <!-- Option 1 Usage Popover Trigger -->
+    <button class="nav-item" id="usageTrigger" type="button" aria-expanded="false" aria-controls="usagePopover">
+      <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+        <g fill="var(--usage-clay)"><rect y="2.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/><rect y="2.5" width="14.8" height="3" rx="1.5"/></g>
+        <g fill="var(--usage-blue)"><rect y="10.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/><rect y="10.5" width="9.1" height="3" rx="1.5"/></g>
+        <g fill="var(--usage-violet)"><rect y="18.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/><rect y="18.5" width="17.8" height="3" rx="1.5"/></g>
+      </svg>
+      <span>用量</span>
+    </button>
+
+    <button class="nav-item active" type="button" aria-current="page">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <!-- Workspace Inset Surface -->
+  <div class="workspace-frame">
+    <!-- Settings Secondary Sidebar -->
+    <aside class="secondary-sidebar" aria-label="设置分类">
+      <div class="sidebar-header">
+        <h1>设置</h1>
+        <button class="icon-btn" type="button" title="收起侧栏" aria-label="收起侧栏">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-search">
+        <div class="search-box">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>搜索设置…</span>
+        </div>
+      </div>
+      <div class="sidebar-nav">
+        <div class="sidebar-group">
+          <h2>偏好设置</h2>
+          <div class="sidebar-group-list">
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+              通用
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+              Provider
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+              远程设备
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+              快捷键
+            </button>
+          </div>
+        </div>
+        <div class="sidebar-group">
+          <h2>系统</h2>
+          <div class="sidebar-group-list">
+            <button class="sidebar-link" type="button" aria-current="page">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+              用量统计
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/></svg>
+              更新
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+              存储
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              已归档 Agent
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Settings Main Content -->
+    <main class="settings-scroll" id="mainScroll">
+      <div class="settings-content" id="statsRoot">
+        <!-- Prototype Bar -->
+        <div class="prototype-bar">
+          <div><strong>融合预览版</strong> · Option 1 底座与 Popover · Provider/模型趋势 · 近 7 天时段分布 · 多维消耗排序</div>
+          <div class="prototype-actions">
+            <button class="btn-outline" id="togglePopoverDemo" type="button">预览用量 Popover</button>
+            <button class="btn-outline" id="themeToggle" type="button">切换深色主题</button>
+          </div>
+        </div>
+
+        <!-- Page Header -->
+        <header class="page-header">
+          <div class="page-title-block">
+            <h2>用量统计</h2>
+            <div class="page-subtitle">
+              <span id="windowRangeText">11月21日 — 11月27日</span>
+              <span>·</span>
+              <span id="sourceSummaryText">聚合本机全部 CLI 与 Lever 会话</span>
+            </div>
+          </div>
+
+          <div class="controls-row">
+            <div class="toggle-group" id="scopeGroup" role="group" aria-label="统计来源">
+              <button class="toggle-item" data-scope="all" aria-pressed="true" type="button">全部本机</button>
+              <button class="toggle-item" data-scope="lever" aria-pressed="false" type="button">仅 Lever</button>
+            </div>
+            <div class="toggle-group" id="periodGroup" role="group" aria-label="时间范围">
+              <button class="toggle-item" data-period="24h" aria-pressed="false" type="button">24h</button>
+              <button class="toggle-item" data-period="7d" aria-pressed="true" type="button">7d</button>
+              <button class="toggle-item" data-period="30d" aria-pressed="false" type="button">30d</button>
+              <button class="toggle-item" data-period="90d" aria-pressed="false" type="button">90d</button>
+            </div>
+            <div class="toggle-group" id="metricGroup" role="group" aria-label="统计维度">
+              <button class="toggle-item" data-metric="tokens" aria-pressed="true" type="button">Tokens</button>
+              <button class="toggle-item" data-metric="cost" aria-pressed="false" type="button">费用</button>
+              <button class="toggle-item" data-metric="limits" aria-pressed="false" type="button">额度</button>
+            </div>
+            <button class="icon-btn" id="refreshBtn" type="button" title="重新扫描本机数据" aria-label="刷新">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Main Analytics View -->
+        <div id="analyticsView" style="display:flex; flex-direction:column; gap:28px;">
+          <!-- 1. Hero + Distribution Chart (Switchable: By Provider / By Model) -->
+          <section class="hero-grid">
+            <div class="hero-summary">
+              <div>
+                <div class="hero-figure tabular" id="heroFigure">852.1M</div>
+                <div class="hero-meta tabular" id="heroMeta">148 次会话 · 约 $218.50</div>
+              </div>
+              <div class="series-rank" id="seriesRank"></div>
+            </div>
+
+            <div class="chart-column">
+              <div class="chart-header">
+                <div class="chart-header-left">
+                  <h3 class="section-title" id="chartTitle">每日处理 Tokens 趋势</h3>
+                  <span class="chart-hint" id="chartFilterHint">点击左侧项可单独聚焦</span>
+                </div>
+                <div class="toggle-group" id="seriesGroup" role="group" aria-label="分布分组方式">
+                  <button class="toggle-item" data-group="provider" aria-pressed="true" type="button">按 Provider</button>
+                  <button class="toggle-item" data-group="model" aria-pressed="false" type="button">按模型</button>
+                </div>
+              </div>
+              <div class="chart-wrap" id="chartWrap">
+                <svg id="trendSvg" viewBox="0 0 600 244" preserveAspectRatio="none"></svg>
+                <div class="chart-tooltip tabular" id="chartTooltip"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 2. Totals 5-col -->
+          <section class="totals-section">
+            <h3 class="section-title">汇总指标</h3>
+            <dl class="totals-grid" id="totalsGrid"></dl>
+          </section>
+
+          <!-- 3. ShareBars (Monochrome Ink Scale) -->
+          <section class="sharebars-grid" id="shareBarsGrid"></section>
+
+          <!-- 4. Last 7 Days Hourly Distribution (From Option 2, styled in Option 1 restraint) -->
+          <section class="hourly-section">
+            <div class="hourly-head">
+              <div>
+                <h3 class="section-title">近 7 天时段分布</h3>
+                <div class="hourly-readout tabular" id="hourReadout">悬停或点击时段格查看明细 · 高峰集中在 14:00–17:00 与 21:00–23:00</div>
+              </div>
+              <div class="hourly-right-meta">
+                <div class="heat-legend">
+                  <span>少</span>
+                  <i style="background:var(--heat-0)"></i>
+                  <i style="background:var(--heat-1)"></i>
+                  <i style="background:var(--heat-2)"></i>
+                  <i style="background:var(--heat-3)"></i>
+                  <i style="background:var(--heat-4)"></i>
+                  <span>多</span>
+                </div>
+                <span class="tabular">本机时区 UTC+8</span>
+              </div>
+            </div>
+            <div class="hourly-card">
+              <div class="hour-matrix-wrap">
+                <div class="hour-day-labels" id="hourDayLabels"></div>
+                <div class="hour-grid" id="hourGrid"></div>
+                <div class="hour-axis tabular">
+                  <span style="grid-column:1 / span 4;">00:00</span>
+                  <span style="grid-column:7 / span 4;">06:00</span>
+                  <span style="grid-column:13 / span 4;">12:00</span>
+                  <span style="grid-column:19 / span 4;">18:00</span>
+                  <span style="grid-column:23 / span 2; text-align:right;">23h</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 5. Breakdown Table: Model / Agent / Project / Session / Date with Consumption Sorting -->
+          <section class="breakdown-section">
+            <div class="breakdown-head">
+              <div class="breakdown-head-left">
+                <h3 class="section-title">消耗排行与明细</h3>
+                <span class="chart-hint" id="breakdownHint">点击表头可切换排序 · 点击条目查看详情</span>
+              </div>
+              <div class="breakdown-controls">
+                <div class="toggle-group" id="breakdownGroup" role="group" aria-label="明细维度">
+                  <button class="toggle-item" data-tab="model" aria-pressed="true" type="button">按模型</button>
+                  <button class="toggle-item" data-tab="agent" aria-pressed="false" type="button">按 Agent</button>
+                  <button class="toggle-item" data-tab="project" aria-pressed="false" type="button">按项目</button>
+                  <button class="toggle-item" data-tab="session" aria-pressed="false" type="button">按会话</button>
+                  <button class="toggle-item" data-tab="time" aria-pressed="false" type="button">按日期</button>
+                </div>
+              </div>
+            </div>
+            <div style="overflow-x:auto;">
+              <table class="data-table" id="breakdownTable"></table>
+            </div>
+          </section>
+        </div>
+
+        <!-- Limits Full View -->
+        <section id="limitsView" style="display:none; flex-direction:column; gap:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div>
+              <h3 class="section-title">订阅配额与消耗节奏</h3>
+              <p style="font-size:12px; color:var(--muted-fg); margin-top:4px;">竖线刻度表示当前时间窗口的自然流逝进度；填充条未超过刻度线表示配额充裕。</p>
+            </div>
+            <span class="tabular" style="font-size:12px; color:var(--muted-fg);">上次同步：刚刚</span>
+          </div>
+          <div class="limits-grid" id="limitsGrid"></div>
+        </section>
+
+        <!-- Local Scan Sources -->
+        <details class="panel-surface sources-panel">
+          <summary class="sources-summary">
+            <span>本机数据来源与扫描状态</span>
+            <span class="sources-meta tabular">4 个来源已就绪 · 扫描耗时 38ms · 保留 90 天</span>
+          </summary>
+          <div class="source-list">
+            <div class="source-item">
+              <div><strong>Lever 工作台数据库</strong> <span class="source-path">~/Library/Application Support/Lever/lever.db</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>148 次会话 · 1,246 轮运行</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Claude Code 本地记录</strong> <span class="source-path">~/.claude/projects/**/*.jsonl</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 94 个文件</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Codex 本地 Rollout</strong> <span class="source-path">~/.codex/sessions/**/rollout-*.jsonl</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 62 个文件</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Antigravity &amp; Pi 会话</strong> <span class="source-path">~/.gemini/antigravity-cli · ~/.pi/sessions</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 31 个文件</div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Entry 1: Option 1 Usage Popover (Exact Compact Layout) -->
+<div class="usage-popover" id="usagePopover" role="dialog" aria-label="订阅用量与本机统计">
+  <div class="pop-body">
+    <div class="pop-head">
+      <span class="pop-label">订阅用量</span>
+      <span class="pop-label tabular">竖线 = 时间进度</span>
+    </div>
+    <div class="pop-sub-list">
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Claude Code</span>
+          <span class="pop-provider-pace pace-fast">略快 +8%</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>5h</span><time>1h 42m 后重置</time></span>
+            <span class="pop-win-right">剩余 38%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-clay) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:62%; background:var(--usage-clay);"></div>
+            <div class="pace-tick" style="left:54%;" title="窗口已流逝 54%"></div>
+          </div>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>7d</span><time>3d 6h 后重置</time></span>
+            <span class="pop-win-right">剩余 56%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-clay) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:44%; background:var(--usage-clay);"></div>
+            <div class="pace-tick" style="left:53%;" title="窗口已流逝 53%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Codex</span>
+          <span class="pop-provider-pace pace-ok">充裕</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>5h</span><time>3h 15m 后重置</time></span>
+            <span class="pop-win-right">剩余 62%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-blue) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:38%; background:var(--usage-blue);"></div>
+            <div class="pace-tick" style="left:35%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Antigravity</span>
+          <span class="pop-provider-pace pace-fast">接近上限</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>Pro 5h</span><time>48m 后重置</time></span>
+            <span class="pop-win-right">剩余 26%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-violet) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:74%; background:var(--usage-violet);"></div>
+            <div class="pace-tick" style="left:84%;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Local Usage Quick Summary in Popover -->
+    <div class="pop-stats">
+      <div class="pop-stats-head">
+        <span class="pop-label">本机消耗概览</span>
+        <div class="mini-seg" id="popRangeSeg">
+          <button type="button" data-poprange="today" class="active">今日</button>
+          <button type="button" data-poprange="7d">7天</button>
+        </div>
+      </div>
+      <div class="pop-stats-grid tabular" id="popStatsGrid"></div>
+    </div>
+  </div>
+  <div class="pop-footer">
+    <button class="pop-footer-btn" id="openFullStatsBtn" type="button">
+      <span>查看完整用量统计</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Drilldown Dialog (Model / Project / Session) -->
+<div class="modal-scrim" id="detailModal" role="dialog" aria-modal="true">
+  <div class="dialog-surface" id="detailModalContent"></div>
+</div>
+
+<script>
+(() => {
+  const PROVIDERS = [
+    { id: "claude", name: "Claude Code", color: "var(--usage-clay)" },
+    { id: "codex", name: "Codex", color: "var(--usage-blue)" },
+    { id: "antigravity", name: "Antigravity", color: "var(--usage-violet)" },
+    { id: "pi", name: "Pi", color: "var(--usage-teal)" },
+  ];
+
+  // Top models as first-class chart series when groupBy === "model"
+  const MODEL_SERIES = [
+    { id: "claude-opus-4-6", name: "claude-opus-4-6", provider: "claude", color: "var(--usage-clay)", splitOfProv: 0.62, hit: 0.90, priceIn: "$15 / M", priceOut: "$75 / M" },
+    { id: "gpt-5.4", name: "gpt-5.4", provider: "codex", color: "var(--usage-blue)", splitOfProv: 0.84, hit: 0.85, priceIn: "$2.5 / M", priceOut: "$10 / M" },
+    { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "claude", color: "var(--usage-clay-soft)", splitOfProv: 0.38, hit: 0.88, priceIn: "$3 / M", priceOut: "$15 / M" },
+    { id: "gemini-3-pro", name: "gemini-3-pro", provider: "antigravity", color: "var(--usage-violet)", splitOfProv: 1.0, hit: 0.84, priceIn: "$2 / M", priceOut: "$12 / M" },
+    { id: "gpt-5.3-codex-mini", name: "gpt-5.3-codex-mini", provider: "codex", color: "var(--usage-blue-soft)", splitOfProv: 0.16, hit: 0.81, priceIn: "$0.6 / M", priceOut: "$2.4 / M" },
+    { id: "deepseek-r1-0528", name: "deepseek-r1-0528", provider: "pi", color: "var(--usage-teal)", splitOfProv: 1.0, hit: 0.78, priceIn: "$0.55 / M", priceOut: "$2.19 / M" },
+  ];
+
+  const DATASET = {
+    "24h": {
+      rangeLabel: "11月26日 15:00 — 11月27日 15:00",
+      labels: ["16:00","18:00","20:00","22:00","00:00","02:00","04:00","06:00","08:00","10:00","12:00","14:00"],
+      sessions: { claude: 11, codex: 8, antigravity: 5, pi: 2 },
+      seriesCost: {
+        claude:      [1.8, 2.4, 3.1, 4.2, 1.4, 0.2, 0.0, 0.1, 0.8, 2.6, 1.9, 2.9],
+        codex:       [1.1, 1.5, 2.0, 1.6, 0.4, 0.0, 0.0, 0.0, 0.5, 1.9, 2.4, 1.8],
+        antigravity: [0.4, 0.9, 0.7, 1.2, 0.2, 0.0, 0.0, 0.0, 0.2, 1.1, 0.9, 1.3],
+        pi:          [0.2, 0.1, 0.3, 0.2, 0.0, 0.0, 0.0, 0.0, 0.1, 0.3, 0.2, 0.4],
+      },
+      tokensRatio: 4.1e6,
+      cacheRatio: 0.86,
+      cacheWriteRatio: 0.06,
+      outputRatio: 0.032,
+      leverShare: 0.74,
+    },
+    "7d": {
+      rangeLabel: "11月21日 — 11月27日",
+      labels: ["11/21","11/22","11/23","11/24","11/25","11/26","11/27"],
+      sessions: { claude: 64, codex: 46, antigravity: 27, pi: 11 },
+      seriesCost: {
+        claude:      [9.4, 14.2, 11.8, 18.6, 15.1, 21.4, 13.8],
+        codex:       [6.1, 8.8,  10.4, 12.2, 9.5,  14.1, 8.9],
+        antigravity: [2.8, 4.1,  3.5,  6.2,  5.4,  7.1,  4.8],
+        pi:          [1.2, 0.9,  1.6,  1.8,  1.1,  2.2,  1.5],
+      },
+      tokensRatio: 3.9e6,
+      cacheRatio: 0.875,
+      cacheWriteRatio: 0.055,
+      outputRatio: 0.031,
+      leverShare: 0.69,
+    },
+    "30d": {
+      rangeLabel: "10月29日 — 11月27日",
+      labels: ["10/29","11/01","11/04","11/07","11/10","11/13","11/16","11/19","11/22","11/25","11/27"],
+      sessions: { claude: 248, codex: 174, antigravity: 102, pi: 44 },
+      seriesCost: {
+        claude:      [18.2, 26.4, 31.0, 22.8, 35.4, 29.2, 38.6, 33.1, 41.2, 46.8, 34.0],
+        codex:       [12.1, 16.8, 19.2, 15.4, 21.0, 18.6, 24.4, 20.1, 26.8, 29.4, 21.6],
+        antigravity: [5.4,  8.2,  7.4,  9.8,  11.2, 8.9,  12.4, 10.6, 14.1, 16.2, 11.4],
+        pi:          [2.1,  3.0,  2.4,  3.8,  4.1,  2.9,  3.6,  4.5,  4.2,  5.1,  3.7],
+      },
+      tokensRatio: 3.8e6,
+      cacheRatio: 0.882,
+      cacheWriteRatio: 0.052,
+      outputRatio: 0.029,
+      leverShare: 0.66,
+    },
+    "90d": {
+      rangeLabel: "8月30日 — 11月27日",
+      labels: ["9月1周","9月2周","9月3周","9月4周","10月1周","10月2周","10月3周","10月4周","11月1周","11月2周","11月3周","11月4周"],
+      sessions: { claude: 682, codex: 495, antigravity: 268, pi: 124 },
+      seriesCost: {
+        claude:      [54, 68, 72, 61, 79, 86, 74, 92, 98, 105, 114, 104],
+        codex:       [38, 44, 51, 46, 52, 58, 49, 63, 66, 72,  76,  70],
+        antigravity: [14, 19, 22, 18, 26, 29, 24, 31, 35, 39,  42,  34],
+        pi:          [6,  8,  7,  9,  10, 11, 8,  12, 11, 14,  13,  10],
+      },
+      tokensRatio: 3.75e6,
+      cacheRatio: 0.87,
+      cacheWriteRatio: 0.058,
+      outputRatio: 0.032,
+      leverShare: 0.64,
+    },
+  };
+
+  const AGENTS_BASE = [
+    { id: "arch", name: "Lever 架构师", initials: "架", bg: "#4169ba", provider: "claude", model: "claude-opus-4-6", project: "lever", share: 0.35, runs: 412, sessions: 38, add: 8420, del: 2810, hit: 0.90 },
+    { id: "ui", name: "前端 UI 匠人", initials: "UI", bg: "#ad604a", provider: "claude", model: "claude-sonnet-4-6", project: "lever", share: 0.25, runs: 318, sessions: 31, add: 6150, del: 1940, hit: 0.88 },
+    { id: "go", name: "后端与存储", initials: "Go", bg: "#2e7d7b", provider: "codex", model: "gpt-5.4", project: "persona", share: 0.21, runs: 274, sessions: 26, add: 5280, del: 1620, hit: 0.86 },
+    { id: "cr", name: "PR 审查助手", initials: "CR", bg: "#7962aa", provider: "antigravity", model: "gemini-3-pro", project: "magpie", share: 0.12, runs: 164, sessions: 19, add: 1120, del: 490, hit: 0.84 },
+    { id: "auto", name: "自动化巡检", initials: "自", bg: "#525252", provider: "codex", model: "gpt-5.3-codex-mini", project: "lever", share: 0.07, runs: 96, sessions: 14, add: 410, del: 120, hit: 0.81 },
+  ];
+
+  const PROJECTS_BASE = [
+    { id: "lever", name: "lever", path: "~/Code/github/lever", kind: "git", kindLabel: "Git 仓库", topAgent: "Lever 架构师", topModel: "claude-opus-4-6", share: 0.42, sessions: 54, runs: 520, add: 11240, del: 3820, hit: 0.89 },
+    { id: "persona", name: "persona", path: "~/Code/github/persona", kind: "git", kindLabel: "Git 仓库", topAgent: "后端与存储", topModel: "gpt-5.4", share: 0.21, sessions: 29, runs: 264, add: 4820, del: 1640, hit: 0.87 },
+    { id: "magpie", name: "magpie", path: "~/Code/github/magpie", kind: "git", kindLabel: "Git 仓库", topAgent: "PR 审查助手", topModel: "claude-sonnet-4-6", share: 0.14, sessions: 19, runs: 188, add: 2610, del: 920, hit: 0.86 },
+    { id: "t3code", name: "t3code", path: "~/Code/github/t3code", kind: "git", kindLabel: "Git 仓库", topAgent: "前端 UI 匠人", topModel: "gemini-3-pro", share: 0.09, sessions: 13, runs: 112, add: 1380, del: 410, hit: 0.84 },
+    { id: "notes", name: "工作笔记与文档", path: "~/Notes", kind: "folder", kindLabel: "目录", topAgent: "前端 UI 匠人", topModel: "claude-sonnet-4-6", share: 0.08, sessions: 19, runs: 96, add: 640, del: 180, hit: 0.82 },
+    { id: "general", name: "无目录自由对话", path: "全局对话", kind: "chat", kindLabel: "通用对话", topAgent: "通用对话", topModel: "gpt-5.3-codex-mini", share: 0.06, sessions: 14, runs: 66, add: 0, del: 0, hit: 0.79 },
+  ];
+
+  const SESSIONS_BASE = [
+    { id: "s1", title: "本机数据统计 UI 方案与多端适配设计", source: "lever", agent: "前端 UI 匠人", agentBg: "#ad604a", agentInitials: "UI", project: "lever", provider: "claude", model: "claude-opus-4-6", runs: 34, tokens: 68.4e6, cost: 18.60, hit: 0.91, add: 1840, del: 320, updatedTs: 1764228000, updatedText: "今天 15:20" },
+    { id: "s2", title: "Refactoring remote delegation reconnect queue", source: "lever", agent: "后端与存储", agentBg: "#2e7d7b", agentInitials: "Go", project: "lever", provider: "codex", model: "gpt-5.4", runs: 28, tokens: 54.2e6, cost: 14.10, hit: 0.87, add: 1290, del: 540, updatedTs: 1764219000, updatedText: "今天 12:50" },
+    { id: "s3", title: "梳理飞书个人通道消息回执与重试状态机", source: "lever", agent: "Lever 架构师", agentBg: "#4169ba", agentInitials: "架", project: "lever", provider: "claude", model: "claude-opus-4-6", runs: 24, tokens: 48.9e6, cost: 13.45, hit: 0.90, add: 960, del: 280, updatedTs: 1764164000, updatedText: "昨天 21:30" },
+    { id: "s4", title: "codex cli: benchmark sqlite WAL checkpoint latency", source: "cli", agent: "外部 CLI", agentBg: "#525252", agentInitials: "CL", project: "persona", provider: "codex", model: "gpt-5.4", runs: 19, tokens: 41.6e6, cost: 10.65, hit: 0.85, add: 0, del: 0, updatedTs: 1764148000, updatedText: "昨天 17:05" },
+    { id: "s5", title: "Design Token Calendar & Hourly Heatmap layout", source: "lever", agent: "前端 UI 匠人", agentBg: "#ad604a", agentInitials: "UI", project: "persona", provider: "claude", model: "claude-sonnet-4-6", runs: 22, tokens: 38.1e6, cost: 9.80, hit: 0.88, add: 1120, del: 390, updatedTs: 1764076000, updatedText: "11/25 21:10" },
+    { id: "s6", title: "claude code: audit plugin manifest schema & migration", source: "cli", agent: "外部 CLI", agentBg: "#525252", agentInitials: "CL", project: "magpie", provider: "antigravity", model: "gemini-3-pro", runs: 17, tokens: 32.4e6, cost: 8.35, hit: 0.84, add: 0, del: 0, updatedTs: 1764042000, updatedText: "11/25 11:40" },
+    { id: "s7", title: "Review PR #418: workspace sidebar drag & collapse", source: "lever", agent: "PR 审查助手", agentBg: "#7962aa", agentInitials: "CR", project: "t3code", provider: "antigravity", model: "gemini-3-pro", runs: 14, tokens: 26.8e6, cost: 6.90, hit: 0.86, add: 410, del: 185, updatedTs: 1763985000, updatedText: "11/24 19:50" },
+    { id: "s8", title: "每日夜间依赖巡检与测试覆盖率摘要", source: "lever", agent: "自动化巡检", agentBg: "#525252", agentInitials: "自", project: "lever", provider: "pi", model: "deepseek-r1-0528", runs: 12, tokens: 18.5e6, cost: 4.20, hit: 0.79, add: 190, del: 42, updatedTs: 1763952000, updatedText: "11/24 10:40" },
+  ];
+
+  const LIMITS_DATA = [
+    {
+      provider: "Claude Code", color: "var(--usage-clay)", plan: "Max · 个人订阅",
+      windows: [
+        { label: "5 小时窗口", used: 62, elapsed: 54, reset: "1h 42m 后重置", note: "略高于均匀节奏 (+8%)", fast: true },
+        { label: "7 天窗口", used: 44, elapsed: 53, reset: "3d 6h 后重置", note: "低于均匀节奏 (-9%)", fast: false },
+      ]
+    },
+    {
+      provider: "Codex", color: "var(--usage-blue)", plan: "ChatGPT Pro",
+      windows: [
+        { label: "5 小时主要额度", used: 38, elapsed: 35, reset: "3h 15m 后重置", note: "与时间节奏持平 (+3%)", fast: false },
+        { label: "7 天次要额度", used: 51, elapsed: 64, reset: "2d 11h 后重置", note: "余量充裕 (-13%)", fast: false },
+      ]
+    },
+    {
+      provider: "Antigravity", color: "var(--usage-violet)", plan: "Google AI Ultra",
+      windows: [
+        { label: "Pro 模型 · 5 小时", used: 74, elapsed: 84, reset: "48m 后重置", note: "即将重置，余量安全", fast: false },
+        { label: "Flash 模型 · 周额度", used: 22, elapsed: 51, reset: "3d 12h 后重置", note: "余量充裕 (-29%)", fast: false },
+      ]
+    },
+    {
+      provider: "Pi (API Key)", color: "var(--usage-teal)", plan: "按量计费",
+      windows: [
+        { label: "月度预算提醒 ($50)", used: 36, elapsed: 88, reset: "3 天后归零", note: "本月已用 $18.20 / $50.00", fast: false },
+      ]
+    },
+  ];
+
+  const state = {
+    period: "7d",
+    metric: "tokens",       // Default to Tokens to showcase Provider/Model tokens distribution
+    scope: "all",
+    groupBy: "provider",    // "provider" | "model"
+    focusId: null,          // Focused provider id or model id
+    breakdown: "model",     // "model" | "agent" | "project" | "session" | "time"
+    sortKey: "tokens",      // Dynamic per breakdown table
+    sortDir: "desc",
+    lockedHourIdx: null,
+    popRange: "today",
+    popoverOpen: false,
+  };
+
+  const fmtUsd = (n) => "$" + (n >= 1000 ? n.toFixed(0) : n.toFixed(2));
+  const fmtAxisUsd = (n) => "$" + (n === 0 ? "0" : n >= 100 ? Math.round(n) : Number.isInteger(n) ? n : n.toFixed(1));
+  const fmtTokens = (n) => {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(Math.round(n));
+  };
+  const fmtAxisTokens = (n) => {
+    if (n === 0) return "0";
+    if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(0) + "M";
+    return Math.round(n / 1e3) + "K";
+  };
+  const fmtPct = (r) => (r * 100).toFixed(1).replace(/\.0$/, "") + "%";
+  const fmtVal = (v, metric) => metric === "cost" ? fmtUsd(v) : fmtTokens(v);
+
+  function computeData() {
+    const raw = DATASET[state.period];
+    const scopeMul = state.scope === "lever" ? raw.leverShare : 1;
+
+    const providerList = PROVIDERS.map((p) => {
+      const seriesCost = raw.seriesCost[p.id].map((v) => +(v * scopeMul).toFixed(2));
+      const cost = seriesCost.reduce((a, b) => a + b, 0);
+      const tokens = Math.round(cost * raw.tokensRatio);
+      const sessions = Math.max(1, Math.round(raw.sessions[p.id] * scopeMul));
+      return {
+        ...p,
+        provider: p.id,
+        seriesCost,
+        seriesTokens: seriesCost.map((v) => Math.round(v * raw.tokensRatio)),
+        cost,
+        tokens,
+        sessions,
+      };
+    });
+
+    const provMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
+
+    // Derive normalized per-model time series so model totals ALWAYS equal provider totals exactly
+    const modelsByProv = {};
+    MODEL_SERIES.forEach((m) => { (modelsByProv[m.provider] ??= []).push(m); });
+    const modelList = MODEL_SERIES.map((m, mi) => {
+      const p = provMap[m.provider];
+      const siblings = modelsByProv[m.provider];
+      const seriesCost = p.seriesCost.map((v, ti) => {
+        if (siblings.length === 1) return v;
+        const weights = siblings.map((s, si) => s.splitOfProv * (1 + Math.sin(ti * 1.4 + si * 2.1) * 0.09));
+        const wSum = weights.reduce((a, b) => a + b, 0);
+        const myIdx = siblings.indexOf(m);
+        return +(v * (weights[myIdx] / wSum)).toFixed(4);
+      });
+      const cost = seriesCost.reduce((a, b) => a + b, 0);
+      const tokens = Math.round(cost * raw.tokensRatio);
+      const sessions = Math.max(1, Math.round(p.sessions * m.splitOfProv));
+      return {
+        ...m,
+        providerName: p.name,
+        seriesCost,
+        seriesTokens: seriesCost.map((v) => Math.round(v * raw.tokensRatio)),
+        cost,
+        tokens,
+        sessions,
+      };
+    });
+
+    const activePool = state.groupBy === "provider" ? providerList : modelList;
+    const filteredSeries = state.focusId
+      ? activePool.filter((s) => s.id === state.focusId)
+      : activePool;
+
+    const totalCost = filteredSeries.reduce((s, p) => s + p.cost, 0);
+    const totalTokens = filteredSeries.reduce((s, p) => s + p.tokens, 0);
+    const totalSessions = filteredSeries.reduce((s, p) => s + p.sessions, 0);
+    const allCost = activePool.reduce((s, p) => s + p.cost, 0) || 1;
+    const allTokens = activePool.reduce((s, p) => s + p.tokens, 0) || 1;
+
+    const cachedInput = Math.round(totalTokens * raw.cacheRatio);
+    const cacheWrite = Math.round(totalTokens * raw.cacheWriteRatio);
+    const output = Math.round(totalTokens * raw.outputRatio);
+    const uncachedInput = Math.max(0, totalTokens - cachedInput - cacheWrite - output);
+    const cacheSavings = totalCost * 1.95;
+
+    return {
+      raw,
+      providerList,
+      modelList,
+      activePool,
+      filteredSeries,
+      totalCost,
+      totalTokens,
+      totalSessions,
+      allCost,
+      allTokens,
+      cachedInput,
+      cacheWrite,
+      output,
+      uncachedInput,
+      cacheSavings,
+    };
+  }
+
+  function monotonePath(points) {
+    if (points.length < 2) return "";
+    const n = points.length;
+    const slopes = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      slopes.push(dx === 0 ? 0 : (points[i + 1].y - points[i].y) / dx);
+    }
+    const t = new Array(n).fill(0);
+    t[0] = slopes[0];
+    t[n - 1] = slopes[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      t[i] = slopes[i - 1] * slopes[i] <= 0 ? 0 : (slopes[i - 1] + slopes[i]) / 2;
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const s = slopes[i];
+      if (s === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+      const a = t[i] / s, b = t[i + 1] / s;
+      const m = a * a + b * b;
+      if (m > 9) {
+        const sc = 3 / Math.sqrt(m);
+        t[i] = sc * a * s;
+        t[i + 1] = sc * b * s;
+      }
+    }
+    let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+    for (let i = 0; i < n - 1; i++) {
+      const p0 = points[i], p1 = points[i + 1];
+      const dx = p1.x - p0.x;
+      d += ` C ${(p0.x + dx / 3).toFixed(1)} ${(p0.y + (t[i] * dx) / 3).toFixed(1)}, ${(p1.x - dx / 3).toFixed(1)} ${(p1.y - (t[i + 1] * dx) / 3).toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+    }
+    return d;
+  }
+
+  function renderChart(data) {
+    const svg = document.getElementById("trendSvg");
+    const tooltip = document.getElementById("chartTooltip");
+    const wrap = document.getElementById("chartWrap");
+    const metric = state.metric === "cost" ? "cost" : "tokens";
+    const labels = data.raw.labels;
+
+    // Limit plotted lines to top 5 models when in model mode for cleanliness
+    const chartPool = state.groupBy === "model"
+      ? data.activePool.slice().sort((a, b) => b.tokens - a.tokens).slice(0, 5)
+      : data.activePool;
+
+    const seriesList = chartPool.map((s) => ({
+      ...s,
+      values: metric === "cost" ? s.seriesCost : s.seriesTokens,
+    }));
+
+    const activeSeries = state.focusId
+      ? seriesList.filter((s) => s.id === state.focusId)
+      : seriesList;
+
+    const maxRaw = Math.max(1, ...activeSeries.flatMap((s) => s.values));
+    const mag = 10 ** Math.floor(Math.log10(maxRaw / 4));
+    const norm = (maxRaw / 4) / mag;
+    const step = (norm > 5 ? 10 : norm > 2 ? 5 : norm > 1 ? 2 : 1) * mag;
+    const yMax = Math.ceil(maxRaw / step) * step;
+
+    const W = 600, H = 244, padL = 48, padR = 12, padT = 12, padB = 28;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const xAt = (i) => padL + (labels.length === 1 ? plotW / 2 : (i / (labels.length - 1)) * plotW);
+    const yAt = (v) => padT + plotH - (v / yMax) * plotH;
+
+    let html = `<defs>`;
+    seriesList.forEach((s, idx) => {
+      html += `
+        <linearGradient id="grad-s-${idx}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${s.color}" stop-opacity="0.20"/>
+          <stop offset="100%" stop-color="${s.color}" stop-opacity="0.01"/>
+        </linearGradient>`;
+    });
+    html += `</defs>`;
+
+    for (let i = 0; i <= 4; i++) {
+      const val = (yMax / 4) * i;
+      const y = yAt(val);
+      html += `<line class="chart-grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
+      html += `<text class="chart-axis-text tabular" x="${padL - 8}" y="${y + 4}" text-anchor="end">${metric === "cost" ? fmtAxisUsd(val) : fmtAxisTokens(val)}</text>`;
+    }
+
+    const labelStep = labels.length > 8 ? 2 : 1;
+    labels.forEach((lbl, i) => {
+      if (i % labelStep !== 0 && i !== labels.length - 1) return;
+      html += `<text class="chart-axis-text tabular" x="${xAt(i)}" y="${H - 6}" text-anchor="middle">${lbl}</text>`;
+    });
+
+    [...activeSeries].sort((a, b) => b.tokens - a.tokens).forEach((s) => {
+      const idx = seriesList.findIndex((x) => x.id === s.id);
+      const pts = s.values.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
+      const lineD = monotonePath(pts);
+      const areaD = `${lineD} L ${pts[pts.length - 1].x} ${padT + plotH} L ${pts[0].x} ${padT + plotH} Z`;
+      html += `<path d="${areaD}" fill="url(#grad-s-${idx})"/>`;
+      html += `<path d="${lineD}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linecap="round"/>`;
+    });
+
+    html += `<g id="chartHoverG" style="display:none;">
+      <line id="crosshairLine" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="3 3"/>
+    </g>`;
+
+    svg.innerHTML = html;
+
+    wrap.onmousemove = (e) => {
+      const rect = wrap.getBoundingClientRect();
+      const relX = ((e.clientX - rect.left) / rect.width) * W;
+      const ratio = Math.max(0, Math.min(1, (relX - padL) / plotW));
+      const idx = Math.round(ratio * (labels.length - 1));
+      const cx = xAt(idx);
+      const hoverG = document.getElementById("chartHoverG");
+      const cross = document.getElementById("crosshairLine");
+      if (!hoverG || !cross) return;
+      hoverG.style.display = "block";
+      cross.setAttribute("x1", cx);
+      cross.setAttribute("x2", cx);
+      hoverG.querySelectorAll("circle").forEach((c) => c.remove());
+
+      let totalAt = 0;
+      let rowsHtml = "";
+      activeSeries.forEach((s) => {
+        const val = s.values[idx];
+        totalAt += val;
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("cx", cx);
+        c.setAttribute("cy", yAt(val));
+        c.setAttribute("r", "3.5");
+        c.setAttribute("fill", s.color);
+        c.setAttribute("stroke", "var(--bg)");
+        c.setAttribute("stroke-width", "1.5");
+        hoverG.appendChild(c);
+        rowsHtml += `
+          <div class="chart-tooltip-row">
+            <span class="chart-tooltip-label"><span class="series-dot" style="background:${s.color}"></span><span class="${state.groupBy === "model" ? "mono" : ""}" style="${state.groupBy === "model" ? "font-size:11px;" : ""}">${s.name}</span></span>
+            <span>${fmtVal(val, metric)}</span>
+          </div>`;
+      });
+
+      tooltip.innerHTML = `
+        <div class="chart-tooltip-date">${labels[idx]}</div>
+        ${rowsHtml}
+        <div class="chart-tooltip-total"><span>合计</span><span>${fmtVal(totalAt, metric)}</span></div>`;
+      tooltip.classList.add("visible");
+      const pxX = (cx / W) * rect.width;
+      const tipW = tooltip.offsetWidth || 190;
+      tooltip.style.left = (pxX + 14 + tipW > rect.width ? Math.max(8, pxX - tipW - 14) : pxX + 14) + "px";
+      tooltip.style.top = "14px";
+    };
+    wrap.onmouseleave = () => {
+      const hoverG = document.getElementById("chartHoverG");
+      if (hoverG) hoverG.style.display = "none";
+      tooltip.classList.remove("visible");
+    };
+  }
+
+  function renderHourlyMatrix(data) {
+    const scopeMul = (state.scope === "lever" ? 0.69 : 1) * (state.focusId ? Math.max(0.18, data.totalTokens / data.allTokens) : 1);
+    const dayLabels = ["11/21 六", "11/22 日", "11/23 一", "11/24 二", "11/25 三", "11/26 四", "今日"];
+    document.getElementById("hourDayLabels").innerHTML = dayLabels
+      .map((l, i) => `<span class="${i === 6 ? "today-lbl" : ""}">${l}</span>`)
+      .join("");
+
+    const topModelNames = ["claude-opus-4-6", "gpt-5.4", "claude-sonnet-4-6", "gemini-3-pro"];
+    const cells = [];
+    for (let r = 0; r < 7; r++) {
+      for (let h = 0; h < 24; h++) {
+        const future = r === 6 && h > 15;
+        let base = 0;
+        if (!future) {
+          const workPeak = (h >= 10 && h <= 12) || (h >= 14 && h <= 18) || (h >= 21 && h <= 23);
+          const sleep = h >= 1 && h <= 7;
+          const seed = Math.sin((r * 31 + h) * 19.3) * 10000;
+          const rnd = seed - Math.floor(seed);
+          if (!sleep) {
+            base = workPeak ? (4.2 + rnd * 12.8) * (r < 2 ? 0.52 : 1) : (rnd < 0.44 ? 0 : rnd * 4.8);
+          } else if (rnd > 0.91) {
+            base = rnd * 2.2;
+          }
+        }
+        const tok = Math.round(base * 1e6 * scopeMul);
+        const cost = tok / 3.9e6;
+        const maxRef = 13.5e6 * scopeMul;
+        const lvl = future ? -1 : tok === 0 ? 0 : tok < maxRef * 0.2 ? 1 : tok < maxRef * 0.45 ? 2 : tok < maxRef * 0.72 ? 3 : 4;
+        cells.push({
+          idx: r * 24 + h,
+          day: dayLabels[r],
+          h,
+          tok,
+          cost,
+          lvl,
+          topModel: state.focusId && state.groupBy === "model" ? state.focusId : topModelNames[(r + h) % topModelNames.length],
+        });
+      }
+    }
+
+    const grid = document.getElementById("hourGrid");
+    const readout = document.getElementById("hourReadout");
+    const defaultText = "悬停或点击时段格查看明细 · 高峰集中在 14:00–17:00 与 21:00–23:00";
+
+    const formatCell = (c) => {
+      const h1 = String(c.h).padStart(2, "0") + ":00";
+      const h2 = String((c.h + 1) % 24).padStart(2, "0") + ":00";
+      if (c.tok === 0) return `<strong>${c.day} ${h1}–${h2}</strong> · 该时段无活动记录`;
+      return `<strong>${c.day} ${h1}–${h2}</strong> · <strong>${fmtTokens(c.tok)} tokens</strong> · 约 ${fmtUsd(c.cost)} · 主力 <span class="mono">${c.topModel}</span>`;
+    };
+
+    grid.innerHTML = cells.map((c) => `
+      <div class="hour-cell ${state.lockedHourIdx === c.idx ? "locked" : ""}" data-idx="${c.idx}" data-level="${c.lvl}" role="button" tabindex="${c.lvl >= 0 ? 0 : -1}" aria-label="${c.day} ${c.h}:00"></div>
+    `).join("");
+
+    if (state.lockedHourIdx !== null && cells[state.lockedHourIdx]) {
+      readout.innerHTML = formatCell(cells[state.lockedHourIdx]) + ` <span style="opacity:0.75;">(已锁定，再次点击取消)</span>`;
+    } else {
+      readout.textContent = defaultText;
+    }
+
+    grid.querySelectorAll(".hour-cell").forEach((el) => {
+      const idx = Number(el.dataset.idx);
+      const c = cells[idx];
+      if (c.lvl < 0) return;
+      el.onmouseenter = () => { readout.innerHTML = formatCell(c); };
+      el.onclick = () => {
+        state.lockedHourIdx = state.lockedHourIdx === idx ? null : idx;
+        renderHourlyMatrix(data);
+      };
+    });
+    grid.onmouseleave = () => {
+      if (state.lockedHourIdx !== null && cells[state.lockedHourIdx]) {
+        readout.innerHTML = formatCell(cells[state.lockedHourIdx]) + ` <span style="opacity:0.75;">(已锁定，再次点击取消)</span>`;
+      } else {
+        readout.textContent = defaultText;
+      }
+    };
+  }
+
+  function sortRows(rows, key, dir) {
+    const mul = dir === "asc" ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+      const va = a[key] ?? 0;
+      const vb = b[key] ?? 0;
+      if (typeof va === "string") return va.localeCompare(vb) * mul;
+      return (va - vb) * mul;
+    });
+  }
+
+  function thSort(label, key) {
+    const active = state.sortKey === key;
+    const arrow = active ? (state.sortDir === "desc" ? "↓" : "↑") : "";
+    return `<th><button type="button" class="th-sort-btn ${active ? "active" : ""}" data-sort="${key}"><span>${label}</span>${arrow ? `<span class="sort-arrow">${arrow}</span>` : ""}</button></th>`;
+  }
+
+  function renderBreakdown(data) {
+    const table = document.getElementById("breakdownTable");
+    const metric = state.metric === "cost" ? "cost" : "tokens";
+    const provMap = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
+    const periodMul = state.period === "24h" ? 0.16 : state.period === "7d" ? 1 : state.period === "30d" ? 3.4 : 9.8;
+    const scopeMul = state.scope === "lever" ? data.raw.leverShare : 1;
+
+    const matchesFocus = (providerId, modelId) => {
+      if (!state.focusId) return true;
+      return state.groupBy === "provider" ? providerId === state.focusId : modelId === state.focusId;
+    };
+
+    if (state.breakdown === "model") {
+      let rows = data.modelList
+        .filter((m) => matchesFocus(m.provider, m.id))
+        .map((m) => ({ ...m, shareVal: metric === "cost" ? m.cost / data.totalCost : m.tokens / data.totalTokens }));
+      rows = sortRows(rows, state.sortKey, state.sortDir);
+      const peak = Math.max(1, ...rows.map((r) => metric === "cost" ? r.cost : r.tokens));
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>模型</th>
+            ${thSort("缓存命中", "hit")}
+            ${thSort("会话数", "sessions")}
+            ${thSort("估算费用", "cost")}
+            <th>占比</th>
+            ${thSort("总 Tokens", "tokens")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((m, idx) => {
+            const val = metric === "cost" ? m.cost : m.tokens;
+            return `
+              <tr class="clickable" data-id="${m.id}">
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="primary-cell">
+                    <span class="series-dot" style="background:${m.color}"></span>
+                    <span class="mono" style="font-size:12.5px;">${m.name}</span>
+                    <span style="font-size:11px; color:var(--muted-fg); font-weight:400;">${m.providerName}</span>
+                  </div>
+                  <div class="inline-bar-track"><div class="inline-bar-fill" style="width:${Math.max(4, (val / peak) * 100)}%; background:${m.color};"></div></div>
+                </td>
+                <td class="tabular">${fmtPct(m.hit)}</td>
+                <td class="tabular">${m.sessions}</td>
+                <td class="tabular ${metric === "cost" ? "strong" : ""}">${fmtUsd(m.cost)}</td>
+                <td class="tabular">${fmtPct(m.shareVal)}</td>
+                <td class="tabular ${metric === "tokens" ? "strong" : ""}">${fmtTokens(m.tokens)}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>`;
+
+      table.querySelectorAll("tbody tr.clickable").forEach((tr) => {
+        tr.onclick = () => {
+          const m = rows.find((x) => x.id === tr.dataset.id);
+          if (m) openDetailModal({
+            title: m.name,
+            monoTitle: true,
+            sub: `${m.providerName} · ${data.raw.rangeLabel}`,
+            kpis: [
+              ["总 Tokens", fmtTokens(m.tokens)],
+              ["估算费用", fmtUsd(m.cost)],
+              ["缓存命中率", fmtPct(m.hit)],
+            ],
+            rows: [
+              ["会话数量", `${m.sessions} 次`],
+              ["缓存命中读取", fmtTokens(Math.round(m.tokens * m.hit))],
+              ["模型输出", fmtTokens(Math.round(m.tokens * 0.031))],
+              ["参考单价（入 / 出）", `${m.priceIn} · ${m.priceOut}`],
+            ],
+          });
+        };
+      });
+    } else if (state.breakdown === "agent") {
+      const leverCost = data.totalCost * (state.scope === "lever" ? 1 : data.raw.leverShare);
+      const leverTokens = data.totalTokens * (state.scope === "lever" ? 1 : data.raw.leverShare);
+      let rows = AGENTS_BASE
+        .filter((a) => matchesFocus(a.provider, a.model))
+        .map((a) => ({
+          ...a,
+          cost: leverCost * a.share,
+          tokens: Math.round(leverTokens * a.share),
+          runs: Math.max(2, Math.round(a.runs * periodMul * 0.35)),
+          sessions: Math.max(1, Math.round(a.sessions * periodMul * 0.65)),
+          add: Math.round(a.add * periodMul * 0.45),
+          del: Math.round(a.del * periodMul * 0.45),
+          codeTotal: Math.round((a.add + a.del) * periodMul * 0.45),
+        }));
+      const sumVal = rows.reduce((s, r) => s + (metric === "cost" ? r.cost : r.tokens), 0) || 1;
+      rows = sortRows(rows, state.sortKey, state.sortDir);
+      const peak = Math.max(1, ...rows.map((r) => metric === "cost" ? r.cost : r.tokens));
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>Lever Agent</th>
+            <th>主力模型</th>
+            ${thSort("运行轮次", "runs")}
+            ${thSort("代码产出", "codeTotal")}
+            ${thSort("估算费用", "cost")}
+            <th>占比</th>
+            ${thSort("总 Tokens", "tokens")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((a, idx) => {
+            const val = metric === "cost" ? a.cost : a.tokens;
+            return `
+              <tr class="clickable" data-id="${a.id}">
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="primary-cell">
+                    <span class="agent-chip-avatar" style="background:${a.bg}">${a.initials}</span>
+                    <div>
+                      <span>${a.name}</span>
+                      <div class="sub-meta-row">常驻项目 ${a.project} · ${a.sessions} 会话</div>
+                    </div>
+                  </div>
+                  <div class="inline-bar-track" style="margin-left:30px;"><div class="inline-bar-fill" style="width:${Math.max(5, (val / peak) * 100)}%; background:${a.bg};"></div></div>
+                </td>
+                <td class="mono" style="font-size:12px;">${a.model}</td>
+                <td class="tabular">${a.runs} 轮</td>
+                <td class="tabular diff-stat"><span class="diff-add">+${a.add.toLocaleString()}</span><span class="diff-del">-${a.del.toLocaleString()}</span></td>
+                <td class="tabular ${metric === "cost" ? "strong" : ""}">${fmtUsd(a.cost)}</td>
+                <td class="tabular">${fmtPct(val / sumVal)}</td>
+                <td class="tabular ${metric === "tokens" ? "strong" : ""}">${fmtTokens(a.tokens)}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>`;
+
+      table.querySelectorAll("tbody tr.clickable").forEach((tr) => {
+        tr.onclick = () => {
+          const a = rows.find((x) => x.id === tr.dataset.id);
+          if (a) openDetailModal({
+            title: a.name,
+            sub: `Lever Agent · 默认模型 ${a.model}`,
+            kpis: [
+              ["总 Tokens", fmtTokens(a.tokens)],
+              ["估算费用", fmtUsd(a.cost)],
+              ["运行轮次", `${a.runs} 轮`],
+            ],
+            rows: [
+              ["活跃会话", `${a.sessions} 次`],
+              ["主要工作项目", a.project],
+              ["缓存命中率", fmtPct(a.hit)],
+              ["代码变更产出", `+${a.add.toLocaleString()} / -${a.del.toLocaleString()} 行`],
+            ],
+          });
+        };
+      });
+    } else if (state.breakdown === "project") {
+      let rows = PROJECTS_BASE.map((p) => ({
+        ...p,
+        cost: data.totalCost * p.share,
+        tokens: Math.round(data.totalTokens * p.share),
+        sessions: Math.max(1, Math.round(p.sessions * periodMul * scopeMul)),
+        runs: Math.max(2, Math.round(p.runs * periodMul * scopeMul * 0.4)),
+        add: Math.round(p.add * periodMul * 0.45),
+        del: Math.round(p.del * periodMul * 0.45),
+        codeTotal: Math.round((p.add + p.del) * periodMul * 0.45),
+      }));
+      const sumVal = rows.reduce((s, r) => s + (metric === "cost" ? r.cost : r.tokens), 0) || 1;
+      rows = sortRows(rows, state.sortKey, state.sortDir);
+      const peak = Math.max(1, ...rows.map((r) => metric === "cost" ? r.cost : r.tokens));
+
+      const iconOf = (kind) => kind === "git"
+        ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--fg)" stroke-width="1.6" style="flex-shrink:0;"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/></svg>`
+        : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted-fg)" stroke-width="1.6" style="flex-shrink:0;"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>项目 / 工作目录</th>
+            ${thSort("会话数", "sessions")}
+            ${thSort("代码产出", "codeTotal")}
+            ${thSort("估算费用", "cost")}
+            <th>占比</th>
+            ${thSort("总 Tokens", "tokens")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((p, idx) => {
+            const val = metric === "cost" ? p.cost : p.tokens;
+            return `
+              <tr class="clickable" data-id="${p.id}">
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="primary-cell">
+                    ${iconOf(p.kind)}
+                    <div style="min-width:0;">
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <span>${p.name}</span>
+                        <span class="soft-badge">${p.kindLabel}</span>
+                      </div>
+                      <div class="sub-meta-row"><span class="mono">${p.path}</span> · 主力 ${p.topModel}</div>
+                    </div>
+                  </div>
+                  <div class="inline-bar-track" style="margin-left:23px;"><div class="inline-bar-fill" style="width:${Math.max(5, (val / peak) * 100)}%; background:var(--fg); opacity:0.65;"></div></div>
+                </td>
+                <td class="tabular">${p.sessions} 次</td>
+                <td class="tabular diff-stat">${p.codeTotal ? `<span class="diff-add">+${p.add.toLocaleString()}</span><span class="diff-del">-${p.del.toLocaleString()}</span>` : `<span style="color:var(--faint-fg);">—</span>`}</td>
+                <td class="tabular ${metric === "cost" ? "strong" : ""}">${fmtUsd(p.cost)}</td>
+                <td class="tabular">${fmtPct(val / sumVal)}</td>
+                <td class="tabular ${metric === "tokens" ? "strong" : ""}">${fmtTokens(p.tokens)}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>`;
+
+      table.querySelectorAll("tbody tr.clickable").forEach((tr) => {
+        tr.onclick = () => {
+          const p = rows.find((x) => x.id === tr.dataset.id);
+          if (p) openDetailModal({
+            title: p.name,
+            sub: `${p.kindLabel} · ${p.path}`,
+            kpis: [
+              ["总 Tokens", fmtTokens(p.tokens)],
+              ["估算费用", fmtUsd(p.cost)],
+              ["会话数", `${p.sessions} 次`],
+            ],
+            rows: [
+              ["主力 Agent", p.topAgent],
+              ["主力模型", p.topModel],
+              ["运行轮次", `${p.runs} 轮`],
+              ["缓存命中率", fmtPct(p.hit)],
+              ["代码变更产出", p.codeTotal ? `+${p.add.toLocaleString()} / -${p.del.toLocaleString()} 行` : "无代码变更"],
+            ],
+          });
+        };
+      });
+    } else if (state.breakdown === "session") {
+      let rows = SESSIONS_BASE
+        .filter((s) => (state.scope === "all" || s.source === "lever") && matchesFocus(s.provider, s.model))
+        .map((s) => ({
+          ...s,
+          color: provMap[s.provider].color,
+          providerName: provMap[s.provider].name,
+        }));
+      rows = sortRows(rows, state.sortKey, state.sortDir);
+      const peak = Math.max(1, ...rows.map((r) => metric === "cost" ? r.cost : r.tokens));
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>会话（按消耗排序）</th>
+            <th>主力模型</th>
+            ${thSort("轮次", "runs")}
+            ${thSort("最近活跃", "updatedTs")}
+            ${thSort("估算费用", "cost")}
+            ${thSort("总 Tokens", "tokens")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows.map((s, idx) => {
+            const val = metric === "cost" ? s.cost : s.tokens;
+            return `
+              <tr class="clickable" data-id="${s.id}">
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="primary-cell">
+                    <span class="agent-chip-avatar" style="background:${s.agentBg}; ${s.source === "cli" ? "opacity:0.65;" : ""}">${s.agentInitials}</span>
+                    <div style="min-width:0;">
+                      <div class="primary-cell-text" title="${s.title}">${s.title}</div>
+                      <div class="sub-meta-row">
+                        <span>${s.agent}</span>
+                        <span>·</span>
+                        <span>${s.project}</span>
+                        ${s.add ? `<span>·</span><span class="mono"><span class="diff-add">+${s.add.toLocaleString()}</span> <span class="diff-del">-${s.del.toLocaleString()}</span></span>` : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="inline-bar-track" style="margin-left:30px;"><div class="inline-bar-fill" style="width:${Math.max(5, (val / peak) * 100)}%; background:${s.color};"></div></div>
+                </td>
+                <td class="mono" style="font-size:12px;">
+                  <span style="display:inline-flex; align-items:center; gap:5px;"><span class="series-dot" style="background:${s.color}"></span>${s.model}</span>
+                </td>
+                <td class="tabular">${s.runs} 轮</td>
+                <td class="tabular" style="font-size:12px;">${s.updatedText}</td>
+                <td class="tabular ${metric === "cost" ? "strong" : ""}">${fmtUsd(s.cost)}</td>
+                <td class="tabular ${metric === "tokens" ? "strong" : ""}">${fmtTokens(s.tokens)}</td>
+              </tr>`;
+          }).join("") : `<tr><td colspan="7" style="text-align:center; padding:24px;">当前筛选条件下暂无会话记录</td></tr>`}
+        </tbody>`;
+
+      table.querySelectorAll("tbody tr.clickable").forEach((tr) => {
+        tr.onclick = () => {
+          const s = rows.find((x) => x.id === tr.dataset.id);
+          if (s) openDetailModal({
+            title: s.title,
+            sub: `${s.source === "lever" ? `Lever 会话 · ${s.agent}` : "本机外部 CLI 会话"} · 项目 ${s.project}`,
+            kpis: [
+              ["总 Tokens", fmtTokens(s.tokens)],
+              ["估算费用", fmtUsd(s.cost)],
+              ["缓存命中率", fmtPct(s.hit)],
+            ],
+            rows: [
+              ["主力模型", `${s.model} (${s.providerName})`],
+              ["对话轮次", `${s.runs} 轮`],
+              ["最近活跃", s.updatedText],
+              ["缓存命中读取", fmtTokens(Math.round(s.tokens * s.hit))],
+              ["模型输出", fmtTokens(Math.round(s.tokens * 0.032))],
+              ...(s.add ? [["代码变更", `+${s.add.toLocaleString()} / -${s.del.toLocaleString()} 行`]] : []),
+            ],
+            actionLabel: s.source === "lever" ? "在工作台中打开此会话" : null,
+          });
+        };
+      });
+    } else {
+      const labels = data.raw.labels;
+      const cols = data.filteredSeries.slice(0, 5);
+      const rows = labels.map((lbl, i) => {
+        const vals = Object.fromEntries(cols.map((s) => [s.id, metric === "cost" ? s.seriesCost[i] : s.seriesTokens[i]]));
+        const totCost = data.filteredSeries.reduce((sum, s) => sum + s.seriesCost[i], 0);
+        const totTok = data.filteredSeries.reduce((sum, s) => sum + s.seriesTokens[i], 0);
+        return { lbl, vals, cost: totCost, tokens: totTok, idx: i };
+      }).reverse();
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>${state.period === "24h" ? "时段" : "日期"}</th>
+            ${cols.map((s) => `<th class="${state.groupBy === "model" ? "mono" : ""}" style="${state.groupBy === "model" ? "font-size:11px;" : ""}">${s.name}</th>`).join("")}
+            <th>合计费用</th>
+            <th>总 Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td class="strong tabular">${r.lbl}</td>
+              ${cols.map((s) => `<td class="tabular">${fmtVal(r.vals[s.id], metric)}</td>`).join("")}
+              <td class="tabular ${metric === "cost" ? "strong" : ""}">${fmtUsd(r.cost)}</td>
+              <td class="tabular ${metric === "tokens" ? "strong" : ""}">${fmtTokens(r.tokens)}</td>
+            </tr>`).join("")}
+        </tbody>`;
+    }
+
+    // Bind sortable column headers
+    table.querySelectorAll(".th-sort-btn").forEach((btn) => {
+      btn.onclick = () => {
+        const key = btn.dataset.sort;
+        if (state.sortKey === key) {
+          state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+        } else {
+          state.sortKey = key;
+          state.sortDir = "desc";
+        }
+        renderBreakdown(data);
+      };
+    });
+  }
+
+  function renderLimits() {
+    document.getElementById("limitsGrid").innerHTML = LIMITS_DATA.map((item) => `
+      <div class="panel-surface limit-card">
+        <div class="limit-card-head">
+          <div class="limit-card-title">
+            <span class="series-dot" style="background:${item.color}"></span>
+            <span>${item.provider}</span>
+          </div>
+          <span class="limit-badge">${item.plan}</span>
+        </div>
+        ${item.windows.map((w) => `
+          <div class="limit-win">
+            <div class="limit-win-row tabular">
+              <div class="limit-win-meta"><span>${w.label}</span><span>${w.reset}</span></div>
+              <span class="limit-win-pct">剩余 ${100 - w.used}%</span>
+            </div>
+            <div class="pace-bar" style="background: color-mix(in srgb, ${item.color} 15%, transparent);">
+              <div class="pace-bar-fill" style="width:${w.used}%; background:${item.color};"></div>
+              <div class="pace-tick" style="left:${w.elapsed}%;" title="窗口时间已流逝 ${w.elapsed}%"></div>
+            </div>
+            <div class="pace-note">
+              <span class="${w.fast ? "pace-fast" : "pace-ok"}">${w.note}</span>
+              <span class="tabular">已用 ${w.used}% · 周期进度 ${w.elapsed}%</span>
+            </div>
+          </div>`).join("")}
+      </div>`).join("");
+  }
+
+  function render() {
+    const data = computeData();
+    const isLimits = state.metric === "limits";
+    document.getElementById("analyticsView").style.display = isLimits ? "none" : "flex";
+    document.getElementById("limitsView").style.display = isLimits ? "flex" : "none";
+    document.getElementById("periodGroup").style.opacity = isLimits ? "0.4" : "1";
+    document.getElementById("periodGroup").style.pointerEvents = isLimits ? "none" : "auto";
+
+    document.getElementById("windowRangeText").textContent = isLimits ? "实时订阅配额状态" : data.raw.rangeLabel;
+    document.getElementById("sourceSummaryText").textContent =
+      state.scope === "lever" ? "仅统计 Lever 工作台内部运行记录" : "聚合本机全部 CLI 与 Lever 会话";
+
+    if (isLimits) {
+      renderLimits();
+      return;
+    }
+
+    const metric = state.metric;
+    document.getElementById("heroFigure").textContent = metric === "cost" ? fmtUsd(data.totalCost) : fmtTokens(data.totalTokens);
+    document.getElementById("heroMeta").textContent =
+      metric === "cost"
+        ? `${data.totalSessions} 次会话 · API 等效估算`
+        : `${data.totalSessions} 次会话 · 约 ${fmtUsd(data.totalCost)}`;
+
+    // Left Hero Rank (Providers OR Models)
+    const rankEl = document.getElementById("seriesRank");
+    const sortedSeries = data.activePool
+      .slice()
+      .sort((a, b) => (metric === "cost" ? b.cost - a.cost : b.tokens - a.tokens))
+      .slice(0, 5);
+
+    rankEl.innerHTML = sortedSeries.map((s) => {
+      const share = metric === "cost" ? s.cost / data.allCost : s.tokens / data.allTokens;
+      const selected = state.focusId === s.id;
+      const dimmed = state.focusId && !selected;
+      return `
+        <button type="button" class="series-row ${selected ? "selected" : ""} ${dimmed ? "dimmed" : ""}" data-sid="${s.id}">
+          <div class="series-row-top">
+            <span class="series-name">
+              <span class="series-dot" style="background:${s.color}"></span>
+              <span class="label-txt ${state.groupBy === "model" ? "mono" : ""}" style="${state.groupBy === "model" ? "font-size:12px;" : ""}">${s.name}</span>
+              <span class="series-sessions tabular">${s.sessions} 会话</span>
+            </span>
+            <span class="series-val tabular">${fmtVal(metric === "cost" ? s.cost : s.tokens, metric)}</span>
+          </div>
+          <div class="series-sub tabular">
+            ${metric === "cost"
+              ? `占费用 ${fmtPct(share)} · ${fmtTokens(s.tokens)} tokens`
+              : `占 Tokens ${fmtPct(share)} · 约 ${fmtUsd(s.cost)}`}
+          </div>
+        </button>`;
+    }).join("");
+
+    rankEl.querySelectorAll(".series-row").forEach((btn) => {
+      btn.onclick = () => {
+        const sid = btn.dataset.sid;
+        state.focusId = state.focusId === sid ? null : sid;
+        render();
+      };
+    });
+
+    const periodPrefix = state.period === "24h" ? "每 2 小时" : state.period === "90d" ? "每周" : "每日";
+    const groupWord = state.groupBy === "provider" ? "Provider" : "模型";
+    document.getElementById("chartTitle").textContent =
+      `${periodPrefix}${metric === "cost" ? "估算费用" : "处理 Tokens"}分布`;
+    document.getElementById("chartFilterHint").textContent = state.focusId
+      ? `已聚焦：${data.activePool.find((x) => x.id === state.focusId)?.name}（再次点击取消）`
+      : `按 ${groupWord} 分组 · 点击左侧可聚焦`;
+
+    renderChart(data);
+
+    // Totals 5-col
+    const hitRate = data.cachedInput / (data.cachedInput + data.uncachedInput + data.cacheWrite);
+    document.getElementById("totalsGrid").innerHTML = `
+      <div class="metric-cell"><dt>总处理 Tokens</dt><dd class="tabular">${fmtTokens(data.totalTokens)}</dd><div class="metric-sub tabular">输入 + 缓存 + 输出</div></div>
+      <div class="metric-cell"><dt>缓存命中读取</dt><dd class="tabular">${fmtTokens(data.cachedInput)}</dd><div class="metric-sub tabular">命中率 ${fmtPct(hitRate)}</div></div>
+      <div class="metric-cell"><dt>未缓存输入</dt><dd class="tabular">${fmtTokens(data.uncachedInput)}</dd><div class="metric-sub tabular">缓存写入 ${fmtTokens(data.cacheWrite)}</div></div>
+      <div class="metric-cell"><dt>模型输出</dt><dd class="tabular">${fmtTokens(data.output)}</dd><div class="metric-sub tabular">含思维链推理</div></div>
+      <div class="metric-cell"><dt>缓存节省费用</dt><dd class="tabular positive">${fmtUsd(data.cacheSavings)}</dd><div class="metric-sub tabular">较无缓存节省约 66%</div></div>
+    `;
+
+    // ShareBars
+    const typeSegs = metric === "tokens"
+      ? [
+          { label: "缓存读取", val: data.cachedInput, color: "var(--ink-28)" },
+          { label: "缓存写入", val: data.cacheWrite, color: "var(--ink-72)" },
+          { label: "未缓存输入", val: data.uncachedInput, color: "var(--ink-50)" },
+          { label: "输出", val: data.output, color: "var(--ink-100)" },
+        ]
+      : [
+          { label: "输出费用", val: data.totalCost * 0.44, color: "var(--ink-100)" },
+          { label: "缓存写入", val: data.totalCost * 0.23, color: "var(--ink-72)" },
+          { label: "未缓存输入", val: data.totalCost * 0.19, color: "var(--ink-50)" },
+          { label: "缓存读取", val: data.totalCost * 0.14, color: "var(--ink-28)" },
+        ];
+
+    const leverPart = state.scope === "lever" ? 1 : data.raw.leverShare;
+    const sourceSegs = [
+      { label: "Lever 工作台", val: (metric === "cost" ? data.totalCost : data.totalTokens) * leverPart, color: "var(--ink-100)" },
+      ...(state.scope === "all"
+        ? [{ label: "外部终端 CLI", val: (metric === "cost" ? data.totalCost : data.totalTokens) * (1 - leverPart), color: "var(--ink-28)" }]
+        : []),
+    ];
+
+    const buildShareBar = (title, aside, segs) => {
+      const sum = segs.reduce((a, b) => a + b.val, 0) || 1;
+      return `
+        <div class="sharebar-block">
+          <div class="sharebar-head">
+            <h3 class="section-title">${title}</h3>
+            <span class="sharebar-aside tabular">${aside}</span>
+          </div>
+          <div class="sharebar-track">
+            ${segs.map((s) => `<div class="sharebar-seg" style="flex:${s.val} 1 0; background:${s.color};" title="${s.label} · ${fmtVal(s.val, metric)} (${fmtPct(s.val / sum)})"></div>`).join("")}
+          </div>
+          <ul class="sharebar-legend tabular">
+            ${segs.map((s) => `<li><span class="sharebar-swatch" style="background:${s.color}"></span><span class="lbl">${s.label}</span><span class="num">${fmtVal(s.val, metric)}</span></li>`).join("")}
+          </ul>
+        </div>`;
+    };
+
+    document.getElementById("shareBarsGrid").innerHTML =
+      buildShareBar(metric === "tokens" ? "按 Token 类型分布" : "按费用构成分布", `缓存命中 ${fmtPct(hitRate)}`, typeSegs) +
+      buildShareBar("按执行来源分布", state.scope === "lever" ? "当前仅看 Lever" : `Lever 占比 ${fmtPct(leverPart)}`, sourceSegs);
+
+    renderHourlyMatrix(data);
+    renderBreakdown(data);
+  }
+
+  function openDetailModal({ title, monoTitle, sub, kpis, rows, actionLabel }) {
+    const modal = document.getElementById("detailModal");
+    const box = document.getElementById("detailModalContent");
+    box.innerHTML = `
+      <div class="dialog-head">
+        <div>
+          <div class="dialog-title ${monoTitle ? "mono" : ""}">${title}</div>
+          <div class="dialog-sub">${sub}</div>
+        </div>
+        <button class="icon-btn" id="closeModalBtn" type="button" aria-label="关闭">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="dialog-metrics tabular">
+        ${kpis.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}
+      </div>
+      <div class="dialog-rows tabular">
+        ${rows.map(([k, v]) => `<div class="dialog-row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("")}
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        ${actionLabel ? `<button class="btn-outline" id="jumpSessionBtn" type="button">${actionLabel}</button>` : ""}
+        <button class="btn-outline" id="closeModalBtn2" type="button">关闭</button>
+      </div>`;
+    modal.classList.add("open");
+    document.getElementById("closeModalBtn").onclick = () => modal.classList.remove("open");
+    document.getElementById("closeModalBtn2").onclick = () => modal.classList.remove("open");
+    const jump = document.getElementById("jumpSessionBtn");
+    if (jump) jump.onclick = () => modal.classList.remove("open");
+  }
+
+  function renderPopoverStats() {
+    const isToday = state.popRange === "today";
+    const stats = isToday
+      ? { tokens: "89.4M", cost: "$24.10", hit: "86.4%", runs: "26 会话 · 184 轮" }
+      : { tokens: "852.1M", cost: "$218.50", hit: "90.3%", runs: "148 会话 · 1,246 轮" };
+    document.getElementById("popStatsGrid").innerHTML = `
+      <div class="pop-stat-item"><div class="k">处理 Tokens</div><div class="v">${stats.tokens}</div><div class="s">缓存命中 ${stats.hit}</div></div>
+      <div class="pop-stat-item"><div class="k">估算费用</div><div class="v">${stats.cost}</div><div class="s">${stats.runs}</div></div>
+    `;
+  }
+
+  // Popover control
+  const usageTrigger = document.getElementById("usageTrigger");
+  const usagePopover = document.getElementById("usagePopover");
+  const demoPopBtn = document.getElementById("togglePopoverDemo");
+  function setPopover(open) {
+    state.popoverOpen = open;
+    usagePopover.classList.toggle("open", open);
+    usageTrigger.classList.toggle("open", open);
+    usageTrigger.setAttribute("aria-expanded", String(open));
+    demoPopBtn.classList.toggle("active", open);
+    demoPopBtn.textContent = open ? "收起用量 Popover" : "预览用量 Popover";
+  }
+  usageTrigger.onclick = (e) => { e.stopPropagation(); setPopover(!state.popoverOpen); };
+  demoPopBtn.onclick = (e) => { e.stopPropagation(); setPopover(!state.popoverOpen); };
+  document.addEventListener("click", (e) => {
+    if (state.popoverOpen && !usagePopover.contains(e.target) && !usageTrigger.contains(e.target) && !demoPopBtn.contains(e.target)) {
+      setPopover(false);
+    }
+  });
+  document.getElementById("openFullStatsBtn").onclick = () => {
+    setPopover(false);
+    const root = document.getElementById("statsRoot");
+    root.classList.remove("flash-highlight");
+    void root.offsetWidth;
+    root.classList.add("flash-highlight");
+    document.getElementById("mainScroll").scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  document.getElementById("popRangeSeg").querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      state.popRange = b.dataset.poprange;
+      document.getElementById("popRangeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+      renderPopoverStats();
+    };
+  });
+
+  // Bind ToggleGroups
+  const bindGroup = (id, onPick) => {
+    const el = document.getElementById(id);
+    el.querySelectorAll(".toggle-item").forEach((btn) => {
+      btn.onclick = () => {
+        el.querySelectorAll(".toggle-item").forEach((x) => x.setAttribute("aria-pressed", String(x === btn)));
+        onPick(btn);
+      };
+    });
+  };
+  bindGroup("periodGroup", (b) => { state.period = b.dataset.period; render(); });
+  bindGroup("scopeGroup", (b) => { state.scope = b.dataset.scope; render(); });
+  bindGroup("metricGroup", (b) => {
+    state.metric = b.dataset.metric;
+    if (state.metric === "cost" || state.metric === "tokens") {
+      if (state.sortKey === "cost" || state.sortKey === "tokens") state.sortKey = state.metric;
+    }
+    render();
+  });
+  bindGroup("seriesGroup", (b) => {
+    state.groupBy = b.dataset.group;
+    state.focusId = null;
+    render();
+  });
+  bindGroup("breakdownGroup", (b) => {
+    state.breakdown = b.dataset.tab;
+    state.sortKey = state.metric === "cost" ? "cost" : "tokens";
+    state.sortDir = "desc";
+    render();
+  });
+
+  const themeBtn = document.getElementById("themeToggle");
+  themeBtn.onclick = () => {
+    const dark = document.documentElement.classList.toggle("dark");
+    themeBtn.textContent = dark ? "切换浅色主题" : "切换深色主题";
+  };
+
+  document.getElementById("refreshBtn").onclick = function () {
+    const svg = this.querySelector("svg");
+    svg.style.transition = "transform 450ms ease-out";
+    svg.style.transform = "rotate(360deg)";
+    setTimeout(() => { svg.style.transition = "none"; svg.style.transform = "rotate(0deg)"; }, 460);
+  };
+
+  document.getElementById("detailModal").onclick = (e) => {
+    if (e.target.id === "detailModal") e.target.classList.remove("open");
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      setPopover(false);
+      document.getElementById("detailModal").classList.remove("open");
+    }
+  });
+
+  renderPopoverStats();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,2181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>方案一 · 极简分析账本（t3code 启发）— Lever 本机数据统计</title>
+<style>
+  :root {
+    --font-sans: "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    --canvas-bg: #ececec;
+    --bg: #ffffff;
+    --sidebar: #fafafa;
+    --panel-bg: #f8f8f8;
+    --popover: rgba(255, 255, 255, 0.94);
+    --fg: #171717;
+    --fg-2: #404040;
+    --muted-fg: #737373;
+    --faint-fg: #a3a3a3;
+    --primary: #262626;
+    --primary-fg: #fafafa;
+    --secondary: #f5f5f5;
+    --border: rgba(23, 23, 23, 0.09);
+    --border-subtle: rgba(23, 23, 23, 0.06);
+    --border-strong: rgba(23, 23, 23, 0.16);
+    --control-bg: #ffffff;
+    --control-hover: rgba(23, 23, 23, 0.055);
+    --control-selected: rgba(23, 23, 23, 0.095);
+    --control-focus: rgba(23, 23, 23, 0.14);
+    --surface-highlight: rgba(255, 255, 255, 0.9);
+    --surface-shadow: rgba(0, 0, 0, 0.06);
+    --overlay-shadow: rgba(0, 0, 0, 0.16);
+    --shadow-surface: inset 0 1px 0 var(--surface-highlight), 0 1px 2px var(--surface-shadow), 0 4px 12px -6px var(--surface-shadow);
+    --shadow-overlay: inset 0 1px 0 var(--surface-highlight), 0 2px 5px var(--surface-shadow), 0 14px 30px -10px var(--overlay-shadow);
+    --scrim: rgba(0, 0, 0, 0.22);
+
+    --usage-blue: #4169ba;
+    --usage-clay: #ad604a;
+    --usage-violet: #7962aa;
+    --usage-teal: #2e7d7b;
+    --status-positive: #1f8a52;
+    --status-attention: #9a6700;
+    --diff-added: #1f8a52;
+    --diff-removed: #c53b3b;
+
+    /* Neutral ink ramp for ShareBar (t3code style) */
+    --ink-100: #171717;
+    --ink-72: #525252;
+    --ink-50: #858585;
+    --ink-28: #c4c4c4;
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius: 8px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+  }
+
+  .dark {
+    --canvas-bg: #1f1f1f;
+    --bg: #141414;
+    --sidebar: #1a1a1a;
+    --panel-bg: #1d1d1d;
+    --popover: rgba(32, 32, 32, 0.94);
+    --fg: #fafafa;
+    --fg-2: #d4d4d4;
+    --muted-fg: #a1a1a1;
+    --faint-fg: #666666;
+    --primary: #e5e5e5;
+    --primary-fg: #171717;
+    --secondary: #262626;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.18);
+    --control-bg: rgba(255, 255, 255, 0.05);
+    --control-hover: rgba(255, 255, 255, 0.06);
+    --control-selected: rgba(255, 255, 255, 0.11);
+    --control-focus: rgba(255, 255, 255, 0.16);
+    --surface-highlight: rgba(255, 255, 255, 0.06);
+    --surface-shadow: rgba(0, 0, 0, 0.28);
+    --overlay-shadow: rgba(0, 0, 0, 0.5);
+    --scrim: rgba(0, 0, 0, 0.45);
+
+    --usage-blue: #87a8f0;
+    --usage-clay: #e69a81;
+    --usage-violet: #b79aee;
+    --usage-teal: #5cb5b2;
+    --status-positive: #4cc38a;
+    --status-attention: #e5b567;
+    --diff-added: #4cc38a;
+    --diff-removed: #e57373;
+
+    --ink-100: #f0f0f0;
+    --ink-72: #adadad;
+    --ink-50: #787878;
+    --ink-28: #444444;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    color: var(--fg);
+    background: var(--canvas-bg);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  /* AGENTS.md: No focus rings/glows on any button */
+  button:focus-visible, [role="tab"]:focus-visible {
+    outline: none;
+    box-shadow: none;
+    background: var(--control-focus);
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); }
+
+  /* Lever App Shell */
+  .app-shell {
+    display: flex;
+    height: 100dvh;
+    background: var(--canvas-bg);
+  }
+
+  /* Primary Navigation */
+  .primary-nav {
+    width: 160px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px;
+    color: var(--muted-fg);
+    user-select: none;
+    position: relative;
+  }
+  .nav-wordmark {
+    height: 36px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+    gap: 8px;
+  }
+  .nav-wordmark .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 99px;
+    background: var(--fg);
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 36px;
+    padding: 0 10px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    transition: background-color 150ms, color 150ms;
+    text-align: left;
+    width: 100%;
+  }
+  .nav-item:hover { background: var(--control-hover); color: var(--fg); }
+  .nav-item.active { background: var(--control-selected); color: var(--fg); }
+  .nav-item.open { background: var(--control-hover); color: var(--fg); }
+  .nav-item svg { flex-shrink: 0; }
+  .nav-spacer { flex: 1; }
+
+  /* Workspace Frame */
+  .workspace-frame {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    margin: 8px 8px 8px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--bg);
+    box-shadow: var(--shadow-surface);
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Secondary Sidebar (Settings) */
+  .secondary-sidebar {
+    width: 232px;
+    flex-shrink: 0;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+  }
+  .sidebar-header {
+    height: 44px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sidebar-header h1 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-fg);
+    transition: background-color 150ms, color 150ms;
+  }
+  .icon-btn:hover { background: var(--control-hover); color: var(--fg); }
+  .sidebar-search {
+    padding: 4px 12px 14px;
+  }
+  .search-box {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--control-bg);
+    color: var(--muted-fg);
+    font-size: 13px;
+  }
+  .sidebar-nav {
+    padding: 0 12px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+  }
+  .sidebar-group h2 {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    padding: 2px 9px 6px;
+  }
+  .sidebar-group-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 9px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    width: 100%;
+    text-align: left;
+    transition: background-color 150ms, color 150ms;
+  }
+  .sidebar-link:hover { background: var(--control-hover); color: var(--fg); }
+  .sidebar-link[aria-current="page"] { background: var(--control-selected); color: var(--fg); }
+
+  /* Main Scroll Area */
+  .settings-scroll {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .settings-content {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 28px clamp(20px, 4%, 36px) 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* Demo Utility Strip inside Header */
+  .prototype-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted-fg);
+  }
+  .prototype-bar strong { color: var(--fg); font-weight: 600; }
+  .prototype-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .btn-outline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--control-bg);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 500;
+    transition: background-color 150ms, border-color 150ms;
+  }
+  .btn-outline:hover { background: var(--control-hover); border-color: var(--border-strong); }
+  .btn-outline.active { background: var(--control-selected); border-color: var(--border-strong); }
+
+  /* Page Header & Controls */
+  .page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 14px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-title-block h2 {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.025em;
+  }
+  .page-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted-fg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ToggleGroup (shadcn outline / segmented feel) */
+  .toggle-group {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--control-bg);
+    padding: 2px;
+    gap: 1px;
+  }
+  .toggle-item {
+    height: 26px;
+    padding: 0 9px;
+    border-radius: calc(var(--radius) - 2px);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    transition: background-color 150ms, color 150ms;
+    white-space: nowrap;
+  }
+  .toggle-item:hover { color: var(--fg); background: var(--control-hover); }
+  .toggle-item[aria-pressed="true"] {
+    background: var(--control-selected);
+    color: var(--fg);
+  }
+
+  /* Hero + Chart Section (t3code asymmetric 2-col) */
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 820px) {
+    .hero-grid { grid-template-columns: 1fr; }
+  }
+  .hero-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .hero-figure {
+    font-size: 38px;
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.1;
+    color: var(--fg);
+  }
+  .hero-meta {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted-fg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .provider-rank {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .provider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    margin: 0 -8px;
+    border-radius: var(--radius);
+    text-align: left;
+    transition: background-color 150ms, opacity 150ms;
+    width: calc(100% + 16px);
+  }
+  .provider-row:hover { background: var(--control-hover); }
+  .provider-row.selected { background: var(--control-selected); }
+  .provider-row.dimmed { opacity: 0.42; }
+  .provider-row-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .provider-name {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .provider-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 99px;
+    flex-shrink: 0;
+  }
+  .provider-sessions {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--muted-fg);
+  }
+  .provider-val {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .provider-sub {
+    padding-left: 14px;
+    font-size: 11.5px;
+    color: var(--muted-fg);
+  }
+
+  /* Chart Area */
+  .chart-column {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .chart-hint {
+    font-size: 11.5px;
+    color: var(--muted-fg);
+  }
+  .chart-wrap {
+    position: relative;
+    height: 236px;
+    width: 100%;
+    user-select: none;
+  }
+  .chart-wrap svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .chart-axis-text {
+    fill: var(--muted-fg);
+    font-size: 11px;
+    font-family: var(--font-sans);
+  }
+  .chart-grid-line {
+    stroke: var(--border);
+    stroke-dasharray: 2 3;
+    stroke-width: 1;
+  }
+  .chart-tooltip {
+    position: absolute;
+    z-index: 10;
+    pointer-events: none;
+    min-width: 168px;
+    padding: 9px 11px;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
+    background: var(--popover);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-overlay);
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 100ms ease-out, transform 100ms ease-out;
+  }
+  .chart-tooltip.visible { opacity: 1; transform: translateY(0); }
+  .chart-tooltip-date {
+    font-size: 11px;
+    color: var(--muted-fg);
+    margin-bottom: 6px;
+  }
+  .chart-tooltip-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    line-height: 1.6;
+  }
+  .chart-tooltip-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted-fg);
+  }
+  .chart-tooltip-total {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+  }
+
+  /* Totals 5-col strip (borderless typography-driven) */
+  .totals-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .totals-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 16px;
+  }
+  @media (max-width: 720px) {
+    .totals-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .metric-cell dt {
+    font-size: 12px;
+    color: var(--muted-fg);
+    margin-bottom: 4px;
+  }
+  .metric-cell dd {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+  }
+  .metric-cell dd.positive { color: var(--status-positive); }
+  .metric-sub {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--muted-fg);
+  }
+
+  /* ShareBar Section */
+  .sharebars-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 28px;
+    padding-top: 4px;
+  }
+  @media (max-width: 720px) {
+    .sharebars-grid { grid-template-columns: 1fr; }
+  }
+  .sharebar-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .sharebar-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .sharebar-aside {
+    font-size: 12px;
+    color: var(--muted-fg);
+  }
+  .sharebar-track {
+    display: flex;
+    height: 8px;
+    gap: 2px;
+  }
+  .sharebar-seg {
+    height: 100%;
+    min-width: 4px;
+    border-radius: 2px;
+    transition: opacity 150ms;
+  }
+  .sharebar-seg:first-child { border-top-left-radius: 99px; border-bottom-left-radius: 99px; }
+  .sharebar-seg:last-child { border-top-right-radius: 99px; border-bottom-right-radius: 99px; }
+  .sharebar-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    list-style: none;
+    font-size: 12px;
+  }
+  .sharebar-legend li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sharebar-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .sharebar-legend .lbl { color: var(--muted-fg); }
+  .sharebar-legend .num { color: var(--fg); font-weight: 500; }
+
+  /* Breakdown Table */
+  .breakdown-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .breakdown-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .data-table th {
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    text-align: right;
+    white-space: nowrap;
+  }
+  .data-table th:first-child, .data-table th:nth-child(2) { text-align: left; }
+  .data-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border-subtle);
+    text-align: right;
+    color: var(--muted-fg);
+    white-space: nowrap;
+  }
+  .data-table td:first-child, .data-table td:nth-child(2) { text-align: left; }
+  .data-table tbody tr {
+    transition: background-color 120ms;
+  }
+  .data-table tbody tr.clickable { cursor: pointer; }
+  .data-table tbody tr:hover { background: var(--control-hover); }
+  .data-table td.strong { color: var(--fg); font-weight: 500; }
+  .model-cell-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .inline-bar-track {
+    margin-top: 5px;
+    height: 2px;
+    width: 180px;
+    max-width: 100%;
+    background: transparent;
+  }
+  .inline-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+  }
+  .agent-chip-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .diff-stat { font-size: 12px; font-family: var(--font-mono); }
+  .diff-add { color: var(--diff-added); }
+  .diff-del { color: var(--diff-removed); margin-left: 4px; }
+
+  /* Limits Full View (when metric = limits) */
+  .limits-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  @media (max-width: 720px) {
+    .limits-grid { grid-template-columns: 1fr; }
+  }
+  .panel-surface {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-surface);
+  }
+  .limit-card {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .limit-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .limit-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .limit-badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    color: var(--muted-fg);
+    background: var(--control-bg);
+  }
+  .limit-win { display: flex; flex-direction: column; gap: 6px; }
+  .limit-win-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 12px;
+  }
+  .limit-win-meta { color: var(--muted-fg); display: flex; align-items: baseline; gap: 8px; }
+  .limit-win-pct { font-weight: 600; color: var(--fg); }
+
+  /* Meter with Pace Tick (inspired by t3code & persona) */
+  .pace-bar {
+    position: relative;
+    height: 6px;
+    border-radius: 99px;
+    background: var(--control-selected);
+    overflow: visible;
+  }
+  .pace-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .pace-tick {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--fg);
+    opacity: 0.55;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .pace-note {
+    font-size: 11px;
+    color: var(--muted-fg);
+    display: flex;
+    justify-content: space-between;
+  }
+  .pace-fast { color: var(--status-attention); }
+  .pace-ok { color: var(--status-positive); }
+
+  /* Sources Collapsible Group */
+  .sources-panel {
+    padding: 0 18px;
+  }
+  .sources-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 0;
+    cursor: pointer;
+    list-style: none;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .sources-summary::-webkit-details-marker { display: none; }
+  .sources-meta { font-size: 12px; font-weight: 400; color: var(--muted-fg); }
+  .source-list {
+    border-top: 1px solid var(--border);
+    padding: 8px 0 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .source-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .source-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-fg); }
+  .source-status { display: flex; align-items: center; gap: 6px; color: var(--muted-fg); }
+  .status-dot { width: 6px; height: 6px; border-radius: 99px; background: var(--status-positive); }
+
+  /* Floating Usage Popover (Entry 1: Bottom-Left Navigation) */
+  .usage-popover {
+    position: fixed;
+    left: 168px;
+    bottom: 52px;
+    width: 292px;
+    z-index: 60;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--popover);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: var(--shadow-overlay);
+    color: var(--fg);
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(-6px) scale(0.97);
+    transform-origin: bottom left;
+    pointer-events: none;
+    transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1), transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .usage-popover.open {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    pointer-events: auto;
+  }
+  .pop-body {
+    padding: 13px 14px 12px;
+  }
+  .pop-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .pop-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted-fg);
+  }
+  .pop-sub-list {
+    display: flex;
+    flex-direction: column;
+  }
+  .pop-provider {
+    padding: 9px 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .pop-provider:first-child { border-top: 0; padding-top: 0; }
+  .pop-provider-name {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pop-provider-pace {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--muted-fg);
+  }
+  .pop-win { margin-bottom: 7px; }
+  .pop-win:last-child { margin-bottom: 0; }
+  .pop-win-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .pop-win-left { color: var(--muted-fg); display: flex; gap: 6px; align-items: baseline; }
+  .pop-win-left time { font-size: 11px; }
+  .pop-win-right { font-weight: 500; }
+
+  /* Popover Local Stats Summary Section */
+  .pop-stats {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .pop-stats-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .mini-seg {
+    display: inline-flex;
+    gap: 2px;
+    background: var(--control-hover);
+    padding: 2px;
+    border-radius: 6px;
+  }
+  .mini-seg button {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 4px;
+    color: var(--muted-fg);
+  }
+  .mini-seg button.active {
+    background: var(--control-bg);
+    color: var(--fg);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  }
+  .pop-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+  }
+  .pop-stat-item .k { font-size: 11px; color: var(--muted-fg); }
+  .pop-stat-item .v { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; margin-top: 1px; }
+  .pop-stat-item .s { font-size: 11px; color: var(--muted-fg); }
+
+  .pop-footer {
+    border-top: 1px solid var(--border);
+    padding: 6px;
+    background: var(--panel-bg);
+  }
+  .pop-footer-btn {
+    width: 100%;
+    height: 30px;
+    padding: 0 9px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg);
+    transition: background-color 150ms;
+  }
+  .pop-footer-btn:hover { background: var(--control-hover); }
+
+  /* Model Drilldown Dialog */
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: var(--scrim);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-scrim.open { display: flex; }
+  .dialog-surface {
+    width: 100%;
+    max-width: 480px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2xl);
+    background: var(--bg);
+    box-shadow: var(--shadow-overlay);
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .dialog-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .dialog-title { font-size: 16px; font-weight: 600; letter-spacing: -0.015em; }
+  .dialog-sub { font-size: 12px; color: var(--muted-fg); margin-top: 3px; }
+  .dialog-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-xl);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+  }
+  .dialog-metrics .k { font-size: 11px; color: var(--muted-fg); }
+  .dialog-metrics .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .dialog-rows { display: flex; flex-direction: column; }
+  .dialog-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 13px;
+  }
+  .dialog-row:last-child { border-bottom: 0; }
+  .dialog-row .k { color: var(--muted-fg); }
+  .dialog-row .v { font-weight: 500; }
+
+  .flash-highlight {
+    animation: flashPanel 700ms ease-out;
+  }
+  @keyframes flashPanel {
+    0% { background-color: var(--control-selected); border-radius: 10px; }
+    100% { background-color: transparent; }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <!-- Primary Navigation (Lever Exact Structure) -->
+  <nav class="primary-nav" aria-label="主导航">
+    <div class="nav-wordmark"><span class="dot"></span>Lever</div>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span>Agents</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+      <span>任务</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"/></svg>
+      <span>自动化</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+      <span>Skills</span>
+    </button>
+    <button class="nav-item" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/></svg>
+      <span>插件</span>
+    </button>
+
+    <div class="nav-spacer"></div>
+
+    <!-- Usage Popover Trigger (Lever 3-bar SVG indicator) -->
+    <button class="nav-item" id="usageTrigger" type="button" aria-expanded="false" aria-controls="usagePopover">
+      <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+        <g fill="var(--usage-clay)">
+          <rect y="2.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/>
+          <rect y="2.5" width="14.8" height="3" rx="1.5"/>
+        </g>
+        <g fill="var(--usage-blue)">
+          <rect y="10.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/>
+          <rect y="10.5" width="9.1" height="3" rx="1.5"/>
+        </g>
+        <g fill="var(--usage-violet)">
+          <rect y="18.5" width="24" height="3" rx="1.5" fill-opacity="0.16"/>
+          <rect y="18.5" width="17.8" height="3" rx="1.5"/>
+        </g>
+      </svg>
+      <span>用量</span>
+    </button>
+
+    <button class="nav-item active" type="button" aria-current="page">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <!-- Workspace Inset Surface -->
+  <div class="workspace-frame">
+    <!-- Secondary Sidebar: Settings -->
+    <aside class="secondary-sidebar" aria-label="设置分类">
+      <div class="sidebar-header">
+        <h1>设置</h1>
+        <button class="icon-btn" type="button" title="收起侧栏" aria-label="收起侧栏">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-search">
+        <div class="search-box">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>搜索设置…</span>
+        </div>
+      </div>
+      <div class="sidebar-nav">
+        <div class="sidebar-group">
+          <h2>偏好设置</h2>
+          <div class="sidebar-group-list">
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+              通用
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+              Provider
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+              远程设备
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+              快捷键
+            </button>
+          </div>
+        </div>
+        <div class="sidebar-group">
+          <h2>系统</h2>
+          <div class="sidebar-group-list">
+            <button class="sidebar-link" type="button" aria-current="page">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+              用量统计
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/></svg>
+              更新
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+              存储
+            </button>
+            <button class="sidebar-link" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              已归档 Agent
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Settings Main Content -->
+    <main class="settings-scroll" id="mainScroll">
+      <div class="settings-content" id="statsRoot">
+        <!-- Prototype Control Bar -->
+        <div class="prototype-bar">
+          <div><strong>方案一 · 极简分析账本</strong>（参考 t3code · 排版驱动、平滑曲线与灰度占比条）</div>
+          <div class="prototype-actions">
+            <button class="btn-outline" id="togglePopoverDemo" type="button">预览用量 Popover</button>
+            <button class="btn-outline" id="themeToggle" type="button">切换深色主题</button>
+          </div>
+        </div>
+
+        <!-- Page Header -->
+        <header class="page-header">
+          <div class="page-title-block">
+            <h2>用量统计</h2>
+            <div class="page-subtitle">
+              <span id="windowRangeText">11月21日 — 11月27日</span>
+              <span>·</span>
+              <span id="sourceSummaryText">聚合本机全部 CLI 与 Lever 会话</span>
+            </div>
+          </div>
+
+          <div class="controls-row">
+            <div class="toggle-group" id="scopeGroup" role="group" aria-label="统计来源">
+              <button class="toggle-item" data-scope="all" aria-pressed="true" type="button">全部本机</button>
+              <button class="toggle-item" data-scope="lever" aria-pressed="false" type="button">仅 Lever</button>
+            </div>
+            <div class="toggle-group" id="periodGroup" role="group" aria-label="时间范围">
+              <button class="toggle-item" data-period="24h" aria-pressed="false" type="button">24h</button>
+              <button class="toggle-item" data-period="7d" aria-pressed="true" type="button">7d</button>
+              <button class="toggle-item" data-period="30d" aria-pressed="false" type="button">30d</button>
+              <button class="toggle-item" data-period="90d" aria-pressed="false" type="button">90d</button>
+            </div>
+            <div class="toggle-group" id="metricGroup" role="group" aria-label="统计维度">
+              <button class="toggle-item" data-metric="cost" aria-pressed="true" type="button">费用</button>
+              <button class="toggle-item" data-metric="tokens" aria-pressed="false" type="button">Tokens</button>
+              <button class="toggle-item" data-metric="limits" aria-pressed="false" type="button">额度</button>
+            </div>
+            <button class="icon-btn" id="refreshBtn" type="button" title="重新扫描本机数据" aria-label="刷新">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Dynamic Body (Cost/Tokens View vs Limits View) -->
+        <div id="analyticsView" style="display:flex; flex-direction:column; gap:28px;">
+          <!-- Hero + Spline Chart -->
+          <section class="hero-grid">
+            <div class="hero-summary">
+              <div>
+                <div class="hero-figure tabular" id="heroFigure">$142.80</div>
+                <div class="hero-meta tabular" id="heroMeta">148 次会话 · API 等效估算</div>
+              </div>
+              <div class="provider-rank" id="providerRank"></div>
+            </div>
+
+            <div class="chart-column">
+              <div class="chart-header">
+                <h3 class="section-title" id="chartTitle">每日估算费用趋势</h3>
+                <span class="chart-hint" id="chartFilterHint">点击左侧 Provider 可单独聚焦</span>
+              </div>
+              <div class="chart-wrap" id="chartWrap">
+                <svg id="trendSvg" viewBox="0 0 600 236" preserveAspectRatio="none"></svg>
+                <div class="chart-tooltip tabular" id="chartTooltip"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Totals 5-col -->
+          <section class="totals-section">
+            <h3 class="section-title">汇总指标</h3>
+            <dl class="totals-grid" id="totalsGrid"></dl>
+          </section>
+
+          <!-- ShareBars -->
+          <section class="sharebars-grid" id="shareBarsGrid"></section>
+
+          <!-- Breakdown Table -->
+          <section class="breakdown-section">
+            <div class="breakdown-head">
+              <h3 class="section-title">明细分布</h3>
+              <div class="toggle-group" id="breakdownGroup" role="group" aria-label="明细维度">
+                <button class="toggle-item" data-tab="model" aria-pressed="true" type="button">按模型</button>
+                <button class="toggle-item" data-tab="agent" aria-pressed="false" type="button">按 Agent</button>
+                <button class="toggle-item" data-tab="time" aria-pressed="false" type="button">按日期</button>
+              </div>
+            </div>
+            <div style="overflow-x:auto;">
+              <table class="data-table" id="breakdownTable"></table>
+            </div>
+          </section>
+        </div>
+
+        <!-- Limits View -->
+        <section id="limitsView" style="display:none; flex-direction:column; gap:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div>
+              <h3 class="section-title">订阅配额与消耗节奏</h3>
+              <p style="font-size:12px; color:var(--muted-fg); margin-top:4px;">竖线刻度表示当前时间窗口的自然流逝进度；填充条未超过刻度线表示配额充裕。</p>
+            </div>
+            <span class="tabular" style="font-size:12px; color:var(--muted-fg);">上次同步：刚刚</span>
+          </div>
+          <div class="limits-grid" id="limitsGrid"></div>
+        </section>
+
+        <!-- Local Scan Sources (Collapsible Settings Group) -->
+        <details class="panel-surface sources-panel">
+          <summary class="sources-summary">
+            <span>本机数据来源与扫描状态</span>
+            <span class="sources-meta tabular">4 个来源已就绪 · 扫描耗时 38ms · 保留 90 天</span>
+          </summary>
+          <div class="source-list">
+            <div class="source-item">
+              <div><strong>Lever 工作台数据库</strong> <span class="source-path">~/Library/Application Support/Lever/lever.db</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>148 次会话 · 1,246 轮运行</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Claude Code 本地记录</strong> <span class="source-path">~/.claude/projects/**/*.jsonl</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 94 个文件</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Codex 本地 Rollout</strong> <span class="source-path">~/.codex/sessions/**/rollout-*.jsonl</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 62 个文件</div>
+            </div>
+            <div class="source-item">
+              <div><strong>Antigravity &amp; Pi 会话</strong> <span class="source-path">~/.gemini/antigravity-cli · ~/.pi/sessions</span></div>
+              <div class="source-status tabular"><span class="status-dot"></span>已索引 31 个文件</div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Entry 1: Enhanced Usage Popover (Anchored to bottom-left Usage nav item) -->
+<div class="usage-popover" id="usagePopover" role="dialog" aria-label="订阅用量与本机统计">
+  <div class="pop-body">
+    <div class="pop-head">
+      <span class="pop-label">订阅用量</span>
+      <span class="pop-label tabular">竖线 = 时间进度</span>
+    </div>
+    <div class="pop-sub-list">
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Claude Code</span>
+          <span class="pop-provider-pace pace-fast">略快 +8%</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>5h</span><time>1h 42m 后重置</time></span>
+            <span class="pop-win-right">剩余 38%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-clay) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:62%; background:var(--usage-clay);"></div>
+            <div class="pace-tick" style="left:54%;" title="窗口已流逝 54%"></div>
+          </div>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>7d</span><time>3d 6h 后重置</time></span>
+            <span class="pop-win-right">剩余 56%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-clay) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:44%; background:var(--usage-clay);"></div>
+            <div class="pace-tick" style="left:53%;" title="窗口已流逝 53%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Codex</span>
+          <span class="pop-provider-pace pace-ok">充裕</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>5h</span><time>3h 15m 后重置</time></span>
+            <span class="pop-win-right">剩余 62%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-blue) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:38%; background:var(--usage-blue);"></div>
+            <div class="pace-tick" style="left:35%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pop-provider">
+        <div class="pop-provider-name">
+          <span>Antigravity</span>
+          <span class="pop-provider-pace pace-fast">接近上限</span>
+        </div>
+        <div class="pop-win">
+          <div class="pop-win-top tabular">
+            <span class="pop-win-left"><span>Pro 5h</span><time>48m 后重置</time></span>
+            <span class="pop-win-right">剩余 26%</span>
+          </div>
+          <div class="pace-bar" style="background: color-mix(in srgb, var(--usage-violet) 14%, transparent);">
+            <div class="pace-bar-fill" style="width:74%; background:var(--usage-violet);"></div>
+            <div class="pace-tick" style="left:84%;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Local Usage Quick Summary in Popover -->
+    <div class="pop-stats">
+      <div class="pop-stats-head">
+        <span class="pop-label">本机消耗概览</span>
+        <div class="mini-seg" id="popRangeSeg">
+          <button type="button" data-poprange="today" class="active">今日</button>
+          <button type="button" data-poprange="7d">7天</button>
+        </div>
+      </div>
+      <div class="pop-stats-grid tabular" id="popStatsGrid"></div>
+    </div>
+  </div>
+  <div class="pop-footer">
+    <button class="pop-footer-btn" id="openFullStatsBtn" type="button">
+      <span>查看完整用量统计</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Model Drilldown Dialog -->
+<div class="modal-scrim" id="modelModal" role="dialog" aria-modal="true">
+  <div class="dialog-surface" id="modelModalContent"></div>
+</div>
+
+<script>
+(() => {
+  const PROVIDERS = [
+    { id: "claude", name: "Claude Code", color: "var(--usage-clay)" },
+    { id: "codex", name: "Codex", color: "var(--usage-blue)" },
+    { id: "antigravity", name: "Antigravity", color: "var(--usage-violet)" },
+    { id: "pi", name: "Pi", color: "var(--usage-teal)" },
+  ];
+
+  const DATASET = {
+    "24h": {
+      rangeLabel: "11月26日 15:00 — 11月27日 15:00",
+      labels: ["16:00","18:00","20:00","22:00","00:00","02:00","04:00","06:00","08:00","10:00","12:00","14:00"],
+      sessions: { claude: 11, codex: 8, antigravity: 5, pi: 2 },
+      seriesCost: {
+        claude:      [1.8, 2.4, 3.1, 4.2, 1.4, 0.2, 0.0, 0.1, 0.8, 2.6, 1.9, 2.9],
+        codex:       [1.1, 1.5, 2.0, 1.6, 0.4, 0.0, 0.0, 0.0, 0.5, 1.9, 2.4, 1.8],
+        antigravity: [0.4, 0.9, 0.7, 1.2, 0.2, 0.0, 0.0, 0.0, 0.2, 1.1, 0.9, 1.3],
+        pi:          [0.2, 0.1, 0.3, 0.2, 0.0, 0.0, 0.0, 0.0, 0.1, 0.3, 0.2, 0.4],
+      },
+      tokensRatio: 4.1e6,
+      cacheRatio: 0.86,
+      cacheWriteRatio: 0.06,
+      outputRatio: 0.032,
+      leverShare: 0.74,
+    },
+    "7d": {
+      rangeLabel: "11月21日 — 11月27日",
+      labels: ["11/21","11/22","11/23","11/24","11/25","11/26","11/27"],
+      sessions: { claude: 64, codex: 46, antigravity: 27, pi: 11 },
+      seriesCost: {
+        claude:      [9.4, 14.2, 11.8, 18.6, 15.1, 21.4, 13.8],
+        codex:       [6.1, 8.8,  10.4, 12.2, 9.5,  14.1, 8.9],
+        antigravity: [2.8, 4.1,  3.5,  6.2,  5.4,  7.1,  4.8],
+        pi:          [1.2, 0.9,  1.6,  1.8,  1.1,  2.2,  1.5],
+      },
+      tokensRatio: 3.9e6,
+      cacheRatio: 0.875,
+      cacheWriteRatio: 0.055,
+      outputRatio: 0.031,
+      leverShare: 0.69,
+    },
+    "30d": {
+      rangeLabel: "10月29日 — 11月27日",
+      labels: ["10/29","11/01","11/04","11/07","11/10","11/13","11/16","11/19","11/22","11/25","11/27"],
+      sessions: { claude: 248, codex: 174, antigravity: 102, pi: 44 },
+      seriesCost: {
+        claude:      [18.2, 26.4, 31.0, 22.8, 35.4, 29.2, 38.6, 33.1, 41.2, 46.8, 34.0],
+        codex:       [12.1, 16.8, 19.2, 15.4, 21.0, 18.6, 24.4, 20.1, 26.8, 29.4, 21.6],
+        antigravity: [5.4,  8.2,  7.4,  9.8,  11.2, 8.9,  12.4, 10.6, 14.1, 16.2, 11.4],
+        pi:          [2.1,  3.0,  2.4,  3.8,  4.1,  2.9,  3.6,  4.5,  4.2,  5.1,  3.7],
+      },
+      tokensRatio: 3.8e6,
+      cacheRatio: 0.882,
+      cacheWriteRatio: 0.052,
+      outputRatio: 0.029,
+      leverShare: 0.66,
+    },
+    "90d": {
+      rangeLabel: "8月30日 — 11月27日",
+      labels: ["9月1周","9月2周","9月3周","9月4周","10月1周","10月2周","10月3周","10月4周","11月1周","11月2周","11月3周","11月4周"],
+      sessions: { claude: 682, codex: 495, antigravity: 268, pi: 124 },
+      seriesCost: {
+        claude:      [54, 68, 72, 61, 79, 86, 74, 92, 98, 105, 114, 104],
+        codex:       [38, 44, 51, 46, 52, 58, 49, 63, 66, 72,  76,  70],
+        antigravity: [14, 19, 22, 18, 26, 29, 24, 31, 35, 39,  42,  34],
+        pi:          [6,  8,  7,  9,  10, 11, 8,  12, 11, 14,  13,  10],
+      },
+      tokensRatio: 3.75e6,
+      cacheRatio: 0.87,
+      cacheWriteRatio: 0.058,
+      outputRatio: 0.032,
+      leverShare: 0.64,
+    },
+  };
+
+  const MODELS_BASE = [
+    { provider: "claude", model: "claude-opus-4-6", share: 0.34, hit: 0.90, priceIn: "$15 / M", priceOut: "$75 / M", sessionsShare: 0.26 },
+    { provider: "claude", model: "claude-sonnet-4-6", share: 0.21, hit: 0.88, priceIn: "$3 / M", priceOut: "$15 / M", sessionsShare: 0.22 },
+    { provider: "codex", model: "gpt-5.4", share: 0.24, hit: 0.85, priceIn: "$2.5 / M", priceOut: "$10 / M", sessionsShare: 0.24 },
+    { provider: "antigravity", model: "gemini-3-pro", share: 0.13, hit: 0.84, priceIn: "$2 / M", priceOut: "$12 / M", sessionsShare: 0.15 },
+    { provider: "codex", model: "gpt-5.3-codex-mini", share: 0.045, hit: 0.81, priceIn: "$0.6 / M", priceOut: "$2.4 / M", sessionsShare: 0.07 },
+    { provider: "pi", model: "deepseek-r1-0528", share: 0.035, hit: 0.78, priceIn: "$0.55 / M", priceOut: "$2.19 / M", sessionsShare: 0.06 },
+  ];
+
+  const AGENTS_BASE = [
+    { name: "Lever 架构师", initials: "架", bg: "#4169ba", provider: "claude", model: "claude-opus-4-6", share: 0.36, runs: 412, add: 8420, del: 2810 },
+    { name: "前端 UI 匠人", initials: "UI", bg: "#ad604a", provider: "claude", model: "claude-sonnet-4-6", share: 0.24, runs: 318, add: 6150, del: 1940 },
+    { name: "后端与存储", initials: "Go", bg: "#2e7d7b", provider: "codex", model: "gpt-5.4", share: 0.21, runs: 274, add: 5280, del: 1620 },
+    { name: "PR 审查助手", initials: "CR", bg: "#7962aa", provider: "antigravity", model: "gemini-3-pro", share: 0.12, runs: 164, add: 1120, del: 490 },
+    { name: "自动化巡检", initials: "自", bg: "#525252", provider: "codex", model: "gpt-5.3-codex-mini", share: 0.07, runs: 78, add: 410, del: 120 },
+  ];
+
+  const LIMITS_DATA = [
+    {
+      provider: "Claude Code", color: "var(--usage-clay)", plan: "Max · 个人订阅",
+      windows: [
+        { label: "5 小时窗口", used: 62, elapsed: 54, reset: "1h 42m 后重置", note: "略高于均匀节奏 (+8%)", fast: true },
+        { label: "7 天窗口", used: 44, elapsed: 53, reset: "3d 6h 后重置", note: "低于均匀节奏 (-9%)", fast: false },
+      ]
+    },
+    {
+      provider: "Codex", color: "var(--usage-blue)", plan: "ChatGPT Pro",
+      windows: [
+        { label: "5 小时主要额度", used: 38, elapsed: 35, reset: "3h 15m 后重置", note: "与时间节奏持平 (+3%)", fast: false },
+        { label: "7 天次要额度", used: 51, elapsed: 64, reset: "2d 11h 后重置", note: "余量充裕 (-13%)", fast: false },
+      ]
+    },
+    {
+      provider: "Antigravity", color: "var(--usage-violet)", plan: "Google AI Ultra",
+      windows: [
+        { label: "Pro 模型 · 5 小时", used: 74, elapsed: 84, reset: "48m 后重置", note: "即将重置，余量安全", fast: false },
+        { label: "Flash 模型 · 周额度", used: 22, elapsed: 51, reset: "3d 12h 后重置", note: "余量充裕 (-29%)", fast: false },
+      ]
+    },
+    {
+      provider: "Pi (API Key)", color: "var(--usage-teal)", plan: "按量计费",
+      windows: [
+        { label: "月度预算提醒 ($50)", used: 36, elapsed: 88, reset: "3 天后归零", note: "本月已用 $18.20 / $50.00", fast: false },
+      ]
+    },
+  ];
+
+  const state = {
+    period: "7d",
+    metric: "cost",
+    scope: "all",
+    breakdown: "model",
+    focusProvider: null,
+    popRange: "today",
+    popoverOpen: false,
+  };
+
+  const fmtUsd = (n) => "$" + (n >= 1000 ? n.toFixed(0) : n.toFixed(2));
+  const fmtAxisUsd = (n) => "$" + (n === 0 ? "0" : n >= 100 ? Math.round(n) : Number.isInteger(n) ? n : n.toFixed(1));
+  const fmtTokens = (n) => {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(Math.round(n));
+  };
+  const fmtPct = (r) => (r * 100).toFixed(1).replace(/\.0$/, "") + "%";
+  const fmtVal = (v, metric) => metric === "cost" ? fmtUsd(v) : fmtTokens(v);
+
+  function computeData() {
+    const raw = DATASET[state.period];
+    const scopeMul = state.scope === "lever" ? raw.leverShare : 1;
+    const providerTotals = PROVIDERS.map((p) => {
+      const seriesCost = raw.seriesCost[p.id].map((v) => +(v * scopeMul).toFixed(2));
+      const cost = seriesCost.reduce((a, b) => a + b, 0);
+      const tokens = Math.round(cost * raw.tokensRatio);
+      const sessions = Math.max(1, Math.round(raw.sessions[p.id] * scopeMul));
+      return {
+        ...p,
+        seriesCost,
+        seriesTokens: seriesCost.map((v) => Math.round(v * raw.tokensRatio)),
+        cost,
+        tokens,
+        sessions,
+      };
+    });
+
+    const filtered = state.focusProvider
+      ? providerTotals.filter((p) => p.id === state.focusProvider)
+      : providerTotals;
+
+    const totalCost = filtered.reduce((s, p) => s + p.cost, 0);
+    const totalTokens = filtered.reduce((s, p) => s + p.tokens, 0);
+    const totalSessions = filtered.reduce((s, p) => s + p.sessions, 0);
+    const allCost = providerTotals.reduce((s, p) => s + p.cost, 0);
+    const allTokens = providerTotals.reduce((s, p) => s + p.tokens, 0);
+
+    const cachedInput = Math.round(totalTokens * raw.cacheRatio);
+    const cacheWrite = Math.round(totalTokens * raw.cacheWriteRatio);
+    const output = Math.round(totalTokens * raw.outputRatio);
+    const uncachedInput = Math.max(0, totalTokens - cachedInput - cacheWrite - output);
+    const cacheSavings = totalCost * 1.95;
+
+    return {
+      raw,
+      providerTotals,
+      filtered,
+      totalCost,
+      totalTokens,
+      totalSessions,
+      allCost,
+      allTokens,
+      cachedInput,
+      cacheWrite,
+      output,
+      uncachedInput,
+      cacheSavings,
+    };
+  }
+
+  function monotonePath(points) {
+    if (points.length < 2) return "";
+    const n = points.length;
+    const slopes = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      slopes.push(dx === 0 ? 0 : (points[i + 1].y - points[i].y) / dx);
+    }
+    const t = new Array(n).fill(0);
+    t[0] = slopes[0];
+    t[n - 1] = slopes[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      t[i] = slopes[i - 1] * slopes[i] <= 0 ? 0 : (slopes[i - 1] + slopes[i]) / 2;
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const s = slopes[i];
+      if (s === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+      const a = t[i] / s, b = t[i + 1] / s;
+      const m = a * a + b * b;
+      if (m > 9) {
+        const sc = 3 / Math.sqrt(m);
+        t[i] = sc * a * s;
+        t[i + 1] = sc * b * s;
+      }
+    }
+    let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+    for (let i = 0; i < n - 1; i++) {
+      const p0 = points[i], p1 = points[i + 1];
+      const dx = p1.x - p0.x;
+      const c1x = p0.x + dx / 3, c1y = p0.y + (t[i] * dx) / 3;
+      const c2x = p1.x - dx / 3, c2y = p1.y - (t[i + 1] * dx) / 3;
+      d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+    }
+    return d;
+  }
+
+  function renderChart(data) {
+    const svg = document.getElementById("trendSvg");
+    const tooltip = document.getElementById("chartTooltip");
+    const wrap = document.getElementById("chartWrap");
+    const metric = state.metric === "tokens" ? "tokens" : "cost";
+    const labels = data.raw.labels;
+    const seriesList = data.providerTotals.map((p) => ({
+      ...p,
+      values: metric === "cost" ? p.seriesCost : p.seriesTokens,
+    }));
+
+    const activeSeries = state.focusProvider
+      ? seriesList.filter((s) => s.id === state.focusProvider)
+      : seriesList;
+
+    const maxRaw = Math.max(1, ...activeSeries.flatMap((s) => s.values));
+    const mag = 10 ** Math.floor(Math.log10(maxRaw / 4));
+    const norm = (maxRaw / 4) / mag;
+    const step = (norm > 5 ? 10 : norm > 2 ? 5 : norm > 1 ? 2 : 1) * mag;
+    const yMax = Math.ceil(maxRaw / step) * step;
+
+    const W = 600, H = 236, padL = 48, padR = 12, padT = 12, padB = 28;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const xAt = (i) => padL + (labels.length === 1 ? plotW / 2 : (i / (labels.length - 1)) * plotW);
+    const yAt = (v) => padT + plotH - (v / yMax) * plotH;
+
+    let html = `<defs>`;
+    seriesList.forEach((s) => {
+      html += `
+        <linearGradient id="grad-${s.id}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${s.color}" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="${s.color}" stop-opacity="0.01"/>
+        </linearGradient>`;
+    });
+    html += `</defs>`;
+
+    // Y Grid & ticks
+    for (let i = 0; i <= 4; i++) {
+      const val = (yMax / 4) * i;
+      const y = yAt(val);
+      html += `<line class="chart-grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
+      html += `<text class="chart-axis-text tabular" x="${padL - 8}" y="${y + 4}" text-anchor="end">${metric === "cost" ? fmtAxisUsd(val) : fmtTokens(val)}</text>`;
+    }
+
+    // X labels
+    const labelStep = labels.length > 8 ? 2 : 1;
+    labels.forEach((lbl, i) => {
+      if (i % labelStep !== 0 && i !== labels.length - 1) return;
+      html += `<text class="chart-axis-text tabular" x="${xAt(i)}" y="${H - 6}" text-anchor="middle">${lbl}</text>`;
+    });
+
+    // Curves (largest total drawn first so smaller stays readable on top)
+    [...activeSeries].sort((a, b) => b.cost - a.cost).forEach((s) => {
+      const pts = s.values.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
+      const lineD = monotonePath(pts);
+      const areaD = `${lineD} L ${pts[pts.length - 1].x} ${padT + plotH} L ${pts[0].x} ${padT + plotH} Z`;
+      html += `<path d="${areaD}" fill="url(#grad-${s.id})"/>`;
+      html += `<path d="${lineD}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linecap="round"/>`;
+    });
+
+    // Crosshair group
+    html += `<g id="chartHoverG" style="display:none;">
+      <line id="crosshairLine" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="3 3"/>
+    </g>`;
+
+    svg.innerHTML = html;
+
+    // Hover interaction
+    wrap.onmousemove = (e) => {
+      const rect = wrap.getBoundingClientRect();
+      const relX = ((e.clientX - rect.left) / rect.width) * W;
+      const ratio = Math.max(0, Math.min(1, (relX - padL) / plotW));
+      const idx = Math.round(ratio * (labels.length - 1));
+      const cx = xAt(idx);
+      const hoverG = document.getElementById("chartHoverG");
+      const cross = document.getElementById("crosshairLine");
+      if (!hoverG || !cross) return;
+      hoverG.style.display = "block";
+      cross.setAttribute("x1", cx);
+      cross.setAttribute("x2", cx);
+
+      // Remove old dots
+      hoverG.querySelectorAll("circle").forEach((c) => c.remove());
+      let totalAt = 0;
+      let rowsHtml = "";
+      activeSeries.forEach((s) => {
+        const val = s.values[idx];
+        totalAt += val;
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("cx", cx);
+        c.setAttribute("cy", yAt(val));
+        c.setAttribute("r", "3.5");
+        c.setAttribute("fill", s.color);
+        c.setAttribute("stroke", "var(--bg)");
+        c.setAttribute("stroke-width", "1.5");
+        hoverG.appendChild(c);
+        rowsHtml += `
+          <div class="chart-tooltip-row">
+            <span class="chart-tooltip-label"><span class="provider-dot" style="background:${s.color}"></span>${s.name}</span>
+            <span>${fmtVal(val, metric)}</span>
+          </div>`;
+      });
+
+      tooltip.innerHTML = `
+        <div class="chart-tooltip-date">${labels[idx]}</div>
+        ${rowsHtml}
+        <div class="chart-tooltip-total">
+          <span>合计</span>
+          <span>${fmtVal(totalAt, metric)}</span>
+        </div>`;
+      tooltip.classList.add("visible");
+      const pxX = (cx / W) * rect.width;
+      const tipW = tooltip.offsetWidth || 175;
+      const left = pxX + 14 + tipW > rect.width ? Math.max(8, pxX - tipW - 14) : pxX + 14;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = "14px";
+    };
+    wrap.onmouseleave = () => {
+      const hoverG = document.getElementById("chartHoverG");
+      if (hoverG) hoverG.style.display = "none";
+      tooltip.classList.remove("visible");
+    };
+  }
+
+  function render() {
+    const data = computeData();
+    const isLimits = state.metric === "limits";
+    document.getElementById("analyticsView").style.display = isLimits ? "none" : "flex";
+    document.getElementById("limitsView").style.display = isLimits ? "flex" : "none";
+    document.getElementById("periodGroup").style.opacity = isLimits ? "0.4" : "1";
+    document.getElementById("periodGroup").style.pointerEvents = isLimits ? "none" : "auto";
+
+    document.getElementById("windowRangeText").textContent = isLimits ? "实时订阅配额状态" : data.raw.rangeLabel;
+    document.getElementById("sourceSummaryText").textContent =
+      state.scope === "lever" ? "仅统计 Lever 工作台内部运行记录" : "聚合本机全部 CLI 与 Lever 会话";
+
+    if (isLimits) {
+      renderLimits();
+      return;
+    }
+
+    const metric = state.metric;
+    document.getElementById("heroFigure").textContent = metric === "cost" ? fmtUsd(data.totalCost) : fmtTokens(data.totalTokens);
+    document.getElementById("heroMeta").textContent =
+      metric === "cost"
+        ? `${data.totalSessions} 次会话 · API 等效估算`
+        : `${data.totalSessions} 次会话 · 约 ${fmtUsd(data.totalCost)}`;
+
+    // Provider rank list
+    const rankEl = document.getElementById("providerRank");
+    rankEl.innerHTML = data.providerTotals
+      .slice()
+      .sort((a, b) => (metric === "cost" ? b.cost - a.cost : b.tokens - a.tokens))
+      .map((p) => {
+        const share = metric === "cost" ? p.cost / data.allCost : p.tokens / data.allTokens;
+        const selected = state.focusProvider === p.id;
+        const dimmed = state.focusProvider && !selected;
+        return `
+          <button type="button" class="provider-row ${selected ? "selected" : ""} ${dimmed ? "dimmed" : ""}" data-pid="${p.id}">
+            <div class="provider-row-top">
+              <span class="provider-name">
+                <span class="provider-dot" style="background:${p.color}"></span>
+                <span>${p.name}</span>
+                <span class="provider-sessions tabular">${p.sessions} 会话</span>
+              </span>
+              <span class="provider-val tabular">${fmtVal(metric === "cost" ? p.cost : p.tokens, metric)}</span>
+            </div>
+            <div class="provider-sub tabular">
+              ${metric === "cost"
+                ? `占费用 ${fmtPct(share)} · ${fmtTokens(p.tokens)} tokens`
+                : `占 Tokens ${fmtPct(share)} · 约 ${fmtUsd(p.cost)}`}
+            </div>
+          </button>`;
+      })
+      .join("");
+
+    rankEl.querySelectorAll(".provider-row").forEach((btn) => {
+      btn.onclick = () => {
+        const pid = btn.dataset.pid;
+        state.focusProvider = state.focusProvider === pid ? null : pid;
+        render();
+      };
+    });
+
+    document.getElementById("chartTitle").textContent =
+      (state.period === "24h" ? "每 2 小时" : state.period === "90d" ? "每周" : "每日") +
+      (metric === "cost" ? "估算费用趋势" : "处理 Tokens 趋势");
+    document.getElementById("chartFilterHint").textContent = state.focusProvider
+      ? `已筛选：${PROVIDERS.find((p) => p.id === state.focusProvider).name}（再次点击取消）`
+      : "点击左侧 Provider 可单独聚焦";
+
+    renderChart(data);
+
+    // Totals 5-col
+    const hitRate = data.cachedInput / (data.cachedInput + data.uncachedInput + data.cacheWrite);
+    document.getElementById("totalsGrid").innerHTML = `
+      <div class="metric-cell"><dt>总处理 Tokens</dt><dd class="tabular">${fmtTokens(data.totalTokens)}</dd><div class="metric-sub tabular">输入 + 缓存 + 输出</div></div>
+      <div class="metric-cell"><dt>缓存命中读取</dt><dd class="tabular">${fmtTokens(data.cachedInput)}</dd><div class="metric-sub tabular">命中率 ${fmtPct(hitRate)}</div></div>
+      <div class="metric-cell"><dt>未缓存输入</dt><dd class="tabular">${fmtTokens(data.uncachedInput)}</dd><div class="metric-sub tabular">缓存写入 ${fmtTokens(data.cacheWrite)}</div></div>
+      <div class="metric-cell"><dt>模型输出</dt><dd class="tabular">${fmtTokens(data.output)}</dd><div class="metric-sub tabular">含思维链推理</div></div>
+      <div class="metric-cell"><dt>缓存节省费用</dt><dd class="tabular positive">${fmtUsd(data.cacheSavings)}</dd><div class="metric-sub tabular">较无缓存节省约 66%</div></div>
+    `;
+
+    // ShareBars (monochrome ink steps matching Lever/t3code restraint)
+    const typeSegs = metric === "tokens"
+      ? [
+          { label: "缓存读取", val: data.cachedInput, color: "var(--ink-28)" },
+          { label: "缓存写入", val: data.cacheWrite, color: "var(--ink-72)" },
+          { label: "未缓存输入", val: data.uncachedInput, color: "var(--ink-50)" },
+          { label: "输出", val: data.output, color: "var(--ink-100)" },
+        ]
+      : [
+          { label: "输出费用", val: data.totalCost * 0.44, color: "var(--ink-100)" },
+          { label: "缓存写入", val: data.totalCost * 0.23, color: "var(--ink-72)" },
+          { label: "未缓存输入", val: data.totalCost * 0.19, color: "var(--ink-50)" },
+          { label: "缓存读取", val: data.totalCost * 0.14, color: "var(--ink-28)" },
+        ];
+
+    const leverPart = state.scope === "lever" ? 1 : data.raw.leverShare;
+    const sourceSegs = [
+      { label: "Lever 工作台", val: (metric === "cost" ? data.totalCost : data.totalTokens) * leverPart, color: "var(--ink-100)" },
+      ...(state.scope === "all"
+        ? [{ label: "外部终端 CLI", val: (metric === "cost" ? data.totalCost : data.totalTokens) * (1 - leverPart), color: "var(--ink-28)" }]
+        : []),
+    ];
+
+    const buildShareBar = (title, aside, segs) => {
+      const sum = segs.reduce((a, b) => a + b.val, 0) || 1;
+      return `
+        <div class="sharebar-block">
+          <div class="sharebar-head">
+            <h3 class="section-title">${title}</h3>
+            <span class="sharebar-aside tabular">${aside}</span>
+          </div>
+          <div class="sharebar-track">
+            ${segs.map((s) => `<div class="sharebar-seg" style="flex:${s.val} 1 0; background:${s.color};" title="${s.label} · ${fmtVal(s.val, metric)} (${fmtPct(s.val / sum)})"></div>`).join("")}
+          </div>
+          <ul class="sharebar-legend tabular">
+            ${segs.map((s) => `<li><span class="sharebar-swatch" style="background:${s.color}"></span><span class="lbl">${s.label}</span><span class="num">${fmtVal(s.val, metric)}</span></li>`).join("")}
+          </ul>
+        </div>`;
+    };
+
+    document.getElementById("shareBarsGrid").innerHTML =
+      buildShareBar(metric === "tokens" ? "按 Token 类型分布" : "按费用构成分布", `缓存命中 ${fmtPct(hitRate)}`, typeSegs) +
+      buildShareBar("按执行来源分布", state.scope === "lever" ? "当前仅看 Lever" : `Lever 占比 ${fmtPct(leverPart)}`, sourceSegs);
+
+    renderBreakdown(data);
+  }
+
+  function renderBreakdown(data) {
+    const table = document.getElementById("breakdownTable");
+    const metric = state.metric === "tokens" ? "tokens" : "cost";
+    const provMap = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
+
+    if (state.breakdown === "model") {
+      const list = MODELS_BASE
+        .filter((m) => !state.focusProvider || m.provider === state.focusProvider)
+        .map((m) => {
+          const pData = data.providerTotals.find((p) => p.id === m.provider);
+          const groupShare = MODELS_BASE.filter((x) => x.provider === m.provider).reduce((a, b) => a + b.share, 0);
+          const ratio = m.share / groupShare;
+          const cost = pData.cost * ratio;
+          const tokens = Math.round(pData.tokens * ratio);
+          const sessions = Math.max(1, Math.round(pData.sessions * ratio));
+          return { ...m, cost, tokens, sessions, color: provMap[m.provider].color, providerName: provMap[m.provider].name };
+        })
+        .sort((a, b) => (metric === "cost" ? b.cost - a.cost : b.tokens - a.tokens));
+
+      const peak = Math.max(1, ...list.map((m) => metric === "cost" ? m.cost : m.tokens));
+      const sum = list.reduce((a, m) => a + (metric === "cost" ? m.cost : m.tokens), 0) || 1;
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>模型（点击查看详情）</th>
+            <th>缓存命中</th>
+            <th>估算费用</th>
+            <th>占比</th>
+            <th>总 Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map((m, idx) => {
+            const val = metric === "cost" ? m.cost : m.tokens;
+            return `
+              <tr class="clickable" data-model="${m.model}">
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="model-cell-main">
+                    <span class="provider-dot" style="background:${m.color}"></span>
+                    <span class="mono" style="font-size:12.5px;">${m.model}</span>
+                    <span style="font-size:11px; color:var(--muted-fg); font-weight:400;">${m.providerName}</span>
+                  </div>
+                  <div class="inline-bar-track">
+                    <div class="inline-bar-fill" style="width:${Math.max(4, (val / peak) * 100)}%; background:${m.color};"></div>
+                  </div>
+                </td>
+                <td class="tabular">${fmtPct(m.hit)}</td>
+                <td class="tabular strong">${fmtUsd(m.cost)}</td>
+                <td class="tabular">${fmtPct(val / sum)}</td>
+                <td class="tabular">${fmtTokens(m.tokens)}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>`;
+
+      table.querySelectorAll("tbody tr.clickable").forEach((tr) => {
+        tr.onclick = () => {
+          const item = list.find((x) => x.model === tr.dataset.model);
+          if (item) openModelModal(item);
+        };
+      });
+    } else if (state.breakdown === "agent") {
+      const mul = state.period === "24h" ? 0.16 : state.period === "7d" ? 1 : state.period === "30d" ? 3.4 : 9.8;
+      const list = AGENTS_BASE
+        .filter((a) => !state.focusProvider || a.provider === state.focusProvider)
+        .map((a) => {
+          const cost = data.totalCost * data.raw.leverShare * a.share;
+          const tokens = Math.round(data.totalTokens * data.raw.leverShare * a.share);
+          return {
+            ...a,
+            cost,
+            tokens,
+            runs: Math.max(2, Math.round(a.runs * mul * 0.35)),
+            add: Math.round(a.add * mul * 0.45),
+            del: Math.round(a.del * mul * 0.45),
+            color: provMap[a.provider].color,
+          };
+        });
+      const peak = Math.max(1, ...list.map((x) => metric === "cost" ? x.cost : x.tokens));
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:32px;">#</th>
+            <th>Lever Agent</th>
+            <th>主力模型</th>
+            <th>运行轮次</th>
+            <th>代码产出</th>
+            <th>估算费用</th>
+            <th>总 Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map((a, idx) => {
+            const val = metric === "cost" ? a.cost : a.tokens;
+            return `
+              <tr>
+                <td class="tabular" style="font-size:12px;">${idx + 1}</td>
+                <td>
+                  <div class="model-cell-main">
+                    <span class="agent-chip-avatar" style="background:${a.bg}">${a.initials}</span>
+                    <span>${a.name}</span>
+                  </div>
+                  <div class="inline-bar-track" style="margin-left:30px;">
+                    <div class="inline-bar-fill" style="width:${Math.max(5, (val / peak) * 100)}%; background:${a.bg};"></div>
+                  </div>
+                </td>
+                <td class="mono" style="font-size:12px;">${a.model}</td>
+                <td class="tabular">${a.runs} 轮</td>
+                <td class="tabular diff-stat"><span class="diff-add">+${a.add.toLocaleString()}</span><span class="diff-del">-${a.del.toLocaleString()}</span></td>
+                <td class="tabular strong">${fmtUsd(a.cost)}</td>
+                <td class="tabular">${fmtTokens(a.tokens)}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>`;
+    } else {
+      const labels = data.raw.labels;
+      const rows = labels.map((lbl, i) => {
+        const byP = Object.fromEntries(data.providerTotals.map((p) => [p.id, { cost: p.seriesCost[i], tokens: p.seriesTokens[i] }]));
+        const totCost = data.filtered.reduce((s, p) => s + p.seriesCost[i], 0);
+        const totTok = data.filtered.reduce((s, p) => s + p.seriesTokens[i], 0);
+        return { lbl, byP, totCost, totTok };
+      }).reverse();
+
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>${state.period === "24h" ? "时段" : "日期"}</th>
+            ${data.filtered.map((p) => `<th>${p.name}</th>`).join("")}
+            <th>合计费用</th>
+            <th>总 Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td class="strong tabular">${r.lbl}</td>
+              ${data.filtered.map((p) => `<td class="tabular">${fmtUsd(r.byP[p.id].cost)}</td>`).join("")}
+              <td class="tabular strong">${fmtUsd(r.totCost)}</td>
+              <td class="tabular">${fmtTokens(r.totTok)}</td>
+            </tr>`).join("")}
+        </tbody>`;
+    }
+  }
+
+  function renderLimits() {
+    document.getElementById("limitsGrid").innerHTML = LIMITS_DATA.map((item) => `
+      <div class="panel-surface limit-card">
+        <div class="limit-card-head">
+          <div class="limit-card-title">
+            <span class="provider-dot" style="background:${item.color}"></span>
+            <span>${item.provider}</span>
+          </div>
+          <span class="limit-badge">${item.plan}</span>
+        </div>
+        ${item.windows.map((w) => `
+          <div class="limit-win">
+            <div class="limit-win-row tabular">
+              <div class="limit-win-meta"><span>${w.label}</span><span>${w.reset}</span></div>
+              <span class="limit-win-pct">剩余 ${100 - w.used}%</span>
+            </div>
+            <div class="pace-bar" style="background: color-mix(in srgb, ${item.color} 15%, transparent);">
+              <div class="pace-bar-fill" style="width:${w.used}%; background:${item.color};"></div>
+              <div class="pace-tick" style="left:${w.elapsed}%;" title="窗口时间已流逝 ${w.elapsed}%"></div>
+            </div>
+            <div class="pace-note">
+              <span class="${w.fast ? "pace-fast" : "pace-ok"}">${w.note}</span>
+              <span class="tabular">已用 ${w.used}% · 周期进度 ${w.elapsed}%</span>
+            </div>
+          </div>`).join("")}
+      </div>`).join("");
+  }
+
+  function renderPopoverStats() {
+    const isToday = state.popRange === "today";
+    const stats = isToday
+      ? { tokens: "89.4M", cost: "$24.10", hit: "86.4%", runs: "26 会话 · 184 轮" }
+      : { tokens: "548.2M", cost: "$142.80", hit: "87.5%", runs: "148 会话 · 1,246 轮" };
+    document.getElementById("popStatsGrid").innerHTML = `
+      <div class="pop-stat-item"><div class="k">处理 Tokens</div><div class="v">${stats.tokens}</div><div class="s">缓存命中 ${stats.hit}</div></div>
+      <div class="pop-stat-item"><div class="k">估算费用</div><div class="v">${stats.cost}</div><div class="s">${stats.runs}</div></div>
+    `;
+  }
+
+  function openModelModal(m) {
+    const modal = document.getElementById("modelModal");
+    const box = document.getElementById("modelModalContent");
+    const cached = Math.round(m.tokens * m.hit);
+    const output = Math.round(m.tokens * 0.032);
+    const uncached = Math.max(0, m.tokens - cached - output);
+    box.innerHTML = `
+      <div class="dialog-head">
+        <div>
+          <div class="dialog-title mono">${m.model}</div>
+          <div class="dialog-sub">${m.providerName} · 当前范围 ${DATASET[state.period].rangeLabel}</div>
+        </div>
+        <button class="icon-btn" id="closeModalBtn" type="button" aria-label="关闭">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="dialog-metrics tabular">
+        <div><div class="k">估算费用</div><div class="v">${fmtUsd(m.cost)}</div></div>
+        <div><div class="k">总 Tokens</div><div class="v">${fmtTokens(m.tokens)}</div></div>
+        <div><div class="k">缓存命中率</div><div class="v">${fmtPct(m.hit)}</div></div>
+      </div>
+      <div class="dialog-rows tabular">
+        <div class="dialog-row"><span class="k">会话数量</span><span class="v">${m.sessions} 次</span></div>
+        <div class="dialog-row"><span class="k">缓存命中读取</span><span class="v">${fmtTokens(cached)}</span></div>
+        <div class="dialog-row"><span class="k">未缓存输入（含写入）</span><span class="v">${fmtTokens(uncached)}</span></div>
+        <div class="dialog-row"><span class="k">模型输出</span><span class="v">${fmtTokens(output)}</span></div>
+        <div class="dialog-row"><span class="k">参考单价（入 / 出）</span><span class="v mono" style="font-size:12px;">${m.priceIn} · ${m.priceOut}</span></div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn-outline" id="closeModalBtn2" type="button">关闭</button>
+      </div>`;
+    modal.classList.add("open");
+    document.getElementById("closeModalBtn").onclick = () => modal.classList.remove("open");
+    document.getElementById("closeModalBtn2").onclick = () => modal.classList.remove("open");
+  }
+
+  // Popover toggle logic
+  const usageTrigger = document.getElementById("usageTrigger");
+  const usagePopover = document.getElementById("usagePopover");
+  const demoPopBtn = document.getElementById("togglePopoverDemo");
+
+  function setPopover(open) {
+    state.popoverOpen = open;
+    usagePopover.classList.toggle("open", open);
+    usageTrigger.classList.toggle("open", open);
+    usageTrigger.setAttribute("aria-expanded", String(open));
+    demoPopBtn.classList.toggle("active", open);
+    demoPopBtn.textContent = open ? "收起用量 Popover" : "预览用量 Popover";
+  }
+
+  usageTrigger.onclick = (e) => { e.stopPropagation(); setPopover(!state.popoverOpen); };
+  demoPopBtn.onclick = (e) => { e.stopPropagation(); setPopover(!state.popoverOpen); };
+  document.addEventListener("click", (e) => {
+    if (state.popoverOpen && !usagePopover.contains(e.target) && !usageTrigger.contains(e.target) && !demoPopBtn.contains(e.target)) {
+      setPopover(false);
+    }
+  });
+  document.getElementById("openFullStatsBtn").onclick = () => {
+    setPopover(false);
+    const root = document.getElementById("statsRoot");
+    root.classList.remove("flash-highlight");
+    void root.offsetWidth;
+    root.classList.add("flash-highlight");
+    document.getElementById("mainScroll").scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  document.getElementById("popRangeSeg").querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      state.popRange = b.dataset.poprange;
+      document.getElementById("popRangeSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+      renderPopoverStats();
+    };
+  });
+
+  // Wire ToggleGroups
+  const bindGroup = (id, key, attr) => {
+    const el = document.getElementById(id);
+    el.querySelectorAll(".toggle-item").forEach((btn) => {
+      btn.onclick = () => {
+        state[key] = btn.dataset[attr];
+        el.querySelectorAll(".toggle-item").forEach((x) => x.setAttribute("aria-pressed", String(x === btn)));
+        render();
+      };
+    });
+  };
+  bindGroup("periodGroup", "period", "period");
+  bindGroup("metricGroup", "metric", "metric");
+  bindGroup("scopeGroup", "scope", "scope");
+  bindGroup("breakdownGroup", "breakdown", "tab");
+
+  // Theme toggle
+  const themeBtn = document.getElementById("themeToggle");
+  themeBtn.onclick = () => {
+    const dark = document.documentElement.classList.toggle("dark");
+    themeBtn.textContent = dark ? "切换浅色主题" : "切换深色主题";
+  };
+
+  // Refresh micro-feedback
+  document.getElementById("refreshBtn").onclick = function () {
+    const svg = this.querySelector("svg");
+    svg.style.transition = "transform 450ms ease-out";
+    svg.style.transform = "rotate(360deg)";
+    setTimeout(() => { svg.style.transition = "none"; svg.style.transform = "rotate(0deg)"; }, 460);
+  };
+
+  document.getElementById("modelModal").onclick = (e) => {
+    if (e.target.id === "modelModal") e.target.classList.remove("open");
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      setPopover(false);
+      document.getElementById("modelModal").classList.remove("open");
+    }
+  });
+
+  renderPopoverStats();
+  render();
+})();
+</script>
+</body>
+</html>
