@@ -149,7 +149,11 @@ export function ChatTopicView({
             <Minimize2 />
           </Button>
         </header>
-        <TopicConversation key={sessionId} {...conversation} />
+        <TopicConversation
+          key={sessionId}
+          {...conversation}
+          onOpenSiblingTopic={onSelect}
+        />
       </div>
       <ImagePreview />
     </div>

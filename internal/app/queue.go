@@ -128,7 +128,7 @@ func reserveRun(tx *sql.Tx, run *model.Run, session *model.Session, config model
 		session.NativeID = ""
 		session.Runtime = nil
 	}
-	run.Handoff = session.NativeID == "" && session.SourceRunID != ""
+	run.Handoff = session.NativeID == "" && (session.SourceRunID != "" || session.HandoffFrom != nil)
 	if session.NativeID == "" && !run.Handoff {
 		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM runs
 WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','cancelled','steering','steered'))`, session.ID).Scan(&run.Handoff); err != nil {

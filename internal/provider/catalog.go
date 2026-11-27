@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"lever/internal/model"
@@ -47,6 +48,20 @@ func discoverNative(ctx context.Context, config model.Provider, cwd string) (mod
 			entry.Fast, _ = m["supportsFastMode"].(bool)
 			entry.Fast = entry.Fast && catalog.FastUnavailable == ""
 			catalog.Models = append(catalog.Models, entry)
+		}
+		for _, ref := range claudeSkillReferences(r, config.ID) {
+			if ref.Kind != "command" || strings.HasPrefix(ref.Name, "mcp__") {
+				continue
+			}
+			hint := ref.ArgumentHint
+			if ref.Name == "compact" && hint == "" {
+				hint = "[instructions]"
+			}
+			catalog.Commands = append(catalog.Commands, model.NativeCommand{
+				Name:         ref.Name,
+				Description:  ref.Description,
+				ArgumentHint: hint,
+			})
 		}
 	} else {
 		catalog.Commands = []model.NativeCommand{{Name: "compact", Description: "Summarize the current conversation"}}

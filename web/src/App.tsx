@@ -941,10 +941,12 @@ export default function App() {
       openChat(run.chatId, run.agentId, title);
     }
     setFocusComposer(undefined);
-    requestReveal({
-      tabId: run.topic ? "topic:" + run.sessionId : run.chatId,
-      runId: run.runId,
-    });
+    if (run.runId) {
+      requestReveal({
+        tabId: run.topic ? "topic:" + run.sessionId : run.chatId,
+        runId: run.runId,
+      });
+    }
   }
   function openTaskChat(execution: TaskExecution, title: string) {
     if (execution.topic || execution.automationId) openRun(execution, title);

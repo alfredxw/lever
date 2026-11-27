@@ -472,6 +472,13 @@ type RemoteDelegationSource struct {
 	RunID      string `json:"runId"`
 }
 
+type SessionHandoff struct {
+	SessionID    string `json:"sessionId"`
+	Kind         string `json:"kind"`
+	UpToSequence int64  `json:"upToSequence"`
+	UpToRunID    string `json:"upToRunId,omitempty"`
+}
+
 type Session struct {
 	Runtime            *SessionRuntime         `json:"runtime,omitempty"`
 	ProjectID          string                  `json:"projectId,omitempty"`
@@ -493,6 +500,7 @@ type Session struct {
 	DelegationMaxDepth int                     `json:"delegationMaxDepth,omitempty"`
 	DelegationChain    []string                `json:"delegationChain,omitempty"`
 	SourceRunID        string                  `json:"sourceRunId,omitempty"`
+	HandoffFrom        *SessionHandoff         `json:"handoffFrom,omitempty"`
 	Comparison         *ComparisonOrigin       `json:"comparison,omitempty"`
 	QueuePaused        bool                    `json:"queuePaused,omitempty"`
 	CreatedAt          string                  `json:"createdAt"`
@@ -777,8 +785,10 @@ type SendInput struct {
 	Delivery      string        `json:"delivery,omitempty"`
 	SteerRunID    string        `json:"steerRunId,omitempty"`
 	AfterRunIDs   []string      `json:"afterRunIds,omitempty"`
-	EditRunID     string        `json:"editRunId,omitempty"`
-	ReplaceRunID  string        `json:"replaceRunId,omitempty"`
+	EditRunID            string        `json:"editRunId,omitempty"`
+	ReplaceRunID         string        `json:"replaceRunId,omitempty"`
+	HandoffFromSessionID string        `json:"handoffFromSessionId,omitempty"`
+	ReferenceSource      bool          `json:"referenceSource,omitempty"`
 }
 
 type TimelineEntry struct {

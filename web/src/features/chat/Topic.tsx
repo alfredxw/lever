@@ -3,14 +3,16 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
+  CornerUpLeft,
   Maximize2,
   MessageCircle,
   Pin,
   UserRound,
 } from "lucide-react";
-import { active } from "@/api/client";
+import { active, api } from "@/api/client";
 import type {
   Agent,
+  Overview,
   Run,
   Session,
   SessionView,
@@ -32,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
 import type { OpenChatFile } from "./ChatResponse";
 import { ComposerContext } from "./ComposerContext";
+import { displayChatTitle } from "./conversationTitle";
 import {
   ImagePreview,
   ImagePreviewProvider,
@@ -373,6 +376,7 @@ export type TopicConversationProps = {
   onOpenTool: (kind: "files" | "diff" | "terminal") => void;
   onOpenRun: OpenRun;
   onOpenAgent: (id: string) => void;
+  onOpenSiblingTopic?: (sessionId: string) => void;
   onLocate?: (session: Session) => void;
   onLocateChannel?: (channel: string) => void;
   focus: boolean;
@@ -422,6 +426,7 @@ function TopicConversationContent({
   onOpenTool,
   onOpenRun,
   onOpenAgent,
+  onOpenSiblingTopic,
   onLocate,
   onLocateChannel,
   focus,
@@ -440,7 +445,24 @@ function TopicConversationContent({
   const composer = useContext(ComposerContext);
   const preview = useImagePreview();
   const { session, agent } = props;
+  const handoffFrom = session.handoffFrom;
   const { data: overview } = useChatActivity(session.chatId, enabled);
+  const { data: handoffSourceTitle } = useQuery({
+    queryKey: ["overview"],
+    queryFn: () => api<Overview>("/overview"),
+    enabled: enabled && Boolean(handoffFrom),
+    select: (data) => {
+      if (!handoffFrom) return "";
+      if (handoffFrom.kind === "topic") {
+        return (
+          data.conversations.find((item) => item.id === handoffFrom.sessionId)
+            ?.title ?? ""
+        );
+      }
+      const parentChat = data.chats.find((item) => item.id === session.chatId);
+      return parentChat ? displayChatTitle(parentChat, t) : "";
+    },
+  });
   const { data: delegations } = useQuery({
     ...chatDelegationsQuery(session.chatId),
     enabled,
@@ -533,6 +555,9 @@ function TopicConversationContent({
         .join(" · ")
     : "";
   if (!overview) return <Loading />;
+  const handoffLabelTitle =
+    handoffSourceTitle ||
+    (handoffFrom?.kind === "topic" ? t("chat.topic") : t("workspace.chat"));
   return (
     <section
       ref={panel}
@@ -558,7 +583,10 @@ function TopicConversationContent({
           )}
         </div>
       )}
-      {(onLocate || session.workingCopyId || session.comparison) && (
+      {(onLocate ||
+        handoffFrom ||
+        session.workingCopyId ||
+        session.comparison) && (
         <div className="topic-toolbar">
           {onLocate && (
             <Button variant="ghost" size="sm" onClick={() => onLocate(session)}>
@@ -570,6 +598,31 @@ function TopicConversationContent({
                     ? "comparison.back"
                     : "chat.locateTopic",
               )}
+            </Button>
+          )}
+          {handoffFrom && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-w-0 max-w-64 text-muted-foreground"
+              title={t("context.handoffFrom", { title: handoffLabelTitle })}
+              onClick={() =>
+                onOpenRun(
+                  {
+                    chatId: session.chatId,
+                    sessionId: handoffFrom.sessionId,
+                    runId: handoffFrom.upToRunId ?? "",
+                    agentId: session.agentId,
+                    topic: handoffFrom.kind === "topic",
+                  },
+                  handoffLabelTitle,
+                )
+              }
+            >
+              <CornerUpLeft data-icon="inline-start" />
+              <span className="truncate">
+                {t("context.handoffFrom", { title: handoffLabelTitle })}
+              </span>
             </Button>
           )}
           {(session.workingCopyId || session.comparison) && (
@@ -647,7 +700,9 @@ function TopicConversationContent({
               />
             ) : (
               <RunContent
-                showRuntimeHandoff={run !== runs[0] || !props.source}
+                showRuntimeHandoff={
+                  run !== runs[0] || (!props.source && !session.handoffFrom)
+                }
                 run={run}
                 agent={agent}
                 session={session}
@@ -697,11 +752,32 @@ function TopicConversationContent({
             session.id,
             runs,
           ).some((d) => isDelegatedRunActive(d.status))}
+          hasHistory={
+            Boolean(props.source) ||
+            runs.some(
+              (run) => run.status !== "queued" && run.status !== "cancelled",
+            )
+          }
+          lastCompacted={latestRun?.input.trim().startsWith("/compact")}
           archived={agent.archived}
           visible={enabled}
           onSent={() =>
             requestAnimationFrame(() => scroller.current?.scrollToEnd())
           }
+          onOpenHandoffTopic={(run) => {
+            if (onOpenSiblingTopic) onOpenSiblingTopic(run.sessionId);
+            else
+              onOpenRun(
+                {
+                  chatId: run.chatId,
+                  sessionId: run.sessionId,
+                  runId: run.id,
+                  agentId: run.agentId,
+                  topic: true,
+                },
+                run.input,
+              );
+          }}
         />
       </footer>
     </section>

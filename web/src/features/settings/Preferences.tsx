@@ -41,6 +41,7 @@ type Preferences = {
   chatWidth: (typeof chatWidths)[number];
   sendShortcut: (typeof sendShortcuts)[number];
   followUpBehavior: (typeof followUpBehaviors)[number];
+  showContextUsage: boolean;
   openNewTopicOnCreate: boolean;
   desktopNotifications: boolean;
   agentSidebarLayout: AgentSidebarLayout;
@@ -57,6 +58,7 @@ const defaults: Preferences = {
   chatWidth: "comfortable",
   sendShortcut: "enter",
   followUpBehavior: "steer",
+  showContextUsage: false,
   openNewTopicOnCreate: true,
   desktopNotifications: false,
   agentSidebarLayout: "single",
@@ -98,6 +100,7 @@ function readPreferences(): Preferences {
       followUpBehavior: followUpBehaviors.includes(saved?.followUpBehavior)
         ? saved.followUpBehavior
         : defaults.followUpBehavior,
+      showContextUsage: saved?.showContextUsage === true,
       openNewTopicOnCreate:
         typeof saved?.openNewTopicOnCreate === "boolean"
           ? saved.openNewTopicOnCreate

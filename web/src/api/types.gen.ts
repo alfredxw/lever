@@ -1185,6 +1185,12 @@ export interface RemoteDelegationSource {
   sessionId: string;
   runId: string;
 }
+export interface SessionHandoff {
+  sessionId: string;
+  kind: string;
+  upToSequence: number /* int64 */;
+  upToRunId?: string;
+}
 export interface Session extends Scope {
   runtime?: SessionRuntime;
   projectId?: string;
@@ -1205,6 +1211,7 @@ export interface Session extends Scope {
   delegationMaxDepth?: number /* int */;
   delegationChain?: string[];
   sourceRunId?: string;
+  handoffFrom?: SessionHandoff;
   comparison?: ComparisonOrigin;
   queuePaused?: boolean;
   createdAt: string;
@@ -1461,6 +1468,8 @@ export interface SendInput {
   afterRunIds?: string[];
   editRunId?: string;
   replaceRunId?: string;
+  handoffFromSessionId?: string;
+  referenceSource?: boolean;
 }
 export interface TimelineEntry {
   sessionId: string;

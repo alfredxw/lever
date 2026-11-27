@@ -101,7 +101,11 @@ import {
   listWaitableRuns,
   runDisplayTitle,
 } from "./waitRuns";
-import { useComposerShortcuts } from "@/features/settings/Preferences";
+import {
+  useComposerShortcuts,
+  usePreferences,
+} from "@/features/settings/Preferences";
+import { ContextMeter } from "./ContextMeter";
 import { PermissionMenu } from "@/features/runtime/Permissions";
 import {
   resolveAgentPermissionForCatalog,
@@ -152,10 +156,13 @@ export function Composer({
   resumableRun,
   queuedRuns = [],
   hasActiveDelegations,
+  hasHistory,
+  lastCompacted,
   archived,
   autoFocus,
   visible,
   onSent,
+  onOpenHandoffTopic,
 }: {
   agentId: string;
   agents?: Agent[];
@@ -172,15 +179,19 @@ export function Composer({
   resumableRun?: Run;
   queuedRuns?: Run[];
   hasActiveDelegations?: boolean;
+  hasHistory?: boolean;
+  lastCompacted?: boolean;
   archived?: boolean;
   autoFocus?: boolean;
   visible?: boolean;
   onSent: (result: Run | Comparison, launchedFromTopicId?: string) => void;
+  onOpenHandoffTopic?: (run: Run) => void;
 }) {
   const { t } = useTranslation();
   const composer = useContext(ComposerContext);
   const keepOpen = useContext(KeepConversationOpen);
   const preview = useImagePreview();
+  const { preferences: appPreferences } = usePreferences();
   const shortcuts = useComposerShortcuts();
   const reduceMotion = useReducedMotion();
   const key = reply ? session!.id : chatId;
@@ -1310,9 +1321,31 @@ export function Composer({
           activeRun={activeRun}
           queuePaused={session?.queuePaused}
           catalog={catalog.data}
+          allowTopicBranch={!fixedSession}
           disabled={sending || uploading || archived || !!readSubmission(key)}
           editing={draft.editing?.runId}
           onEdit={(run) => beginEdit(run, false)}
+          onTopicCreated={(run) => {
+            if (
+              reply &&
+              appPreferences.openNewTopicOnCreate &&
+              onOpenHandoffTopic
+            ) {
+              onOpenHandoffTopic(run);
+            } else {
+              toast.success(
+                t("chat.topicCreated"),
+                onOpenHandoffTopic
+                  ? {
+                      action: {
+                        label: t("queue.openTopic"),
+                        onClick: () => onOpenHandoffTopic(run),
+                      },
+                    }
+                  : undefined,
+              );
+            }
+          }}
           onSteer={(run) =>
             setDraft((d) => {
               const choice = d.sessionSelection;
@@ -1767,6 +1800,77 @@ export function Composer({
               <div className="composer-submit">
                 {!comparisonAgents && (
                   <>
+                    {appPreferences.showContextUsage &&
+                      !topicMode &&
+                      !editingSent &&
+                      !archived &&
+                      !draftAgentId &&
+                      session &&
+                      (Boolean(sessionRuntime?.context) ||
+                        Boolean(hasHistory)) && (
+                        <ContextMeter
+                          sessionRuntime={sessionRuntime}
+                          catalog={catalog.data}
+                          hasHistory={Boolean(hasHistory)}
+                          lastCompacted={lastCompacted}
+                          disabled={
+                            sending ||
+                            changeRunPermission.isPending ||
+                            activeRun?.status === "unknown"
+                          }
+                          onCompact={async (focus) => {
+                            const nextSelection =
+                              permission && permission !== selection.permission
+                                ? { ...selection, permission }
+                                : selection;
+                            const run = await api<Run>("/messages", {
+                              commandId: crypto.randomUUID(),
+                              chatId,
+                              sessionId: reply ? session.id : undefined,
+                              operation: reply ? "reply" : "main",
+                              delivery: running ? "queue" : undefined,
+                              text: focus ? `/compact ${focus}` : "/compact",
+                              selection: nextSelection,
+                            } satisfies SendInput);
+                            await Promise.all([
+                              queryClient.invalidateQueries({
+                                queryKey: ["chat", run.chatId],
+                              }),
+                              queryClient.invalidateQueries({
+                                queryKey: ["session", session.id],
+                              }),
+                              queryClient.invalidateQueries({
+                                queryKey: ["overview"],
+                              }),
+                            ]);
+                            onSent(run);
+                          }}
+                          onHandoff={async (text) => {
+                            const nextSelection =
+                              permission && permission !== selection.permission
+                                ? { ...selection, permission }
+                                : selection;
+                            const run = await api<Run>("/messages", {
+                              commandId: crypto.randomUUID(),
+                              chatId,
+                              operation: "topic",
+                              handoffFromSessionId: session.id,
+                              text,
+                              selection: nextSelection,
+                            } satisfies SendInput);
+                            await Promise.all([
+                              queryClient.invalidateQueries({
+                                queryKey: ["chat", run.chatId],
+                              }),
+                              queryClient.invalidateQueries({
+                                queryKey: ["overview"],
+                              }),
+                            ]);
+                            onOpenHandoffTopic?.(run);
+                          }}
+                          onReturnToComposer={() => textbox.current?.focus()}
+                        />
+                      )}
                     <PermissionMenu
                       providerType={runtime?.type}
                       permissions={catalog.data?.permissions}

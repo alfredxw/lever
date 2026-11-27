@@ -672,6 +672,7 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 	var session model.Session
 	var launchProfile model.Profile
 	var launchProvider model.Provider
+	previousSessionID := ""
 	fresh := false
 	if a.closed {
 		return run, conflict("Backend is shutting down")
@@ -695,6 +696,12 @@ func (a *App) sendLocked(ctx context.Context, input model.SendInput, origin send
 	}
 	if input.ReplaceRunID != "" && (input.AgentID != "" || input.EditRunID != "" || input.WorkingCopyID != "" || input.Delivery != "" || len(afterRunIDs) > 0) {
 		return run, invalid("An edited sent message must run in its original conversation")
+	}
+	if input.HandoffFromSessionID != "" && (input.Operation != "topic" || input.ChatID == "" || input.AgentID != "" || input.EditRunID != "" || input.ReplaceRunID != "") {
+		return run, invalid("Context handoff can only start a new Topic in the current Chat")
+	}
+	if input.ReferenceSource && (input.EditRunID == "" || input.Operation != "topic") {
+		return run, invalid("Referencing the source conversation requires moving a queued message into a new Topic")
 	}
 	if err := validateSelection(input.Selection); err != nil {
 		return run, err
@@ -960,6 +967,9 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 		case input.Operation == "topic":
 			create = true
 			if editing.Operation == "topic" {
+				if input.ReferenceSource {
+					return invalid("This queued message is already starting a Topic")
+				}
 				session, err = store.Get[model.Session](ctx, tx, "SELECT data FROM sessions WHERE id=?", editing.SessionID)
 				if err != nil {
 					return err
@@ -1033,6 +1043,53 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				session.Title, session.TaskID = task.Title, task.TaskID
 			} else if origin.automation != nil && kind == "topic" {
 				session.Title = origin.automation.plan.Name
+			}
+			if editing.ID != "" && editing.SessionID != "" {
+				sourceSession, err := store.Get[model.Session](ctx, tx, "SELECT data FROM sessions WHERE id=? AND chat_id=?", editing.SessionID, chat.ID)
+				if err != nil {
+					return err
+				}
+				session.ProjectID = sourceSession.ProjectID
+				session.Scope = cloneScope(sourceSession.Scope)
+				session.WorkingCopyID = sourceSession.WorkingCopyID
+				session.WorkingCopyName = sourceSession.WorkingCopyName
+				if sourceSession.Selection.Provider != "" {
+					session.Selection = sourceSession.Selection
+				}
+			}
+			if input.HandoffFromSessionID != "" {
+				sourceSession, err := store.Get[model.Session](ctx, tx, "SELECT data FROM sessions WHERE id=? AND chat_id=?", input.HandoffFromSessionID, chat.ID)
+				if errors.Is(err, sql.ErrNoRows) {
+					return invalid("The source conversation was not found in this Chat")
+				}
+				if err != nil {
+					return err
+				}
+				var upTo int64
+				var upToRunID string
+				err = tx.QueryRowContext(ctx, `SELECT id, position FROM runs
+WHERE session_id=? AND position IS NOT NULL AND status NOT IN ('queued','steering','steered','cancelled')
+ORDER BY position DESC LIMIT 1`, sourceSession.ID).Scan(&upToRunID, &upTo)
+				if errors.Is(err, sql.ErrNoRows) {
+					if sourceSession.SourceRunID == "" {
+						return conflict("This conversation has no history to carry into a new Topic yet")
+					}
+				} else if err != nil {
+					return err
+				}
+				session.ProjectID = sourceSession.ProjectID
+				session.Scope = cloneScope(sourceSession.Scope)
+				session.WorkingCopyID = sourceSession.WorkingCopyID
+				session.WorkingCopyName = sourceSession.WorkingCopyName
+				if sourceSession.Selection.Provider != "" {
+					session.Selection = sourceSession.Selection
+				}
+				session.HandoffFrom = &model.SessionHandoff{
+					SessionID:    sourceSession.ID,
+					Kind:         sourceSession.Kind,
+					UpToSequence: upTo,
+					UpToRunID:    upToRunID,
+				}
 			}
 		}
 		if input.WorkingCopyID != "" {
@@ -1111,6 +1168,20 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 				return ref.Kind == originRef.Kind && ref.ID == originRef.ID
 			}) {
 				input.References = append(slices.Clone(input.References), *originRef)
+			}
+		}
+		if input.ReferenceSource {
+			sourceRef, err := conversationReference(ctx, tx, editing.SessionID)
+			if err != nil {
+				return err
+			}
+			if sourceRef != nil && !slices.ContainsFunc(input.References, func(ref model.Reference) bool {
+				return ref.Kind == sourceRef.Kind && ref.ID == sourceRef.ID
+			}) {
+				if len(input.References) >= 32 {
+					return invalid("A message can have up to 32 references")
+				}
+				input.References = append(slices.Clone(input.References), *sourceRef)
 			}
 		}
 		retryComparison := origin.retry != nil && origin.retry.ComparisonID != ""
@@ -1199,7 +1270,7 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 			run.ComparisonID = origin.retry.ComparisonID
 		}
 		switch {
-		case sourceRun != nil:
+		case sourceRun != nil && (editing.ID == "" || editing.SessionID == session.ID):
 			run.AutomationID, run.Quiet = sourceRun.AutomationID, sourceRun.Quiet
 			run.Task, err = taskForReplay(ctx, tx, sourceRun, chat.TaskID, session.Kind)
 			if err != nil {
@@ -1228,6 +1299,7 @@ EXISTS(SELECT 1 FROM runs WHERE session_id=? AND status='queued')`, session.ID, 
 				return err
 			}
 			if editing.SessionID != session.ID {
+				previousSessionID = editing.SessionID
 				if _, err := tx.Exec("DELETE FROM sessions WHERE id=? AND kind='topic' AND NOT EXISTS (SELECT 1 FROM runs WHERE session_id=?)", editing.SessionID, editing.SessionID); err != nil {
 					return err
 				}
@@ -1416,6 +1488,11 @@ WHERE id=? AND state='queued' AND error=''`, run.ID, time.Now().UnixMilli(), que
 	}
 	if err := a.advanceQueueLocked(run.SessionID); err != nil {
 		return run, err
+	}
+	if previousSessionID != "" {
+		if err := a.advanceQueueLocked(previousSessionID); err != nil {
+			slog.Error("advance source message queue", "session", previousSessionID, "error", err)
+		}
 	}
 	saved, err := store.Get[model.Run](ctx, a.Store.DB, `SELECT `+store.RunWithOverviewFields+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?`, run.ID)

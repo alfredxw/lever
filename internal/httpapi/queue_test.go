@@ -515,3 +515,226 @@ func TestQueuedMainCanStartIndependentTopic(t *testing.T) {
 	command.CommandID = app.ID()
 	f.request("POST", "/messages", command, 409, nil)
 }
+
+func TestQueuedTopicReplyCanBranchIntoNewTopicWithSourceReference(t *testing.T) {
+	f := newFixture(t)
+	chat := f.chat(f.agent("codex"))
+	topic := f.send(chat.ID, "topic", "", "[hang] Architecture review topic")
+	f.wait(topic.ID, "running")
+
+	attachment := f.upload(chat.ID, "spec.txt", []byte("parallel spec"))
+	quote := &model.MessageQuote{RunID: topic.ID, Role: "user"}
+	var first, second, branched model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:     app.ID(),
+		ChatID:        chat.ID,
+		Operation:     "reply",
+		SessionID:     topic.SessionID,
+		Delivery:      "queue",
+		Text:          "[wire] Parallel follow-up task",
+		AttachmentIDs: []string{attachment.ID},
+		Quote:         quote,
+	}, 200, &first)
+	f.request("POST", "/messages", model.SendInput{
+		CommandID: app.ID(),
+		ChatID:    chat.ID,
+		Operation: "reply",
+		SessionID: topic.SessionID,
+		Delivery:  "queue",
+		Text:      "stay in original topic",
+	}, 200, &second)
+
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          chat.ID,
+		EditRunID:       first.ID,
+		Operation:       "topic",
+		ReferenceSource: true,
+		Text:            first.Input,
+		Selection:       &first.Selection,
+		AttachmentIDs:   []string{attachment.ID},
+		References:      first.References,
+		Quote:           first.Quote,
+	}, 200, &branched)
+
+	if branched.ID != first.ID || branched.Sequence != first.Sequence || branched.SessionID == topic.SessionID || branched.Operation != "topic" {
+		t.Fatalf("queued reply did not branch into a new Topic: %+v", branched)
+	}
+	if branched.Input != first.Input {
+		t.Fatalf("branched topic mutated input text: got %q want %q", branched.Input, first.Input)
+	}
+	if len(branched.Attachments) != 1 || branched.Attachments[0].ID != attachment.ID {
+		t.Fatalf("branched topic lost attachments: %+v", branched.Attachments)
+	}
+	if branched.Quote == nil || branched.Quote.RunID != topic.ID {
+		t.Fatalf("branched topic lost quote: %+v", branched.Quote)
+	}
+	if len(branched.References) != 1 || branched.References[0].Kind != "topic" || branched.References[0].ID != topic.SessionID || branched.References[0].Start != nil || branched.References[0].End != nil || !strings.Contains(branched.References[0].Name, "Architecture review topic") {
+		t.Fatalf("branched topic missing expected trailing topic reference: %+v", branched.References)
+	}
+
+	done := f.wait(branched.ID, "completed")
+	var wire struct{ Input string }
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(done.Items[0].Text, "wire:")), &wire); err != nil {
+		t.Fatalf("failed to decode wire receipt: %v", err)
+	}
+	if !strings.Contains(wire.Input, "use read_chat_context with target \""+topic.SessionID+"\"") {
+		t.Fatalf("provider input missing source topic reference instruction: %q", wire.Input)
+	}
+
+	// Verify the new Topic can read the live source Topic dialogue while the source Topic is still running.
+	readPayload, err := json.Marshal([]historyCall{{Name: "read_chat_context", Arguments: map[string]any{"target": topic.SessionID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var third, branchedContext model.Run
+	existingRef := model.Reference{Kind: "topic", ID: topic.SessionID, Name: "Already referenced"}
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:  app.ID(),
+		ChatID:     chat.ID,
+		Operation:  "reply",
+		SessionID:  topic.SessionID,
+		Delivery:   "queue",
+		Text:       "[chat-context] " + string(readPayload),
+		References: []model.Reference{existingRef},
+	}, 200, &third)
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          chat.ID,
+		EditRunID:       third.ID,
+		Operation:       "topic",
+		ReferenceSource: true,
+		Text:            third.Input,
+		Selection:       &third.Selection,
+		References:      third.References,
+	}, 200, &branchedContext)
+	if len(branchedContext.References) != 1 {
+		t.Fatalf("duplicate source topic reference was added: %+v", branchedContext.References)
+	}
+	contextDone := f.wait(branchedContext.ID, "completed")
+	var receipt struct {
+		Results []historyResult
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(contextDone.Items[0].Text, "context:")), &receipt); err != nil {
+		t.Fatalf("failed to decode context receipt: %v", err)
+	}
+	if len(receipt.Results) != 1 || len(receipt.Results[0].Body.Messages) == 0 || receipt.Results[0].Body.Messages[0].Text != topic.Input {
+		t.Fatalf("branched topic could not read source topic dialogue: %+v", receipt.Results)
+	}
+
+	// Original topic stays running and its remaining queued reply stays queued until it finishes.
+	f.wait(topic.ID, "running")
+	f.wait(second.ID, "queued")
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "reply", SessionID: topic.SessionID, Delivery: "steer", Text: "finish original"}, 200, nil)
+	f.wait(topic.ID, "completed")
+	f.wait(second.ID, "completed")
+}
+
+func TestQueuedMainCanBranchIntoNewTopicWithChatReference(t *testing.T) {
+	f := newFixture(t)
+	chat := f.chat(f.agent("claude"))
+	seed := f.wait(f.send(chat.ID, "main", "", "Main rollout discussion").ID, "completed")
+	main := f.send(chat.ID, "main", "", "[hang] keep main busy")
+	f.wait(main.ID, "running")
+
+	var queued, branched model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID: app.ID(),
+		ChatID:    chat.ID,
+		Operation: "main",
+		Delivery:  "queue",
+		Text:      "[wire] Parallel investigation from main",
+	}, 200, &queued)
+
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          chat.ID,
+		EditRunID:       queued.ID,
+		Operation:       "topic",
+		ReferenceSource: true,
+		Text:            queued.Input,
+		Selection:       &queued.Selection,
+	}, 200, &branched)
+
+	if branched.SessionID == seed.SessionID || branched.Operation != "topic" {
+		t.Fatalf("queued main message did not branch into a new Topic: %+v", branched)
+	}
+	if len(branched.References) != 1 || branched.References[0].Kind != "chat" || branched.References[0].ID != main.SessionID || branched.References[0].Name != "Main rollout discussion" {
+		t.Fatalf("branched topic missing expected chat reference: %+v", branched.References)
+	}
+	done := f.wait(branched.ID, "completed")
+	var wire struct{ Input string }
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(done.Items[0].Text, "wire:")), &wire); err != nil {
+		t.Fatalf("failed to decode wire receipt: %v", err)
+	}
+	if !strings.Contains(wire.Input, "use read_chat_context with target \""+main.SessionID+"\"") {
+		t.Fatalf("provider input missing source chat reference instruction: %q", wire.Input)
+	}
+
+	f.wait(main.ID, "running")
+	f.request("POST", "/messages", model.SendInput{CommandID: app.ID(), ChatID: chat.ID, Operation: "main", Delivery: "steer", Text: "finish main"}, 200, nil)
+	f.wait(main.ID, "completed")
+}
+
+func TestQueuedBranchReferenceValidationAndRuntimeMCPCapability(t *testing.T) {
+	f := newFixture(t)
+	chat := f.chat(f.agent("codex"))
+
+	// ReferenceSource requires EditRunID and Operation=="topic".
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          chat.ID,
+		Operation:       "topic",
+		ReferenceSource: true,
+		Text:            "invalid without editRunId",
+	}, 400, nil)
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          chat.ID,
+		EditRunID:       "missing",
+		Operation:       "main",
+		ReferenceSource: true,
+		Text:            "invalid operation",
+	}, 400, nil)
+
+	// A runtime without MCP support rejects branching with source reference and preserves the queued message.
+	pi := f.piAgent()
+	limitedConfig := model.Provider{PluginID: "lever.pi", ContributionID: "pi", Type: "pi", Name: "Pi without tools", Command: "pi", Args: []string{"--no-tools"}, Enabled: true}
+	f.request("POST", "/providers", limitedConfig, 200, &limitedConfig)
+	limited := pi
+	limited.ID = ""
+	limited.Name = "Limited Pi"
+	limited.Profile.Provider = limitedConfig.ID
+	f.request("POST", "/agents", limited, 200, &limited)
+
+	limitedChat := f.chat(limited)
+	topic := f.send(limitedChat.ID, "topic", "", "[hang] Limited topic")
+	f.wait(topic.ID, "running")
+	var queued model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID: app.ID(),
+		ChatID:    limitedChat.ID,
+		Operation: "reply",
+		SessionID: topic.SessionID,
+		Delivery:  "queue",
+		Text:      "queued on limited runtime",
+	}, 200, &queued)
+
+	var rejected map[string]string
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:       app.ID(),
+		ChatID:          limitedChat.ID,
+		EditRunID:       queued.ID,
+		Operation:       "topic",
+		ReferenceSource: true,
+		Text:            queued.Input,
+		Selection:       &queued.Selection,
+	}, 400, &rejected)
+	if !strings.Contains(rejected["error"], "MCP support") {
+		t.Fatalf("expected MCP capability error, got: %+v", rejected)
+	}
+	// Queued message remains intact in its original Topic.
+	f.wait(queued.ID, "queued")
+	f.request("POST", "/runs/"+topic.ID+"/stop", nil, 200, nil)
+	f.wait(topic.ID, "interrupted")
+}

@@ -715,7 +715,7 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 						n, _ := usage[key].(float64)
 						used += n
 					}
-					if err := setClaudeContext(sink, in, requestedAt, used, window, obj(usage["cache_creation"])); err != nil {
+					if err := setClaudeContext(sink, in, requestedAt, used, window, usage); err != nil {
 						return err
 					}
 				}
@@ -820,21 +820,25 @@ func claudeContent(in Input) ([]object, error) {
 	return content, nil
 }
 
-func setClaudeContext(sink Sink, in Input, requestedAt time.Time, used float64, window any, cache object) error {
+func setClaudeContext(sink Sink, in Input, requestedAt time.Time, used float64, window any, usageMap object) error {
 	w, ok := window.(float64)
 	if !ok || w <= 0 {
 		return nil
 	}
 	usage := &model.ContextUsage{Used: int64(used), Window: int64(w)}
-	if in.Provider.IdleCompaction == "beforeCacheExpires" && used >= 200000 && !requestedAt.IsZero() {
+	if !requestedAt.IsZero() {
 		// Start at submission, so a slow response cannot extend a cache's lifetime.
+		cache := obj(usageMap["cache_creation"])
 		hour, _ := cache["ephemeral_1h_input_tokens"].(float64)
 		short, _ := cache["ephemeral_5m_input_tokens"].(float64)
+		cacheRead, _ := usageMap["cache_read_input_tokens"].(float64)
 		var ttl time.Duration
 		switch {
 		case hour > 0:
 			ttl = time.Hour
 		case short > 0:
+			ttl = 5 * time.Minute
+		case cacheRead > 0:
 			ttl = 5 * time.Minute
 		}
 		if ttl != 0 {

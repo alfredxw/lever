@@ -4859,6 +4859,113 @@ test("main and Topics execute independently with isolated queues, approvals and 
   await page.screenshot({ path: "../output/e2e/parallel-topics.png" });
 });
 
+test("queued messages can branch into a new Topic referencing the source Topic or Chat", async ({
+  page,
+}) => {
+  await createAgent(page, "并行分支");
+  const composer = page.locator(".chat-composer-wrap");
+  const input = composer.getByRole("textbox", {
+    name: "发送消息",
+    exact: true,
+  });
+  await input.fill("原话题排查清单");
+  await composer.getByRole("button", { name: "发送", exact: true }).click();
+  const initialTopic = page
+    .locator(".topic-thread")
+    .filter({ hasText: "原话题排查清单" });
+  await expect(initialTopic).toHaveAttribute("data-status", "completed");
+  const sourceTopicId = await initialTopic.getAttribute("data-session-id");
+  const sourceTopic = page.locator(
+    `.topic-thread[data-session-id="${sourceTopicId}"]`,
+  );
+
+  await sourceTopic.getByRole("button", { name: "回复", exact: true }).click();
+  const topicWrap = page.locator(".topic-composer-wrap:visible");
+  const reply = topicWrap.getByRole("textbox", {
+    name: "回复话题",
+    exact: true,
+  });
+  await reply.fill("[hang] 正在执行当前修复");
+  await reply.press("Enter");
+  await expect(sourceTopic).toHaveAttribute("data-status", "running");
+
+  await reply.fill("1. 并行排查消息不全\n2. 清理暂停态");
+  await reply.press("ControlOrMeta+Enter");
+
+  const topicQueue = topicWrap.getByRole("region", { name: "消息队列" });
+  await expect(topicQueue).toContainText("并行排查消息不全");
+  const branchBtn = topicQueue.getByRole("button", {
+    name: "新建话题并引用当前话题",
+    exact: true,
+  });
+  const steerBtn = topicQueue.getByRole("button", {
+    name: "发送到当前执行",
+    exact: true,
+  });
+  await expect(branchBtn).toBeVisible();
+  const [branchBox, steerBox] = await Promise.all([
+    branchBtn.boundingBox(),
+    steerBtn.boundingBox(),
+  ]);
+  expect(branchBox && steerBox && branchBox.x < steerBox.x).toBe(true);
+
+  await branchBtn.click();
+
+  // Default openNewTopicOnCreate opens the new parallel Topic with the source reference chip.
+  const activeTopic = page.locator(".topic-conversation:visible");
+  await expect(activeTopic).toContainText("并行排查消息不全");
+  await expect(activeTopic.locator(".run-content").first()).toHaveAttribute(
+    "data-status",
+    "completed",
+  );
+  const sourceRef = activeTopic.getByRole("button", {
+    name: "原话题排查清单",
+    exact: true,
+  });
+  await expect(sourceRef).toBeVisible();
+  // Clicking the reference navigates back to the still-running original Topic.
+  await sourceRef.click();
+  await expect(activeTopic).toContainText("[hang] 正在执行当前修复");
+  await expect(activeTopic.locator(".run-content").last()).toHaveAttribute(
+    "data-status",
+    "running",
+  );
+  await expect(topicQueue).toHaveCount(0);
+
+  // Also test branching from a queued Main Chat message referencing the Main Chat.
+  await setComposerMode(composer, "chat");
+  const mainInput = composer.getByRole("textbox", {
+    name: "发送消息",
+    exact: true,
+  });
+  await mainInput.fill("主对话进度");
+  await mainInput.press("Enter");
+  const mainRuns = page.locator(".chat-panel .conversation > .run-content");
+  await expect(mainRuns.last()).toHaveAttribute("data-status", "completed");
+
+  await mainInput.fill("[hang] 主对话继续执行");
+  await mainInput.press("Enter");
+  await expect(mainRuns.last()).toHaveAttribute("data-status", "running");
+
+  await mainInput.fill("主对话并行任务");
+  await mainInput.press("ControlOrMeta+Enter");
+  const mainQueue = composer.getByRole("region", { name: "消息队列" });
+  const branchMainBtn = mainQueue.getByRole("button", {
+    name: "新建话题并引用当前对话",
+    exact: true,
+  });
+  await expect(branchMainBtn).toBeVisible();
+  await branchMainBtn.click();
+
+  const branchedFromMain = page
+    .locator(".topic-thread")
+    .filter({ hasText: "主对话并行任务" });
+  await expect(branchedFromMain).toHaveAttribute("data-status", "completed");
+  await expect(branchedFromMain.locator(".inline-reference")).toBeVisible();
+  await expect(mainRuns.last()).toHaveAttribute("data-status", "running");
+  await expect(sourceTopic).toHaveAttribute("data-status", "running");
+});
+
 test("message actions preserve drafts and forward to an Agent with a note exactly once", async ({
   page,
 }) => {

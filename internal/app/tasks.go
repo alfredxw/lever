@@ -311,19 +311,36 @@ WHERE agent_id=? AND json_extract(data,'$.source')='works'`, task.AgentID)
 }
 
 func originConversationReference(ctx context.Context, q store.Queryer, origin *model.RunLocation) (*model.Reference, error) {
-	if origin == nil || !notes.IDPattern.MatchString(origin.SessionID) {
+	if origin == nil {
+		return nil, nil
+	}
+	return conversationReference(ctx, q, origin.SessionID)
+}
+
+func conversationReference(ctx context.Context, q store.Queryer, sessionID string) (*model.Reference, error) {
+	if !notes.IDPattern.MatchString(sessionID) {
 		return nil, nil
 	}
 	var kind, sessionTitle, chatTitle string
 	err := q.QueryRowContext(ctx, `SELECT s.kind,
 COALESCE(NULLIF(json_extract(s.data,'$.title'),''), NULLIF(json_extract(s.activity,'$.title'),''), ''),
 COALESCE(json_extract(c.data,'$.title'),'')
-FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?`, origin.SessionID).Scan(&kind, &sessionTitle, &chatTitle)
+FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?`, sessionID).Scan(&kind, &sessionTitle, &chatTitle)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if kind == "topic" && strings.TrimSpace(sessionTitle) == "" {
+		first, firstErr := store.Get[model.Run](ctx, q, `SELECT data FROM runs
+WHERE session_id=? AND status NOT IN ('queued','steering','steered','cancelled')
+ORDER BY sequence LIMIT 1`, sessionID)
+		if firstErr == nil {
+			sessionTitle = store.ChatTitle(first)
+		} else if !errors.Is(firstErr, sql.ErrNoRows) {
+			return nil, firstErr
+		}
 	}
 	clip := func(s string) string {
 		s = strings.Join(strings.Fields(s), " ")
@@ -333,7 +350,7 @@ FROM sessions s JOIN chats c ON c.id=s.chat_id WHERE s.id=?`, origin.SessionID).
 		}
 		return s
 	}
-	ref := model.Reference{ID: origin.SessionID}
+	ref := model.Reference{ID: sessionID}
 	switch kind {
 	case "topic":
 		ref.Kind = "topic"

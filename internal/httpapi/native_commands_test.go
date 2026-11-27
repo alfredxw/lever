@@ -2,6 +2,8 @@ package httpapi_test
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -151,5 +153,71 @@ func TestPiCompactAndACPSessionCommands(t *testing.T) {
 	state := f.sessionRuntime(run.SessionID)
 	if state.Commands == nil || len(*state.Commands) != 0 || state.Context == nil || state.Context.Used != 32 {
 		t.Fatalf("ACP command revocation and context update: %+v", state)
+	}
+}
+
+func TestFreshTopicHandoffAndClaudeCatalogCompact(t *testing.T) {
+	f := newFixture(t)
+	var claudeCatalog model.Catalog
+	f.request("GET", "/providers/claude/models?cwd="+url.QueryEscape(f.root), nil, 200, &claudeCatalog)
+	if !slices.ContainsFunc(claudeCatalog.Commands, func(c model.NativeCommand) bool {
+		return c.Name == "compact" && c.ArgumentHint != ""
+	}) {
+		t.Fatalf("expected Claude catalog to advertise compact with argument hint, got %+v", claudeCatalog.Commands)
+	}
+
+	chat := f.chat(f.agent("claude"))
+	first := f.wait(f.send(chat.ID, "main", "", "first decision: keep SQLite schema").ID, "completed")
+	second := f.wait(f.send(chat.ID, "main", "", "second decision: expose context meter").ID, "completed")
+
+	var handoffRun model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID:            app.ID(),
+		ChatID:               chat.ID,
+		Operation:            "topic",
+		HandoffFromSessionID: first.SessionID,
+		Text:                 "continue implementation in fresh topic",
+	}, 200, &handoffRun)
+	handoffRun = f.wait(handoffRun.ID, "completed")
+	if !handoffRun.Handoff || handoffRun.SessionID == first.SessionID {
+		t.Fatalf("expected fresh topic handoff run, got %+v", handoffRun)
+	}
+	var view model.SessionView
+	f.request("GET", "/sessions/"+handoffRun.SessionID, nil, 200, &view)
+	if view.Session.HandoffFrom == nil ||
+		view.Session.HandoffFrom.SessionID != first.SessionID ||
+		view.Session.HandoffFrom.Kind != "main" ||
+		view.Session.HandoffFrom.UpToSequence != second.Sequence ||
+		view.Session.HandoffFrom.UpToRunID != second.ID {
+		t.Fatalf("unexpected handoff metadata: %+v", view.Session.HandoffFrom)
+	}
+	history, err := os.ReadFile(filepath.Join(f.a.Store.Dir, "sessions", handoffRun.SessionID, "history-"+handoffRun.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(history)
+	if !strings.Contains(content, "first decision: keep SQLite schema") || !strings.Contains(content, "second decision: expose context meter") {
+		t.Fatalf("handoff JSONL missing upstream turns: %s", content)
+	}
+
+	// Later messages in the original session must not leak into the handoff topic if it switches providers.
+	f.wait(f.send(chat.ID, "main", "", "unrelated later main turn").ID, "completed")
+	var switched model.Run
+	f.request("POST", "/messages", model.SendInput{
+		CommandID: app.ID(),
+		ChatID:    chat.ID,
+		Operation: "reply",
+		SessionID: handoffRun.SessionID,
+		Text:      "follow up on codex",
+		Selection: &model.Selection{Provider: "codex"},
+	}, 200, &switched)
+	switched = f.wait(switched.ID, "completed")
+	switchedHistory, err := os.ReadFile(filepath.Join(f.a.Store.Dir, "sessions", handoffRun.SessionID, "history-"+switched.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(switchedHistory), "unrelated later main turn") ||
+		!strings.Contains(string(switchedHistory), "continue implementation in fresh topic") {
+		t.Fatalf("switched handoff history violated boundary: %s", string(switchedHistory))
 	}
 }

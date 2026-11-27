@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   CornerUpRight,
   MessageCircle,
+  MessageCirclePlus,
   MessagesCircle,
   Pencil,
   Play,
@@ -11,8 +12,9 @@ import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { api, queryClient } from "@/api/client";
-import type { Catalog, Run } from "@/api/types.gen";
+import type { Catalog, Run, SendInput } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
+import { useProviders } from "@/features/runtime/queries";
 import { Attachments } from "./Attachments";
 import { MessageInput } from "./References";
 import { QuotedMessage } from "./QuotedMessage";
@@ -26,45 +28,55 @@ export function QueuedMessages({
   activeRun,
   queuePaused,
   catalog,
+  allowTopicBranch = true,
   disabled,
   editing,
   onEdit,
   onSteer,
+  onTopicCreated,
 }: {
   runs: Run[];
   activeRun?: Run;
   queuePaused?: boolean;
   catalog?: Catalog | null;
+  allowTopicBranch?: boolean;
   disabled?: boolean;
   editing?: string;
   onEdit?: (run: Run) => void;
   onSteer?: (run: Run) => void;
+  onTopicCreated?: (run: Run) => void;
 }) {
   const { t } = useTranslation();
   const queueId = useId();
+  const providers = useProviders();
   const action = useMutation({
     mutationFn: ({ run, action }: { run: Run; action: string }) => {
       if (action === "resume")
         return api(`/sessions/${run.sessionId}/queue/resume`, {});
-      if (action === "main" || action === "topic")
-        return api("/messages", {
+      if (
+        action === "main" ||
+        action === "topic" ||
+        action === "topic_with_reference"
+      )
+        return api<Run>("/messages", {
           commandId: crypto.randomUUID(),
           chatId: run.chatId,
           editRunId: run.id,
-          operation: action,
+          operation: action === "main" ? "main" : "topic",
+          referenceSource: action === "topic_with_reference" || undefined,
           text: run.input,
           selection: run.selection,
           attachmentIds: run.attachments.map((file) => file.id),
           references: run.references,
           quote: run.quote,
           afterRunIds: run.afterRunIds,
-        });
+        } satisfies SendInput);
       return api(`/runs/${run.id}/queue`, {
         action,
         steerRunId: action === "send" ? activeRun?.id : undefined,
       });
     },
-    onSuccess: async (_, { run, action }) => {
+    onSuccess: async (result, { run, action }) => {
       if (action === "send") {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["chat", run.chatId] }),
@@ -74,6 +86,19 @@ export function QueuedMessages({
           queryClient.invalidateQueries({ queryKey: ["overview"] }),
         ]);
         onSteer?.(run);
+      } else if (action === "topic_with_reference") {
+        const created = result as Run;
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["chat", created.chatId] }),
+          queryClient.invalidateQueries({
+            queryKey: ["session", run.sessionId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["session", created.sessionId],
+          }),
+          queryClient.invalidateQueries({ queryKey: ["overview"] }),
+        ]);
+        onTopicCreated?.(created);
       } else {
         void queryClient.invalidateQueries();
       }
@@ -113,6 +138,13 @@ export function QueuedMessages({
         {sorted.map((run) => {
             const busy = disabled || action.isPending;
             const editable = onEdit && !run.comparisonId && !run.channel;
+            const runProvider = providers.data?.find(
+              (provider) => provider.id === run.selection.provider,
+            );
+            const supportsReference =
+              (run.selection.provider === catalog?.provider
+                ? catalog?.capabilities.mcp
+                : runProvider?.capabilities.mcp) !== false;
             const hasWaiting = Boolean(
               run.afterRunIds?.length || run.waitingOn?.length,
             );
@@ -183,7 +215,7 @@ export function QueuedMessages({
                   {run.error && <p role="status">{run.error}</p>}
                 </div>
                 <div className="queue-actions">
-                  {editable && run.operation !== "reply" && (
+                  {editable && allowTopicBranch && run.operation !== "reply" && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -218,6 +250,37 @@ export function QueuedMessages({
                       )}
                     </Button>
                   )}
+                  {editable &&
+                    allowTopicBranch &&
+                    (run.operation === "reply" || run.operation === "main") && (
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t(
+                          run.operation === "reply"
+                            ? "queue.branchFromTopic"
+                            : "queue.branchFromChat",
+                        )}
+                        title={
+                          !supportsReference
+                            ? t("queue.branchRequiresMcp")
+                            : t(
+                                run.operation === "reply"
+                                  ? "queue.branchFromTopic"
+                                  : "queue.branchFromChat",
+                              )
+                        }
+                        disabled={busy || !!editing || !supportsReference}
+                        onClick={() =>
+                          action.mutate({
+                            run,
+                            action: "topic_with_reference",
+                          })
+                        }
+                      >
+                        <MessageCirclePlus />
+                      </Button>
+                    )}
                   {hasWaiting ? (
                     <Button
                       variant="ghost"

@@ -727,9 +727,27 @@ function ChatContent(props: ChatProps) {
             resumableRun={resumableMainRun}
             queuedRuns={queuedRuns}
             hasActiveDelegations={hasActiveMainDelegations}
+            hasHistory={mainRuns.some(
+              (run) => run.status !== "queued" && run.status !== "cancelled",
+            )}
+            lastCompacted={latestMainRun?.input.trim().startsWith("/compact")}
             archived={agent.archived}
             visible={enabled}
             onSent={onSent}
+            onOpenHandoffTopic={(run) => {
+              if (inlineTopic) onExpand(run.sessionId);
+              else
+                onOpenRun(
+                  {
+                    chatId: run.chatId,
+                    sessionId: run.sessionId,
+                    runId: run.id,
+                    agentId: run.agentId,
+                    topic: true,
+                  },
+                  run.input,
+                );
+            }}
           />
         </div>
       )}

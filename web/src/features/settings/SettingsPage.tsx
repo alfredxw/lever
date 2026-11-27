@@ -125,6 +125,8 @@ const sectionGroups = [
           "chatFontSizeDescription",
           "chatWidth",
           "chatWidthDescription",
+          "showContextUsage",
+          "showContextUsageDescription",
           "workbench",
           "taskChatMode",
           "taskChatModeDescription",
@@ -562,6 +564,20 @@ export function SettingsPage({
                   label: t(`settings.width.${value}`),
                 }))}
               />
+              <SettingsRow
+                id="settings-show-context-usage"
+                title={t("settings.showContextUsage")}
+                description={t("settings.showContextUsageDescription")}
+              >
+                <Switch
+                  id="settings-show-context-usage"
+                  aria-describedby="settings-show-context-usage-description"
+                  checked={preferences.showContextUsage}
+                  onCheckedChange={(showContextUsage) =>
+                    preference.mutate({ showContextUsage })
+                  }
+                />
+              </SettingsRow>
             </SettingsGroup>
             <section
               className="settings-preview"
