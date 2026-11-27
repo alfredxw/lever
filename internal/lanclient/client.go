@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -186,7 +187,11 @@ func (c *Client) UnpairDirect(ctx context.Context, st p.ClientState, host string
 }
 
 func (c *Client) direct(ctx context.Context, st p.ClientState, r route, method, path string, body []byte, out any) error {
-	client := http.Client{Timeout: 3 * time.Second, CheckRedirect: p.Client.CheckRedirect, Transport: &http.Transport{DisableKeepAlives: true, TLSClientConfig: &tls.Config{
+	dialer := &net.Dialer{Timeout: 2500 * time.Millisecond}
+	client := http.Client{Timeout: 20 * time.Second, CheckRedirect: p.Client.CheckRedirect, Transport: &http.Transport{
+		DialContext:       dialer.DialContext,
+		DisableKeepAlives: true,
+		TLSClientConfig: &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		// The self-signed leaf is authenticated by its Hub-registered Ed25519 key.
 		InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
@@ -318,13 +323,53 @@ func (c *Client) Local(ctx context.Context, st p.ClientState, method, path strin
 			err := c.exchange(ctx, st, parts[1], "GET", "/commands/"+url.PathEscape(parts[2]), nil, &out)
 			return out, err == nil || parts[0] == "private-commands", err
 		}
+		if len(parts) == 3 && parts[0] == "avatars" && parts[1] != "" && len(parts[2]) == 64 {
+			var out json.RawMessage
+			err := c.exchange(ctx, st, parts[1], "GET", "/avatars/"+url.PathEscape(parts[2]), nil, &out)
+			return out, true, err
+		}
+		if len(parts) == 2 && parts[0] == "composer-meta" && parts[1] != "" {
+			q := url.Values{}
+			for _, key := range []string{"agent", "chat", "session", "provider"} {
+				if val := u.Query().Get(key); val != "" {
+					q.Set(key, val)
+				}
+			}
+			var out json.RawMessage
+			err := c.exchange(ctx, st, parts[1], "GET", "/composer-meta?"+q.Encode(), nil, &out)
+			return out, true, err
+		}
+	}
+	if method == http.MethodPut {
+		suffix := strings.TrimPrefix(u.Path, st.SpacePath()+"/")
+		parts := strings.Split(suffix, "/")
+		if len(parts) == 2 && parts[0] == "starred-models" && parts[1] != "" {
+			var out json.RawMessage
+			err := c.exchange(ctx, st, parts[1], http.MethodPut, "/starred-models", body, &out)
+			return out, true, err
+		}
+	}
+	if method == http.MethodPost {
+		suffix := strings.TrimPrefix(u.Path, st.SpacePath()+"/")
+		parts := strings.Split(suffix, "/")
+		if len(parts) == 2 && parts[0] == "attachments" && parts[1] != "" {
+			var out json.RawMessage
+			err := c.exchange(ctx, st, parts[1], http.MethodPost, "/attachments", body, &out)
+			return out, true, err
+		}
 	}
 	if host, ok := strings.CutPrefix(u.Path, st.SpacePath()+"/private-archive/"); ok {
 		if method != http.MethodGet || host == "" || strings.Contains(host, "/") {
 			return nil, true, errors.New("invalid private archive request")
 		}
+		q := url.Values{}
+		for _, key := range []string{"chat", "session", "before", "limit"} {
+			if val := u.Query().Get(key); val != "" {
+				q.Set(key, val)
+			}
+		}
 		var out json.RawMessage
-		err := c.exchange(ctx, st, host, "GET", "/private?"+url.Values{"chat": {u.Query().Get("chat")}}.Encode(), nil, &out)
+		err := c.exchange(ctx, st, host, "GET", "/private?"+q.Encode(), nil, &out)
 		return out, true, err
 	}
 	out, handled := c.TryArchive(ctx, st, method, path)

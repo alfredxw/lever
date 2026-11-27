@@ -89,7 +89,42 @@ func (a *App) ReviewRemote(ctx context.Context, scope model.SharedScope, i p.Int
 	}
 	o := remoteOrigin{scope: scope, intent: i, digest: hash(i)}
 	if i.Kind == "send" || i.Kind == "dispatch_task" {
-		in := model.SendInput{CommandID: "hub:" + hash([]string{scope.HubID, scope.SpaceID, i.ID}), AgentID: i.AgentID, ChatID: i.ChatID, SessionID: i.SessionID, Text: i.Text, WorkingCopyID: i.WorkingCopyID, Operation: i.Operation, Delivery: i.Delivery}
+		in := model.SendInput{
+			CommandID:     "hub:" + hash([]string{scope.HubID, scope.SpaceID, i.ID}),
+			AgentID:       i.AgentID,
+			ChatID:        i.ChatID,
+			SessionID:     i.SessionID,
+			Text:          i.Text,
+			WorkingCopyID: i.WorkingCopyID,
+			Operation:     i.Operation,
+			Delivery:      i.Delivery,
+			AttachmentIDs: i.AttachmentIDs,
+		}
+		if len(i.References) > 0 {
+			in.References = make([]model.Reference, 0, len(i.References))
+			for _, ref := range i.References {
+				in.References = append(in.References, model.Reference{
+					Kind:         ref.Kind,
+					Name:         ref.Name,
+					ID:           ref.ID,
+					Path:         ref.Path,
+					Provider:     ref.Provider,
+					Description:  ref.Description,
+					ArgumentHint: ref.ArgumentHint,
+					Start:        ref.Start,
+					End:          ref.End,
+				})
+			}
+		}
+		if i.Selection != nil && (i.Selection.Provider != "" || i.Selection.Model != "" || i.Selection.Effort != "" || i.Selection.Fast || i.Selection.Permission != "") {
+			in.Selection = &model.Selection{
+				Provider:   i.Selection.Provider,
+				Model:      i.Selection.Model,
+				Effort:     i.Selection.Effort,
+				Fast:       i.Selection.Fast,
+				Permission: i.Selection.Permission,
+			}
+		}
 		if i.ChatID == "" {
 			if i.Private {
 				return empty, invalid("a device-only Chat must be selected locally")

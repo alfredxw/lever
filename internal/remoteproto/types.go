@@ -56,6 +56,68 @@ type Device struct {
 	LastSeen      int64  `json:"lastSeen"`
 	Version       int64  `json:"version"`
 }
+type AvatarSpec struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+	Color string `json:"color,omitempty"`
+}
+type ModelOption struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	ResolvedModel string   `json:"resolvedModel,omitempty"`
+	Efforts       []string `json:"efforts,omitempty"`
+	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	Fast          bool     `json:"fast,omitempty"`
+}
+type ModelSelection struct {
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	Fast       bool   `json:"fast,omitempty"`
+	Permission string `json:"permission,omitempty"`
+}
+type AttachmentRef struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MediaType string `json:"mediaType,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+}
+type AttachmentUpload struct {
+	ChatID  string `json:"chatId,omitempty"`
+	AgentID string `json:"agentId,omitempty"`
+	Name    string `json:"name"`
+	Data    string `json:"data"` // base64-encoded file bytes
+}
+type Reference struct {
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	ID           string `json:"id,omitempty"`
+	Path         string `json:"path,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	Description  string `json:"description,omitempty"`
+	ArgumentHint string `json:"argumentHint,omitempty"`
+	Start        *int   `json:"start,omitempty"`
+	End          *int   `json:"end,omitempty"`
+}
+type SlashCommand struct {
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	ArgumentHint string `json:"argumentHint,omitempty"`
+}
+type ProviderCatalog struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Type     string         `json:"type"`
+	PluginID string         `json:"pluginId,omitempty"`
+	Models   []ModelOption  `json:"models,omitempty"`
+	Commands []SlashCommand `json:"commands,omitempty"`
+}
+type ComposerMeta struct {
+	Providers     []ProviderCatalog   `json:"providers"`
+	StarredModels map[string][]string `json:"starredModels"`
+	Skills        []Reference         `json:"skills"`
+}
 type Group struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -92,52 +154,57 @@ type FileStat struct {
 	Deletions int    `json:"deletions"`
 }
 type Record struct {
-	CanSteer          bool       `json:"canSteer,omitempty"`
-	Files             []FileStat `json:"files,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	WorkingCopyID     string     `json:"workingCopyId,omitempty"`
-	WorkingCopyName   string     `json:"workingCopyName,omitempty"`
-	AnsweredByUserID  string     `json:"answeredByUserId,omitempty"`
-	Avatar            string     `json:"avatar,omitempty"`
-	Description       string     `json:"description,omitempty"`
-	Permission        string     `json:"permission,omitempty"`
-	AcceptDelegations *bool      `json:"acceptDelegations,omitempty"`
-	Private           bool       `json:"private,omitempty"`
-	Kind              string     `json:"kind"`
-	ID               string     `json:"id"`
-	AgentID          string     `json:"agentId,omitempty"`
-	ChatID           string     `json:"chatId,omitempty"`
-	SessionID        string     `json:"sessionId,omitempty"`
-	RunID            string     `json:"runId,omitempty"`
-	TaskID           string     `json:"taskId,omitempty"`
-	DispatchID       string     `json:"dispatchId,omitempty"`
-	Title            string     `json:"title,omitempty"`
-	Status           string     `json:"status,omitempty"`
-	Type             string     `json:"type,omitempty"`
-	Model            string     `json:"model,omitempty"`
-	Provider         string     `json:"provider,omitempty"`
-	Groups           []Group    `json:"groups,omitempty"`
-	Text             string     `json:"text,omitempty"`
-	Items            []Item     `json:"items,omitempty"`
-	Truncated        bool       `json:"truncated,omitempty"`
-	Superseded       bool       `json:"superseded,omitempty"`
-	QueuePaused      bool       `json:"queuePaused,omitempty"`
-	UnreadSequence   int64      `json:"unreadSequence,omitempty"`
-	ReadSequence     int64      `json:"readSequence,omitempty"`
-	ClearedSequence  int64      `json:"clearedSequence,omitempty"`
-	Preview          string     `json:"preview,omitempty"`
-	MessageAt        string     `json:"messageAt,omitempty"`
-	ActiveStatus     string     `json:"activeStatus,omitempty"`
-	PendingCount     int        `json:"pendingCount,omitempty"`
-	ReplyCount       int        `json:"replyCount,omitempty"`
-	SourceRunID      string     `json:"sourceRunId,omitempty"`
-	Sequence         int64      `json:"sequence,omitempty"`
-	CreatedAt        string     `json:"createdAt,omitempty"`
-	UpdatedAt        string     `json:"updatedAt,omitempty"`
-	Questions        []Question `json:"questions,omitempty"`
-	Options          []Option   `json:"options,omitempty"`
-	Answer           *Answer    `json:"answer,omitempty"`
-	AllowOnce        *Answer    `json:"allowOnce,omitempty"`
+	CanSteer          bool          `json:"canSteer,omitempty"`
+	Files             []FileStat    `json:"files,omitempty"`
+	Error             string        `json:"error,omitempty"`
+	WorkingCopyID     string        `json:"workingCopyId,omitempty"`
+	WorkingCopyName   string        `json:"workingCopyName,omitempty"`
+	AnsweredByUserID  string        `json:"answeredByUserId,omitempty"`
+	Avatar            string        `json:"avatar,omitempty"`
+	AvatarSpec        *AvatarSpec   `json:"avatarSpec,omitempty"`
+	Description       string        `json:"description,omitempty"`
+	Permission        string        `json:"permission,omitempty"`
+	AcceptDelegations *bool         `json:"acceptDelegations,omitempty"`
+	Private           bool          `json:"private,omitempty"`
+	Kind              string        `json:"kind"`
+	ID                string        `json:"id"`
+	AgentID           string        `json:"agentId,omitempty"`
+	ChatID            string        `json:"chatId,omitempty"`
+	SessionID         string        `json:"sessionId,omitempty"`
+	RunID             string        `json:"runId,omitempty"`
+	TaskID            string        `json:"taskId,omitempty"`
+	DispatchID        string        `json:"dispatchId,omitempty"`
+	Title             string        `json:"title,omitempty"`
+	Status            string        `json:"status,omitempty"`
+	Type              string        `json:"type,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	Effort            string          `json:"effort,omitempty"`
+	Fast              bool            `json:"fast,omitempty"`
+	Provider          string          `json:"provider,omitempty"`
+	Models            []ModelOption   `json:"models,omitempty"`
+	Groups            []Group         `json:"groups,omitempty"`
+	Attachments       []AttachmentRef `json:"attachments,omitempty"`
+	Text              string        `json:"text,omitempty"`
+	Items             []Item        `json:"items,omitempty"`
+	Truncated         bool          `json:"truncated,omitempty"`
+	Superseded        bool          `json:"superseded,omitempty"`
+	QueuePaused       bool          `json:"queuePaused,omitempty"`
+	UnreadSequence    int64         `json:"unreadSequence,omitempty"`
+	ReadSequence      int64         `json:"readSequence,omitempty"`
+	ClearedSequence   int64         `json:"clearedSequence,omitempty"`
+	Preview           string        `json:"preview,omitempty"`
+	MessageAt         string        `json:"messageAt,omitempty"`
+	ActiveStatus      string        `json:"activeStatus,omitempty"`
+	PendingCount      int           `json:"pendingCount,omitempty"`
+	ReplyCount        int           `json:"replyCount,omitempty"`
+	SourceRunID       string        `json:"sourceRunId,omitempty"`
+	Sequence          int64         `json:"sequence,omitempty"`
+	CreatedAt         string        `json:"createdAt,omitempty"`
+	UpdatedAt         string        `json:"updatedAt,omitempty"`
+	Questions         []Question    `json:"questions,omitempty"`
+	Options           []Option      `json:"options,omitempty"`
+	Answer            *Answer       `json:"answer,omitempty"`
+	AllowOnce         *Answer       `json:"allowOnce,omitempty"`
 }
 type Change struct {
 	Record  `tstype:",extends"`
@@ -287,6 +354,9 @@ type Intent struct {
 	Operation      string            `json:"operation,omitempty"`
 	Delivery       string            `json:"delivery,omitempty"`
 	Text           string            `json:"text,omitempty"`
+	Selection      *ModelSelection   `json:"selection,omitempty"`
+	AttachmentIDs  []string          `json:"attachmentIds,omitempty"`
+	References     []Reference       `json:"references,omitempty"`
 	Answer         *Answer           `json:"answer,omitempty"`
 	Delegation     *DelegationOrigin `json:"delegation,omitempty"`
 	ActorUserID    string            `json:"actorUserId,omitempty"`

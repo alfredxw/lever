@@ -29,7 +29,7 @@ func (h *Host) propose(ctx context.Context, g p.Grant, cmd p.LANCommand) (p.Inbo
 	default:
 		return out, errors.New("unsupported LAN action")
 	}
-	if len(i.Text) > 256<<10 || (i.Kind == "send" && (i.Operation != "main" && i.Operation != "reply" && i.Operation != "topic")) {
+	if len(i.Text) > 256<<10 || len(i.AttachmentIDs) > 8 || len(i.References) > 64 || (i.Kind == "send" && (i.Operation != "main" && i.Operation != "reply" && i.Operation != "topic")) {
 		return out, errors.New("invalid message")
 	}
 	scope := model.SharedScope{HubID: g.HubID, SpaceID: g.SpaceID}

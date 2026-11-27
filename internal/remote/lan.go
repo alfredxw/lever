@@ -1,14 +1,17 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -325,12 +328,19 @@ func (h *Host) handleDirectPair(w http.ResponseWriter, r *http.Request, body []b
 func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	commandID, lookup := strings.CutPrefix(r.URL.Path, "/commands/")
 	lookup = lookup && len(commandID) == 36 && !strings.Contains(commandID, "/")
-	if !(r.Method == http.MethodGet && (r.URL.Path == "/archive" || r.URL.Path == "/private" || r.URL.Path == "/host" || lookup) ||
-		r.Method == http.MethodPost && (r.URL.Path == "/commands" || r.URL.Path == "/read" || r.URL.Path == "/cleared" || r.URL.Path == "/pair" || r.URL.Path == "/unpair")) {
+	avatarID, avatarLookup := strings.CutPrefix(r.URL.Path, "/avatars/")
+	avatarLookup = avatarLookup && len(avatarID) == 64 && !strings.Contains(avatarID, "/")
+	if !(r.Method == http.MethodGet && (r.URL.Path == "/archive" || r.URL.Path == "/private" || r.URL.Path == "/host" || r.URL.Path == "/composer-meta" || lookup || avatarLookup) ||
+		r.Method == http.MethodPut && r.URL.Path == "/starred-models" ||
+		r.Method == http.MethodPost && (r.URL.Path == "/commands" || r.URL.Path == "/read" || r.URL.Path == "/cleared" || r.URL.Path == "/attachments" || r.URL.Path == "/pair" || r.URL.Path == "/unpair")) {
 		http.NotFound(w, r)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, p.MaxFrame))
+	maxBody := int64(p.MaxFrame)
+	if r.Method == http.MethodPost && r.URL.Path == "/attachments" {
+		maxBody = 12 << 20
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
 		http.Error(w, "request too large", 413)
 		return
@@ -423,6 +433,36 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(true)
 		return
 	}
+	if r.Method == http.MethodGet && avatarLookup {
+		var allowed bool
+		err := h.App.Store.DB.QueryRowContext(r.Context(), `SELECT EXISTS(
+			SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
+			WHERE coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND json_extract(a.data,'$.avatar.kind')='image'
+			AND json_extract(a.data,'$.avatar.value')=?3
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			g.HubID, g.SpaceID, avatarID).Scan(&allowed)
+		if err != nil || !allowed {
+			http.NotFound(w, r)
+			return
+		}
+		f, mediaType, err := h.App.OpenAvatarImage(avatarID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		raw, err := io.ReadAll(io.LimitReader(f, p.MaxFrame))
+		if err != nil {
+			http.Error(w, "avatar unavailable", 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"mediaType": mediaType,
+			"data":      base64.StdEncoding.EncodeToString(raw),
+		})
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/host" {
 		var version int64
 		_ = h.App.Store.DB.QueryRowContext(r.Context(), "SELECT version FROM remote_memberships WHERE hub=? AND space=?", g.HubID, g.SpaceID).Scan(&version)
@@ -440,6 +480,52 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 			DesktopActive: h.App.DesktopActive(),
 			Version:       version,
 		})
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/composer-meta" {
+		meta, err := h.composerMeta(r.Context(), g, r.URL.Query().Get("agent"), r.URL.Query().Get("chat"), r.URL.Query().Get("session"), r.URL.Query().Get("provider"))
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(meta)
+		return
+	}
+	if r.Method == http.MethodPut && r.URL.Path == "/starred-models" {
+		var in map[string][]string
+		if err = p.Decode(body, &in); err != nil {
+			http.Error(w, "invalid starred models", 400)
+			return
+		}
+		if m.UserID != g.UserID {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		saved, err := h.saveStarredModels(r.Context(), in)
+		if err != nil {
+			http.Error(w, "failed to save starred models", 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(saved)
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/attachments" {
+		var in p.AttachmentUpload
+		if err = p.Decode(body, &in); err != nil || strings.TrimSpace(in.Name) == "" || in.Data == "" {
+			http.Error(w, "invalid attachment upload", 400)
+			return
+		}
+		rawBytes, err := base64.StdEncoding.DecodeString(in.Data)
+		if err != nil || len(rawBytes) == 0 {
+			http.Error(w, "invalid attachment data", 400)
+			return
+		}
+		ref, err := h.uploadScopeAttachment(r.Context(), g, in.ChatID, in.AgentID, in.Name, rawBytes)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(ref)
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -478,8 +564,16 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/private" {
 		controller = g.Controller.ID
 	}
-	if controller == "" && r.URL.Query().Get("sync") == "1" {
-		page, err := h.archivePage(r.Context(), m, r.URL.Query().Get("chat"), p.ReadCursor(r.URL.Query()))
+	q := r.URL.Query()
+	chatID := q.Get("chat")
+	sessionID := q.Get("session")
+	beforeSeq, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit > 200 {
+		limit = 200
+	}
+	if controller == "" && q.Get("sync") == "1" && sessionID == "" && beforeSeq == 0 && limit == 0 {
+		page, err := h.archivePage(r.Context(), m, chatID, p.ReadCursor(q))
 		if err != nil {
 			http.Error(w, "archive unavailable", 500)
 			return
@@ -487,7 +581,7 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(page)
 		return
 	}
-	records, err := lanArchive(r.Context(), h.App.Store, m, r.URL.Query().Get("chat"), controller)
+	records, err := lanArchivePaged(r.Context(), h.App.Store, m, chatID, controller, sessionID, beforeSeq, limit)
 	if err != nil {
 		http.Error(w, "archive unavailable", 500)
 		return
@@ -496,12 +590,86 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 }
 
 func lanArchive(ctx context.Context, s *store.Store, m p.Membership, chat, controller string) ([]p.Record, error) {
+	return lanArchivePaged(ctx, s, m, chat, controller, "", 0, 0)
+}
+
+func lanArchivePaged(ctx context.Context, s *store.Store, m p.Membership, chat, controller, sessionID string, beforeSeq int64, limit int) ([]p.Record, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	if chat != "" && (sessionID != "" || limit > 0) {
+		return readLANArchivePaged(ctx, tx, m, chat, controller, sessionID, beforeSeq, limit)
+	}
 	return readLANArchive(ctx, tx, m, chat, controller)
+}
+
+func readLANArchivePaged(ctx context.Context, tx *sql.Tx, m p.Membership, chat, controller, sessionID string, beforeSeq int64, limit int) ([]p.Record, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	scope := sharedChatCond("?1", "?2")
+	args := []any{m.Hub.ID, m.SpaceID, chat}
+	ctrlIdx := ""
+	if controller != "" {
+		ctrlIdx = "?4"
+		scope = privateChatCond("?1", "?2", ctrlIdx)
+		args = append(args, controller)
+	}
+	sessArg := fmt.Sprintf("?%d", len(args)+1)
+	args = append(args, sessionID)
+	beforeArg := fmt.Sprintf("?%d", len(args)+1)
+	args = append(args, beforeSeq)
+	limitArg := fmt.Sprintf("?%d", len(args)+1)
+	args = append(args, limit)
+
+	var query string
+	if sessionID != "" {
+		query = "WITH allowed AS (SELECT c.id FROM chats c WHERE " + scope + " AND c.id=?3), " +
+			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id=" + sessArg + " AND (" + beforeArg + "=0 OR sequence<" + beforeArg + ") ORDER BY sequence DESC LIMIT " + limitArg + ") " +
+			"SELECT 'session',id FROM sessions WHERE chat_id IN allowed AND id=" + sessArg + " " +
+			"UNION ALL SELECT 'run',id FROM page_runs " +
+			"UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN allowed AND json_extract(data,'$.sessionId')=" + sessArg + " AND (status='pending' OR json_extract(data,'$.runId') IN (SELECT id FROM page_runs))"
+	} else {
+		query = "WITH allowed AS (SELECT c.id FROM chats c WHERE " + scope + " AND c.id=?3), " +
+			"main_sess AS (SELECT id FROM sessions WHERE chat_id IN allowed AND kind='main'), " +
+			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id IN (SELECT id FROM main_sess) AND (" + beforeArg + "=0 OR sequence<" + beforeArg + ") ORDER BY sequence DESC LIMIT " + limitArg + ") " +
+			"SELECT 'chat',id FROM allowed " +
+			"UNION ALL SELECT 'session',id FROM sessions WHERE chat_id IN allowed " +
+			"UNION ALL SELECT 'run',id FROM page_runs " +
+			"UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN allowed AND (status='pending' OR json_extract(data,'$.runId') IN (SELECT id FROM page_runs))"
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	var keys []object
+	for rows.Next() {
+		var o object
+		if err = rows.Scan(&o.kind, &o.id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		keys = append(keys, o)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	records := []p.Record{}
+	for _, o := range keys {
+		rec, err := project(ctx, tx, m, o, controller)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
 }
 
 func readLANArchive(ctx context.Context, tx *sql.Tx, m p.Membership, chat, controller string) ([]p.Record, error) {
@@ -596,4 +764,183 @@ func (h *Host) markScopeSessionsCleared(ctx context.Context, hubID, spaceID, con
 		}
 	}
 	return h.App.MarkSessionsCleared(ctx, allowed)
+}
+
+func (h *Host) loadStarredModels(ctx context.Context) map[string][]string {
+	out := map[string][]string{}
+	var raw string
+	if err := h.App.Store.DB.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='starred_models'").Scan(&raw); err == nil && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &out)
+	}
+	if out == nil {
+		out = map[string][]string{}
+	}
+	return out
+}
+
+func (h *Host) saveStarredModels(ctx context.Context, in map[string][]string) (map[string][]string, error) {
+	cleaned := map[string][]string{}
+	for prov, ids := range in {
+		prov = strings.TrimSpace(prov)
+		if prov == "" || len(cleaned) >= 64 {
+			continue
+		}
+		seen := map[string]bool{}
+		list := make([]string, 0, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id == "" || seen[id] || len(list) >= 128 {
+				continue
+			}
+			seen[id] = true
+			list = append(list, id)
+		}
+		if len(list) > 0 {
+			cleaned[prov] = list
+		}
+	}
+	err := h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec("INSERT INTO settings(key,value) VALUES('starred_models',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", store.JSON(cleaned))
+		return err
+	})
+	return cleaned, err
+}
+
+func (h *Host) composerMeta(ctx context.Context, g p.Grant, agentID, chatID, sessionID, runtimeOverride string) (p.ComposerMeta, error) {
+	meta := p.ComposerMeta{
+		Providers:     []p.ProviderCatalog{},
+		StarredModels: h.loadStarredModels(ctx),
+		Skills:        []p.Reference{},
+	}
+
+	providers, err := store.List[model.Provider](ctx, h.App.Store.DB, "SELECT data FROM providers ORDER BY rowid")
+	if err != nil {
+		return meta, err
+	}
+	for _, prov := range providers {
+		if !prov.Enabled || prov.ID == "" {
+			continue
+		}
+		hidden := map[string]bool{}
+		for _, hm := range prov.HiddenModels {
+			hidden[hm] = true
+		}
+		pc := p.ProviderCatalog{
+			ID:       prov.ID,
+			Name:     prov.Name,
+			Type:     prov.Type,
+			PluginID: prov.PluginID,
+		}
+		if pc.Name == "" {
+			pc.Name = prov.ID
+		}
+		if cat, err := store.Get[model.Catalog](ctx, h.App.Store.DB, "SELECT data FROM provider_catalogs WHERE provider_id=? ORDER BY length(data) DESC LIMIT 1", prov.ID); err == nil {
+			for _, mInfo := range cat.Models {
+				if mInfo.ID == "" || hidden[mInfo.ID] {
+					continue
+				}
+				name, _ := clipped(mInfo.Name, 128)
+				pc.Models = append(pc.Models, p.ModelOption{
+					ID:            mInfo.ID,
+					Name:          name,
+					ResolvedModel: mInfo.ResolvedModel,
+					Efforts:       mInfo.Efforts,
+					DefaultEffort: mInfo.DefaultEffort,
+					Fast:          mInfo.Fast,
+				})
+			}
+			for _, cmd := range cat.Commands {
+				if cmd.Name == "" {
+					continue
+				}
+				desc, _ := clipped(cmd.Description, 180)
+				hint, _ := clipped(cmd.ArgumentHint, 120)
+				pc.Commands = append(pc.Commands, p.SlashCommand{
+					Name:         cmd.Name,
+					Description:  desc,
+					ArgumentHint: hint,
+				})
+			}
+		}
+		meta.Providers = append(meta.Providers, pc)
+	}
+
+	// Resolve Agent skills when a visible agent/chat is supplied
+	resolvedAgent := agentID
+	if chatID != "" {
+		var visible bool
+		query := "SELECT EXISTS(SELECT 1 FROM chats c WHERE c.id=?1 AND ((" + sharedChatCond("?2", "?3") + ") OR (" + privateChatCond("?2", "?3", "?4") + ")))"
+		if err := h.App.Store.DB.QueryRowContext(ctx, query, chatID, g.HubID, g.SpaceID, g.Controller.ID).Scan(&visible); err != nil || !visible {
+			return meta, nil
+		}
+		_ = h.App.Store.DB.QueryRowContext(ctx, "SELECT coalesce(json_extract(data,'$.agentId'),'') FROM chats WHERE id=?", chatID).Scan(&resolvedAgent)
+	} else if resolvedAgent != "" {
+		var visible bool
+		if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
+			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			g.HubID, g.SpaceID, resolvedAgent).Scan(&visible); err != nil || !visible {
+			return meta, nil
+		}
+	}
+
+	if resolvedAgent != "" {
+		runtimeID := runtimeOverride
+		if runtimeID == "" {
+			_ = h.App.Store.DB.QueryRowContext(ctx, "SELECT coalesce(json_extract(data,'$.profile.provider'),'') FROM agents WHERE id=?", resolvedAgent).Scan(&runtimeID)
+		}
+		if runtimeID != "" {
+			sCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			refs, err := h.App.Suggestions(sCtx, chatID, resolvedAgent, sessionID, "", "slash", runtimeID, "")
+			cancel()
+			if err == nil {
+				for _, ref := range refs {
+					desc, _ := clipped(ref.Description, 180)
+					hint, _ := clipped(ref.ArgumentHint, 120)
+					meta.Skills = append(meta.Skills, p.Reference{
+						Kind:         ref.Kind,
+						Name:         ref.Name,
+						ID:           ref.ID,
+						Path:         ref.Path,
+						Provider:     ref.Provider,
+						Description:  desc,
+						ArgumentHint: hint,
+					})
+				}
+			}
+		}
+	}
+
+	return meta, nil
+}
+
+func (h *Host) uploadScopeAttachment(ctx context.Context, g p.Grant, chatID, agentID, name string, raw []byte) (p.AttachmentRef, error) {
+	var out p.AttachmentRef
+	if chatID != "" {
+		var visible bool
+		query := "SELECT EXISTS(SELECT 1 FROM chats c WHERE c.id=?1 AND ((" + sharedChatCond("?2", "?3") + ") OR (" + privateChatCond("?2", "?3", "?4") + ")))"
+		if err := h.App.Store.DB.QueryRowContext(ctx, query, chatID, g.HubID, g.SpaceID, g.Controller.ID).Scan(&visible); err != nil || !visible {
+			return out, errors.New("chat is not accessible")
+		}
+		att, err := h.App.Upload(ctx, chatID, name, bytes.NewReader(raw))
+		if err != nil {
+			return out, err
+		}
+		return p.AttachmentRef{ID: att.ID, Name: att.Name, MediaType: att.MediaType, Size: att.Size}, nil
+	}
+	if agentID != "" {
+		var visible bool
+		if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
+			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
+			g.HubID, g.SpaceID, agentID).Scan(&visible); err != nil || !visible {
+			return out, errors.New("agent is not accessible")
+		}
+		att, err := h.App.UploadDraft(ctx, agentID, name, bytes.NewReader(raw))
+		if err != nil {
+			return out, err
+		}
+		return p.AttachmentRef{ID: att.ID, Name: att.Name, MediaType: att.MediaType, Size: att.Size}, nil
+	}
+	return out, errors.New("chatId or agentId required")
 }

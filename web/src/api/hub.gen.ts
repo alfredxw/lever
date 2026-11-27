@@ -50,6 +50,68 @@ export interface Device extends Identity {
   lastSeen: number /* int64 */;
   version: number /* int64 */;
 }
+export interface AvatarSpec {
+  kind: string;
+  value?: string;
+  color?: string;
+}
+export interface ModelOption {
+  id: string;
+  name?: string;
+  description?: string;
+  resolvedModel?: string;
+  efforts?: string[];
+  defaultEffort?: string;
+  fast?: boolean;
+}
+export interface ModelSelection {
+  provider?: string;
+  model?: string;
+  effort?: string;
+  fast?: boolean;
+  permission?: string;
+}
+export interface AttachmentRef {
+  id: string;
+  name: string;
+  mediaType?: string;
+  size?: number /* int64 */;
+}
+export interface AttachmentUpload {
+  chatId?: string;
+  agentId?: string;
+  name: string;
+  data: string; // base64-encoded file bytes
+}
+export interface Reference {
+  kind: string;
+  name: string;
+  id?: string;
+  path?: string;
+  provider?: string;
+  description?: string;
+  argumentHint?: string;
+  start?: number /* int */;
+  end?: number /* int */;
+}
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+}
+export interface ProviderCatalog {
+  id: string;
+  name: string;
+  type: string;
+  pluginId?: string;
+  models?: ModelOption[];
+  commands?: SlashCommand[];
+}
+export interface ComposerMeta {
+  providers: ProviderCatalog[];
+  starredModels: { [key: string]: string[]};
+  skills: Reference[];
+}
 export interface Group {
   id: string;
   name: string;
@@ -94,6 +156,7 @@ export interface Record {
   workingCopyName?: string;
   answeredByUserId?: string;
   avatar?: string;
+  avatarSpec?: AvatarSpec;
   description?: string;
   permission?: string;
   acceptDelegations?: boolean;
@@ -110,8 +173,12 @@ export interface Record {
   status?: string;
   type?: string;
   model?: string;
+  effort?: string;
+  fast?: boolean;
   provider?: string;
+  models?: ModelOption[];
   groups?: Group[];
+  attachments?: AttachmentRef[];
   text?: string;
   items?: Item[];
   truncated?: boolean;
@@ -281,6 +348,9 @@ export interface Intent {
   operation?: string;
   delivery?: string;
   text?: string;
+  selection?: ModelSelection;
+  attachmentIds?: string[];
+  references?: Reference[];
   answer?: Answer;
   delegation?: DelegationOrigin;
   actorUserId?: string;

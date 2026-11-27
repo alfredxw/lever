@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
+import { api } from "@/api/client";
 import type { Agent, Selection } from "@/api/types.gen";
 import {
   isMeaningfulEffortSource,
@@ -132,7 +133,66 @@ function parseStarredModels(raw: string | null): Set<string> {
   }
 }
 
+let starredSyncStarted = false;
+
+function readAllLocalStarredModels(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (typeof localStorage === "undefined") return out;
+  const prefix = "lever:starred-models:";
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(prefix)) continue;
+    const provider = key.slice(prefix.length);
+    const list = [...parseStarredModels(localStorage.getItem(key))];
+    if (provider && list.length) out[provider] = list;
+  }
+  return out;
+}
+
+function pushAllStarredModelsToServer() {
+  if (typeof window === "undefined") return;
+  void api("/settings/starred-models", readAllLocalStarredModels(), "PUT").catch(
+    () => undefined,
+  );
+}
+
+function ensureStarredModelsSynced() {
+  if (starredSyncStarted || typeof window === "undefined") return;
+  starredSyncStarted = true;
+  void api<Record<string, string[]>>("/settings/starred-models")
+    .then((remote) => {
+      const local = readAllLocalStarredModels();
+      let changedLocal = false;
+      let needsPush = false;
+      const merged: Record<string, string[]> = { ...local };
+      for (const [provider, ids] of Object.entries(remote ?? {})) {
+        const set = new Set(merged[provider] ?? []);
+        const before = set.size;
+        for (const id of ids) set.add(id);
+        if (set.size > before) {
+          merged[provider] = [...set];
+          localStorage.setItem(
+            starredModelsKey(provider),
+            JSON.stringify(merged[provider]),
+          );
+          changedLocal = true;
+        }
+      }
+      for (const [provider, ids] of Object.entries(merged)) {
+        const remoteSet = new Set(remote?.[provider] ?? []);
+        if (ids.some((id) => !remoteSet.has(id))) {
+          needsPush = true;
+          break;
+        }
+      }
+      if (changedLocal) changes.dispatchEvent(new Event("change"));
+      if (needsPush) pushAllStarredModelsToServer();
+    })
+    .catch(() => undefined);
+}
+
 export function useStarredModels(provider: string) {
+  ensureStarredModelsSynced();
   const raw = useStoredPreference(starredModelsKey(provider));
   const starred = useMemo(() => parseStarredModels(raw), [raw]);
   return {
@@ -142,6 +202,7 @@ export function useStarredModels(provider: string) {
 }
 
 export function useStarredModelsByProvider(providers: string[]) {
+  ensureStarredModelsSynced();
   const raw = useSyncExternalStore(subscribe, () =>
     JSON.stringify(
       providers.map((id) => [id, localStorage.getItem(starredModelsKey(id))]),
@@ -161,6 +222,7 @@ export function toggleModelStar(provider: string, model: string) {
   if (next.has(model)) next.delete(model);
   else next.add(model);
   savePreference(key, [...next]);
+  pushAllStarredModelsToServer();
 }
 
 export function rememberModel(

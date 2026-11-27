@@ -110,8 +110,13 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			return r, err
 		}
 		r.Title, _ = clipped(a.Name, 512)
-		if a.Avatar != nil && (a.Avatar.Kind == "emoji" || a.Avatar.Kind == "monogram") {
-			r.Avatar, _ = clipped(a.Avatar.Value, 32)
+		if a.Avatar != nil {
+			val, _ := clipped(a.Avatar.Value, 128)
+			col, _ := clipped(a.Avatar.Color, 64)
+			r.AvatarSpec = &p.AvatarSpec{Kind: a.Avatar.Kind, Value: val, Color: col}
+			if a.Avatar.Kind == "emoji" || a.Avatar.Kind == "monogram" {
+				r.Avatar, _ = clipped(a.Avatar.Value, 32)
+			}
 		}
 		r.Description, _ = clipped(a.Profile.Description, 512)
 		r.Provider = a.Profile.Provider
@@ -129,6 +134,33 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 			}
 		}
 		r.Permission = provider.NormalizePermissionMode(providerType, effectivePermission)
+		if a.Profile.Provider != "" {
+			hidden := map[string]bool{}
+			if prov, err := store.Get[model.Provider](ctx, tx, "SELECT data FROM providers WHERE id=?", a.Profile.Provider); err == nil {
+				for _, h := range prov.HiddenModels {
+					hidden[h] = true
+				}
+			}
+			if cat, err := store.Get[model.Catalog](ctx, tx, "SELECT data FROM provider_catalogs WHERE provider_id=? ORDER BY length(data) DESC LIMIT 1", a.Profile.Provider); err == nil {
+				for _, mInfo := range cat.Models {
+					if mInfo.ID == "" || hidden[mInfo.ID] {
+						continue
+					}
+					if len(r.Models) >= 48 {
+						break
+					}
+					name, _ := clipped(mInfo.Name, 128)
+					r.Models = append(r.Models, p.ModelOption{
+						ID:            mInfo.ID,
+						Name:          name,
+						ResolvedModel: mInfo.ResolvedModel,
+						Efforts:       mInfo.Efforts,
+						DefaultEffort: mInfo.DefaultEffort,
+						Fast:          mInfo.Fast,
+					})
+				}
+			}
+		}
 		if !a.Profile.CanAcceptDelegations() {
 			accept := false
 			r.AcceptDelegations = &accept
@@ -170,6 +202,10 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		r.SourceRunID = s.SourceRunID
 		r.CreatedAt = s.CreatedAt
 		r.QueuePaused = s.QueuePaused
+		r.Provider = s.Selection.Provider
+		r.Model = s.Selection.Model
+		r.Effort = s.Selection.Effort
+		r.Fast = s.Selection.Fast
 		var preview, messageAt, activityTitle string
 		if err = tx.QueryRow(`SELECT
 			coalesce(json_extract(activity,'$.unreadSequence'),0),
@@ -202,6 +238,19 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		r.AgentID = run.AgentID
 		r.ChatID = run.ChatID
 		r.SessionID = run.SessionID
+		r.Provider = run.Selection.Provider
+		r.Model = run.Selection.Model
+		r.Effort = run.Selection.Effort
+		r.Fast = run.Selection.Fast
+		for _, att := range run.Attachments {
+			name, _ := clipped(att.Name, 256)
+			r.Attachments = append(r.Attachments, p.AttachmentRef{
+				ID:        att.ID,
+				Name:      name,
+				MediaType: att.MediaType,
+				Size:      att.Size,
+			})
+		}
 		r.CanSteer = run.CanSteer || run.SteerPending
 		r.Status = run.Status
 		r.Superseded = run.Superseded

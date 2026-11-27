@@ -525,6 +525,43 @@ func (s *Server) routes(mux *http.ServeMux) {
 		v, err := a.SavePermissionSettings(r.Context(), in)
 		respond(w, v, err)
 	})
+	mux.HandleFunc("GET /api/settings/starred-models", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string][]string{}
+		var raw string
+		if err := a.Store.DB.QueryRowContext(r.Context(), "SELECT value FROM settings WHERE key='starred_models'").Scan(&raw); err == nil && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &out)
+		}
+		respond(w, out, nil)
+	})
+	mux.HandleFunc("PUT /api/settings/starred-models", func(w http.ResponseWriter, r *http.Request) {
+		var in map[string][]string
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		cleaned := map[string][]string{}
+		for prov, ids := range in {
+			if prov == "" || len(cleaned) >= 64 {
+				continue
+			}
+			seen := map[string]bool{}
+			list := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if id != "" && !seen[id] && len(list) < 128 {
+					seen[id] = true
+					list = append(list, id)
+				}
+			}
+			if len(list) > 0 {
+				cleaned[prov] = list
+			}
+		}
+		err := a.Store.Write(r.Context(), func(tx *sql.Tx) error {
+			_, err := tx.Exec("INSERT INTO settings(key,value) VALUES('starred_models',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", store.JSON(cleaned))
+			return err
+		})
+		respond(w, cleaned, err)
+	})
 	mux.HandleFunc("GET /api/delegation/remote-targets", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
