@@ -216,3 +216,108 @@ func TestDetachReadyWriterHelper(t *testing.T) {
 	writeRawStdout("raw after close\n")
 	os.Exit(0)
 }
+
+func TestConnectDesktopHandsOffVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	const address = "127.0.0.1:0"
+
+	prevVersion := DesktopVersion
+	prevLauncher := launchDesktopBackend
+	t.Cleanup(func() {
+		DesktopVersion = prevVersion
+		launchDesktopBackend = prevLauncher
+	})
+
+	startInProcess := func(ctx context.Context, version string) (<-chan error, func()) {
+		DesktopVersion = version
+		ready, report := io.Pipe()
+		done := make(chan error, 1)
+		go func() {
+			defer report.Close()
+			done <- ServeDesktop(ctx, dir, address, "", report)
+		}()
+		var startup desktopStartup
+		if err := json.NewDecoder(ready).Decode(&startup); err != nil || startup.Error != "" {
+			t.Fatalf("start backend %s: err=%v startup=%+v", version, err, startup)
+		}
+		_ = ready.Close()
+		return done, func() {
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("backend %s exited with error: %v", version, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Errorf("backend %s did not exit", version)
+			}
+		}
+	}
+
+	oldDone, waitOld := startInProcess(t.Context(), "0.1.0")
+	var newWait func()
+	launched := false
+	launchDesktopBackend = func(ctx context.Context, _, _, _ string, _ *http.Client) error {
+		launched = true
+		_, newWait = startInProcess(t.Context(), "0.2.0")
+		return nil
+	}
+
+	DesktopVersion = "0.2.0"
+	desktop, err := ConnectDesktop(dir, address, "", false)
+	if err != nil {
+		t.Fatalf("ConnectDesktop handoff failed: %v", err)
+	}
+	if !launched {
+		t.Fatal("expected ConnectDesktop to launch a fresh backend for version mismatch")
+	}
+	if desktop.Version != "0.2.0" {
+		t.Fatalf("attached version = %q, want 0.2.0", desktop.Version)
+	}
+	select {
+	case err := <-oldDone:
+		if err != nil {
+			t.Fatalf("old backend exited with error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old backend did not exit during handoff")
+	}
+	// Close is idempotent.
+	desktop.Close()
+	desktop.Close()
+	if newWait != nil {
+		newWait()
+	}
+	_ = waitOld
+}
+
+func TestConnectDesktopPreservesResidentBackendOnVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	prevVersion := DesktopVersion
+	prevLauncher := launchDesktopBackend
+	t.Cleanup(func() {
+		DesktopVersion = prevVersion
+		launchDesktopBackend = prevLauncher
+	})
+
+	DesktopVersion = "0.1.0"
+	server, err := Start(dir, "127.0.0.1:0", "")
+	if err != nil {
+		t.Fatalf("start resident server: %v", err)
+	}
+	t.Cleanup(func() { _ = Stop(server) })
+
+	launchDesktopBackend = func(context.Context, string, string, string, *http.Client) error {
+		t.Fatal("ConnectDesktop must not replace a resident CLI backend")
+		return nil
+	}
+
+	DesktopVersion = "0.2.0"
+	desktop, err := ConnectDesktop(dir, "127.0.0.1:0", "", false)
+	if err != nil {
+		t.Fatalf("attach resident backend: %v", err)
+	}
+	defer desktop.Close()
+	if !desktop.resident {
+		t.Fatal("expected resident flag on desktop pairing")
+	}
+}

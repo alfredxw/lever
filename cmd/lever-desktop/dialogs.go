@@ -16,8 +16,12 @@ import (
 type Dialogs struct{}
 
 func (*Dialogs) ShowAbout() {
+	version := mygo.App.Version()
+	if version == "" {
+		version = "dev"
+	}
 	mygo.App.ShowAboutPanel(mygo.AboutPanelOptions{
-		ApplicationName: mygo.App.Name(), ApplicationVersion: mygo.App.Version(),
+		ApplicationName: mygo.App.Name(), ApplicationVersion: version,
 	})
 }
 

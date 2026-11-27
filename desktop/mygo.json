@@ -7,6 +7,21 @@
   "main": "../cmd/lever-desktop",
   "bindings": "../web/src/api/desktop.gen.ts",
   "out": "dist",
-  "macos": { "minimumSystemVersion": "12.0", "category": "public.app-category.developer-tools", "infoPlist": {"NSLocalNetworkUsageDescription": "发现并连接已授权的 Lever 设备", "NSBonjourServices": ["_lever._tcp"]} },
+  "updates": {
+    "publicKey": "Q6Sw5dV9CeQBxlGXN8fwHw9MH2ntEtFSjtjJVzvO3zg=",
+    "github": "alfredxw/lever",
+    "changelog": "../CHANGELOG.md"
+  },
+  "macos": {
+    "minimumSystemVersion": "12.0",
+    "category": "public.app-category.developer-tools",
+    "notarize": {
+      "keychainProfile": "lever-notary"
+    },
+    "infoPlist": {
+      "NSLocalNetworkUsageDescription": "发现并连接已授权的 Lever 设备",
+      "NSBonjourServices": ["_lever._tcp"]
+    }
+  },
   "windows": {}
 }

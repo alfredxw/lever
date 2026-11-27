@@ -24,6 +24,7 @@ export function DesktopTitlebar({
   onFind,
   onToggleSidebar,
   onOpenSettings,
+  onCheckForUpdates,
 }: {
   dark: boolean;
   sidebarOpen: boolean;
@@ -33,6 +34,7 @@ export function DesktopTitlebar({
   onFind?: (trigger: HTMLElement | null) => void;
   onToggleSidebar?: () => void;
   onOpenSettings: () => void;
+  onCheckForUpdates?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { preferences } = usePreferences();
@@ -179,6 +181,14 @@ export function DesktopTitlebar({
                 {t("titlebar.guide")}
               </a>
             </Menubar.Item>
+            {onCheckForUpdates && (
+              <Menubar.Item
+                className="desktop-menu-item"
+                onSelect={onCheckForUpdates}
+              >
+                {t("titlebar.checkForUpdates")}
+              </Menubar.Item>
+            )}
             <Menubar.Item
               className="desktop-menu-item"
               onSelect={() => {

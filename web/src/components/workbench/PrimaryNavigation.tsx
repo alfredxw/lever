@@ -236,6 +236,7 @@ type NavigationProps = {
   page: PrimaryPage;
   providers: ProviderInfo[];
   taskAlert?: boolean;
+  settingsAlert?: boolean;
   onPreview: (page: PrimaryPage) => void;
   onAgents: () => void;
   onTasks: () => void;
@@ -291,6 +292,7 @@ function PrimaryNavigation({
   page,
   providers,
   taskAlert = false,
+  settingsAlert = false,
   onPreview,
   onAgents,
   onTasks,
@@ -398,6 +400,12 @@ function PrimaryNavigation({
       >
         <Settings size={18} strokeWidth={1.6} />
         <span>{t("nav.settings")}</span>
+        {settingsAlert && (
+          <span
+            className="navigation-item-dot"
+            aria-label={t("settings.updatesAvailableDot")}
+          />
+        )}
       </button>
       <div
         className="navigation-resize"

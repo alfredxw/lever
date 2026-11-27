@@ -1732,6 +1732,7 @@ export const enUS = {
   "titlebar.help": "Help",
   "titlebar.fullscreen": "Toggle full screen",
   "titlebar.guide": "User guide",
+  "titlebar.checkForUpdates": "Check for Updates…",
   "titlebar.about": "About Lever",
   "usage.backendUpdate":
     "This backend cannot read agy usage. After active runs finish, quit and reopen Lever with an up-to-date agy CLI.",
@@ -2090,6 +2091,55 @@ export const enUS = {
   "settings.noMatches": "No matching settings",
   "settings.general": "General",
   "settings.remoteDevices": "Remote devices",
+  "settings.updates": "Updates",
+  "settings.updatesVersion": "Application version",
+  "settings.updatesDescription":
+    "Check for and install signed updates from GitHub Releases.",
+  "settings.updatesDisabledDev":
+    "Automatic updates are unavailable in development builds.",
+  "settings.updatesDisabledUnwritable":
+    "The installation folder is not writable. Move Lever to a writable Applications folder to update.",
+  "settings.updatesChecking": "Checking for updates…",
+  "settings.updatesCheckingAction": "Checking…",
+  "settings.updatesUpToDate": "You are on the latest version.",
+  "settings.updatesUpToDateChecked":
+    "You are on the latest version · Last checked {{time}}",
+  "settings.updatesLastChecked": "Last checked {{time}}",
+  "settings.updatesAvailable":
+    "Version {{version}} is available to download and install.",
+  "settings.updatesAvailableDot": "Desktop update available",
+  "settings.updatesDownloading": "Downloading {{version}}…",
+  "settings.updatesDownloadingProgress":
+    "Downloading {{version}} · {{percent}}% ({{downloaded}} / {{total}})",
+  "settings.updatesInstalling": "Verifying signature and preparing {{version}}…",
+  "settings.updatesPreparing": "Preparing…",
+  "settings.updatesReady":
+    "Version {{version}} is ready. Restart to finish updating (active runs stay alive).",
+  "settings.updatesReadyBadge": "{{version}} ready",
+  "settings.updatesErrorHint":
+    "Could not complete the update check or download. Review the error below and try again.",
+  "settings.updatesCheck": "Check for updates",
+  "settings.updatesDownload": "Download update",
+  "settings.updatesRetryDownload": "Retry download",
+  "settings.updatesSkip": "Skip version",
+  "settings.updatesRestart": "Restart to update",
+  "settings.updatesRestartBusy":
+    "A run is still starting up. Wait a moment and try restarting again.",
+  "settings.updatesReleaseNotes": "Release notes for {{version}}",
+  "settings.updatesPreferences": "Update preferences",
+  "settings.updatesAutoCheck": "Automatically check for updates",
+  "settings.updatesAutoCheckDescription":
+    "Check in the background after launch and periodically while Lever is running.",
+  "settings.updatesAutoDownload": "Download updates in the background",
+  "settings.updatesAutoDownloadDescription":
+    "Automatically download and verify new versions so they apply on restart or next launch.",
+  "settings.updatesPrereleases": "Include pre-release versions",
+  "settings.updatesPrereleasesDescription":
+    "Receive beta and release-candidate builds. Turning this off waits for the next stable release.",
+  "settings.updatesToastReadyTitle": "Lever {{version}} is ready",
+  "settings.updatesToastReadyDescription":
+    "Restart Lever to finish installing the update.",
+  "settings.updatesView": "View",
   "settings.storage": "Storage",
   "settings.archivedAgents": "Archived Agents",
   "settings.archivedAgentsDescription":

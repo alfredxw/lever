@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,16 +24,25 @@ import (
 )
 
 type Desktop struct {
-	URL     string
-	PairURL string
-	client  *http.Client
-	lease   io.Closer
+	URL      string
+	PairURL  string
+	Version  string
+	resident bool
+	client   *http.Client
+	lease    io.Closer
+	close    sync.Once
 }
 
-var errDesktopStopping = errors.New("Lever is shutting down")
+var (
+	errDesktopStopping      = errors.New("Lever is shutting down")
+	launchDesktopBackend    = launchDesktopServer
+	versionHandoffTimeout   = 10 * time.Second
+)
 
 // ConnectDesktop normally reattaches to the running backend. An explicit
 // restart requires a successful startup from this executable before attaching.
+// Packaged builds also hand off automatically when the attached desktop backend
+// belongs to a different version (for example after an auto-update).
 func ConnectDesktop(dir, address, devOrigin string, fresh bool) (*Desktop, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
@@ -67,7 +78,19 @@ func ConnectDesktop(dir, address, devOrigin string, fresh bool) (*Desktop, error
 	for !fresh {
 		desktop, err := attachDesktop(client, query)
 		if err == nil {
-			return desktop, nil
+			if DesktopVersion == "" || desktop.resident || desktop.Version == DesktopVersion {
+				return desktop, nil
+			}
+			// Attached to a non-resident desktop backend from an older/different version.
+			desktop.Close()
+			releaseCtx, releaseCancel := context.WithTimeout(ctx, versionHandoffTimeout)
+			releaseErr := releaseDesktopBackend(releaseCtx, client)
+			releaseCancel()
+			if releaseErr == nil {
+				break
+			}
+			slog.Warn("keep previous desktop backend until idle", "running", desktop.Version, "current", DesktopVersion, "error", releaseErr)
+			return attachDesktop(client, query)
 		}
 		if !errors.Is(err, errDesktopStopping) && !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
 			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
@@ -83,7 +106,7 @@ func ConnectDesktop(dir, address, devOrigin string, fresh bool) (*Desktop, error
 	if fresh {
 		previous = client
 	}
-	if err := launchDesktopServer(ctx, dir, address, devOrigin, previous); err != nil {
+	if err := launchDesktopBackend(ctx, dir, address, devOrigin, previous); err != nil {
 		return nil, err
 	}
 	return attachDesktop(client, query)
@@ -137,12 +160,25 @@ func attachDesktop(client *http.Client, query url.Values) (*Desktop, error) {
 		_ = res.Body.Close()
 		return nil, err
 	}
-	return &Desktop{URL: pairing.URL, PairURL: pairing.PairURL, client: client, lease: res.Body}, nil
+	return &Desktop{
+		URL:      pairing.URL,
+		PairURL:  pairing.PairURL,
+		Version:  pairing.Version,
+		resident: pairing.Resident,
+		client:   client,
+		lease:    res.Body,
+	}, nil
 }
 
 func (d *Desktop) Close() {
-	_ = d.lease.Close()
-	d.client.CloseIdleConnections()
+	d.close.Do(func() {
+		if d.lease != nil {
+			_ = d.lease.Close()
+		}
+		if d.client != nil {
+			d.client.CloseIdleConnections()
+		}
+	})
 }
 
 func desktopResponseError(res *http.Response) error {

@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { isMyGo } from "mygo-runtime";
 import {
   Archive,
+  ArrowDownToLine,
   ArrowRight,
   Copy,
   FolderOpen,
@@ -90,6 +91,8 @@ import {
 import { RemoteDevices } from "./RemoteDevices";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
+import { UpdatesSettings } from "./UpdatesSettings";
+import type { DesktopUpdatesController } from "./useDesktopUpdates";
 
 const sectionGroups = [
   {
@@ -169,8 +172,28 @@ const sectionGroups = [
   {
     id: "system",
     sections: [
+      ...(isMyGo()
+        ? [
+            {
+              id: "updates" as const,
+              icon: ArrowDownToLine,
+              fields: [
+                "updatesVersion",
+                "updatesDescription",
+                "updatesCheck",
+                "updatesPreferences",
+                "updatesAutoCheck",
+                "updatesAutoCheckDescription",
+                "updatesAutoDownload",
+                "updatesAutoDownloadDescription",
+                "updatesPrereleases",
+                "updatesPrereleasesDescription",
+              ],
+            },
+          ]
+        : []),
       {
-        id: "storage",
+        id: "storage" as const,
         icon: HardDrive,
         fields: [
           "dataDir",
@@ -183,7 +206,7 @@ const sectionGroups = [
         ],
       },
       {
-        id: "archivedAgents",
+        id: "archivedAgents" as const,
         icon: Archive,
         fields: ["archivedAgentsDescription"],
       },
@@ -271,6 +294,8 @@ export function SettingsPage({
   onThemeChange,
   overview,
   providerTarget,
+  updatesTarget,
+  desktopUpdates,
   onOpenPlugin,
   onOpenArchivedAgent,
 }: {
@@ -279,6 +304,8 @@ export function SettingsPage({
   onThemeChange: (theme: Theme) => void;
   overview: UseQueryResult<Pick<Overview, "dataDir" | "agents" | "chats">, Error>;
   providerTarget?: { id?: string; pluginId?: string };
+  updatesTarget?: number;
+  desktopUpdates?: DesktopUpdatesController;
   onOpenPlugin: (id?: string) => void;
   onOpenArchivedAgent?: (agent: Agent) => void;
 }) {
@@ -288,7 +315,11 @@ export function SettingsPage({
   const shortcuts = useComposerShortcuts();
   const keybindingGroups = shortcutGroups(preferences.shortcutOverrides);
   const [section, setSection] = useState<Section>(
-    providerTarget ? "providers" : "general",
+    providerTarget
+      ? "providers"
+      : updatesTarget && isMyGo()
+        ? "updates"
+        : "general",
   );
   const [providerId, setProviderId] = useState(providerTarget?.id);
   const [providerPlugin, setProviderPlugin] = useState(
@@ -305,6 +336,13 @@ export function SettingsPage({
       if (innerWidth < 760) setSidebar(false);
     }
   }, [providerTarget]);
+  useEffect(() => {
+    if (updatesTarget && isMyGo()) {
+      setSection("updates");
+      setSearch("");
+      if (innerWidth < 760) setSidebar(false);
+    }
+  }, [updatesTarget]);
   const language = useMutation({ mutationFn: changeLanguage });
   const preference = useMutation({
     mutationFn: async (patch: Parameters<typeof updatePreferences>[0]) =>
@@ -768,7 +806,11 @@ export function SettingsPage({
             chats={overview.data?.chats ?? []}
           />
         );
- case "storage":
+      case "updates":
+        return desktopUpdates ? (
+          <UpdatesSettings controller={desktopUpdates} />
+        ) : null;
+      case "storage":
         return (
           <>
             {overview.isPending && <Loading />}
@@ -974,6 +1016,12 @@ export function SettingsPage({
                 >
                   <Icon data-icon="inline-start" />
                   <span className="truncate">{t(`settings.${id}`)}</span>
+                  {id === "updates" && desktopUpdates?.hasActionableUpdate && (
+                    <span
+                      className="ms-auto size-2 shrink-0 rounded-full bg-[var(--status-attention)]"
+                      aria-label={t("settings.updatesAvailableDot")}
+                    />
+                  )}
                   {id === "archivedAgents" && archivedAgents.length > 0 && (
                     <span className="ms-auto text-xs tabular-nums text-muted-foreground">
                       {archivedAgents.length}

@@ -38,6 +38,7 @@ func main() {
 	generate := os.Getenv("MYGO_GENERATE") != ""
 	var dir, address, devOrigin *string
 	var freshBackend, reloadOnSighup bool
+	host.DesktopVersion = mygo.App.Version()
 	if !generate {
 		dir = flag.String("data-dir", host.DefaultDir(), "Local data directory")
 		printDir := flag.Bool("print-data-dir", false, "Print the effective data directory and exit")
@@ -84,7 +85,12 @@ func main() {
 	notifications := &Notifications{}
 	dialogs := &Dialogs{}
 	browser := &Browser{tabs: make(map[string]*browserTab)}
-	mygo.Bind(&Appearance{}, dialogs, notifications, browser)
+	dataDir := ""
+	if dir != nil {
+		dataDir = *dir
+	}
+	updates := newUpdates(dataDir, browser)
+	mygo.Bind(&Appearance{}, dialogs, notifications, browser, updates)
 	// Binding generation must not open the user's database or start a server.
 	if generate {
 		if err := mygo.App.Run(); err != nil {
@@ -109,6 +115,10 @@ func main() {
 		return
 	}
 	defer backend.Close()
+	mygo.App.OnQuit(func() {
+		updates.stop()
+		backend.Close()
+	})
 	if *devOrigin != "" {
 		fmt.Println("Lever Desktop:", backend.URL)
 	}
@@ -134,8 +144,12 @@ func main() {
 		defer logFile.Close()
 		slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
 	}
-	mygo.App.SetVersion("0.1.0")
 	mygo.App.OnNotificationClick(notifications.open)
+	if runtime.GOOS == "darwin" {
+		mygo.App.OnLocaleChanged(func(string) {
+			mygo.App.SetMenu(darwinMenu(updates))
+		})
+	}
 	mygo.App.WhenReady(func() {
 		options := mygo.WindowOptions{
 			Title:     "Lever",
@@ -147,15 +161,7 @@ func main() {
 			Content:   ui.View(browser.paint),
 		}
 		if runtime.GOOS == "darwin" {
-			mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-				{Role: mygo.RoleAppMenu},
-				{Role: mygo.RoleFileMenu, Submenu: []*mygo.MenuItem{
-					{Role: mygo.RoleClose, Accelerator: "Cmd+Shift+W"},
-				}},
-				{Role: mygo.RoleEditMenu},
-				{Role: mygo.RoleViewMenu},
-				{Role: mygo.RoleWindowMenu},
-			}))
+			mygo.App.SetMenu(darwinMenu(updates))
 			if err := mygo.App.Dock.SetIcon(appIcon); err != nil {
 				slog.Warn("set app icon", "error", err)
 			}
@@ -171,12 +177,39 @@ func main() {
 		if err := browser.attach(window, backend.URL, backend.PairURL); err != nil {
 			slog.Error("load workbench", "error", err)
 			mygo.App.Quit()
+			return
 		}
+		updates.start()
 	})
 	mygo.App.OnWindowAllClosed(func() { mygo.App.Quit() })
 	if err = mygo.App.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
+}
+
+func darwinMenu(updates *Updates) *mygo.Menu {
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{Label: "Lever", Submenu: []*mygo.MenuItem{
+			{Role: mygo.RoleAbout},
+			{Label: nativeText().checkForUpdates, Click: func(*mygo.MenuItem, *mygo.Window) {
+				updates.requestCheckFromMenu()
+			}},
+			mygo.Separator(),
+			{Role: mygo.RoleServices},
+			mygo.Separator(),
+			{Role: mygo.RoleHide},
+			{Role: mygo.RoleHideOthers},
+			{Role: mygo.RoleUnhide},
+			mygo.Separator(),
+			{Role: mygo.RoleQuit},
+		}},
+		{Role: mygo.RoleFileMenu, Submenu: []*mygo.MenuItem{
+			{Role: mygo.RoleClose, Accelerator: "Cmd+Shift+W"},
+		}},
+		{Role: mygo.RoleEditMenu},
+		{Role: mygo.RoleViewMenu},
+		{Role: mygo.RoleWindowMenu},
+	})
 }
 
 func (browser *Browser) attach(window *mygo.Window, origin, start string) error {

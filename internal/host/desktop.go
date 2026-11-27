@@ -18,13 +18,19 @@ const (
 	desktopStartupTimeout = 45 * time.Second
 )
 
+// DesktopVersion identifies the packaged desktop build so a newly updated shell
+// can hand off from a stale detached --serve-desktop backend automatically.
+var DesktopVersion string
+
 type desktopStartup struct {
 	Error string `json:"error,omitempty"`
 }
 
 type desktopPairing struct {
-	URL     string `json:"url"`
-	PairURL string `json:"pairUrl"`
+	URL      string `json:"url"`
+	PairURL  string `json:"pairUrl"`
+	Version  string `json:"version,omitempty"`
+	Resident bool   `json:"resident,omitempty"`
 }
 
 // ServeDesktop runs the local backend independently of the desktop process.
@@ -34,7 +40,13 @@ func ServeDesktop(ctx context.Context, dir, address, devOrigin string, ready io.
 	defer closeReady()
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	control := &desktopControl{ctx: ctx, stop: stop, address: address, attachBy: time.Now().Add(desktopStartupTimeout)}
+	control := &desktopControl{
+		ctx:      ctx,
+		stop:     stop,
+		address:  address,
+		version:  DesktopVersion,
+		attachBy: time.Now().Add(desktopStartupTimeout),
+	}
 	startup, cancelStartup := context.WithTimeout(ctx, desktopStartupTimeout)
 	defer cancelStartup()
 	var server *httpapi.Server
@@ -69,6 +81,7 @@ func ServeDesktop(ctx context.Context, dir, address, devOrigin string, ready io.
 
 type desktopControl struct {
 	resident bool
+	version  string
 	ctx      context.Context
 	stop     context.CancelFunc
 	address  string
@@ -120,7 +133,12 @@ func (c *desktopControl) attach(w http.ResponseWriter, r *http.Request) {
 	// Keep the request open so a quit or crash releases the desktop attachment.
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(desktopPairing{URL: c.server.URL, PairURL: c.server.PairURL()}); err != nil {
+	if err := json.NewEncoder(w).Encode(desktopPairing{
+		URL:      c.server.URL,
+		PairURL:  c.server.PairURL(),
+		Version:  c.version,
+		Resident: c.resident,
+	}); err != nil {
 		return
 	}
 	if err := http.NewResponseController(w).Flush(); err != nil {

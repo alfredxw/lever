@@ -1,7 +1,8 @@
 .PHONY: web hub-web hub hub-image hub-deploy mobile-ios-core mobile-ios mobile-ios-simulator mobile-android build desktop package dev privacy test generate
 VERSION ?= 0.1.0
 TARGETS ?= darwin/arm64
-PACKAGE_FLAGS ?= -skip-dmg -skip-installer
+PACKAGE_FLAGS ?= -skip-dmg -skip-notarize -skip-installer
+MYGO_VERSION := $(shell go list -m -f '{{.Version}}' github.com/egoist/mygo)
 MYGO_IOS_CLI := github.com/egoist/mygo/cmd/mygo@v0.10.1-0.20261118115623-e1e4364ce377
 web:
 	pnpm --dir web install --frozen-lockfile
@@ -11,7 +12,7 @@ build: web
 desktop: web
 	go build -o bin/desktop/Lever ./cmd/lever-desktop
 package: web
-	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform $(TARGETS) $(PACKAGE_FLAGS) desktop
+	go run github.com/egoist/mygo/cmd/mygo@$(MYGO_VERSION) build -platform $(TARGETS) $(PACKAGE_FLAGS) desktop
 dev:
 	go run -tags dev ./cmd/lever --dev-origin http://127.0.0.1:5179
 privacy:
@@ -22,7 +23,7 @@ test: privacy
 	pnpm --dir web test:e2e
 generate:
 	go run github.com/gzuidhof/tygo@v0.2.21 generate --config internal/model/tygo.yaml
-	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 generate desktop
+	go run github.com/egoist/mygo/cmd/mygo@$(MYGO_VERSION) generate desktop
 
 
 hub-web:
@@ -43,4 +44,4 @@ mobile-ios:
 mobile-ios-simulator:
 	bash mobile/ios/build-app.sh simulator
 mobile-android: hub-web
-	go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform android mobile
+	go run github.com/egoist/mygo/cmd/mygo@$(MYGO_VERSION) build -platform android mobile

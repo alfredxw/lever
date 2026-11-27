@@ -173,6 +173,7 @@ import type { BrowserContext } from "@/features/browser/BrowserPanel";
 import { HtmlPreviewHost, HtmlPreviewPanel } from "@/features/chat/HtmlPreview";
 import type { HtmlPreview } from "@/features/chat/chatFileLinks";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { useDesktopUpdates } from "@/features/settings/useDesktopUpdates";
 import { usePreferences } from "@/features/settings/Preferences";
 import {
   availableShortcuts,
@@ -313,6 +314,16 @@ export default function App() {
     id?: string;
     pluginId?: string;
   }>();
+  const [updatesTarget, setUpdatesTarget] = useState(0);
+  const openUpdatesSettings = useCallback(() => {
+    setProviderTarget(undefined);
+    setUpdatesTarget((count) => count + 1);
+    setPage("settings");
+  }, []);
+  const desktopUpdates = useDesktopUpdates({
+    onOpenUpdates: openUpdatesSettings,
+    viewingUpdates: page === "settings",
+  });
   const [selectedAutomation, setSelectedAutomation] = useState<string>();
   const [tasksOpened, setTasksOpened] = useState(false);
   const [taskAlert, setTaskAlert] = useState(false);
@@ -1980,6 +1991,7 @@ export default function App() {
           page={page}
           providers={providers.data ?? []}
           taskAlert={taskAlert && page !== "tasks"}
+          settingsAlert={desktopUpdates.hasActionableUpdate && page !== "settings"}
           onPreview={prefetchPrimaryPage}
           onAgents={() => {
             setPage("agents");
@@ -2902,6 +2914,8 @@ export default function App() {
               onThemeChange={setTheme}
               overview={overview}
               providerTarget={providerTarget}
+              updatesTarget={updatesTarget}
+              desktopUpdates={desktopUpdates}
               onOpenPlugin={showPlugin}
               onOpenArchivedAgent={(target) => {
                 openAgentChat(target);
@@ -2940,6 +2954,10 @@ export default function App() {
             }
             onToggleSidebar={canUseAgentActions ? toggleAgentSidebar : undefined}
             onOpenSettings={openSettings}
+            onCheckForUpdates={() => {
+              openUpdatesSettings();
+              void desktopUpdates.check();
+            }}
           />
           {workbenchContent}
         </div>

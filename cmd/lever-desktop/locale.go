@@ -32,12 +32,20 @@ func (*Appearance) SetWindowButtonsTheme(ctx context.Context, dark bool) {
 }
 
 type desktopText struct {
-	startError, chooseDirectory string
+	startError, chooseDirectory, checkForUpdates string
 }
 
 func nativeText() desktopText {
 	if strings.HasPrefix(mygo.App.Locale(), "zh") {
-		return desktopText{startError: "无法启动 Lever", chooseDirectory: "选择工作目录"}
+		return desktopText{
+			startError:      "无法启动 Lever",
+			chooseDirectory: "选择工作目录",
+			checkForUpdates: "检查更新…",
+		}
 	}
-	return desktopText{startError: "Unable to start Lever", chooseDirectory: "Choose working directory"}
+	return desktopText{
+		startError:      "Unable to start Lever",
+		chooseDirectory: "Choose working directory",
+		checkForUpdates: "Check for Updates…",
+	}
 }

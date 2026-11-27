@@ -51,6 +51,32 @@ export interface NotificationTarget {
   taskId?: string;
 }
 
+/** UpdatePreferences configures how Lever Desktop checks for and installs updates. */
+export interface UpdatePreferences {
+  automaticChecks: boolean;
+  automaticDownloads: boolean;
+  prereleases: boolean;
+}
+
+/** UpdateState is the snapshot pushed to the desktop workbench UI. */
+export interface UpdateState {
+  supported: boolean;
+  disabledReason?: string;
+  currentVersion: string;
+  status: string;
+  version?: string;
+  notes?: string;
+  publishedAt?: string;
+  downloaded?: number;
+  total?: number;
+  error?: string;
+  lastCheckedAt?: string;
+  automaticChecks: boolean;
+  automaticDownloads: boolean;
+  prereleases: boolean;
+  skippedVersion?: string;
+}
+
 // ---- Services ----
 
 /**
@@ -97,6 +123,26 @@ export const Browser = {
   screenshot: bind<[string], string>("Browser.Screenshot", (id: string) => [id]),
 } as const;
 
+/** Updates manages signed desktop application updates via mygo.Updater. */
+export const Updates = {
+  /** CancelDownload cancels an active download or check. */
+  cancelDownload: bind<[], UpdateState>("Updates.CancelDownload", () => []),
+  /** Check starts a user-initiated check for updates and returns the immediate state. */
+  check: bind<[], UpdateState>("Updates.Check", () => []),
+  /** Download downloads and stages the available update. */
+  download: bind<[], void>("Updates.Download", () => []),
+  /** RestartToUpdate verifies the backend can safely hand off and relaunches Lever into the staged update. */
+  restartToUpdate: bind<[], void>("Updates.RestartToUpdate", () => []),
+  /** SetPreferences updates persisted update preferences and reschedules background checks. */
+  setPreferences: bind<[UpdatePreferences], UpdateState>("Updates.SetPreferences", (prefs: UpdatePreferences) => [prefs]),
+  /** SkipVersion marks version as skipped so background checks will not prompt for it again. */
+  skipVersion: bind<[string], UpdateState>("Updates.SkipVersion", (version: string) => [version]),
+  /** State returns the current update state snapshot. */
+  state: bind<[], UpdateState>("Updates.State", () => []),
+  /** TakeOpenRequest consumes a pending menu-triggered request to open the updates panel. */
+  takeOpenRequest: bind<[], boolean>("Updates.TakeOpenRequest", () => []),
+} as const;
+
 // ---- Events ----
 
 /** Events sent by the Go side. Subscribe with `events.name.on(listener)`. */
@@ -105,4 +151,6 @@ export const events = {
   leverBrowserPressed: event<string>("lever:browser-pressed"),
   leverDesktopFrame: event<DesktopFrame>("lever:desktop-frame"),
   leverAgentNotificationClicked: event<{}>("lever:agent-notification-clicked"),
+  leverUpdateState: event<UpdateState>("lever:update-state"),
+  leverOpenUpdates: event<{}>("lever:open-updates"),
 } as const;
