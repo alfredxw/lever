@@ -16,10 +16,14 @@ export function ImageViewer({
   src,
   name,
   onClose,
+  label,
+  maxZoom = MAX_ZOOM,
 }: {
   src: string;
   name: string;
   onClose?: () => void;
+  label?: string;
+  maxZoom?: number;
 }) {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
@@ -47,7 +51,7 @@ export function ImageViewer({
             ? element.clientHeight
             : 1);
       // Keep exponential zoom reversible and anchored to the pointer.
-      const next = clamp(scale * Math.exp(-delta * 0.004), MIN_ZOOM, MAX_ZOOM);
+      const next = clamp(scale * Math.exp(-delta * 0.004), MIN_ZOOM, maxZoom);
       const rect = content.getBoundingClientRect();
       view.setTransform(
         positionX - ((event.clientX - rect.left) / scale) * (next - scale),
@@ -58,9 +62,9 @@ export function ImageViewer({
     }
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
-  }, [unavailable]);
+  }, [unavailable, maxZoom]);
 
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (
       unavailable ||
       event.altKey ||
@@ -124,12 +128,13 @@ export function ImageViewer({
   return (
     <section
       className="attachment-preview"
-      aria-label={t("attachments.preview")}
+      aria-label={label || t("attachments.preview")}
+      onKeyDown={onKeyDown}
     >
       <TransformWrapper
         ref={transform}
         minScale={MIN_ZOOM}
-        maxScale={MAX_ZOOM}
+        maxScale={maxZoom}
         centerOnInit
         centerZoomedOut
         wheel={{ disabled: true }}
@@ -171,7 +176,7 @@ export function ImageViewer({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                disabled={unavailable || zoom >= MAX_ZOOM}
+                disabled={unavailable || zoom >= maxZoom}
                 aria-label={t("attachments.zoomIn")}
                 title={t("attachments.zoomIn")}
                 onClick={() => zoomIn(ZOOM_STEP, 0)}
@@ -200,7 +205,6 @@ export function ImageViewer({
               onPointerDownCapture={(event) =>
                 event.currentTarget.focus({ preventScroll: true })
               }
-              onKeyDown={onKeyDown}
             >
               {unavailable ? (
                 <p

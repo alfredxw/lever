@@ -2830,6 +2830,7 @@ export const enUS = {
   "chat.copyCode": "Copy code",
   "chat.mermaidDiagram": "Mermaid diagram",
   "chat.mermaidUnavailable": "Couldn’t render Mermaid diagram",
+  "chat.expandDiagram": "Expand diagram",
   "chat.expandTable": "Expand table",
   "chat.tableContent": "Table content",
   "chat.copyFailed": "Could not copy. Please try again.",

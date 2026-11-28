@@ -2697,6 +2697,7 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.copyCode": "复制代码",
   "chat.mermaidDiagram": "Mermaid 图表",
   "chat.mermaidUnavailable": "Mermaid 图表无法渲染",
+  "chat.expandDiagram": "放大图表",
   "chat.expandTable": "放大表格",
   "chat.tableContent": "表格内容",
   "chat.copyFailed": "复制失败，请重试。",
