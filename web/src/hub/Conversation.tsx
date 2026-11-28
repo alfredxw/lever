@@ -44,8 +44,38 @@ function Card({
   onAnswer: (a: Answer | "allow_run") => void;
   disabled: boolean;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [custom, setCustom] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (q.questions ?? [])
+        .filter((v) => v.initialAnswer)
+        .map((v) => [v.id, v.initialAnswer!]),
+    ),
+  );
   const isPending = q.status === "pending";
+  const resolvedAnswers = (): Record<string, string[]> | null => {
+    const out: Record<string, string[]> = {};
+    for (const v of q.questions ?? []) {
+      const allowCustom = v.allowCustom !== false;
+      const text = allowCustom ? (custom[v.id] ?? "").trim() : "";
+      if (text) {
+        out[v.id] = [text];
+        continue;
+      }
+      const choices = selected[v.id] ?? [];
+      if (choices.length) {
+        out[v.id] = choices;
+        continue;
+      }
+      if (v.required === false) {
+        if (v.multiple) out[v.id] = [];
+        continue;
+      }
+      return null;
+    }
+    return out;
+  };
+  const submitAnswers = q.type === "question" ? resolvedAnswers() : null;
   return (
     <section
       className={`hub-approval-card ${isPending ? "hub-approval-pending" : "hub-approval-done"}`}
@@ -81,58 +111,96 @@ function Card({
         </div>
       ) : (
         <div className="mt-3 flex flex-col gap-3">
-          {q.questions?.map((v) => (
-            <fieldset key={v.id} className="flex flex-col gap-1.5">
-              <legend className="mb-1 text-[13px] font-medium text-foreground">
-                {v.text}
-              </legend>
-              {v.options?.length ? (
-                v.options.map((o) => (
+          {q.questions?.map((v) => {
+            const allowCustom = v.allowCustom !== false;
+            const customVal = custom[v.id] ?? "";
+            const choices = customVal.trim() ? [] : (selected[v.id] ?? []);
+            return (
+              <fieldset key={v.id} className="flex flex-col gap-1.5">
+                <legend className="mb-1 text-[13px] font-medium text-foreground">
+                  {v.header && v.header !== v.text ? `${v.header} · ` : ""}
+                  {v.text}
+                  {v.required === false && (
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      (可选)
+                    </span>
+                  )}
+                </legend>
+                {v.options?.map((o) => (
                   <label
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-[13px] hover:bg-control-hover"
+                    className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-[13px] hover:bg-control-hover"
                     key={o.id}
                   >
                     <input
                       type={v.multiple ? "checkbox" : "radio"}
                       name={v.id}
-                      checked={answers[v.id]?.includes(o.id) ?? false}
-                      onChange={(e) =>
-                        setAnswers({
-                          ...answers,
+                      className="mt-0.5"
+                      checked={choices.includes(o.id)}
+                      onChange={(e) => {
+                        setCustom((prev) => ({ ...prev, [v.id]: "" }));
+                        setSelected((prev) => ({
+                          ...prev,
                           [v.id]: e.target.checked
                             ? [
-                                ...(v.multiple ? (answers[v.id] ?? []) : []),
+                                ...(v.multiple ? (prev[v.id] ?? []) : []),
                                 o.id,
                               ]
-                            : (answers[v.id] ?? []).filter((id) => id !== o.id),
-                        })
-                      }
+                            : (prev[v.id] ?? []).filter((id) => id !== o.id),
+                        }));
+                      }}
                     />
-                    <span>{o.name}</span>
+                    <span className="flex flex-col gap-0.5">
+                      <span>{o.name}</span>
+                      {o.description && o.description !== o.name && (
+                        <span className="text-xs text-muted-foreground">
+                          {o.description}
+                        </span>
+                      )}
+                    </span>
                   </label>
-                ))
-              ) : (
-                <Input
-                  placeholder="输入回答…"
-                  onChange={(e) =>
-                    setAnswers({ ...answers, [v.id]: [e.target.value] })
-                  }
-                />
-              )}
-            </fieldset>
-          ))}
+                ))}
+                {allowCustom && (
+                  <Input
+                    type={v.secret ? "password" : "text"}
+                    value={customVal}
+                    placeholder={
+                      v.placeholder ||
+                      (v.options?.length ? "或输入其他回答…" : "输入回答…")
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCustom((prev) => ({ ...prev, [v.id]: val }));
+                      if (val.trim()) {
+                        setSelected((prev) => ({ ...prev, [v.id]: [] }));
+                      }
+                    }}
+                  />
+                )}
+              </fieldset>
+            );
+          })}
           <div className="flex flex-wrap items-center gap-2">
             {q.type === "question" ? (
-              <Button
-                size="sm"
-                disabled={
-                  disabled ||
-                  q.questions?.some((v) => !answers[v.id]?.some(Boolean))
-                }
-                onClick={() => onAnswer({ allow: true, answers })}
-              >
-                提交回答
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  disabled={disabled || !submitAnswers}
+                  onClick={() =>
+                    submitAnswers &&
+                    onAnswer({ allow: true, answers: submitAnswers })
+                  }
+                >
+                  提交回答
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() => onAnswer({ allow: false, answers: {} })}
+                >
+                  忽略
+                </Button>
+              </>
             ) : (
               <>
                 {q.options?.length ? (

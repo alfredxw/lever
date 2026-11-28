@@ -1705,7 +1705,7 @@ func (a *App) answer(ctx context.Context, id string, answer model.Answer, origin
 	}
 	if request.Kind == "question" && answer.Allow {
 		for _, q := range request.Questions {
-			if len(answer.Answers[q.ID]) == 0 {
+			if q.IsRequired() && len(answer.Answers[q.ID]) == 0 {
 				return invalid("Answer every question")
 			}
 		}

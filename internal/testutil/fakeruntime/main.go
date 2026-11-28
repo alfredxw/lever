@@ -695,8 +695,62 @@ func main() {
 				}
 			case strings.Contains(commands, "[approval]") || strings.Contains(commands, "[approval-chain]"):
 				send(object{"id": "approval-1", "method": "item/commandExecution/requestApproval", "params": object{"threadId": native, "turnId": turn, "command": "echo approval-fixture"}})
+			case strings.Contains(commands, "[question-multi]"):
+				send(object{
+					"id":     "question-multi",
+					"method": "item/tool/requestUserInput",
+					"params": object{
+						"threadId": native,
+						"questions": []object{
+							{
+								"id":       "strategy",
+								"header":   "Rollout",
+								"question": "How should we roll this out?",
+								"options": []object{
+									{"label": "Canary", "description": "Start with 5% traffic"},
+									{"label": "Direct", "description": "Ship to all users"},
+								},
+							},
+							{
+								"id":       "token",
+								"header":   "Deploy key",
+								"question": "Enter deploy token",
+								"isSecret": true,
+							},
+						},
+					},
+				})
+			case strings.Contains(commands, "[codex-elicitation]"):
+				send(object{
+					"id":     "codex-elicit-1",
+					"method": "mcpServer/elicitation/request",
+					"params": object{
+						"threadId":   native,
+						"turnId":     turn,
+						"serverName": "fixture-mcp",
+						"mode":       "form",
+						"message":    "Configure MCP action",
+						"requestedSchema": object{
+							"type": "object",
+							"properties": object{
+								"env": object{
+									"type":        "string",
+									"title":       "Environment",
+									"description": "Pick target environment",
+									"enum":        []string{"staging", "prod"},
+								},
+								"retries": object{
+									"type":        "integer",
+									"title":       "Retries",
+									"description": "Retry count",
+								},
+							},
+							"required": []string{"env"},
+						},
+					},
+				})
 			case strings.Contains(commands, "[question]"):
-				send(object{"id": "question-1", "method": "item/tool/requestUserInput", "params": object{"threadId": native, "questions": []object{{"id": "choice", "question": "Choose a color", "options": []object{{"label": "Green", "description": "Calm"}, {"label": "Blue", "description": "Cool"}}}}}})
+				send(object{"id": "question-1", "method": "item/tool/requestUserInput", "params": object{"threadId": native, "questions": []object{{"id": "choice", "header": "Color", "question": "Choose a color", "options": []object{{"label": "Green", "description": "Calm"}, {"label": "Blue", "description": "Cool"}}}}}})
 			case strings.Contains(commands, "[pausable]"):
 				partialReply = "Partial reply before the pause"
 				send(object{"method": "item/agentMessage/delta", "params": object{"threadId": native, "turnId": turn, "itemId": "partial-answer", "delta": partialReply}})
@@ -948,6 +1002,12 @@ func claude() {
 				send(object{"type": "assistant", "message": object{"id": "msg-approval", "content": []object{{"type": "text", "text": text}}}})
 				send(object{"type": "result", "subtype": "success", "session_id": native, "result": text})
 			}
+			if r["request_id"] == "claude-question" || r["request_id"] == "claude-elicitation" {
+				data, _ := json.Marshal(r["response"])
+				text := "Claude question: " + string(data)
+				send(object{"type": "assistant", "message": object{"id": "msg-question", "content": []object{{"type": "text", "text": text}}}})
+				send(object{"type": "result", "subtype": "success", "session_id": native, "result": text})
+			}
 		case "user":
 			if toolInFlight {
 				toolInFlight = false
@@ -1027,6 +1087,58 @@ func claude() {
 			}
 			if strings.Contains(fixtureCommands(text), "[claude-approval]") {
 				send(object{"type": "control_request", "request_id": "claude-approval", "request": object{"subtype": "can_use_tool", "tool_name": "Bash", "input": object{"command": "echo claude-fixture"}}})
+				continue
+			}
+			if strings.Contains(fixtureCommands(text), "[claude-question]") {
+				send(object{
+					"type":       "control_request",
+					"request_id": "claude-question",
+					"request": object{
+						"subtype":   "can_use_tool",
+						"tool_name": "AskUserQuestion",
+						"input": object{
+							"questions": []object{
+								{
+									"header":      "Auth",
+									"question":    "Which auth method?",
+									"multiSelect": false,
+									"options": []object{
+										{"label": "OAuth", "description": "Browser login", "preview": "```ts\nuseOAuth()\n```"},
+										{"label": "API Key", "description": "Static token"},
+									},
+								},
+								{
+									"header":      "Scopes",
+									"question":    "Select scopes",
+									"multiSelect": true,
+									"options": []object{
+										{"label": "read", "description": "Read data"},
+										{"label": "write", "description": "Modify data"},
+									},
+								},
+							},
+						},
+					},
+				})
+				continue
+			}
+			if strings.Contains(fixtureCommands(text), "[claude-elicitation]") {
+				send(object{
+					"type":       "control_request",
+					"request_id": "claude-elicitation",
+					"request": object{
+						"subtype": "elicitation",
+						"mode":    "form",
+						"message": "Pick a region",
+						"requested_schema": object{
+							"type": "object",
+							"properties": object{
+								"region": object{"type": "string", "title": "Region", "description": "Choose region", "enum": []string{"us", "eu"}},
+							},
+							"required": []string{"region"},
+						},
+					},
+				})
 				continue
 			}
 			if strings.Contains(fixtureCommands(text), "[hang]") {

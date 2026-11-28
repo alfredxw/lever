@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -165,7 +166,18 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 	}
 	initCtx, stop := context.WithTimeout(ctx, timeout)
 	defer stop()
-	c.initial, err = acp.SendRequest[acp.InitializeResponse](c.conn, initCtx, "initialize", acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientInfo: &acp.Implementation{Name: "lever", Version: "0.1.0"}})
+	initRequest := acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersionNumber,
+		ClientInfo:      &acp.Implementation{Name: "lever", Version: "0.1.0"},
+	}
+	if sink != nil {
+		initRequest.ClientCapabilities = acp.ClientCapabilities{
+			Elicitation: &acp.ElicitationCapabilities{
+				Form: &acp.ElicitationFormCapabilities{},
+			},
+		}
+	}
+	c.initial, err = acp.SendRequest[acp.InitializeResponse](c.conn, initCtx, "initialize", initRequest)
 	if err == nil && c.initial.ProtocolVersion != acp.ProtocolVersionNumber {
 		err = fmt.Errorf("Unsupported ACP protocol version: %d (Lever supports v1)", c.initial.ProtocolVersion)
 	}
@@ -897,17 +909,44 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 		if !active || c.sink == nil || len(params.Options) == 0 {
 			return cancelled, nil
 		}
+		interaction := (c.antigravity || c.output != nil) && strings.HasPrefix(string(params.ToolCall.ToolCallId), "interaction_")
 		request := model.Request{Kind: "approval", Title: "Tool permission", Detail: pretty(params.ToolCall), Questions: []model.Question{}}
-		if c.output != nil && strings.HasPrefix(string(params.ToolCall.ToolCallId), "interaction_") {
-			request.Kind, request.Title = "question", "Choose an option"
-		}
-		if params.ToolCall.Title != nil {
-			request.Title = *params.ToolCall.Title
-		}
-		for _, option := range params.Options {
-			request.Options = append(request.Options, model.RequestOption{ID: string(option.OptionId), Name: option.Name, Allow: option.Kind == acp.PermissionOptionKindAllowOnce || option.Kind == acp.PermissionOptionKindAllowAlways})
-			if request.Kind == "approval" && request.AllowOnce == nil && option.Kind == acp.PermissionOptionKindAllowOnce {
-				request.AllowOnce = &model.Answer{Allow: true, Answers: map[string][]string{}, OptionID: string(option.OptionId)}
+		if interaction {
+			questionText := "Choose an option"
+			if params.ToolCall.Title != nil && strings.TrimSpace(*params.ToolCall.Title) != "" {
+				questionText = strings.TrimSpace(*params.ToolCall.Title)
+			}
+			questionOptions := make([]model.QuestionOption, 0, len(params.Options))
+			for _, option := range params.Options {
+				label := strings.TrimSpace(option.Name)
+				if label == "" {
+					label = string(option.OptionId)
+				}
+				questionOptions = append(questionOptions, model.QuestionOption{
+					ID:    string(option.OptionId),
+					Label: label,
+				})
+			}
+			request = model.Request{
+				Kind:  "question",
+				Title: "Agent needs your input",
+				Questions: []model.Question{{
+					ID:          string(params.ToolCall.ToolCallId),
+					Header:      "Question",
+					Text:        questionText,
+					Options:     questionOptions,
+					AllowCustom: boolPtr(false),
+				}},
+			}
+		} else {
+			if params.ToolCall.Title != nil {
+				request.Title = *params.ToolCall.Title
+			}
+			for _, option := range params.Options {
+				request.Options = append(request.Options, model.RequestOption{ID: string(option.OptionId), Name: option.Name, Allow: option.Kind == acp.PermissionOptionKindAllowOnce || option.Kind == acp.PermissionOptionKindAllowAlways})
+				if request.AllowOnce == nil && option.Kind == acp.PermissionOptionKindAllowOnce {
+					request.AllowOnce = &model.Answer{Allow: true, Answers: map[string][]string{}, OptionID: string(option.OptionId)}
+				}
 			}
 		}
 		answer, err := c.sink.Ask(ctx, request)
@@ -929,15 +968,50 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 			c.cancel()
 			return cancelled, nil
 		}
-		if answer.OptionID == "" {
+		selectedID := answer.OptionID
+		if interaction {
+			if !answer.Allow {
+				return cancelled, nil
+			}
+			if selectedID == "" {
+				if values := answer.Answers[string(params.ToolCall.ToolCallId)]; len(values) > 0 {
+					selectedID = values[0]
+				}
+			}
+		}
+		if selectedID == "" {
 			return cancelled, nil
 		}
 		for _, option := range params.Options {
-			if string(option.OptionId) == answer.OptionID {
+			if string(option.OptionId) == selectedID {
 				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId}}}, nil
 			}
 		}
+		if interaction {
+			var matched *acp.PermissionOption
+			for i := range params.Options {
+				label := strings.TrimSpace(params.Options[i].Name)
+				if label == "" {
+					label = string(params.Options[i].OptionId)
+				}
+				if label == selectedID {
+					if matched != nil {
+						matched = nil
+						break
+					}
+					matched = &params.Options[i]
+				}
+			}
+			if matched != nil {
+				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: matched.OptionId}}}, nil
+			}
+			return cancelled, nil
+		}
 		return nil, acp.NewInvalidParams("Unknown permission option")
+	case acp.ClientMethodElicitationCreate:
+		return c.handleElicitation(ctx, raw)
+	case acp.ClientMethodElicitationComplete:
+		return nil, nil
 	case "session/update":
 		var update acp.SessionNotification
 		if err := json.Unmarshal(raw, &update); err != nil {
@@ -1031,6 +1105,110 @@ func (c *acpRuntime) handle(ctx context.Context, method string, raw json.RawMess
 	default:
 		return nil, acp.NewMethodNotFound(method)
 	}
+}
+
+func (c *acpRuntime) handleElicitation(ctx context.Context, raw json.RawMessage) (any, *acp.RequestError) {
+	var params struct {
+		SessionID       acp.SessionId   `json:"sessionId"`
+		Mode            string          `json:"mode"`
+		Message         string          `json:"message"`
+		RequestedSchema json.RawMessage `json:"requestedSchema"`
+		Meta            map[string]any  `json:"_meta"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, acp.NewInvalidParams(err.Error())
+	}
+	cancelled := object{"action": "cancel"}
+	declined := object{"action": "decline"}
+	c.mu.Lock()
+	active := c.active && (params.SessionID == "" || params.SessionID == c.session)
+	var finishErr error
+	if active && c.sink != nil {
+		finishErr = c.finishMessage()
+		if finishErr == nil && c.background != nil {
+			c.background.startRequest()
+			defer c.finishAntigravityRequest()
+		}
+	}
+	c.mu.Unlock()
+	if finishErr != nil {
+		c.mu.Lock()
+		c.err = finishErr
+		c.mu.Unlock()
+		c.cancel()
+		return cancelled, nil
+	}
+	if !active || c.sink == nil {
+		return cancelled, nil
+	}
+	if params.Mode != "form" || len(bytes.TrimSpace(params.RequestedSchema)) == 0 {
+		return declined, nil
+	}
+	form, ok := parseElicitationForm(params.RequestedSchema, params.Message, elicitationOptions{
+		allowOther:                params.Meta["cognition.ai/allowOther"] == true,
+		antigravityTitleAsQuestion: c.antigravity,
+	})
+	if !ok {
+		return declined, nil
+	}
+	var request model.Request
+	if form.empty {
+		title := form.title
+		if title == "" {
+			title = "Confirmation required"
+		}
+		request = model.Request{
+			Kind:      "approval",
+			Title:     title,
+			Detail:    strings.TrimSpace(params.Message),
+			Questions: []model.Question{},
+			AllowOnce: &model.Answer{Allow: true, Answers: map[string][]string{}},
+		}
+	} else {
+		title := form.title
+		if title == "" {
+			title = "Agent needs your input"
+		}
+		request = model.Request{
+			Kind:      "question",
+			Title:     title,
+			Detail:    strings.TrimSpace(params.Message),
+			Questions: form.questions,
+		}
+	}
+	answer, err := c.sink.Ask(ctx, request)
+	if err != nil {
+		if c.ctx.Err() != nil {
+			return cancelled, nil
+		}
+		select {
+		case <-c.conn.Done():
+			err = fmt.Errorf("%w: runtime disconnected during user input", ErrUnconfirmed)
+		default:
+			if ctx.Err() != nil {
+				return cancelled, nil
+			}
+		}
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+		c.cancel()
+		return cancelled, nil
+	}
+	if form.empty {
+		if answer.Allow {
+			return object{"action": "accept", "content": object{}}, nil
+		}
+		return declined, nil
+	}
+	if !answer.Allow {
+		return cancelled, nil
+	}
+	content, ok := form.content(answer.Answers)
+	if !ok {
+		return cancelled, nil
+	}
+	return object{"action": "accept", "content": content}, nil
 }
 
 // Turn-local names carry a file selection across ACP and do not belong in

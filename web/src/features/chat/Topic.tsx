@@ -47,6 +47,10 @@ import { UserMessage } from "./UserMessage";
 import { canRecoverRun, RunRecoveryButton } from "./RunRecoveryButton";
 import { canContinueRun } from "./runControls";
 import { canEditSentMessage, RunContent } from "./RunContent";
+import {
+  PendingQuestionPanel,
+  selectSessionQuestions,
+} from "./PendingQuestionPanel";
 import { isWorking, RunStatus } from "./RunStatus";
 import { useRevealEntry } from "./useRevealEntry";
 import { useUnreadStart } from "./useUnreadStart";
@@ -501,6 +505,14 @@ function TopicConversationContent({
     () => (props.source ? [props.source, ...runs] : runs),
     [props.source, runs],
   );
+  const topicQuestions = useMemo(
+    () => selectSessionQuestions(overview?.requests, session.id, runs),
+    [overview?.requests, session.id, runs],
+  );
+  const dockedTopicQuestionIds = useMemo(
+    () => new Set(topicQuestions.map((request) => request.id)),
+    [topicQuestions],
+  );
   const quote = composer?.quote;
   const edit = composer?.edit;
   const onQuote = useCallback(
@@ -712,6 +724,7 @@ function TopicConversationContent({
                 onOpenRun={onOpenRun}
                 onOpenAgent={onOpenAgent}
                 requests={overview.requests}
+                dockedRequestIds={dockedTopicQuestionIds}
                 sessionBusy={!!activeRun}
                 canRecover={run.id === latestRun?.id}
                 onQuote={onQuote}
@@ -731,6 +744,11 @@ function TopicConversationContent({
           agents={overview.agents}
           requests={overview.requests}
           onOpenRun={onOpenRun}
+        />
+        <PendingQuestionPanel
+          requests={topicQuestions}
+          runs={runs}
+          visible={enabled}
         />
         <Composer
           agentId={agent.id}

@@ -9455,7 +9455,7 @@ test("browsing reuses a conversation preview and keeps edits and partial answers
   await openTopic(question);
   await expect(tabs).toHaveCount(1);
   await expect(preview).toHaveText("选颜色 [question]");
-  const green = page.getByRole("checkbox", { name: /Green/ });
+  const green = page.getByRole("radio", { name: /Green/ });
   await green.check();
   await expect(preview).toHaveCount(0);
   // Patrol enough conversations to evict the question panel from the warm cache.

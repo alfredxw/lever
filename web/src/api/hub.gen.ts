@@ -127,12 +127,20 @@ export interface Item {
 export interface Option {
   id: string;
   name: string;
+  description?: string;
+  preview?: string;
   allow?: boolean;
 }
 export interface Question {
   id: string;
+  header?: string;
   text: string;
   multiple?: boolean;
+  allowCustom?: boolean;
+  required?: boolean;
+  initialAnswer?: string;
+  placeholder?: string;
+  secret?: boolean;
   options?: Option[];
 }
 export interface Answer {

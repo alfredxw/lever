@@ -131,15 +131,23 @@ type Item struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 type Option struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Allow bool   `json:"allow,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
+	Allow       bool   `json:"allow,omitempty"`
 }
 type Question struct {
-	ID       string   `json:"id"`
-	Text     string   `json:"text"`
-	Multiple bool     `json:"multiple,omitempty"`
-	Options  []Option `json:"options,omitempty"`
+	ID            string   `json:"id"`
+	Header        string   `json:"header,omitempty"`
+	Text          string   `json:"text"`
+	Multiple      bool     `json:"multiple,omitempty"`
+	AllowCustom   *bool    `json:"allowCustom,omitempty"`
+	Required      *bool    `json:"required,omitempty"`
+	InitialAnswer string   `json:"initialAnswer,omitempty"`
+	Placeholder   string   `json:"placeholder,omitempty"`
+	Secret        bool     `json:"secret,omitempty"`
+	Options       []Option `json:"options,omitempty"`
 }
 type Answer struct {
 	Allow    bool                `json:"allow"`

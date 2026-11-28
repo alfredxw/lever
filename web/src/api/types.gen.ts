@@ -1422,12 +1422,19 @@ export interface QuestionOption {
   id: string;
   label: string;
   description?: string;
+  preview?: string;
 }
 export interface Question {
   id: string;
+  header?: string;
   text: string;
   options: QuestionOption[];
   multiple: boolean;
+  allowCustom?: boolean;
+  required?: boolean;
+  initialAnswer?: string;
+  placeholder?: string;
+  secret?: boolean;
 }
 export interface Request {
   answeredByUserId?: string;

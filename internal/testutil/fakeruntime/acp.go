@@ -77,6 +77,7 @@ func acpFixture() {
 	scanner.Buffer(make([]byte, 65536), 32<<20)
 	var native, cwd, mode, model, effort, title string
 	var directories, servers []any
+	var clientCapabilities any
 	var history []string
 	var promptID any
 	var steerTarget any
@@ -152,6 +153,7 @@ func acpFixture() {
 		respond := func(result any) { send(object{"jsonrpc": "2.0", "id": frame["id"], "result": result}) }
 		switch method {
 		case "initialize":
+			clientCapabilities = params["clientCapabilities"]
 			if slices.Contains(os.Args, "--hold-initialize") {
 				fixtureSteerGate("[defer-steer]")
 			}
@@ -377,7 +379,7 @@ func acpFixture() {
 				notify(object{"sessionUpdate": "available_commands_update", "availableCommands": []object{}})
 				notify(object{"sessionUpdate": "usage_update", "used": 32, "size": 4096})
 			}
-			receipt = object{"native": native, "input": input, "mode": mode, "model": model, "effort": effort, "cwd": cwd, "directories": directories, "servers": servers, "images": images, "resources": resources, "args": os.Args[1:]}
+			receipt = object{"native": native, "input": input, "mode": mode, "model": model, "effort": effort, "cwd": cwd, "directories": directories, "servers": servers, "images": images, "resources": resources, "args": os.Args[1:], "clientCapabilities": clientCapabilities}
 			if strings.Contains(input, "[skill-policy]") {
 				for _, directory := range directories {
 					data, err := os.ReadFile(filepath.Join(str(directory), ".agents", "skills.json"))
@@ -479,6 +481,93 @@ func acpFixture() {
 			case strings.Contains(command, "[disconnect]"):
 				notify(object{"sessionUpdate": "agent_message_chunk", "content": object{"type": "text", "text": "partial before disconnect"}})
 				os.Exit(0)
+			case strings.Contains(command, "[elicitation]"):
+				send(object{
+					"jsonrpc": "2.0",
+					"id":      "elicitation-1",
+					"method":  "elicitation/create",
+					"params": object{
+						"sessionId": native,
+						"mode":      "form",
+						"message":   "Choose the fixture preferences.",
+						"requestedSchema": json.RawMessage(`{
+							"type": "object",
+							"title": "Fixture preferences",
+							"properties": {
+								"mode": {
+									"type": "string",
+									"title": "Mode",
+									"description": "Which mode should we run?",
+									"enum": ["Strict (Recommended)", "Flexible"]
+								},
+								"areas": {
+									"type": "array",
+									"title": "Areas",
+									"description": "Which areas should this cover?",
+									"minItems": 1,
+									"items": {
+										"anyOf": [
+											{"const": "schemas", "title": "Schemas", "description": "Typed wire shapes"},
+											{"const": "ui", "title": "UI", "description": "Web experience"}
+										]
+									}
+								},
+								"note": {
+									"type": "string",
+									"title": "Extra note",
+									"description": "Optional note",
+									"default": "default note"
+								}
+							},
+							"required": ["mode", "areas"]
+						}`),
+					},
+				})
+			case strings.Contains(command, "[agy-ask-question]"):
+				send(object{
+					"jsonrpc": "2.0",
+					"id":      "elicitation-1",
+					"method":  "elicitation/create",
+					"params": object{
+						"sessionId": native,
+						"mode":      "form",
+						"message":   "Please answer 2 questions",
+						"requestedSchema": object{
+							"type": "object",
+							"properties": object{
+								"q1": object{
+									"type":  "string",
+									"title": "Which database should we use?",
+									"enum":  []string{"Postgres", "SQLite"},
+								},
+								"q2": object{
+									"type":  "string",
+									"title": "Deploy to staging first?",
+									"oneOf": []object{{"const": "yes", "title": "Yes"}, {"const": "no", "title": "No"}},
+								},
+								"q2_other": object{
+									"type":  "string",
+									"title": "Other",
+								},
+							},
+							"required": []string{"q1"},
+						},
+					},
+				})
+			case strings.Contains(command, "[agy-interaction]"):
+				send(object{
+					"jsonrpc": "2.0",
+					"id":      "permission-original-id",
+					"method":  "session/request_permission",
+					"params": object{
+						"sessionId": native,
+						"toolCall":  object{"toolCallId": "interaction_1", "title": "Pick a deployment target"},
+						"options": []object{
+							{"optionId": "target:staging", "name": "Staging", "kind": "allow_once"},
+							{"optionId": "target:prod", "name": "Production", "kind": "allow_once"},
+						},
+					},
+				})
 			case strings.Contains(command, "[approval]"):
 				send(object{"jsonrpc": "2.0", "id": "permission-original-id", "method": "session/request_permission", "params": object{"sessionId": native, "toolCall": object{"toolCallId": "native-tool", "title": "ACP approval"}, "options": []object{{"optionId": "native:allow:once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "native:reject:once", "name": "Reject once", "kind": "reject_once"}}}})
 				if strings.Contains(command, "[drop-approval]") {
@@ -523,6 +612,9 @@ func acpFixture() {
 		case "":
 			if frame["id"] == "permission-original-id" {
 				receipt["permission"] = obj(obj(frame["result"])["outcome"])
+				complete()
+			} else if frame["id"] == "elicitation-1" {
+				receipt["elicitation"] = frame["result"]
 				complete()
 			}
 		}

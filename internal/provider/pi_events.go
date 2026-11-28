@@ -166,25 +166,81 @@ func (t *piTranscript) update(frame object) error {
 }
 
 func answerPiDialog(ctx context.Context, p *device.Process, sink Sink, frame object) error {
-	method, title := str(frame["method"]), str(frame["title"])
+	method := str(frame["method"])
+	title := strings.TrimSpace(str(frame["title"]))
 	request := model.Request{Kind: "question", Title: title}
+	if request.Title == "" {
+		request.Title = "Agent needs your input"
+	}
 	options := arr(frame["options"])
+	var selectRaw []string
+	var selectIDs []string
 	switch method {
 	case "select":
-		for i, value := range options {
-			request.Options = append(request.Options, model.RequestOption{ID: strconv.Itoa(i), Name: str(value), Allow: true})
+		questionText := title
+		if questionText == "" {
+			questionText = "Choose an option"
 		}
+		counts := map[string]int{}
+		selectRaw = make([]string, len(options))
+		for i, value := range options {
+			s := str(value)
+			selectRaw[i] = s
+			counts[s]++
+		}
+		selectIDs = make([]string, len(selectRaw))
+		qOptions := make([]model.QuestionOption, len(selectRaw))
+		for i, s := range selectRaw {
+			id := s
+			if id == "" || counts[s] > 1 {
+				id = strconv.Itoa(i)
+			}
+			label := s
+			if strings.TrimSpace(label) == "" {
+				label = "Empty value"
+			}
+			selectIDs[i] = id
+			qOptions[i] = model.QuestionOption{ID: id, Label: label}
+		}
+		request.Title = "Agent needs your input"
+		request.Questions = []model.Question{{
+			ID:          "value",
+			Header:      "Question",
+			Text:        questionText,
+			Options:     qOptions,
+			AllowCustom: boolPtr(false),
+		}}
 	case "confirm":
 		request.Kind, request.Detail = "approval", str(frame["message"])
 	case "input", "editor":
-		detail := str(frame["placeholder"])
+		message := strings.TrimSpace(str(frame["message"]))
+		placeholder := strings.TrimSpace(str(frame["placeholder"]))
+		header := "Question"
+		questionText := title
+		if message != "" && title != "" && message != title {
+			header = title
+			questionText = message
+		} else if questionText == "" {
+			questionText = message
+		}
+		if questionText == "" {
+			questionText = placeholder
+		}
+		if questionText == "" {
+			questionText = "Provide your input"
+		}
+		q := model.Question{
+			ID:          "value",
+			Header:      header,
+			Text:        questionText,
+			Placeholder: placeholder,
+			Required:    boolPtr(false),
+			Options:     []model.QuestionOption{},
+		}
 		if method == "editor" {
-			detail = str(frame["prefill"])
+			q.InitialAnswer = str(frame["prefill"])
 		}
-		if detail == "" {
-			detail = title
-		}
-		request.Questions = []model.Question{{ID: "value", Text: detail, Options: []model.QuestionOption{}}}
+		request.Questions = []model.Question{q}
 	default:
 		return nil
 	}
@@ -221,13 +277,31 @@ func answerPiDialog(ctx context.Context, p *device.Process, sink Sink, frame obj
 	switch {
 	case method == "confirm" && err == nil:
 		response["confirmed"] = answer.Allow
-	case answer.Allow && method == "select":
-		if i, err := strconv.Atoi(answer.OptionID); err == nil && i >= 0 && i < len(options) {
-			response["value"] = options[i]
+	case answer.Allow && err == nil && method == "select":
+		selected := answer.OptionID
+		if selected == "" {
+			if values := answer.Answers["value"]; len(values) > 0 {
+				selected = values[0]
+			}
 		}
-	case answer.Allow:
+		matched := false
+		for i, id := range selectIDs {
+			if id == selected {
+				response["value"] = selectRaw[i]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			if i, convErr := strconv.Atoi(selected); convErr == nil && i >= 0 && i < len(selectRaw) {
+				response["value"] = selectRaw[i]
+			}
+		}
+	case answer.Allow && err == nil:
 		if values := answer.Answers["value"]; len(values) != 0 {
 			response["value"] = values[0]
+		} else {
+			response["value"] = ""
 		}
 	}
 	if response["value"] == nil && response["confirmed"] == nil {

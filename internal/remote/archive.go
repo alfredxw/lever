@@ -316,15 +316,30 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 				r.Truncated = true
 				break
 			}
-			v.Text, _ = clipped(v.Text, 1024)
-			question := p.Question{ID: v.ID, Text: v.Text, Multiple: v.Multiple}
+			v.Header, _ = clipped(v.Header, 256)
+			v.Text, _ = clipped(v.Text, 2048)
+			v.InitialAnswer, _ = clipped(v.InitialAnswer, 2048)
+			v.Placeholder, _ = clipped(v.Placeholder, 256)
+			question := p.Question{
+				ID:            v.ID,
+				Header:        v.Header,
+				Text:          v.Text,
+				Multiple:      v.Multiple,
+				AllowCustom:   v.AllowCustom,
+				Required:      v.Required,
+				InitialAnswer: v.InitialAnswer,
+				Placeholder:   v.Placeholder,
+				Secret:        v.Secret,
+			}
 			for idx, opt := range v.Options {
 				if idx >= 32 {
 					r.Truncated = true
 					break
 				}
 				opt.Label, _ = clipped(opt.Label, 256)
-				question.Options = append(question.Options, p.Option{ID: opt.ID, Name: opt.Label})
+				opt.Description, _ = clipped(opt.Description, 512)
+				opt.Preview, _ = clipped(opt.Preview, 2048)
+				question.Options = append(question.Options, p.Option{ID: opt.ID, Name: opt.Label, Description: opt.Description, Preview: opt.Preview})
 			}
 			r.Questions = append(r.Questions, question)
 		}

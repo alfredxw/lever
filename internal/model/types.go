@@ -737,13 +737,28 @@ type QuestionOption struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
 }
 
 type Question struct {
-	ID       string           `json:"id"`
-	Text     string           `json:"text"`
-	Options  []QuestionOption `json:"options"`
-	Multiple bool             `json:"multiple"`
+	ID            string           `json:"id"`
+	Header        string           `json:"header,omitempty"`
+	Text          string           `json:"text"`
+	Options       []QuestionOption `json:"options"`
+	Multiple      bool             `json:"multiple"`
+	AllowCustom   *bool            `json:"allowCustom,omitempty"`
+	Required      *bool            `json:"required,omitempty"`
+	InitialAnswer string           `json:"initialAnswer,omitempty"`
+	Placeholder   string           `json:"placeholder,omitempty"`
+	Secret        bool             `json:"secret,omitempty"`
+}
+
+func (q Question) IsRequired() bool {
+	return q.Required == nil || *q.Required
+}
+
+func (q Question) AllowsCustom() bool {
+	return q.AllowCustom == nil || *q.AllowCustom
 }
 
 type Request struct {

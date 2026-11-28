@@ -106,9 +106,16 @@ func piFixture() {
 			}
 			reply(object{"models": models})
 		case "extension_ui_response":
-			if frame["id"] != "checkpoint-question" || frame["value"] != "continue" {
-				os.Exit(3)
+			if frame["id"] == "checkpoint-question" {
+				if frame["value"] != "continue" {
+					os.Exit(3)
+				}
+				send(object{"type": "agent_settled"})
+				continue
 			}
+			data, _ := json.Marshal(frame)
+			send(object{"type": "message_start", "message": object{"role": "assistant"}})
+			send(object{"type": "message_end", "message": object{"role": "assistant", "stopReason": "stop", "content": []object{{"type": "text", "text": string(data)}}}})
 			send(object{"type": "agent_settled"})
 		case "prompt":
 			input := str(frame["message"])
@@ -129,6 +136,14 @@ func piFixture() {
 			}
 			if strings.Contains(input, "[pi-question]") {
 				send(object{"type": "extension_ui_request", "id": "checkpoint-question", "method": "input", "title": "Continue this turn?"})
+				continue
+			}
+			if strings.Contains(input, "[pi-select]") {
+				send(object{"type": "extension_ui_request", "id": "select-question", "method": "select", "title": "Choose a release channel", "options": []string{"Alpha", "Beta"}})
+				continue
+			}
+			if strings.Contains(input, "[pi-editor]") {
+				send(object{"type": "extension_ui_request", "id": "editor-question", "method": "editor", "title": "Edit release notes", "prefill": "Initial notes"})
 				continue
 			}
 			if strings.Contains(input, "[pi-disconnect]") {

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -820,7 +821,7 @@ func claudeApproval(ctx context.Context, p *device.Process, sink Sink, frame obj
 		response := object{"behavior": "cancelled"}
 		if r["dialog_kind"] == "resume_return" {
 			answer, err := sink.Ask(ctx, model.Request{Kind: "question", Title: "Claude Code", Questions: []model.Question{{
-				ID: "resume", Text: "Compact this idle conversation before continuing?", Options: []model.QuestionOption{
+				ID: "resume", Header: "Claude Code", Text: "Compact this idle conversation before continuing?", AllowCustom: boolPtr(false), Options: []model.QuestionOption{
 					{ID: "continue", Label: "Continue"}, {ID: "compact", Label: "Compact and continue"},
 				},
 			}}})
@@ -837,6 +838,73 @@ func claudeApproval(ctx context.Context, p *device.Process, sink Sink, frame obj
 		}
 		return p.Send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": frame["request_id"], "response": response}})
 	}
+	if str(r["subtype"]) == "elicitation" {
+		schemaVal := r["requested_schema"]
+		if schemaVal == nil {
+			schemaVal = r["requestedSchema"]
+		}
+		if str(r["mode"]) != "form" || schemaVal == nil {
+			return p.Send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": frame["request_id"], "response": object{"action": "cancel"}}})
+		}
+		rawSchema, err := json.Marshal(schemaVal)
+		if err != nil {
+			return p.Send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": frame["request_id"], "response": object{"action": "cancel"}}})
+		}
+		form, ok := parseElicitationForm(rawSchema, str(r["message"]), elicitationOptions{})
+		if !ok {
+			return p.Send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": frame["request_id"], "response": object{"action": "cancel"}}})
+		}
+		var req model.Request
+		if form.empty {
+			title := form.title
+			if title == "" {
+				title = strings.TrimSpace(str(r["title"]))
+			}
+			if title == "" {
+				title = strings.TrimSpace(str(r["server_name"]))
+			}
+			if title == "" {
+				title = "MCP confirmation"
+			}
+			req = model.Request{
+				Kind:       "approval",
+				Title:      title,
+				Detail:     strings.TrimSpace(str(r["message"])),
+				Questions:  []model.Question{},
+				SubagentID: subagentID,
+				AllowOnce:  &model.Answer{Allow: true, Answers: map[string][]string{}},
+			}
+		} else {
+			title := form.title
+			if title == "" {
+				title = "Agent needs your input"
+			}
+			req = model.Request{
+				Kind:       "question",
+				Title:      title,
+				Detail:     strings.TrimSpace(str(r["message"])),
+				Questions:  form.questions,
+				SubagentID: subagentID,
+			}
+		}
+		answer, err := sink.Ask(ctx, req)
+		if err != nil {
+			return err
+		}
+		response := object{"action": "cancel"}
+		if form.empty {
+			if answer.Allow {
+				response = object{"action": "accept", "content": object{}}
+			} else {
+				response = object{"action": "decline"}
+			}
+		} else if answer.Allow {
+			if content, ok := form.content(answer.Answers); ok {
+				response = object{"action": "accept", "content": content}
+			}
+		}
+		return p.Send(object{"type": "control_response", "response": object{"subtype": "success", "request_id": frame["request_id"], "response": response}})
+	}
 	if str(r["subtype"]) != "can_use_tool" {
 		return fmt.Errorf("unsupported Claude request: %s", str(r["subtype"]))
 	}
@@ -846,13 +914,36 @@ func claudeApproval(ctx context.Context, p *device.Process, sink Sink, frame obj
 	if name == "AskUserQuestion" {
 		request.Kind = "question"
 		request.Title = "Agent needs your input"
-		for _, q := range arr(input["questions"]) {
+		rawQuestions := arr(input["questions"])
+		for i, q := range rawQuestions {
 			q := obj(q)
-			question := model.Question{ID: str(q["question"]), Text: str(q["question"]), Options: []model.QuestionOption{}}
+			text := strings.TrimSpace(str(q["question"]))
+			if text == "" {
+				continue
+			}
+			header := strings.TrimSpace(str(q["header"]))
+			if header == "" && len(rawQuestions) > 1 {
+				header = fmt.Sprintf("Question %d", i+1)
+			}
+			question := model.Question{
+				ID:      str(q["question"]),
+				Header:  header,
+				Text:    text,
+				Options: []model.QuestionOption{},
+			}
 			question.Multiple, _ = q["multiSelect"].(bool)
 			for _, o := range arr(q["options"]) {
 				o := obj(o)
-				question.Options = append(question.Options, model.QuestionOption{ID: str(o["label"]), Label: str(o["label"]), Description: str(o["description"])})
+				label := strings.TrimSpace(str(o["label"]))
+				if label == "" {
+					continue
+				}
+				question.Options = append(question.Options, model.QuestionOption{
+					ID:          str(o["label"]),
+					Label:       label,
+					Description: strings.TrimSpace(str(o["description"])),
+					Preview:     str(o["preview"]),
+				})
 			}
 			request.Questions = append(request.Questions, question)
 		}

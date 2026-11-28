@@ -50,6 +50,10 @@ import type { OpenChatFile } from "./ChatResponse";
 import { ComparisonMessage } from "./ComparisonMessage";
 import { ComposerContext } from "./ComposerContext";
 import { QueuedMessages } from "./QueuedMessages";
+import {
+  PendingQuestionPanel,
+  selectSessionQuestions,
+} from "./PendingQuestionPanel";
 import { RunContent } from "./RunContent";
 import { canContinueRun } from "./runControls";
 import { Topic, type TopicConversationProps } from "./Topic";
@@ -331,6 +335,17 @@ function ChatContent(props: ChatProps) {
         isDelegatedRunActive(d.status),
       ),
     [delegations, main?.id, mainRuns],
+  );
+  const mainQuestions = useMemo(
+    () => selectSessionQuestions(overview?.requests, main?.id, mainRuns),
+    [overview?.requests, main?.id, mainRuns],
+  );
+  const dockedMainQuestionIds = useMemo(
+    () =>
+      inlineTopic
+        ? undefined
+        : new Set(mainQuestions.map((request) => request.id)),
+    [inlineTopic, mainQuestions],
   );
   useFocusComposer(panel, focus && !inlineTopic && !!latestPage, onFocused);
   useUnreadStart({
@@ -634,6 +649,7 @@ function ChatContent(props: ChatProps) {
                     onOpenRun={onOpenRun}
                     onOpenAgent={onOpenAgent}
                     requests={overview.requests}
+                    dockedRequestIds={dockedMainQuestionIds}
                     sessionBusy={!!activeRun}
                     canRecover={entry.runId === latestMainRun?.id}
                     onQuote={botChat ? undefined : quoteMessage}
@@ -667,6 +683,13 @@ function ChatContent(props: ChatProps) {
             requests={overview.requests}
             onOpenRun={onOpenRun}
           />
+          {!inlineTopic && (
+            <PendingQuestionPanel
+              requests={mainQuestions}
+              runs={mainRuns}
+              visible={enabled}
+            />
+          )}
           <QueuedMessages
             runs={queuedRuns}
             activeRun={activeRun}
@@ -715,6 +738,13 @@ function ChatContent(props: ChatProps) {
             requests={overview.requests}
             onOpenRun={onOpenRun}
           />
+          {!inlineTopic && (
+            <PendingQuestionPanel
+              requests={mainQuestions}
+              runs={mainRuns}
+              visible={enabled}
+            />
+          )}
           <Composer
             agentId={agent.id}
             agents={overview.agents}

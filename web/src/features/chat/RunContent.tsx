@@ -75,6 +75,7 @@ export type RunContentProps = {
   session: Session;
   onOpenFile: OpenChatFile;
   requests: Request[];
+  dockedRequestIds?: ReadonlySet<string>;
   sessionBusy: boolean;
   showRuntimeHandoff?: boolean;
   hideUserMessage?: boolean;
@@ -117,6 +118,7 @@ export function RunMessages({
   session,
   onOpenFile,
   requests,
+  dockedRequestIds,
   sessionBusy,
   showRuntimeHandoff = true,
   hideUserMessage = false,
@@ -304,7 +306,10 @@ export function RunMessages({
           />
           {hasCollaboration && work}
           {pendingRequests
-            .filter((request) => !request.delegationAgentId)
+            .filter(
+              (request) =>
+                !request.delegationAgentId && !dockedRequestIds?.has(request.id),
+            )
             .map((request) => {
               const title =
                 request.subagentId &&

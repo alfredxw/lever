@@ -6,19 +6,9 @@ import { api, queryClient } from "@/api/client";
 import type { Answer, Request } from "@/api/types.gen";
 import { CodeSnippet } from "@/components/ai-elements/code-block";
 import { KeepConversationOpen } from "./ComposerContext";
-import { useQuestionDraft } from "./questionDraft";
+import { QuestionPrompt } from "./QuestionPrompt";
 import { ErrorNotice } from "@/components/common";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field";
 import {
   Item,
   ItemActions,
@@ -43,18 +33,6 @@ export function RequestCard({
 }) {
   const { t } = useTranslation();
   const keepOpen = useContext(KeepConversationOpen);
-  const [draft, setAnswer] = useQuestionDraft(request.id);
-  const answers = Object.fromEntries(
-    request.questions.map((q) => {
-      const value = draft[q.id];
-      return [
-        q.id,
-        typeof value === "string"
-          ? [value.trim()].filter(Boolean)
-          : (value ?? []),
-      ];
-    }),
-  );
   const answer = useMutation({
     onMutate: () => keepOpen?.(),
     mutationFn: (value: Answer | "allow-run") =>
@@ -70,6 +48,19 @@ export function RequestCard({
       }
     },
   });
+
+  if (request.kind === "question" && request.questions.length > 0) {
+    return (
+      <QuestionPrompt
+        request={request}
+        title={title}
+        source={source}
+        variant="card"
+        onSubmit={onSubmit}
+      />
+    );
+  }
+
   const approval = request.kind === "approval";
   return (
     <Item
@@ -101,73 +92,13 @@ export function RequestCard({
           <p className="text-sm whitespace-pre-wrap wrap-break-word">
             {request.detail}
           </p>
-        ) : approval ? (
+        ) : (
           request.detail && (
             <CodeSnippet
               code={request.detail}
               title={t("chat.requestDetails")}
             />
           )
-        ) : (
-          <FieldGroup>
-            {request.questions.map((q) => {
-              const value = draft[q.id];
-              const choices = Array.isArray(value) ? value : [];
-              return (
-                <FieldSet key={q.id} disabled={answer.isPending}>
-                  <FieldLegend variant="label">{q.text}</FieldLegend>
-                  <FieldGroup className="gap-2">
-                    {q.options.map((option) => {
-                      const id = `${request.id}-${q.id}-${option.id}`;
-                      return (
-                        <FieldLabel key={option.id} htmlFor={id}>
-                          <Field orientation="horizontal">
-                            <Checkbox
-                              id={id}
-                              checked={choices.includes(option.id)}
-                              onCheckedChange={(checked) => {
-                                keepOpen?.();
-                                setAnswer(
-                                  q.id,
-                                  checked
-                                    ? [
-                                        ...(q.multiple ? choices : []),
-                                        option.id,
-                                      ]
-                                    : choices.filter((id) => id !== option.id),
-                                );
-                              }}
-                            />
-                            <div className="flex flex-col gap-1">
-                              <span>{option.label}</span>
-                              {option.description && (
-                                <FieldDescription>
-                                  {option.description}
-                                </FieldDescription>
-                              )}
-                            </div>
-                          </Field>
-                        </FieldLabel>
-                      );
-                    })}
-                    <Field>
-                      <Textarea
-                        aria-label={t("chat.answerLabel", { question: q.text })}
-                        placeholder={t("chat.answerPlaceholder")}
-                        rows={2}
-                        value={typeof value === "string" ? value : ""}
-                        onCompositionStart={keepOpen}
-                        onChange={(event) => {
-                          keepOpen?.();
-                          setAnswer(q.id, event.target.value);
-                        }}
-                      />
-                    </Field>
-                  </FieldGroup>
-                </FieldSet>
-              );
-            })}
-          </FieldGroup>
         )}
         {answer.error && <ErrorNotice error={answer.error} />}
       </ItemContent>
@@ -215,12 +146,8 @@ export function RequestCard({
           {!request.options?.length && (
             <Button
               size="sm"
-              disabled={
-                answer.isPending ||
-                (!approval &&
-                  request.questions.some((q) => !answers[q.id]?.length))
-              }
-              onClick={() => answer.mutate({ allow: true, answers })}
+              disabled={answer.isPending}
+              onClick={() => answer.mutate({ allow: true, answers: {} })}
             >
               {answer.isPending ? (
                 <LoaderCircle

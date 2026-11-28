@@ -122,6 +122,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 				return nil
 			}
 			request := model.Request{Kind: "approval", Title: method, Detail: pretty(q), Questions: []model.Question{}}
+			var elicitation *elicitationForm
 			switch method {
 			case "item/commandExecution/requestApproval":
 				request.Title = "Run command"
@@ -135,14 +136,71 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			case "item/tool/requestUserInput":
 				request.Kind = "question"
 				request.Title = "Agent needs your input"
-				for _, v := range arr(q["questions"]) {
+				for i, v := range arr(q["questions"]) {
 					v := obj(v)
-					question := model.Question{ID: str(v["id"]), Text: str(v["question"]), Options: []model.QuestionOption{}}
-					for _, o := range arr(v["options"]) {
+					qID := strings.TrimSpace(str(v["id"]))
+					if qID == "" {
+						qID = fmt.Sprintf("question-%d", i+1)
+					}
+					text := strings.TrimSpace(str(v["question"]))
+					if text == "" {
+						text = "Choose an answer."
+					}
+					header := strings.TrimSpace(str(v["header"]))
+					question := model.Question{
+						ID:       qID,
+						Header:   header,
+						Text:     text,
+						Options:  []model.QuestionOption{},
+						Multiple: v["multiSelect"] == true,
+						Secret:   v["isSecret"] == true,
+					}
+					for j, o := range arr(v["options"]) {
 						o := obj(o)
-						question.Options = append(question.Options, model.QuestionOption{ID: str(o["label"]), Label: str(o["label"]), Description: str(o["description"])})
+						label := strings.TrimSpace(str(o["label"]))
+						if label == "" {
+							label = fmt.Sprintf("Option %d", j+1)
+						}
+						question.Options = append(question.Options, model.QuestionOption{
+							ID:          label,
+							Label:       label,
+							Description: strings.TrimSpace(str(o["description"])),
+						})
 					}
 					request.Questions = append(request.Questions, question)
+				}
+			case "mcpServer/elicitation/request":
+				if str(q["mode"]) != "form" || q["requestedSchema"] == nil {
+					return p.Send(object{"id": frame["id"], "result": object{"action": "cancel"}})
+				}
+				rawSchema, err := json.Marshal(q["requestedSchema"])
+				if err != nil {
+					return p.Send(object{"id": frame["id"], "result": object{"action": "cancel"}})
+				}
+				form, ok := parseElicitationForm(rawSchema, str(q["message"]), elicitationOptions{})
+				if !ok {
+					return p.Send(object{"id": frame["id"], "result": object{"action": "cancel"}})
+				}
+				elicitation = form
+				if form.empty {
+					request.Title = form.title
+					if request.Title == "" {
+						if server := strings.TrimSpace(str(q["serverName"])); server != "" {
+							request.Title = server
+						} else {
+							request.Title = "MCP confirmation"
+						}
+					}
+					request.Detail = strings.TrimSpace(str(q["message"]))
+					request.AllowOnce = &model.Answer{Allow: true, Answers: map[string][]string{}}
+				} else {
+					request.Kind = "question"
+					request.Title = form.title
+					if request.Title == "" {
+						request.Title = "Agent needs your input"
+					}
+					request.Detail = strings.TrimSpace(str(q["message"]))
+					request.Questions = form.questions
 				}
 			default:
 				return p.Send(object{"id": frame["id"], "error": object{"code": -32601, "message": "Lever does not support this runtime request: " + method}})
@@ -162,10 +220,26 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			if answer.Allow {
 				result["decision"] = "accept"
 			}
-			if request.Kind == "question" {
+			if elicitation != nil {
+				if elicitation.empty {
+					if answer.Allow {
+						result = object{"action": "accept", "content": object{}}
+					} else {
+						result = object{"action": "decline"}
+					}
+				} else if !answer.Allow {
+					result = object{"action": "cancel"}
+				} else if content, ok := elicitation.content(answer.Answers); ok {
+					result = object{"action": "accept", "content": content}
+				} else {
+					result = object{"action": "cancel"}
+				}
+			} else if request.Kind == "question" {
 				answers := object{}
-				for id, values := range answer.Answers {
-					answers[id] = object{"answers": values}
+				if answer.Allow {
+					for id, values := range answer.Answers {
+						answers[id] = object{"answers": values}
+					}
 				}
 				result = object{"answers": answers}
 			}
