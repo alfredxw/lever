@@ -59,24 +59,62 @@ func runRemote(args []string, dir string, in io.Reader, out, errOut io.Writer) e
 	fs.StringVar(&v.AgentID, "agent", v.AgentID, "exposed Agent ID")
 	fs.StringVar(&v.Operation, "operation", "", "send, answer, stop or dispatch_task")
 	fs.BoolVar(&v.Enabled, "enabled", false, "enable LAN or grant this operation")
-	fs.Bool("code-stdin", false, "read the one-time code from stdin")
+	stdinCode := fs.Bool("code-stdin", false, "read the one-time code from stdin")
+	fs.StringVar(&v.Pair.Code, "code", "", "one-time pairing code")
+	fs.StringVar(&v.Pair.Link, "link", "", "Hub or pinned LAN pairing link")
+	access := fs.String("access", "", "chat, workspace or admin")
+	var expose optionalBool
+	fs.Var(&expose, "expose-all", "expose all non-archived Agents")
+	fs.BoolVar(&v.Pair.NoControl, "no-control", false, "disable controlling other devices")
+	jsonStatus := fs.Bool("json", false, "include node route diagnostics in status")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional argument")
 	}
+	if op == "status" && *jsonStatus {
+		v.Action = "diagnostics"
+	}
+	if op == "access" {
+		v.AccessLevel = p.AccessLevel(*access)
+	}
 	if op == "pair" {
+		v.Pair.Access = p.AccessLevel(*access)
+		if expose.set {
+			v.Pair.ExposeAll = &expose.value
+		}
 		v.Pair.Role = p.Role(*role)
 		if !v.Pair.Role.Valid() {
 			return errors.New("invalid role")
 		}
-		fmt.Fprint(errOut, "Pairing code: ")
-		code, err := bufio.NewReader(io.LimitReader(in, 256)).ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return err
+		if v.Pair.Link != "" && (v.Pair.Code != "" || *stdinCode || v.Pair.Hub != "") || v.Pair.Code != "" && *stdinCode {
+			return errors.New("choose one of --link, --code or --code-stdin")
 		}
-		v.Pair.Code = strings.TrimSpace(code)
+		if v.Pair.Link != "" && strings.Contains(v.Pair.Link, "lan=") && v.Pair.Role == p.Executor && !v.Pair.NoControl {
+			explicitRole := false
+			fs.Visit(func(f *flag.Flag) {
+				if f.Name == "role" {
+					explicitRole = true
+				}
+			})
+			if !explicitRole {
+				v.Pair.Role = p.Workstation
+			}
+		}
+		if v.Pair.Link == "" && v.Pair.Code == "" {
+			if !*stdinCode {
+				fmt.Fprint(errOut, "Pairing code: ")
+			}
+			code, err := bufio.NewReader(io.LimitReader(in, 256)).ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return err
+			}
+			v.Pair.Code = strings.TrimSpace(code)
+			if v.Pair.Code == "" {
+				return errors.New("pairing code required")
+			}
+		}
 	}
 	err := request(dir, "POST", "/remote", "", v, out)
 	if op != "pair" || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED)) {

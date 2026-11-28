@@ -36,7 +36,7 @@ hub-image: hub-web
 	bash deploy/hub/build-image.sh $(VERSION)
 hub-deploy:
 	mkdir -p output/remote
-	COPYFILE_DISABLE=1 tar -czf output/remote/lever-hub-deploy-$(VERSION).tar.gz -C deploy/hub compose.yaml .env.example README.md
+	COPYFILE_DISABLE=1 tar -czf output/remote/lever-hub-deploy-$(VERSION).tar.gz -C deploy/hub compose.yaml .env.example README.md install.sh systemd
 mobile-ios-core:
 	bash mobile/ios/build-core.sh
 mobile-ios:

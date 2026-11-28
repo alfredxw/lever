@@ -22,6 +22,7 @@ import (
 const executionTokenEnv = "LEVER_EXECUTION_TOKEN"
 
 const UsageText = `Usage: lever [server flags]
+       lever serve [--listen HOST:PORT] [--advertise HOST:PORT] [--json]
        lever agent list|get|create|update [flags]
        lever providers list|models [flags]
        lever chat list|create|send [flags]

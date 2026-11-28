@@ -13,5 +13,18 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+  node:
+    profiles: ["node"]
+    image: ${LEVER_NODE_IMAGE:-lever-node:0.1.0}
+    restart: unless-stopped
+    network_mode: "service:hub"
+    depends_on: [hub]
+    command: ["serve", "--listen", "127.0.0.1:8091", "--json"]
+    volumes:
+      - node-data:/var/lib/lever
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
 volumes:
   hub-data: {}
+  node-data: {}

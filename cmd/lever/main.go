@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -33,6 +35,13 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if flag.Arg(0) == "serve" {
+		if err := serveNode(flag.Args()[1:], *dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *background {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -64,4 +73,40 @@ func main() {
 	if err = host.Stop(server); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
+}
+
+func serveNode(args []string, dir string) error {
+	if os.Getenv("LEVER_EXECUTION_TOKEN") != "" {
+		return errors.New("starting a Node requires a local operator")
+	}
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.StringVar(&dir, "data-dir", dir, "Node data directory")
+	bind := fs.String("listen", "127.0.0.1:8090", "peer TLS listener address")
+	advertise := fs.String("advertise", "", "peer address advertised in pairing links")
+	jsonReady := fs.Bool("json", false, "emit one versioned JSON readiness record")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected serve argument")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server, err := host.Start(dir, "127.0.0.1:0", "")
+	if err != nil {
+		return err
+	}
+	addr, err := server.Remote.ListenPeer(*bind, *advertise)
+	if err != nil {
+		return errors.Join(err, host.Stop(server))
+	}
+	if *jsonReady {
+		err = json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 1, "ready": true, "nodeId": server.App.Store.DeviceID, "listen": *bind, "advertise": addr})
+	} else {
+		_, err = fmt.Fprintln(os.Stdout, "Lever Node", server.App.Store.DeviceID, addr)
+	}
+	if err == nil {
+		<-ctx.Done()
+	}
+	return errors.Join(err, host.Stop(server))
 }

@@ -12,25 +12,16 @@ docker compose up -d
 
 独立 HTTPS 部署将 `.env` 的 `LEVER_HUB_DOMAIN` 设为解析到服务器的域名，`LEVER_HUB_BIND` 设为监听网卡地址，`LEVER_HUB_PORT` 设为 443。开放公网 TCP 443 后启动 Compose。Hub 通过 TLS-ALPN-01 申请和续期证书。
 
-在「设置 → 设备」选择执行机、工作机或控制端并生成配对码。在执行机运行以下命令。Agent ID 可从本机 `lever agent list` 查看。
+在 Hub 的「设备」中为新机器签发配对码。在目标机器运行以下命令，输入一次性配对码。该示例允许个人设备使用这台机器的 Agent 工作区。
 
 ```sh
-lever remote pair --hub https://hub.example.com --role executor --code-stdin
-lever remote agents expose AGENT_ID
-lever remote status
+lever remote pair --hub https://hub.example.com --role workstation --code-stdin --access workspace --expose-all
+lever remote status --json
 ```
 
-打开 Hub 的 Tasks 创建并派发共享任务。在目标 Host 的「设置 → 远程与设备」查看指令和确认执行，或在该机使用 `lever remote inbox`、`lever remote accept COMMAND_ID`。既有本机对话默认保留在设备。首次勾选共享后，对话正文、审批和摘要会同步到指定空间。
+在桌面「设置 → 远程与设备」可调整开放的 Agent、文件只读模式、允许浏览的目录和新设备确认策略。个人空间默认按目标机器配置的权限执行。选择「仅本机」后，相应 Agent 或对话仅在所属机器上显示。设备在线时可读取完整历史，离线时 Hub 提供活跃会话最近 40 轮缓存。
 
-同一账号的个人手机可以在桌面「设置 → 远程与设备」中设为可信，并按 Agent 勾选发送、回答审批、停止或派发任务。无界面的执行机可使用以下命令。手机的设备 ID 在手机「设置」中查看。已授权的手机可在 Host 断开 Hub 时继续走局域网，撤销信任会同时移除该手机的全部操作授权。
-
-```sh
-lever remote lan --enabled
-lever remote trust --controller PHONE_ID
-lever remote permission --controller PHONE_ID --agent AGENT_ID --operation send --enabled
-lever remote permission --controller PHONE_ID --agent AGENT_ID --operation answer --enabled
-lever remote trusted
-```
+手机和另一台电脑可通过桌面生成的局域网配对链接独立连接。已配对的设备出现在 Agents 列表里。运行、新建和文件操作都由选中的设备处理。旧版设备及已有的逐项授权可继续使用原有的信任、收件箱和共享流程。
 
 ## 备份与恢复
 
@@ -73,3 +64,11 @@ services:
 ```
 
 手机在配对后可允许系统通知，也可稍后在 App 的「设置」开启。Hub 将提醒与会话更新写入同一事务，临时投递失败会重试，投递前会复核请求状态。推送服务只接触设备 token、通用提醒和加密的定位信息；聊天正文、审批命令和解密密钥保留在手机及其配对的 Hub。真机验收时，在 Wi-Fi 发消息并锁屏，切蜂窝网络，点系统通知回到原审批。再从电脑先回答一次，确认手机打开旧通知会显示已采纳的答案。
+
+### 同机运行执行节点
+
+先初始化 Hub 账号。新版 Linux 镜像包同时包含 Hub 和 Node，使用 `docker load` 即可导入。在源码仓库执行 `WITH_NODE=1 ./deploy/hub/build-image.sh` 可同时构建 Hub 和 Node 镜像。也可以通过 `LEVER_NODE_IMAGE` 指定已安装所需 Provider CLI 的自定义 Node 镜像。
+
+在部署目录运行 `./install.sh --with-node`。按提示输入 Hub 签发的一次性工作机配对码，或回车稍后配对。两个服务共享网络命名空间。Hub 使用 8090，Node 的加密直连接口绑定 127.0.0.1:8091，各自使用独立数据卷。已在运行的 Hub 可以直接启用此 profile。查看路由和权限可执行 `docker compose exec node lever remote status --json`。
+
+在独立 Linux 主机上，将 Lever 二进制安装到 `/usr/local/bin/lever`。个人账号可将 `systemd/lever-node-user.service` 复制到 `~/.config/systemd/user/` 并执行 `systemctl --user enable --now lever-node-user`。系统服务模板 `systemd/lever-node.service` 使用专用的 `lever` 账号。启动后，以同一运行账号执行 `lever remote pair --hub https://你的域名 --code-stdin --access admin --no-control --expose-all`，输入一次性配对码。使用自定义数据目录时向该命令传入同一个 `--data-dir`。

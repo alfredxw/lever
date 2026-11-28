@@ -15,3 +15,8 @@ done
 test -s "$stage/ca-certificates.crt"
 cp deploy/hub/Dockerfile "$stage/"
 docker build --platform "linux/$arch" -t "lever-hub:$version" "$stage"
+
+if [[ ${WITH_NODE:-0} == 1 ]]; then
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$stage/lever" ./cmd/lever
+  docker build --platform "linux/$arch" -f deploy/hub/Dockerfile.node -t "lever-node:$version" "$stage"
+fi

@@ -121,6 +121,11 @@ jobs:
       - name: Build desktop and Hub web assets
         if: matrix.target == 'hub'
         run: make privacy web
+      - name: Enable ARM64 container builds for the optional Node
+        if: matrix.target == 'hub'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
       - name: Package Hub Linux images and Compose files
         if: matrix.target == 'hub'
         run: bash scripts/build-release.sh hub

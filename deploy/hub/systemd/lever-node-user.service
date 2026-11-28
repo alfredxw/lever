@@ -1,0 +1,16 @@
+[Unit]
+Description=Personal Lever execution node
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Environment=LEVER_DATA_DIR=%h/.local/share/lever
+ExecStart=/usr/local/bin/lever serve --listen 127.0.0.1:8090 --json
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -130,9 +130,9 @@ case "$1" in
     docker compose --env-file deploy/hub/.env.example -f deploy/hub/compose.yaml config --quiet
     for arch in arm64 amd64; do
       image="lever-hub:$VERSION"
-      HUB_ARCH="$arch" bash deploy/hub/build-image.sh "$VERSION"
+      WITH_NODE=1 HUB_ARCH="$arch" bash deploy/hub/build-image.sh "$VERSION"
       [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" == "linux/$arch" ]]
-      docker save "$image" | gzip -n > "$package_dir/lever-hub-$VERSION-linux-$arch.tar.gz"
+      docker save "$image" "lever-node:$VERSION" | gzip -n > "$package_dir/lever-hub-$VERSION-linux-$arch.tar.gz"
     done
     container=$(docker run --rm -d -p 127.0.0.1::8090 "$image" --listen :8090)
     trap 'docker stop "$container" >/dev/null' EXIT

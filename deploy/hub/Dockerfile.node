@@ -1,0 +1,8 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 65532 --create-home --home-dir /var/lib/lever lever
+COPY lever /usr/local/bin/lever
+USER lever
+WORKDIR /var/lib/lever
+ENV LEVER_DATA_DIR=/var/lib/lever/data
+ENTRYPOINT ["/usr/local/bin/lever"]
