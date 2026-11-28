@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"lever/internal/model"
 )
@@ -31,11 +32,25 @@ func parsePiFile(path string) (parsedFile, error) {
 	var out parsedFile
 	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	seen := make(map[string]bool)
+	var lastTriggerTS time.Time
 
 	err = readLines(f, func(line []byte) {
-		if !bytes.Contains(line, []byte(`"usage"`)) &&
-			!bytes.Contains(line, []byte(`"session"`)) &&
-			!(out.Title == "" && bytes.Contains(line, []byte(`"user"`))) {
+		hasUsage := bytes.Contains(line, []byte(`"usage"`))
+		isSession := bytes.Contains(line, []byte(`"session"`))
+		isUser := bytes.Contains(line, []byte(`"user"`))
+		isToolResult := bytes.Contains(line, []byte(`"toolResult"`))
+		if !hasUsage && !isSession && !isUser && !isToolResult {
+			return
+		}
+		if !hasUsage && !isSession && out.Title != "" {
+			if bytes.Contains(line, []byte(`"role":"user"`)) ||
+				bytes.Contains(line, []byte(`"role": "user"`)) ||
+				bytes.Contains(line, []byte(`"role":"toolResult"`)) ||
+				bytes.Contains(line, []byte(`"role": "toolResult"`)) {
+				if ts, ok := extractFastTimestamp(line); ok {
+					lastTriggerTS = ts
+				}
+			}
 			return
 		}
 		var entry struct {
@@ -67,9 +82,14 @@ func parsePiFile(path string) (parsedFile, error) {
 			}
 			return
 		}
-		if out.Title == "" && entry.Type == "message" && entry.Message != nil && entry.Message.Role == "user" {
-			if text, ok := entry.Message.Content.(string); ok {
-				out.Title = trimTitle(text)
+		if entry.Type == "message" && entry.Message != nil && (entry.Message.Role == "user" || entry.Message.Role == "toolResult") {
+			if ts, ok := parseTimestamp(entry.Timestamp); ok {
+				lastTriggerTS = ts
+			}
+			if out.Title == "" && entry.Message.Role == "user" {
+				if text, ok := entry.Message.Content.(string); ok {
+					out.Title = trimTitle(text)
+				}
 			}
 		}
 
@@ -128,6 +148,11 @@ func parsePiFile(path string) (parsedFile, error) {
 			}
 			seen[key] = true
 		}
+		var durMs int64
+		if !lastTriggerTS.IsZero() && ts.After(lastTriggerTS) {
+			durMs = sanitizeDurationMs(ts.Sub(lastTriggerTS))
+		}
+		lastTriggerTS = ts
 		out.Records = append(out.Records, usageRecord{
 			Provider:     "pi",
 			SessionID:    sessionID,
@@ -136,6 +161,7 @@ func parsePiFile(path string) (parsedFile, error) {
 			Timestamp:    ts,
 			Totals:       totals,
 			ReportedCost: reported,
+			DurationMs:   durMs,
 			DedupeKey:    key,
 		})
 	})

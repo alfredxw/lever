@@ -316,6 +316,7 @@ func TestServiceStatsAndCorrelation(t *testing.T) {
 	}
 
 	svc := NewService(st.DB, stateDir)
+	defer svc.Close()
 	statsAll, err := svc.Stats(context.Background(), Query{Period: "7d", Scope: "all", TimeZone: "UTC", Refresh: true})
 	if err != nil {
 		t.Fatal(err)
@@ -422,4 +423,237 @@ func concatPB(chunks ...[]byte) []byte {
 		out = append(out, c...)
 	}
 	return out
+}
+
+func TestTpsExtractionAndAggregation(t *testing.T) {
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "state")
+	claudeDir := filepath.Join(tmp, "claude")
+	codexDir := filepath.Join(tmp, "codex")
+	geminiDir := filepath.Join(tmp, "gemini")
+	piDir := filepath.Join(tmp, "pi")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	t.Setenv("CODEX_HOME", codexDir)
+	t.Setenv("GEMINI_HOME", geminiDir)
+	t.Setenv("PI_CODING_AGENT_DIR", piDir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	t0 := now.Add(-30 * time.Second)
+
+	// 1. Claude: user at t0 -> assistant chunk1 at t0+2s (out=50) -> chunk2 at t0+4s (out=200) => dur=4s => 50 tok/s
+	if err := os.MkdirAll(filepath.Join(claudeDir, "projects", "p1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeLines := []string{
+		`{"type":"user","timestamp":"` + t0.Format(time.RFC3339) + `","sessionId":"c-tps","cwd":"/tmp/r","message":{"role":"user","content":"Hello"}}`,
+		`{"type":"assistant","timestamp":"` + t0.Add(2*time.Second).Format(time.RFC3339) + `","sessionId":"c-tps","requestId":"rq1","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}}`,
+		`{"type":"assistant","timestamp":"` + t0.Add(4*time.Second).Format(time.RFC3339) + `","sessionId":"c-tps","requestId":"rq1","message":{"id":"m1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":200}}}`,
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "projects", "p1", "c-tps.jsonl"), []byte(joinLines(claudeLines)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Codex: turn_context at t0 -> token_usage_record at t0+5s (out=500) => 100 tok/s
+	if err := os.MkdirAll(filepath.Join(codexDir, "sessions", "2026"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codexLines := []string{
+		`{"timestamp":"` + t0.Format(time.RFC3339) + `","type":"session_meta","payload":{"id":"x-tps","cwd":"/tmp/r"}}`,
+		`{"timestamp":"` + t0.Format(time.RFC3339) + `","type":"turn_context","payload":{"model":"gpt-5.4","cwd":"/tmp/r"}}`,
+		`{"timestamp":"` + t0.Add(5*time.Second).Format(time.RFC3339) + `","type":"token_usage_record","payload":{"response_id":"resp-x1","usage":{"input_tokens":1000,"output_tokens":500,"total_tokens":1500}}}`,
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "sessions", "2026", "x-tps.jsonl"), []byte(joinLines(codexLines)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Antigravity: gen_metadata field 11 (TTFT=1s) + field 12 (stream=1s) => dur=2s, out=300 => 150 tok/s
+	agyConvDir := filepath.Join(geminiDir, "antigravity-cli", "conversations")
+	if err := os.MkdirAll(agyConvDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agyDBPath := filepath.Join(agyConvDir, "agy-tps.db")
+	adb, err := sql.Open("sqlite", agyDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adb.Exec(`CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);`); err != nil {
+		t.Fatal(err)
+	}
+	usageMsg := concatPB(
+		pbVarint(1, 1532),
+		pbVarint(2, 500),
+		pbVarint(3, 300),
+		pbBytes(7, []byte("agy-resp-1")),
+	)
+	tsMsg := pbVarint(1, uint64(t0.Add(6*time.Second).Unix()))
+	dur1s := pbVarint(1, 1)
+	inner := concatPB(
+		pbVarint(3, 1532),
+		pbBytes(4, usageMsg),
+		pbBytes(9, pbBytes(4, tsMsg)),
+		pbBytes(11, dur1s),
+		pbBytes(12, dur1s),
+		pbBytes(19, []byte("gemini-4-neon")),
+	)
+	if _, err := adb.Exec(`INSERT INTO gen_metadata (idx, data) VALUES (1, ?)`, pbBytes(1, inner)); err != nil {
+		t.Fatal(err)
+	}
+	adb.Close()
+
+	// 4. Pi: user at t0 -> assistant at t0+2.5s (out=100) => 40 tok/s
+	if err := os.MkdirAll(filepath.Join(piDir, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	piLines := []string{
+		`{"type":"session","id":"pi-tps","cwd":"/tmp/r","timestamp":"` + t0.Format(time.RFC3339) + `"}`,
+		`{"type":"message","timestamp":"` + t0.Format(time.RFC3339) + `","message":{"role":"user","content":"Go"}}`,
+		`{"type":"message","id":"pm1","timestamp":"` + t0.Add(2500*time.Millisecond).Format(time.RFC3339Nano) + `","message":{"role":"assistant","model":"deepseek-r1","usage":{"input":100,"output":100}}}`,
+	}
+	if err := os.WriteFile(filepath.Join(piDir, "sessions", "pi-tps.jsonl"), []byte(joinLines(piLines)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(nil, stateDir)
+	defer svc.Close()
+	stats, err := svc.Stats(context.Background(), Query{Period: "24h", Scope: "all", TimeZone: "UTC", Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Overall weighted TPS: output = 200+500+300+100 = 1100; dur = 4+5+2+2.5 = 13.5s => 81.5 tok/s
+	if stats.TpsSamples != 4 {
+		t.Fatalf("tpsSamples = %d, want 4", stats.TpsSamples)
+	}
+	if math.Abs(stats.AvgTps-81.5) > 0.1 {
+		t.Fatalf("grand avgTps = %v, want 81.5", stats.AvgTps)
+	}
+	if len(stats.SeriesTps) != len(stats.TimeSlots) {
+		t.Fatalf("seriesTps len = %d, slots = %d", len(stats.SeriesTps), len(stats.TimeSlots))
+	}
+
+	wantProvTps := map[string]float64{
+		"claude":      50.0,
+		"codex":       100.0,
+		"antigravity": 150.0,
+		"pi":          40.0,
+	}
+	for _, p := range stats.Providers {
+		want, ok := wantProvTps[p.ID]
+		if !ok {
+			t.Fatalf("unexpected provider %q", p.ID)
+		}
+		if math.Abs(p.AvgTps-want) > 0.1 || p.TpsSamples != 1 {
+			t.Fatalf("provider %s avgTps=%v samples=%d, want %v/1", p.ID, p.AvgTps, p.TpsSamples, want)
+		}
+		if len(p.SeriesTps) != len(stats.TimeSlots) {
+			t.Fatalf("provider %s seriesTps len mismatch", p.ID)
+		}
+	}
+	for _, m := range stats.Models {
+		want := wantProvTps[m.Provider]
+		if math.Abs(m.AvgTps-want) > 0.1 || m.TpsSamples != 1 {
+			t.Fatalf("model %s avgTps=%v samples=%d, want %v/1", m.Model, m.AvgTps, m.TpsSamples, want)
+		}
+	}
+}
+
+func TestPersistentCacheAndSWR(t *testing.T) {
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "lever-state")
+	claudeDir := filepath.Join(tmp, "claude")
+	codexDir := filepath.Join(tmp, "codex")
+	geminiDir := filepath.Join(tmp, "gemini")
+	piDir := filepath.Join(tmp, "pi")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	t.Setenv("CODEX_HOME", codexDir)
+	t.Setenv("GEMINI_HOME", geminiDir)
+	t.Setenv("PI_CODING_AGENT_DIR", piDir)
+
+	st, err := store.Open(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	proj := model.Project{ID: "p1", Name: "demo"}
+	agent := model.Agent{ID: "a1", Name: "Worker"}
+	chat := model.Chat{ID: "c1", AgentID: "a1", Title: "Cache Test"}
+	sess := model.Session{ID: "s1", ChatID: "c1", AgentID: "a1", NativeID: "nat-1", Title: "Cache Test"}
+	run1 := map[string]any{
+		"id": "r1", "sessionId": "s1", "createdAt": now.Format(time.RFC3339),
+		"changes": []model.RunChanges{{Files: []model.DiffFile{{Path: "x.go", Additions: 25, Deletions: 5}}}},
+	}
+	mustJSON := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+	_, _ = st.DB.Exec(`INSERT INTO projects(id,data) VALUES(?,?)`, proj.ID, mustJSON(proj))
+	_, _ = st.DB.Exec(`INSERT INTO agents(id,data) VALUES(?,?)`, agent.ID, mustJSON(agent))
+	_, _ = st.DB.Exec(`INSERT INTO chats(id,agent_id,data) VALUES(?,?,?)`, chat.ID, chat.AgentID, mustJSON(chat))
+	_, _ = st.DB.Exec(`INSERT INTO sessions(id,chat_id,kind,data) VALUES(?,?,'main',?)`, sess.ID, sess.ChatID, mustJSON(sess))
+	_, _ = st.DB.Exec(`INSERT INTO runs(id,session_id,chat_id,agent_id,command_id,input_hash,status,data) VALUES(?,?,?,?,?,?,?,?)`,
+		"r1", "s1", "c1", "a1", "cmd1", "h1", "completed", mustJSON(run1))
+
+	if err := os.MkdirAll(filepath.Join(claudeDir, "projects", "p1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fPath := filepath.Join(claudeDir, "projects", "p1", "nat-1.jsonl")
+	line1 := `{"type":"user","timestamp":"` + now.Add(-2*time.Second).Format(time.RFC3339) + `","sessionId":"nat-1","message":{"role":"user","content":"Hi"}}` + "\n" +
+		`{"type":"assistant","timestamp":"` + now.Format(time.RFC3339) + `","sessionId":"nat-1","requestId":"req1","message":{"id":"m1","model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":120}}}` + "\n"
+	if err := os.WriteFile(fPath, []byte(line1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Service #1 populates persistent disk cache.
+	svc1 := NewService(st.DB, stateDir)
+	s1, err := svc1.Stats(context.Background(), Query{Period: "7d", Scope: "all", TimeZone: "UTC", Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s1.Totals.Total != 220 || math.Abs(s1.AvgTps-60.0) > 0.1 || len(s1.Agents) != 1 || s1.Agents[0].Additions != 25 {
+		t.Fatalf("svc1 unexpected stats: total=%d tps=%v agents=%+v", s1.Totals.Total, s1.AvgTps, s1.Agents)
+	}
+	svc1.Close()
+
+	if _, err := os.Stat(filepath.Join(stateDir, "local_stats_cache.db")); err != nil {
+		t.Fatalf("expected persistent cache db to exist: %v", err)
+	}
+
+	// Service #2 starts fresh in-memory and must hydrate fileCache & runCache from disk.
+	svc2 := NewService(st.DB, stateDir)
+	defer svc2.Close()
+	s2, err := svc2.Stats(context.Background(), Query{Period: "7d", Scope: "all", TimeZone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Totals.Total != 220 || math.Abs(s2.AvgTps-60.0) > 0.1 || len(s2.Agents) != 1 || s2.Agents[0].Additions != 25 {
+		t.Fatalf("svc2 hydrated stats mismatch: total=%d tps=%v agents=%+v", s2.Totals.Total, s2.AvgTps, s2.Agents)
+	}
+
+	// Verify SWR: expire snapshot TTL, append a new record to the file, then call Stats(Refresh: false).
+	// First call returns cached snapshot immediately (220 tokens) while triggering background refresh.
+	line2 := `{"type":"assistant","timestamp":"` + now.Add(2*time.Second).Format(time.RFC3339) + `","sessionId":"nat-1","requestId":"req2","message":{"id":"m2","model":"claude-opus-4-6","usage":{"input_tokens":300,"output_tokens":180}}}` + "\n"
+	if err := os.WriteFile(fPath, []byte(line1+line2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc2.mu.Lock()
+	svc2.snapshot.scannedAt = time.Now().Add(-2 * snapshotTTL)
+	svc2.mu.Unlock()
+
+	swrStats, err := svc2.Stats(context.Background(), Query{Period: "7d", Scope: "all", TimeZone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if swrStats.Totals.Total != 220 {
+		t.Fatalf("expected SWR immediate stale snapshot (220), got %d", swrStats.Totals.Total)
+	}
+
+	// Wait briefly for the background SWR refresh to land.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		fresh, err := svc2.Stats(context.Background(), Query{Period: "7d", Scope: "all", TimeZone: "UTC"})
+		if err == nil && fresh.Totals.Total == 700 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("background SWR refresh did not update snapshot to 700 tokens in time")
 }

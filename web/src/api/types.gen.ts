@@ -407,8 +407,11 @@ export interface LocalStatsSeries {
   leverCostUsd: number /* float64 */;
   sessions: number /* int */;
   runs: number /* int */;
+  avgTps: number /* float64 */;
+  tpsSamples: number /* int */;
   seriesTokens: number /* int64 */[];
   seriesCost: number /* float64 */[];
+  seriesTps: number /* float64 */[];
 }
 export interface LocalStatsModel {
   id: string;
@@ -428,8 +431,11 @@ export interface LocalStatsModel {
   cacheHitRate: number /* float64 */;
   sessions: number /* int */;
   runs: number /* int */;
+  avgTps: number /* float64 */;
+  tpsSamples: number /* int */;
   seriesTokens: number /* int64 */[];
   seriesCost: number /* float64 */[];
+  seriesTps: number /* float64 */[];
 }
 export interface LocalStatsAgent {
   id: string;
@@ -522,6 +528,8 @@ export interface LocalStats {
   cacheSavingsUsd: number /* float64 */;
   categoryCost: LocalStatsCategoryCost;
   cacheHitRate: number /* float64 */;
+  avgTps: number /* float64 */;
+  tpsSamples: number /* int */;
   sessionsCount: number /* int */;
   runsCount: number /* int */;
   leverTokens: number /* int64 */;
@@ -529,6 +537,7 @@ export interface LocalStats {
   externalTokens: number /* int64 */;
   externalCostUsd: number /* float64 */;
   timeSlots: string[];
+  seriesTps: number /* float64 */[];
   providers: LocalStatsSeries[];
   models: LocalStatsModel[];
   agents: LocalStatsAgent[];

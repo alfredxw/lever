@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import {
   computeWindowPace,
   fmtAxisTokens,
+  fmtAxisTps,
   fmtAxisUsd,
+  fmtMetricValue,
   fmtPct,
   fmtTokens,
+  fmtTps,
   fmtUsd,
   formatSlotLabel,
   providerAccent,
@@ -34,6 +37,17 @@ test("formats token, currency, and percentage values cleanly", () => {
   assert.equal(fmtPct(0.875), "87.5%");
   assert.equal(fmtPct(0.9), "90%");
   assert.equal(fmtPct(1), "100%");
+
+  assert.equal(fmtTps(0), "—");
+  assert.equal(fmtTps(-5), "—");
+  assert.equal(fmtTps(42.36), "42.4 tok/s");
+  assert.equal(fmtTps(155.4), "155 tok/s");
+  assert.equal(fmtTps(1420), "1.4K tok/s");
+  assert.equal(fmtAxisTps(0), "0");
+  assert.equal(fmtAxisTps(60), "60");
+  assert.equal(fmtAxisTps(12.5), "12.5");
+  assert.equal(fmtAxisTps(1500), "1.5K");
+  assert.equal(fmtMetricValue(72.5, "tps"), "72.5 tok/s");
 });
 
 test("computeWindowPace calculates elapsed time tick and pace status", () => {

@@ -3,11 +3,19 @@ package localstats
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
+	"math"
 	"strings"
 	"time"
 
 	"lever/internal/model"
+)
+
+const (
+	minValidDurationMs = 50
+	maxValidDurationMs = 10 * 60 * 1000 // 10 minutes
+	maxValidTps        = 2500.0
 )
 
 type usageRecord struct {
@@ -20,6 +28,7 @@ type usageRecord struct {
 	Totals       model.TokenTotals
 	CacheWrite1h int64
 	ReportedCost *float64
+	DurationMs   int64
 	DedupeKey    string
 }
 
@@ -51,6 +60,80 @@ func parseTimestamp(raw string) (time.Time, bool) {
 		return ts.UTC(), true
 	}
 	return time.Time{}, false
+}
+
+// extractFastTimestamp extracts a JSON "timestamp":"..." value from the line prefix
+// without unmarshaling multi-MB message or tool-output payloads.
+func extractFastTimestamp(line []byte) (time.Time, bool) {
+	// Scan prefix first (timestamp is near the start in Codex/Claude/Pi JSONL lines).
+	prefix := line
+	if len(prefix) > 512 {
+		prefix = prefix[:512]
+	}
+	if ts, ok := scanTimestampField(prefix); ok {
+		return ts, true
+	}
+	// If the line is huge and timestamp wasn't in the first 512 bytes, also check tail.
+	if len(line) > 512 {
+		tailStart := max(0, len(line)-512)
+		if ts, ok := scanTimestampField(line[tailStart:]); ok {
+			return ts, true
+		}
+	}
+	var hdr struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &hdr) == nil {
+		return parseTimestamp(hdr.Timestamp)
+	}
+	return time.Time{}, false
+}
+
+func scanTimestampField(buf []byte) (time.Time, bool) {
+	key := []byte(`"timestamp"`)
+	idx := bytes.Index(buf, key)
+	if idx < 0 {
+		return time.Time{}, false
+	}
+	rest := buf[idx+len(key):]
+	colon := bytes.IndexByte(rest, ':')
+	if colon < 0 {
+		return time.Time{}, false
+	}
+	rest = bytes.TrimLeft(rest[colon+1:], " \t")
+	if len(rest) < 2 || rest[0] != '"' {
+		return time.Time{}, false
+	}
+	rest = rest[1:]
+	end := bytes.IndexByte(rest, '"')
+	if end <= 0 || end > 64 {
+		return time.Time{}, false
+	}
+	return parseTimestamp(string(rest[:end]))
+}
+
+func sanitizeDurationMs(d time.Duration) int64 {
+	ms := d.Milliseconds()
+	if ms < minValidDurationMs || ms > maxValidDurationMs {
+		return 0
+	}
+	return ms
+}
+
+func isValidTpsSample(outputTokens, durationMs int64) bool {
+	if outputTokens <= 0 || durationMs < minValidDurationMs || durationMs > maxValidDurationMs {
+		return false
+	}
+	tps := float64(outputTokens) / (float64(durationMs) / 1000.0)
+	return tps > 0 && tps <= maxValidTps
+}
+
+func calcTps(outputTokens, durationMs int64) float64 {
+	if outputTokens <= 0 || durationMs <= 0 {
+		return 0
+	}
+	v := float64(outputTokens) / (float64(durationMs) / 1000.0)
+	return math.Round(v*10) / 10
 }
 
 func trimTitle(raw string) string {

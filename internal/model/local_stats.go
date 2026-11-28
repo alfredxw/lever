@@ -44,8 +44,11 @@ type LocalStatsSeries struct {
 	LeverCostUsd    float64                `json:"leverCostUsd"`
 	Sessions        int                    `json:"sessions"`
 	Runs            int                    `json:"runs"`
+	AvgTps          float64                `json:"avgTps"`
+	TpsSamples      int                    `json:"tpsSamples"`
 	SeriesTokens    []int64                `json:"seriesTokens"`
 	SeriesCost      []float64              `json:"seriesCost"`
+	SeriesTps       []float64              `json:"seriesTps"`
 }
 
 type LocalStatsModel struct {
@@ -66,8 +69,11 @@ type LocalStatsModel struct {
 	CacheHitRate    float64                `json:"cacheHitRate"`
 	Sessions        int                    `json:"sessions"`
 	Runs            int                    `json:"runs"`
+	AvgTps          float64                `json:"avgTps"`
+	TpsSamples      int                    `json:"tpsSamples"`
 	SeriesTokens    []int64                `json:"seriesTokens"`
 	SeriesCost      []float64              `json:"seriesCost"`
+	SeriesTps       []float64              `json:"seriesTps"`
 }
 
 type LocalStatsAgent struct {
@@ -166,6 +172,8 @@ type LocalStats struct {
 	CacheSavingsUsd float64                `json:"cacheSavingsUsd"`
 	CategoryCost    LocalStatsCategoryCost `json:"categoryCost"`
 	CacheHitRate    float64                `json:"cacheHitRate"`
+	AvgTps          float64                `json:"avgTps"`
+	TpsSamples      int                    `json:"tpsSamples"`
 	SessionsCount   int                    `json:"sessionsCount"`
 	RunsCount       int                    `json:"runsCount"`
 	LeverTokens     int64                  `json:"leverTokens"`
@@ -173,6 +181,7 @@ type LocalStats struct {
 	ExternalTokens  int64                  `json:"externalTokens"`
 	ExternalCostUsd float64                `json:"externalCostUsd"`
 	TimeSlots       []string               `json:"timeSlots"`
+	SeriesTps       []float64              `json:"seriesTps"`
 	Providers       []LocalStatsSeries     `json:"providers"`
 	Models          []LocalStatsModel      `json:"models"`
 	Agents          []LocalStatsAgent      `json:"agents"`

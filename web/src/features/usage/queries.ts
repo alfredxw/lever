@@ -27,6 +27,58 @@ export function localStatsQueryKey(
   return ["local-stats", period, scope, timeZone] as const;
 }
 
+export function localStatsSummaryQueryKey(timeZone: string) {
+  return ["local-stats-summary", timeZone] as const;
+}
+
+function fetchLocalStats(
+  period: LocalStatsPeriod,
+  scope: LocalStatsScope,
+  timeZone: string,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ period, scope });
+  if (timeZone) params.set("tz", timeZone);
+  return api<LocalStats>(
+    `/stats/local?${params.toString()}`,
+    undefined,
+    "GET",
+    signal,
+  );
+}
+
+function fetchLocalStatsSummary(timeZone: string, signal?: AbortSignal) {
+  const params = new URLSearchParams();
+  if (timeZone) params.set("tz", timeZone);
+  const qs = params.toString();
+  return api<LocalStatsQuickSummary>(
+    `/stats/local/summary${qs ? `?${qs}` : ""}`,
+    undefined,
+    "GET",
+    signal,
+  );
+}
+
+export function prefetchLocalStatsSummary(timeZone: string) {
+  return queryClient.prefetchQuery({
+    queryKey: localStatsSummaryQueryKey(timeZone),
+    staleTime: USAGE_STALE_MS,
+    queryFn: ({ signal }) => fetchLocalStatsSummary(timeZone, signal),
+  });
+}
+
+export function prefetchLocalStats(
+  period: LocalStatsPeriod,
+  scope: LocalStatsScope,
+  timeZone: string,
+) {
+  return queryClient.prefetchQuery({
+    queryKey: localStatsQueryKey(period, scope, timeZone),
+    staleTime: USAGE_STALE_MS,
+    queryFn: ({ signal }) => fetchLocalStats(period, scope, timeZone, signal),
+  });
+}
+
 export function useLocalStats(
   period: LocalStatsPeriod,
   scope: LocalStatsScope,
@@ -40,16 +92,7 @@ export function useLocalStats(
     enabled,
     staleTime: USAGE_STALE_MS,
     placeholderData: keepPreviousData,
-    queryFn: ({ signal }) => {
-      const params = new URLSearchParams({ period, scope });
-      if (timeZone) params.set("tz", timeZone);
-      return api<LocalStats>(
-        `/stats/local?${params.toString()}`,
-        undefined,
-        "GET",
-        signal,
-      );
-    },
+    queryFn: ({ signal }) => fetchLocalStats(period, scope, timeZone, signal),
   });
 
   const refresh = useCallback(async () => {
@@ -74,20 +117,12 @@ export function useLocalStats(
 
 export function useLocalStatsSummary(timeZone: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["local-stats-summary", timeZone],
+    queryKey: localStatsSummaryQueryKey(timeZone),
     enabled,
     staleTime: USAGE_STALE_MS,
-    queryFn: ({ signal }) => {
-      const params = new URLSearchParams();
-      if (timeZone) params.set("tz", timeZone);
-      const qs = params.toString();
-      return api<LocalStatsQuickSummary>(
-        `/stats/local/summary${qs ? `?${qs}` : ""}`,
-        undefined,
-        "GET",
-        signal,
-      );
-    },
+    placeholderData: keepPreviousData,
+    retry: false,
+    queryFn: ({ signal }) => fetchLocalStatsSummary(timeZone, signal),
   });
 }
 

@@ -2,9 +2,12 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   fmtAxisTokens,
+  fmtAxisTps,
   fmtAxisUsd,
   fmtMetricValue,
+  fmtTps,
   formatSlotLabel,
+  type UsageMetric,
 } from "./format";
 
 export interface ChartSeriesItem {
@@ -68,12 +71,14 @@ export function TrendChart({
   resolution,
   series,
   metric,
+  overallValues,
   monoNames,
 }: {
   slots: string[];
   resolution: "hour" | "day";
   series: ChartSeriesItem[];
-  metric: "tokens" | "cost";
+  metric: UsageMetric;
+  overallValues?: number[];
   monoNames?: boolean;
 }) {
   const { t } = useTranslation();
@@ -81,6 +86,7 @@ export function TrendChart({
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const isRate = metric === "tps";
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -108,18 +114,22 @@ export function TrendChart({
   const plotW = Math.max(80, width - padL - padR);
   const plotH = height - padT - padB;
 
-  const { yMax, sortedSeries } = useMemo(() => {
+  const { yMax, sortedSeries, hasRateData } = useMemo(() => {
+    const allVals = series.flatMap((s) => s.values);
     const maxRaw = Math.max(
-      metric === "cost" ? 0.04 : 4,
-      ...series.flatMap((s) => s.values),
+      metric === "cost" ? 0.04 : metric === "tps" ? 40 : 4,
+      ...allVals,
     );
     const rough = maxRaw / 4;
     const mag = 10 ** Math.floor(Math.log10(rough));
     const norm = rough / mag;
-    const step = (norm > 5 ? 10 : norm > 2 ? 5 : norm > 1 ? 2 : 1) * mag;
+    const step =
+      (norm > 5 ? 10 : norm > 2.5 ? 5 : norm > 2 ? 2.5 : norm > 1 ? 2 : 1) *
+      mag;
     const computedMax = Math.max(step * 4, Math.ceil(maxRaw / step) * step);
     const ordered = [...series].sort((a, b) => b.total - a.total);
-    return { yMax: computedMax, sortedSeries: ordered };
+    const hasPositive = allVals.some((v) => v > 0);
+    return { yMax: computedMax, sortedSeries: ordered, hasRateData: hasPositive };
   }, [series, metric]);
 
   const xAt = (i: number) =>
@@ -134,7 +144,7 @@ export function TrendChart({
   }, [labels.length, plotW]);
 
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!slots.length || !wrapRef.current) return;
+    if (!slots.length || !wrapRef.current || (isRate && !hasRateData)) return;
     const rect = wrapRef.current.getBoundingClientRect();
     const relX = event.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, (relX - padL) / plotW));
@@ -151,10 +161,20 @@ export function TrendChart({
       : hoverX + 14;
   }, [hoverIdx, hoverX, width]);
 
-  const hoverTotal =
+  const hoverSummary =
     hoverIdx !== null
-      ? sortedSeries.reduce((sum, s) => sum + (s.values[hoverIdx] ?? 0), 0)
+      ? isRate
+        ? (overallValues?.[hoverIdx] ?? 0)
+        : sortedSeries.reduce((sum, s) => sum + (s.values[hoverIdx] ?? 0), 0)
       : 0;
+
+  if (isRate && !hasRateData) {
+    return (
+      <div ref={wrapRef} className="usage-chart-wrap usage-chart-empty">
+        <span>{t("usage.tpsNoSamples")}</span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -174,7 +194,11 @@ export function TrendChart({
               x2="0"
               y2="1"
             >
-              <stop offset="0%" stopColor={s.color} stopOpacity={0.2} />
+              <stop
+                offset="0%"
+                stopColor={s.color}
+                stopOpacity={isRate ? 0.14 : 0.2}
+              />
               <stop offset="100%" stopColor={s.color} stopOpacity={0.01} />
             </linearGradient>
           ))}
@@ -199,7 +223,11 @@ export function TrendChart({
                 y={y + 4}
                 textAnchor="end"
               >
-                {metric === "cost" ? fmtAxisUsd(val) : fmtAxisTokens(val)}
+                {metric === "cost"
+                  ? fmtAxisUsd(val)
+                  : metric === "tps"
+                    ? fmtAxisTps(val)
+                    : fmtAxisTokens(val)}
               </text>
             </g>
           );
@@ -230,6 +258,93 @@ export function TrendChart({
         {/* Area fills & smooth monotone spline lines */}
         {sortedSeries.map((s, idx) => {
           if (!slots.length) return null;
+          if (isRate) {
+            // Rate mode (TPS): skip unmeasured (0) slots instead of plunging to 0,
+            // bridging gaps with light dashed connectors and marking measured points.
+            const runs: Point[][] = [];
+            let cur: Point[] = [];
+            for (let i = 0; i < slots.length; i++) {
+              const v = s.values[i] ?? 0;
+              if (v > 0) {
+                cur.push({ x: xAt(i), y: yAt(v) });
+              } else if (cur.length > 0) {
+                runs.push(cur);
+                cur = [];
+              }
+            }
+            if (cur.length > 0) runs.push(cur);
+            if (runs.length === 0) return null;
+
+            const showArea = sortedSeries.length === 1;
+            const showDots = slots.length <= 31;
+            return (
+              <g key={s.id}>
+                {runs.map((run, rIdx) => {
+                  const prev = rIdx > 0 ? runs[rIdx - 1] : null;
+                  const bridgeFrom = prev ? prev[prev.length - 1] : null;
+                  const bridgeTo = run[0];
+                  const lineD = run.length >= 2 ? monotonePath(run) : "";
+                  const areaD =
+                    showArea && run.length >= 2
+                      ? `${lineD} L ${run[run.length - 1].x.toFixed(1)} ${(padT + plotH).toFixed(1)} L ${run[0].x.toFixed(1)} ${(padT + plotH).toFixed(1)} Z`
+                      : "";
+                  return (
+                    <g key={rIdx}>
+                      {bridgeFrom && (
+                        <line
+                          x1={bridgeFrom.x}
+                          y1={bridgeFrom.y}
+                          x2={bridgeTo.x}
+                          y2={bridgeTo.y}
+                          stroke={s.color}
+                          strokeWidth={1.5}
+                          strokeDasharray="3 4"
+                          strokeOpacity={0.42}
+                        />
+                      )}
+                      {areaD && (
+                        <path
+                          d={areaD}
+                          fill={`url(#usage-grad-${uid}-${idx})`}
+                        />
+                      )}
+                      {lineD && (
+                        <path
+                          d={lineD}
+                          fill="none"
+                          stroke={s.color}
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                        />
+                      )}
+                      {run.length === 1 ? (
+                        <circle
+                          cx={run[0].x}
+                          cy={run[0].y}
+                          r={3.5}
+                          fill={s.color}
+                          stroke="var(--background)"
+                          strokeWidth={1.5}
+                        />
+                      ) : (
+                        showDots &&
+                        run.map((pt, pIdx) => (
+                          <circle
+                            key={pIdx}
+                            cx={pt.x}
+                            cy={pt.y}
+                            r={2.2}
+                            fill={s.color}
+                          />
+                        ))
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          }
+
           const pts = slots.map((_, i) => ({
             x: xAt(i),
             y: yAt(s.values[i] ?? 0),
@@ -273,17 +388,21 @@ export function TrendChart({
               strokeWidth={1}
               strokeDasharray="3 3"
             />
-            {sortedSeries.map((s) => (
-              <circle
-                key={s.id}
-                cx={hoverX}
-                cy={yAt(s.values[hoverIdx] ?? 0)}
-                r={3.5}
-                fill={s.color}
-                stroke="var(--background)"
-                strokeWidth={1.5}
-              />
-            ))}
+            {sortedSeries.map((s) => {
+              const v = s.values[hoverIdx] ?? 0;
+              if (isRate && v <= 0) return null;
+              return (
+                <circle
+                  key={s.id}
+                  cx={hoverX}
+                  cy={yAt(v)}
+                  r={3.5}
+                  fill={s.color}
+                  stroke="var(--background)"
+                  strokeWidth={1.5}
+                />
+              );
+            })}
           </g>
         )}
       </svg>
@@ -321,8 +440,14 @@ export function TrendChart({
           ))}
           {sortedSeries.length > 1 && (
             <div className="usage-chart-tooltip-total">
-              <span>{t("usage.chartTotal")}</span>
-              <span>{fmtMetricValue(hoverTotal, metric)}</span>
+              <span>
+                {isRate ? t("usage.chartAvg") : t("usage.chartTotal")}
+              </span>
+              <span>
+                {isRate
+                  ? fmtTps(hoverSummary)
+                  : fmtMetricValue(hoverSummary, metric)}
+              </span>
             </div>
           )}
         </div>

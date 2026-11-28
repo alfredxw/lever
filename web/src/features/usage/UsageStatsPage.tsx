@@ -19,10 +19,12 @@ import {
   fmtMetricValue,
   fmtPct,
   fmtTokens,
+  fmtTps,
   fmtUsd,
   formatWindowRange,
   modelAccent,
   providerAccent,
+  type UsageMetric,
 } from "./format";
 import { HourlyHeatmap } from "./HourlyHeatmap";
 import { LimitsOverview } from "./LimitsOverview";
@@ -35,7 +37,7 @@ import {
 import { TrendChart, type ChartSeriesItem } from "./TrendChart";
 import "./usage-stats.css";
 
-type MetricMode = "tokens" | "cost" | "limits";
+type MetricMode = "tokens" | "cost" | "tps" | "limits";
 type SeriesGroupMode = "provider" | "model";
 
 interface RankItem {
@@ -44,6 +46,8 @@ interface RankItem {
   color: string;
   tokens: number;
   costUsd: number;
+  avgTps: number;
+  tpsSamples: number;
   sessions: number;
   totals: TokenTotals;
   cacheSavingsUsd: number;
@@ -57,6 +61,7 @@ interface RankItem {
   leverCostUsd: number;
   seriesTokens: number[];
   seriesCost: number[];
+  seriesTps: number[];
 }
 
 function ShareBarBlock({
@@ -139,7 +144,10 @@ export function UsageStatsPage({
 
   const stats = statsQuery.data;
   const isLimits = metric === "limits";
-  const valueMetric: "tokens" | "cost" = metric === "cost" ? "cost" : "tokens";
+  const valueMetric: UsageMetric =
+    metric === "cost" ? "cost" : metric === "tps" ? "tps" : "tokens";
+  const shareMetric: "tokens" | "cost" =
+    valueMetric === "cost" ? "cost" : "tokens";
 
   const handleRefresh = async () => {
     if (isLimits) {
@@ -175,6 +183,8 @@ export function UsageStatsPage({
         color: providerAccent(p.id, idx),
         tokens: p.tokens,
         costUsd: p.costUsd,
+        avgTps: p.avgTps ?? 0,
+        tpsSamples: p.tpsSamples ?? 0,
         sessions: p.sessions,
         totals: p.totals,
         cacheSavingsUsd: p.cacheSavingsUsd,
@@ -183,6 +193,7 @@ export function UsageStatsPage({
         leverCostUsd: p.leverCostUsd,
         seriesTokens: p.seriesTokens ?? [],
         seriesCost: p.seriesCost ?? [],
+        seriesTps: p.seriesTps ?? [],
       }));
     }
     const perProvCount = new Map<string, number>();
@@ -195,6 +206,8 @@ export function UsageStatsPage({
         color: modelAccent(m.provider, rank),
         tokens: m.tokens,
         costUsd: m.costUsd,
+        avgTps: m.avgTps ?? 0,
+        tpsSamples: m.tpsSamples ?? 0,
         sessions: m.sessions,
         totals: m.totals,
         cacheSavingsUsd: m.cacheSavingsUsd,
@@ -203,6 +216,7 @@ export function UsageStatsPage({
         leverCostUsd: m.leverCostUsd,
         seriesTokens: m.seriesTokens ?? [],
         seriesCost: m.seriesCost ?? [],
+        seriesTps: m.seriesTps ?? [],
       };
     });
   }, [stats, groupBy]);
@@ -214,11 +228,25 @@ export function UsageStatsPage({
   );
 
   const sortedRank = useMemo(() => {
+    const limit = groupBy === "model" ? 5 : 6;
+    if (valueMetric === "tps") {
+      // Pick the highest-volume active providers/models with TPS samples first so
+      // low-sample utility models don't crowd out primary models, then rank by TPS.
+      return [...rankPool]
+        .sort((a, b) => {
+          const aHas = a.tpsSamples > 0 ? 1 : 0;
+          const bHas = b.tpsSamples > 0 ? 1 : 0;
+          if (aHas !== bHas) return bHas - aHas;
+          return b.tokens - a.tokens;
+        })
+        .slice(0, limit)
+        .sort((a, b) => b.avgTps - a.avgTps || b.tokens - a.tokens);
+    }
     return [...rankPool]
       .sort((a, b) =>
         valueMetric === "cost" ? b.costUsd - a.costUsd : b.tokens - a.tokens,
       )
-      .slice(0, groupBy === "model" ? 5 : 6);
+      .slice(0, limit);
   }, [rankPool, valueMetric, groupBy]);
 
   const chartSeries: ChartSeriesItem[] = useMemo(() => {
@@ -227,8 +255,18 @@ export function UsageStatsPage({
       id: s.id,
       name: s.name,
       color: s.color,
-      total: valueMetric === "cost" ? s.costUsd : s.tokens,
-      values: valueMetric === "cost" ? s.seriesCost : s.seriesTokens,
+      total:
+        valueMetric === "tps"
+          ? s.avgTps
+          : valueMetric === "cost"
+            ? s.costUsd
+            : s.tokens,
+      values:
+        valueMetric === "tps"
+          ? s.seriesTps
+          : valueMetric === "cost"
+            ? s.seriesCost
+            : s.seriesTokens,
     }));
   }, [effectiveFocus, sortedRank, valueMetric]);
 
@@ -242,6 +280,8 @@ export function UsageStatsPage({
       return {
         totals,
         costUsd: effectiveFocus.costUsd,
+        avgTps: effectiveFocus.avgTps,
+        tpsSamples: effectiveFocus.tpsSamples,
         cacheSavingsUsd: effectiveFocus.cacheSavingsUsd,
         categoryCost: effectiveFocus.categoryCost,
         cacheHitRate: denom > 0 ? totals.cachedInput / denom : 0,
@@ -261,6 +301,8 @@ export function UsageStatsPage({
     return {
       totals: stats.totals,
       costUsd: stats.costUsd,
+      avgTps: stats.avgTps ?? 0,
+      tpsSamples: stats.tpsSamples ?? 0,
       cacheSavingsUsd: stats.cacheSavingsUsd,
       categoryCost: stats.categoryCost,
       cacheHitRate: stats.cacheHitRate,
@@ -277,12 +319,16 @@ export function UsageStatsPage({
 
   const chartTitle =
     stats?.resolution === "hour"
-      ? valueMetric === "cost"
-        ? t("usage.chartTitleCost24h")
-        : t("usage.chartTitleTokens24h")
-      : valueMetric === "cost"
-        ? t("usage.chartTitleCostDay")
-        : t("usage.chartTitleTokensDay");
+      ? valueMetric === "tps"
+        ? t("usage.chartTitleTps24h")
+        : valueMetric === "cost"
+          ? t("usage.chartTitleCost24h")
+          : t("usage.chartTitleTokens24h")
+      : valueMetric === "tps"
+        ? t("usage.chartTitleTpsDay")
+        : valueMetric === "cost"
+          ? t("usage.chartTitleCostDay")
+          : t("usage.chartTitleTokensDay");
 
   const readySourcesCount =
     stats?.sources.filter((s) => s.status === "ok" || s.status === "partial")
@@ -369,6 +415,9 @@ export function UsageStatsPage({
             <ToggleGroupItem value="cost" className="usage-toggle-item">
               {t("usage.metricCost")}
             </ToggleGroupItem>
+            <ToggleGroupItem value="tps" className="usage-toggle-item">
+              {t("usage.metricTps")}
+            </ToggleGroupItem>
             <ToggleGroupItem value="limits" className="usage-toggle-item">
               {t("usage.metricLimits")}
             </ToggleGroupItem>
@@ -429,19 +478,26 @@ export function UsageStatsPage({
             <div className="usage-hero-summary">
               <div>
                 <div className="usage-hero-figure tabular-nums">
-                  {valueMetric === "cost"
-                    ? fmtUsd(activeMetrics.costUsd)
-                    : fmtTokens(activeMetrics.totals.total)}
+                  {valueMetric === "tps"
+                    ? fmtTps(activeMetrics.avgTps)
+                    : valueMetric === "cost"
+                      ? fmtUsd(activeMetrics.costUsd)
+                      : fmtTokens(activeMetrics.totals.total)}
                 </div>
                 <div className="usage-hero-meta tabular-nums">
-                  {valueMetric === "cost"
-                    ? t("usage.heroMetaCost", {
-                        sessions: activeMetrics.sessionsCount,
+                  {valueMetric === "tps"
+                    ? t("usage.heroMetaTps", {
+                        samples: activeMetrics.tpsSamples.toLocaleString(),
+                        output: fmtTokens(activeMetrics.totals.output),
                       })
-                    : t("usage.heroMetaTokens", {
-                        sessions: activeMetrics.sessionsCount,
-                        cost: fmtUsd(activeMetrics.costUsd),
-                      })}
+                    : valueMetric === "cost"
+                      ? t("usage.heroMetaCost", {
+                          sessions: activeMetrics.sessionsCount,
+                        })
+                      : t("usage.heroMetaTokens", {
+                          sessions: activeMetrics.sessionsCount,
+                          cost: fmtUsd(activeMetrics.costUsd),
+                        })}
                 </div>
               </div>
 
@@ -489,21 +545,30 @@ export function UsageStatsPage({
                         </span>
                         <span className="usage-series-val tabular-nums">
                           {fmtMetricValue(
-                            valueMetric === "cost" ? item.costUsd : item.tokens,
+                            valueMetric === "tps"
+                              ? item.avgTps
+                              : valueMetric === "cost"
+                                ? item.costUsd
+                                : item.tokens,
                             valueMetric,
                           )}
                         </span>
                       </div>
                       <div className="usage-series-sub tabular-nums">
-                        {valueMetric === "cost"
-                          ? t("usage.shareOfCost", {
-                              share: fmtPct(share),
-                              tokens: fmtTokens(item.tokens),
+                        {valueMetric === "tps"
+                          ? t("usage.shareOfTps", {
+                              samples: item.tpsSamples.toLocaleString(),
+                              output: fmtTokens(item.totals.output),
                             })
-                          : t("usage.shareOfTokens", {
-                              share: fmtPct(share),
-                              cost: fmtUsd(item.costUsd),
-                            })}
+                          : valueMetric === "cost"
+                            ? t("usage.shareOfCost", {
+                                share: fmtPct(share),
+                                tokens: fmtTokens(item.tokens),
+                              })
+                            : t("usage.shareOfTokens", {
+                                share: fmtPct(share),
+                                cost: fmtUsd(item.costUsd),
+                              })}
                       </div>
                     </button>
                   );
@@ -555,6 +620,9 @@ export function UsageStatsPage({
                 resolution={stats.resolution}
                 series={chartSeries}
                 metric={valueMetric}
+                overallValues={
+                  valueMetric === "tps" ? (stats.seriesTps ?? []) : undefined
+                }
                 monoNames={groupBy === "model"}
               />
             </div>
@@ -637,16 +705,16 @@ export function UsageStatsPage({
           <section className="usage-sharebars-grid">
             <ShareBarBlock
               title={
-                valueMetric === "tokens"
+                shareMetric === "tokens"
                   ? t("usage.shareTokenTypes")
                   : t("usage.shareCostTypes")
               }
               aside={t("usage.shareCacheHitAside", {
                 rate: fmtPct(activeMetrics.cacheHitRate),
               })}
-              metric={valueMetric}
+              metric={shareMetric}
               segments={
-                valueMetric === "tokens"
+                shareMetric === "tokens"
                   ? [
                       {
                         label: t("usage.shareCacheRead"),
@@ -701,7 +769,7 @@ export function UsageStatsPage({
                   ? t("usage.shareLeverOnly")
                   : t("usage.shareLeverRatio", {
                       rate: fmtPct(
-                        valueMetric === "cost"
+                        shareMetric === "cost"
                           ? activeMetrics.leverCostUsd /
                               Math.max(
                                 0.0001,
@@ -717,12 +785,12 @@ export function UsageStatsPage({
                       ),
                     })
               }
-              metric={valueMetric}
+              metric={shareMetric}
               segments={[
                 {
                   label: t("usage.shareLeverLabel"),
                   value:
-                    valueMetric === "cost"
+                    shareMetric === "cost"
                       ? activeMetrics.leverCostUsd
                       : activeMetrics.leverTokens,
                   color: "var(--usage-ink-100)",
@@ -732,7 +800,7 @@ export function UsageStatsPage({
                       {
                         label: t("usage.shareExternalLabel"),
                         value:
-                          valueMetric === "cost"
+                          shareMetric === "cost"
                             ? activeMetrics.externalCostUsd
                             : activeMetrics.externalTokens,
                         color: "var(--usage-ink-28)",

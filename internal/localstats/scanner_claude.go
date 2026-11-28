@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"lever/internal/model"
 )
@@ -63,6 +64,9 @@ func parseClaudeFile(path string) (parsedFile, error) {
 	fallbackSessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	var out parsedFile
 	dedupeIdx := make(map[string]int)
+	reqStartTS := make(map[string]time.Time)
+	reqFirstTS := make(map[string]time.Time)
+	var lastTriggerTS time.Time
 
 	appendOrMerge := func(rec usageRecord) {
 		if rec.Totals.Total == 0 && (rec.ReportedCost == nil || *rec.ReportedCost <= 0) {
@@ -83,6 +87,13 @@ func parseClaudeFile(path string) (parsedFile, error) {
 				}
 				if rec.Timestamp.After(prev.Timestamp) {
 					prev.Timestamp = rec.Timestamp
+					if start, ok := reqStartTS[rec.DedupeKey]; ok && !start.IsZero() && rec.Timestamp.After(start) {
+						prev.DurationMs = sanitizeDurationMs(rec.Timestamp.Sub(start))
+					} else if first, ok := reqFirstTS[rec.DedupeKey]; ok && rec.Timestamp.After(first) {
+						prev.DurationMs = sanitizeDurationMs(rec.Timestamp.Sub(first))
+					}
+				} else if prev.DurationMs == 0 && rec.DurationMs > 0 {
+					prev.DurationMs = rec.DurationMs
 				}
 				return
 			}
@@ -93,9 +104,22 @@ func parseClaudeFile(path string) (parsedFile, error) {
 
 	err = readLines(f, func(line []byte) {
 		hasUsage := bytes.Contains(line, []byte(`"usage"`))
-		needTitle := out.Title == "" && bytes.Contains(line, []byte(`"user"`))
+		isUser := bytes.Contains(line, []byte(`"user"`))
+		isAttach := bytes.Contains(line, []byte(`"attachment"`))
+		needTitle := out.Title == "" && isUser
 		needCWD := out.CWD == "" && bytes.Contains(line, []byte(`"cwd"`))
+		if !hasUsage && !isUser && !isAttach && !needCWD {
+			return
+		}
 		if !hasUsage && !needTitle && !needCWD {
+			if bytes.Contains(line, []byte(`"type":"user"`)) ||
+				bytes.Contains(line, []byte(`"type": "user"`)) ||
+				bytes.Contains(line, []byte(`"type":"attachment"`)) ||
+				bytes.Contains(line, []byte(`"type": "attachment"`)) {
+				if ts, ok := extractFastTimestamp(line); ok {
+					lastTriggerTS = ts
+				}
+			}
 			return
 		}
 		var entry claudeLine
@@ -104,6 +128,11 @@ func parseClaudeFile(path string) (parsedFile, error) {
 		}
 		if out.CWD == "" && entry.CWD != "" {
 			out.CWD = entry.CWD
+		}
+		if entry.Type == "user" || entry.Type == "attachment" {
+			if ts, ok := parseTimestamp(entry.Timestamp); ok {
+				lastTriggerTS = ts
+			}
 		}
 		if out.Title == "" && entry.Type == "user" && len(entry.Message) > 0 {
 			out.Title = extractClaudeUserTitle(entry.Message)
@@ -131,6 +160,18 @@ func parseClaudeFile(path string) (parsedFile, error) {
 		if msg.ID != "" || entry.RequestID != "" {
 			dedupeKey = "claude:" + msg.ID + ":" + entry.RequestID
 		}
+		var durMs int64
+		if dedupeKey != "" {
+			if _, seen := dedupeIdx[dedupeKey]; !seen {
+				if !lastTriggerTS.IsZero() && ts.After(lastTriggerTS) {
+					durMs = sanitizeDurationMs(ts.Sub(lastTriggerTS))
+					reqStartTS[dedupeKey] = lastTriggerTS
+				}
+				reqFirstTS[dedupeKey] = ts
+			}
+		} else if !lastTriggerTS.IsZero() && ts.After(lastTriggerTS) {
+			durMs = sanitizeDurationMs(ts.Sub(lastTriggerTS))
+		}
 		var w1h int64
 		if msg.Usage.CacheCreation != nil {
 			w1h = max(int64(0), msg.Usage.CacheCreation.Ephemeral1hInputTokens)
@@ -155,8 +196,10 @@ func parseClaudeFile(path string) (parsedFile, error) {
 			Totals:       totals,
 			CacheWrite1h: w1h,
 			ReportedCost: reported,
+			DurationMs:   durMs,
 			DedupeKey:    dedupeKey,
 		})
+		lastTriggerTS = ts
 
 		for idx, iter := range msg.Usage.Iterations {
 			if iter.Type != "advisor_message" {

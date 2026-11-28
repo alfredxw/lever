@@ -99,8 +99,18 @@ type Service struct {
 	db       *sql.DB
 	stateDir string
 
+	ctx    context.Context
+	cancel context.CancelFunc
+	bgWG   sync.WaitGroup
+
+	cacheOnce sync.Once
+	cache     *diskCache
+
 	mu          sync.Mutex
+	closed      bool
 	fileCache   map[string]cachedFile
+	runCache    map[string]cachedRun
+	agySumCache map[string]cachedAgySummary
 	projectMemo map[string]projectKey
 	snapshot    *scanSnapshot
 	scanning    *scanWaiter
@@ -119,11 +129,76 @@ type projectKey struct {
 }
 
 func NewService(db *sql.DB, stateDir string) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		db:          db,
 		stateDir:    stateDir,
+		ctx:         ctx,
+		cancel:      cancel,
 		fileCache:   make(map[string]cachedFile),
+		runCache:    make(map[string]cachedRun),
+		agySumCache: make(map[string]cachedAgySummary),
 		projectMemo: make(map[string]projectKey),
+	}
+}
+
+func (s *Service) ensureCacheLoaded() {
+	s.cacheOnce.Do(func() {
+		dc, err := openDiskCache(s.stateDir)
+		if err != nil || dc == nil {
+			return
+		}
+		files, runs, summaries := dc.loadAll()
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			dc.close()
+			return
+		}
+		s.cache = dc
+		for k, v := range files {
+			if _, exists := s.fileCache[k]; !exists {
+				s.fileCache[k] = v
+			}
+		}
+		for k, v := range runs {
+			if _, exists := s.runCache[k]; !exists {
+				s.runCache[k] = v
+			}
+		}
+		for k, v := range summaries {
+			if _, exists := s.agySumCache[k]; !exists {
+				s.agySumCache[k] = v
+			}
+		}
+		s.mu.Unlock()
+	})
+}
+
+// Warm primes the local stats cache and snapshot in the background.
+func (s *Service) Warm(ctx context.Context) {
+	_ = s.getSnapshot(ctx, false)
+}
+
+// Close stops background scans and releases the persistent cache database.
+func (s *Service) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	s.cancel()
+	s.mu.Unlock()
+
+	s.bgWG.Wait()
+
+	s.mu.Lock()
+	dc := s.cache
+	s.cache = nil
+	s.mu.Unlock()
+	if dc != nil {
+		dc.close()
 	}
 }
 
@@ -167,34 +242,71 @@ func resolveLocation(tz string) (*time.Location, string) {
 func (s *Service) getSnapshot(ctx context.Context, refresh bool) *scanSnapshot {
 	now := time.Now()
 	s.mu.Lock()
-	if !refresh && s.snapshot != nil && now.Sub(s.snapshot.scannedAt) < snapshotTTL {
+	if s.closed {
 		snap := s.snapshot
+		s.mu.Unlock()
+		if snap != nil {
+			return snap
+		}
+		return emptySnapshot()
+	}
+	if !refresh && s.snapshot != nil {
+		snap := s.snapshot
+		if now.Sub(snap.scannedAt) < snapshotTTL {
+			s.mu.Unlock()
+			return snap
+		}
+		// Stale-While-Revalidate: return the cached snapshot immediately and
+		// trigger a singleflight background refresh so UI reads never stall.
+		if s.scanning == nil {
+			s.startScanLocked()
+		}
 		s.mu.Unlock()
 		return snap
 	}
-	if s.scanning != nil {
-		w := s.scanning
-		s.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return s.latestOrEmpty()
-		case <-w.done:
-			return w.snap
-		}
+	w := s.scanning
+	if w == nil {
+		w = s.startScanLocked()
 	}
+	s.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return s.latestOrEmpty()
+	case <-w.done:
+		return w.snap
+	}
+}
+
+func (s *Service) startScanLocked() *scanWaiter {
 	w := &scanWaiter{done: make(chan struct{})}
 	s.scanning = w
-	s.mu.Unlock()
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		snap := s.performScan(s.ctx)
+		s.mu.Lock()
+		// Preserve an existing snapshot if the service was cancelled mid-scan.
+		if s.ctx.Err() == nil || s.snapshot == nil {
+			s.snapshot = snap
+			w.snap = snap
+		} else {
+			w.snap = s.snapshot
+		}
+		if s.scanning == w {
+			s.scanning = nil
+		}
+		close(w.done)
+		s.mu.Unlock()
+	}()
+	return w
+}
 
-	snap := s.performScan(ctx)
-
-	s.mu.Lock()
-	s.snapshot = snap
-	w.snap = snap
-	close(w.done)
-	s.scanning = nil
-	s.mu.Unlock()
-	return snap
+func emptySnapshot() *scanSnapshot {
+	return &scanSnapshot{
+		leverDB:   &leverDBSnapshot{byNative: make(map[string]leverSessionMeta), projectByRoot: make(map[string]projectKey)},
+		scannedAt: time.Now(),
+	}
 }
 
 func (s *Service) latestOrEmpty() *scanSnapshot {
@@ -203,10 +315,7 @@ func (s *Service) latestOrEmpty() *scanSnapshot {
 	if s.snapshot != nil {
 		return s.snapshot
 	}
-	return &scanSnapshot{
-		leverDB:   &leverDBSnapshot{byNative: make(map[string]leverSessionMeta), projectByRoot: make(map[string]projectKey)},
-		scannedAt: time.Now(),
-	}
+	return emptySnapshot()
 }
 
 func (s *Service) Summary(ctx context.Context, tz string) (*model.LocalStatsQuickSummary, error) {
@@ -345,6 +454,11 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		sessions        map[string]struct{}
 		seriesTokens    []int64
 		seriesCost      []float64
+		tpsOutput       int64
+		tpsDurMs        int64
+		tpsSamples      int
+		seriesTpsOutput []int64
+		seriesTpsDurMs  []int64
 	}
 	type modelAgg struct {
 		id, model, provider, providerName string
@@ -360,6 +474,11 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		sessions                          map[string]struct{}
 		seriesTokens                      []int64
 		seriesCost                        []float64
+		tpsOutput                         int64
+		tpsDurMs                          int64
+		tpsSamples                        int
+		seriesTpsOutput                   []int64
+		seriesTpsDurMs                    []int64
 	}
 	type agentAgg struct {
 		id, name, provider, model, project string
@@ -415,6 +534,10 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 	var grandLeverRuns, grandExternalRuns int
 	var leverTokens, extTokens int64
 	var leverCost, extCost float64
+	var grandTpsOutput, grandTpsDurMs int64
+	var grandTpsSamples int
+	grandSeriesTpsOutput := make([]int64, len(slots))
+	grandSeriesTpsDurMs := make([]int64, len(slots))
 
 	// Track which Lever sessions got diff/run credit so we add each session's git diff once.
 	creditedLeverSession := make(map[string]bool)
@@ -467,6 +590,7 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		sIdx, hasSlot := slotIndex[slotKey]
 
 		cost, cat, savings, priced := EstimateCost(r.Model, r.Totals, r.CacheWrite1h, r.ReportedCost)
+		validTps := isValidTpsSample(r.Totals.Output, r.DurationMs)
 
 		grandTotals = addTotals(grandTotals, r.Totals)
 		grandCost += cost
@@ -475,6 +599,15 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		grandCat.CacheRead += cat.CacheRead
 		grandCat.CacheWrite += cat.CacheWrite
 		grandCat.Output += cat.Output
+		if validTps {
+			grandTpsOutput += r.Totals.Output
+			grandTpsDurMs += r.DurationMs
+			grandTpsSamples++
+			if hasSlot {
+				grandSeriesTpsOutput[sIdx] += r.Totals.Output
+				grandSeriesTpsDurMs[sIdx] += r.DurationMs
+			}
+		}
 
 		if isLever {
 			leverTokens += r.Totals.Total
@@ -495,11 +628,13 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		pa := provs[r.Provider]
 		if pa == nil {
 			pa = &provAgg{
-				id:           r.Provider,
-				name:         providerDisplayName(r.Provider),
-				sessions:     make(map[string]struct{}),
-				seriesTokens: make([]int64, len(slots)),
-				seriesCost:   make([]float64, len(slots)),
+				id:              r.Provider,
+				name:            providerDisplayName(r.Provider),
+				sessions:        make(map[string]struct{}),
+				seriesTokens:    make([]int64, len(slots)),
+				seriesCost:      make([]float64, len(slots)),
+				seriesTpsOutput: make([]int64, len(slots)),
+				seriesTpsDurMs:  make([]int64, len(slots)),
 			}
 			provs[r.Provider] = pa
 		}
@@ -521,18 +656,29 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 			pa.seriesTokens[sIdx] += r.Totals.Total
 			pa.seriesCost[sIdx] += cost
 		}
+		if validTps {
+			pa.tpsOutput += r.Totals.Output
+			pa.tpsDurMs += r.DurationMs
+			pa.tpsSamples++
+			if hasSlot {
+				pa.seriesTpsOutput[sIdx] += r.Totals.Output
+				pa.seriesTpsDurMs[sIdx] += r.DurationMs
+			}
+		}
 
 		// Model agg
 		ma := models[mKey]
 		if ma == nil {
 			ma = &modelAgg{
-				id:           mKey,
-				model:        r.Model,
-				provider:     r.Provider,
-				providerName: providerDisplayName(r.Provider),
-				sessions:     make(map[string]struct{}),
-				seriesTokens: make([]int64, len(slots)),
-				seriesCost:   make([]float64, len(slots)),
+				id:              mKey,
+				model:           r.Model,
+				provider:        r.Provider,
+				providerName:    providerDisplayName(r.Provider),
+				sessions:        make(map[string]struct{}),
+				seriesTokens:    make([]int64, len(slots)),
+				seriesCost:      make([]float64, len(slots)),
+				seriesTpsOutput: make([]int64, len(slots)),
+				seriesTpsDurMs:  make([]int64, len(slots)),
 			}
 			models[mKey] = ma
 		}
@@ -556,6 +702,15 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		if hasSlot {
 			ma.seriesTokens[sIdx] += r.Totals.Total
 			ma.seriesCost[sIdx] += cost
+		}
+		if validTps {
+			ma.tpsOutput += r.Totals.Output
+			ma.tpsDurMs += r.DurationMs
+			ma.tpsSamples++
+			if hasSlot {
+				ma.seriesTpsOutput[sIdx] += r.Totals.Output
+				ma.seriesTpsDurMs[sIdx] += r.DurationMs
+			}
 		}
 
 		// Project resolution (unifying Lever projects and external CLI paths sharing the same root)
@@ -721,6 +876,10 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		for i, v := range p.seriesCost {
 			sc[i] = roundUsd(v)
 		}
+		stps := make([]float64, len(p.seriesTpsOutput))
+		for i := range p.seriesTpsOutput {
+			stps[i] = calcTps(p.seriesTpsOutput[i], p.seriesTpsDurMs[i])
+		}
 		outProviders = append(outProviders, model.LocalStatsSeries{
 			ID:              p.id,
 			Name:            p.name,
@@ -738,8 +897,11 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 			LeverCostUsd: roundUsd(p.leverCost),
 			Sessions:     len(p.sessions),
 			Runs:         p.runs,
+			AvgTps:       calcTps(p.tpsOutput, p.tpsDurMs),
+			TpsSamples:   p.tpsSamples,
 			SeriesTokens: p.seriesTokens,
 			SeriesCost:   sc,
+			SeriesTps:    stps,
 		})
 	}
 	sort.Slice(outProviders, func(i, j int) bool {
@@ -752,6 +914,10 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		sc := make([]float64, len(m.seriesCost))
 		for i, v := range m.seriesCost {
 			sc[i] = roundUsd(v)
+		}
+		stps := make([]float64, len(m.seriesTpsOutput))
+		for i := range m.seriesTpsOutput {
+			stps[i] = calcTps(m.seriesTpsOutput[i], m.seriesTpsDurMs[i])
 		}
 		outModels = append(outModels, model.LocalStatsModel{
 			ID:              m.id,
@@ -776,8 +942,11 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 			CacheHitRate: cacheHitRate(m.totals),
 			Sessions:     len(m.sessions),
 			Runs:         m.runs,
+			AvgTps:       calcTps(m.tpsOutput, m.tpsDurMs),
+			TpsSamples:   m.tpsSamples,
 			SeriesTokens: m.seriesTokens,
 			SeriesCost:   sc,
+			SeriesTps:    stps,
 		})
 	}
 	sort.Slice(outModels, func(i, j int) bool {
@@ -879,6 +1048,11 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 	}
 	sources = append([]model.LocalStatsSource{leverSrc}, sources...)
 
+	grandSeriesTps := make([]float64, len(slots))
+	for i := range grandSeriesTpsOutput {
+		grandSeriesTps[i] = calcTps(grandSeriesTpsOutput[i], grandSeriesTpsDurMs[i])
+	}
+
 	return &model.LocalStats{
 		Period:          period,
 		Scope:           scope,
@@ -898,6 +1072,8 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 			Output:     roundUsd(grandCat.Output),
 		},
 		CacheHitRate:    cacheHitRate(grandTotals),
+		AvgTps:          calcTps(grandTpsOutput, grandTpsDurMs),
+		TpsSamples:      grandTpsSamples,
 		SessionsCount:   len(globalSessions),
 		RunsCount:       grandLeverRuns + grandExternalRuns,
 		LeverTokens:     leverTokens,
@@ -905,6 +1081,7 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 		ExternalTokens:  extTokens,
 		ExternalCostUsd: roundUsd(extCost),
 		TimeSlots:       slots,
+		SeriesTps:       grandSeriesTps,
 		Providers:       outProviders,
 		Models:          outModels,
 		Agents:          outAgents,
@@ -917,15 +1094,94 @@ func (s *Service) Stats(ctx context.Context, q Query) (*model.LocalStats, error)
 
 // --- Scanning ---
 
+type scanCacheBatch struct {
+	mu             sync.Mutex
+	seenFiles      map[string]struct{}
+	dirtyFiles     map[string]cachedFile
+	dirtySummaries map[string]cachedAgySummary
+	dirtyRuns      map[string]cachedRun
+	pruneRuns      []string
+}
+
+func newScanCacheBatch() *scanCacheBatch {
+	return &scanCacheBatch{
+		seenFiles:      make(map[string]struct{}),
+		dirtyFiles:     make(map[string]cachedFile),
+		dirtySummaries: make(map[string]cachedAgySummary),
+		dirtyRuns:      make(map[string]cachedRun),
+	}
+}
+
+func (b *scanCacheBatch) markSeenFile(path string) {
+	b.mu.Lock()
+	b.seenFiles[path] = struct{}{}
+	b.mu.Unlock()
+}
+
+func (b *scanCacheBatch) markDirtyFile(path, fp string, pf parsedFile) {
+	b.mu.Lock()
+	b.seenFiles[path] = struct{}{}
+	b.dirtyFiles[path] = cachedFile{fingerprint: fp, parsed: pf}
+	b.mu.Unlock()
+}
+
+func (b *scanCacheBatch) markDirtySummary(path, fp string, summaries map[string]agySummaryMeta) {
+	b.mu.Lock()
+	b.dirtySummaries[path] = cachedAgySummary{Fingerprint: fp, Summaries: summaries}
+	b.mu.Unlock()
+}
+
+func (b *scanCacheBatch) setRunChanges(dirty map[string]cachedRun, pruned []string) {
+	b.mu.Lock()
+	for id, r := range dirty {
+		b.dirtyRuns[id] = r
+	}
+	b.pruneRuns = append(b.pruneRuns, pruned...)
+	b.mu.Unlock()
+}
+
 func (s *Service) performScan(ctx context.Context) *scanSnapshot {
 	started := time.Now()
+	s.ensureCacheLoaded()
 	cutoff := started.AddDate(0, 0, -maxRetainDays)
 
 	dirs := s.discoverDirectories(ctx)
-	var allRecords []usageRecord
-	var sources []model.LocalStatsSource
+	batch := newScanCacheBatch()
 
-	// Global dedupe across files/directories
+	var (
+		claudeSrc, codexSrc, agySrc, piSrc     model.LocalStatsSource
+		claudeRecs, codexRecs, agyRecs, piRecs []usageRecord
+		leverDB                                *leverDBSnapshot
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		claudeSrc, claudeRecs = s.scanJSONLDirs(ctx, "claude", "Claude Code", dirs.claude, ".jsonl", cutoff, parseClaudeFile, batch)
+	}()
+	go func() {
+		defer wg.Done()
+		codexSrc, codexRecs = s.scanJSONLDirs(ctx, "codex", "Codex", dirs.codex, ".jsonl", cutoff, parseCodexFile, batch)
+	}()
+	go func() {
+		defer wg.Done()
+		agySrc, agyRecs = s.scanAntigravityDirs(ctx, dirs.antigravity, cutoff, batch)
+	}()
+	go func() {
+		defer wg.Done()
+		piSrc, piRecs = s.scanJSONLDirs(ctx, "pi", "Pi", dirs.pi, ".jsonl", cutoff, parsePiFile, batch)
+	}()
+	go func() {
+		defer wg.Done()
+		leverDB = s.loadLeverDBSnapshot(ctx, batch)
+	}()
+	wg.Wait()
+
+	var allRecords []usageRecord
+	sources := []model.LocalStatsSource{claudeSrc, codexSrc, agySrc, piSrc}
+
+	// Global dedupe across files/directories in deterministic provider order.
 	dedupeIdx := make(map[string]int)
 	addRecord := func(rec usageRecord) {
 		if rec.Timestamp.Before(cutoff) {
@@ -940,6 +1196,9 @@ func (s *Service) performScan(ctx context.Context) *scanSnapshot {
 				prev.Totals.Output = max(prev.Totals.Output, rec.Totals.Output)
 				prev.Totals.Reasoning = max(prev.Totals.Reasoning, rec.Totals.Reasoning)
 				prev.Totals = computeTotal(prev.Totals)
+				if rec.DurationMs > prev.DurationMs {
+					prev.DurationMs = rec.DurationMs
+				}
 				if prev.CWD == "" && rec.CWD != "" {
 					prev.CWD = rec.CWD
 				}
@@ -953,36 +1212,27 @@ func (s *Service) performScan(ctx context.Context) *scanSnapshot {
 		allRecords = append(allRecords, rec)
 	}
 
-	// 1. Claude Code
-	claudeSrc, claudeRecs := s.scanJSONLDirs(ctx, "claude", "Claude Code", dirs.claude, ".jsonl", cutoff, parseClaudeFile)
-	sources = append(sources, claudeSrc)
-	for _, r := range claudeRecs {
-		addRecord(r)
+	for _, recs := range [][]usageRecord{claudeRecs, codexRecs, agyRecs, piRecs} {
+		for _, r := range recs {
+			addRecord(r)
+		}
 	}
 
-	// 2. Codex
-	codexSrc, codexRecs := s.scanJSONLDirs(ctx, "codex", "Codex", dirs.codex, ".jsonl", cutoff, parseCodexFile)
-	sources = append(sources, codexSrc)
-	for _, r := range codexRecs {
-		addRecord(r)
+	var pruneFiles []string
+	if ctx.Err() == nil {
+		s.mu.Lock()
+		for path := range s.fileCache {
+			if _, ok := batch.seenFiles[path]; !ok {
+				delete(s.fileCache, path)
+				pruneFiles = append(pruneFiles, path)
+			}
+		}
+		dc := s.cache
+		s.mu.Unlock()
+		if dc != nil {
+			dc.saveBatch(batch.dirtyFiles, batch.dirtyRuns, batch.dirtySummaries, pruneFiles, batch.pruneRuns)
+		}
 	}
-
-	// 3. Antigravity
-	agySrc, agyRecs := s.scanAntigravityDirs(ctx, dirs.antigravity, cutoff)
-	sources = append(sources, agySrc)
-	for _, r := range agyRecs {
-		addRecord(r)
-	}
-
-	// 4. Pi
-	piSrc, piRecs := s.scanJSONLDirs(ctx, "pi", "Pi", dirs.pi, ".jsonl", cutoff, parsePiFile)
-	sources = append(sources, piSrc)
-	for _, r := range piRecs {
-		addRecord(r)
-	}
-
-	// Load Lever DB metadata once per scan snapshot (in parallel with file scanning or immediately after)
-	leverDB := s.loadLeverDBSnapshot(ctx)
 
 	return &scanSnapshot{
 		records:   allRecords,
@@ -1097,6 +1347,7 @@ func (s *Service) scanJSONLDirs(
 	ext string,
 	cutoff time.Time,
 	parser func(path string) (parsedFile, error),
+	batch *scanCacheBatch,
 ) (model.LocalStatsSource, []usageRecord) {
 	src := model.LocalStatsSource{ID: id, Name: name, Status: "missing"}
 	if len(dirs) > 0 {
@@ -1156,6 +1407,7 @@ func (s *Service) scanJSONLDirs(
 				}
 				c := candidates[idx]
 				if pf, ok := s.getCachedFile(c.path, c.fp); ok {
+					batch.markSeenFile(c.path)
 					results[idx] = pf
 					continue
 				}
@@ -1164,6 +1416,7 @@ func (s *Service) scanJSONLDirs(
 					continue
 				}
 				s.setCachedFile(c.path, c.fp, pf)
+				batch.markDirtyFile(c.path, c.fp, pf)
 				results[idx] = pf
 			}
 		}()
@@ -1186,7 +1439,7 @@ func (s *Service) scanJSONLDirs(
 	return src, records
 }
 
-func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff time.Time) (model.LocalStatsSource, []usageRecord) {
+func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff time.Time, batch *scanCacheBatch) (model.LocalStatsSource, []usageRecord) {
 	src := model.LocalStatsSource{ID: "antigravity", Name: "Antigravity", Status: "missing"}
 	if len(dirs) > 0 {
 		src.Path = tildePath(dirs[0])
@@ -1210,8 +1463,17 @@ func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff
 		anyExists = true
 		// Optional conversation_summaries.db sits next to conversations/
 		sumPath := filepath.Join(filepath.Dir(dir), "conversation_summaries.db")
-		if _, err := os.Stat(sumPath); err == nil {
-			for k, v := range readAntigravitySummaries(ctx, sumPath) {
+		if sfi, err := os.Stat(sumPath); err == nil {
+			sumFP := sqliteFileFingerprint(sumPath, sfi)
+			var sumMap map[string]agySummaryMeta
+			if cached, ok := s.getCachedAgySummary(sumPath, sumFP); ok {
+				sumMap = cached
+			} else {
+				sumMap = readAntigravitySummaries(ctx, sumPath)
+				s.setCachedAgySummary(sumPath, sumFP, sumMap)
+				batch.markDirtySummary(sumPath, sumFP, sumMap)
+			}
+			for k, v := range sumMap {
 				summaries[k] = v
 			}
 		}
@@ -1271,6 +1533,7 @@ func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff
 				}
 				c := candidates[idx]
 				if pf, ok := s.getCachedFile(c.path, c.fp); ok {
+					batch.markSeenFile(c.path)
 					results[idx] = pf
 					continue
 				}
@@ -1279,6 +1542,7 @@ func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff
 					continue
 				}
 				s.setCachedFile(c.path, c.fp, pf)
+				batch.markDirtyFile(c.path, c.fp, pf)
 				results[idx] = pf
 			}
 		}()
@@ -1306,6 +1570,14 @@ func (s *Service) scanAntigravityDirs(ctx context.Context, dirs []string, cutoff
 	return src, records
 }
 
+func sqliteFileFingerprint(path string, fi fs.FileInfo) string {
+	walPart := "-"
+	if wfi, err := os.Stat(path + "-wal"); err == nil {
+		walPart = fmt.Sprintf("%d:%d", wfi.Size(), wfi.ModTime().UnixNano())
+	}
+	return fmt.Sprintf("%d:%d/%s", fi.Size(), fi.ModTime().UnixNano(), walPart)
+}
+
 func (s *Service) getCachedFile(path, fp string) (parsedFile, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1319,6 +1591,21 @@ func (s *Service) setCachedFile(path, fp string, pf parsedFile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fileCache[path] = cachedFile{fingerprint: fp, parsed: pf}
+}
+
+func (s *Service) getCachedAgySummary(path, fp string) (map[string]agySummaryMeta, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c, ok := s.agySumCache[path]; ok && c.Fingerprint == fp {
+		return c.Summaries, true
+	}
+	return nil, false
+}
+
+func (s *Service) setCachedAgySummary(path, fp string, summaries map[string]agySummaryMeta) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agySumCache[path] = cachedAgySummary{Fingerprint: fp, Summaries: summaries}
 }
 
 // --- Lever DB Correlation ---
@@ -1347,7 +1634,16 @@ type leverIndex struct {
 	windowRuns    int
 }
 
-func (s *Service) loadLeverDBSnapshot(ctx context.Context) *leverDBSnapshot {
+func isTerminalRunStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "interrupted", "cancelled", "steered", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) loadLeverDBSnapshot(ctx context.Context, batch *scanCacheBatch) *leverDBSnapshot {
 	snap := &leverDBSnapshot{
 		byNative:      make(map[string]leverSessionMeta),
 		projectByRoot: make(map[string]projectKey),
@@ -1412,24 +1708,79 @@ func (s *Service) loadLeverDBSnapshot(ctx context.Context) *leverDBSnapshot {
 		rows.Close()
 	}
 
-	// Read lightweight run metadata once per scan snapshot using json_extract so we skip multi-MB items.
-	if rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id,
+	// Fast metadata scan (avoids reading multi-MB runs.data JSON blobs for cached terminal runs).
+	type runMetaRow struct {
+		id        string
+		sessionID string
+		status    string
+	}
+	var metaRows []runMetaRow
+	if rows, err := s.db.QueryContext(ctx, "SELECT id, session_id, status FROM runs"); err == nil {
+		for rows.Next() {
+			var m runMetaRow
+			if rows.Scan(&m.id, &m.sessionID, &m.status) == nil {
+				metaRows = append(metaRows, m)
+			}
+		}
+		rows.Close()
+	}
+
+	snap.totalRuns = len(metaRows)
+	seenRunIDs := make(map[string]struct{}, len(metaRows))
+	statusByID := make(map[string]string, len(metaRows))
+	resolvedRuns := make(map[string]cachedRun, len(metaRows))
+	var fetchIDs []string
+
+	s.mu.Lock()
+	for _, m := range metaRows {
+		seenRunIDs[m.id] = struct{}{}
+		statusByID[m.id] = m.status
+		if cr, ok := s.runCache[m.id]; ok && isTerminalRunStatus(m.status) && cr.Status == m.status {
+			resolvedRuns[m.id] = cr
+			continue
+		}
+		fetchIDs = append(fetchIDs, m.id)
+	}
+	var pruneRuns []string
+	if ctx.Err() == nil {
+		for id := range s.runCache {
+			if _, ok := seenRunIDs[id]; !ok {
+				delete(s.runCache, id)
+				pruneRuns = append(pruneRuns, id)
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	dirtyRuns := make(map[string]cachedRun)
+	const runFetchChunk = 50
+	for start := 0; start < len(fetchIDs); start += runFetchChunk {
+		if ctx.Err() != nil {
+			break
+		}
+		end := min(len(fetchIDs), start+runFetchChunk)
+		chunk := fetchIDs[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		q := `SELECT id,
 		       COALESCE(json_extract(data, '$.createdAt'), ''),
 		       COALESCE(json_extract(data, '$.changes'), ''),
 		       COALESCE(json_extract(data, '$.turnDiff'), '')
-		FROM runs
-	`); err == nil {
+		FROM runs WHERE id IN (` + placeholders + `)`
+		rows, err := s.db.QueryContext(ctx, q, args...)
+		if err != nil {
+			continue
+		}
 		for rows.Next() {
-			var sid, createdAt, changesRaw, turnDiffRaw string
-			if rows.Scan(&sid, &createdAt, &changesRaw, &turnDiffRaw) != nil {
+			var id, createdAt, changesRaw, turnDiffRaw string
+			if rows.Scan(&id, &createdAt, &changesRaw, &turnDiffRaw) != nil {
 				continue
 			}
-			snap.totalRuns++
-			ts, ok := parseTimestamp(createdAt)
-			if !ok {
-				continue
-			}
+			ts, _ := parseTimestamp(createdAt)
 			var changes []model.RunChanges
 			var turnDiff *model.TurnPatch
 			if changesRaw != "" && changesRaw != "null" {
@@ -1442,14 +1793,43 @@ func (s *Service) loadLeverDBSnapshot(ctx context.Context) *leverDBSnapshot {
 				}
 			}
 			add, del := runDiffTotals(changes, turnDiff)
-			snap.runs = append(snap.runs, leverRunRecord{
-				sessionID: sid,
-				createdAt: ts,
-				additions: add,
-				deletions: del,
-			})
+			cr := cachedRun{
+				Status:    statusByID[id],
+				CreatedAt: ts,
+				Additions: add,
+				Deletions: del,
+			}
+			resolvedRuns[id] = cr
+			if isTerminalRunStatus(cr.Status) {
+				dirtyRuns[id] = cr
+			}
 		}
 		rows.Close()
+	}
+
+	if len(dirtyRuns) > 0 {
+		s.mu.Lock()
+		for id, cr := range dirtyRuns {
+			s.runCache[id] = cr
+		}
+		s.mu.Unlock()
+	}
+	if batch != nil && (len(dirtyRuns) > 0 || len(pruneRuns) > 0) {
+		batch.setRunChanges(dirtyRuns, pruneRuns)
+	}
+
+	snap.runs = make([]leverRunRecord, 0, len(metaRows))
+	for _, m := range metaRows {
+		cr, ok := resolvedRuns[m.id]
+		if !ok || cr.CreatedAt.IsZero() {
+			continue
+		}
+		snap.runs = append(snap.runs, leverRunRecord{
+			sessionID: m.sessionID,
+			createdAt: cr.CreatedAt,
+			additions: cr.Additions,
+			deletions: cr.Deletions,
+		})
 	}
 
 	if rows, err := s.db.QueryContext(ctx, "SELECT data FROM sessions"); err == nil {

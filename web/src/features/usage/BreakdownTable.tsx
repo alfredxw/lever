@@ -23,11 +23,13 @@ import {
   fmtMetricValue,
   fmtPct,
   fmtTokens,
+  fmtTps,
   fmtUsd,
   formatSessionUpdated,
   formatSlotLabel,
   modelAccent,
   providerAccent,
+  type UsageMetric,
 } from "./format";
 
 export type BreakdownTab = "model" | "agent" | "project" | "session" | "time";
@@ -66,24 +68,26 @@ export function BreakdownTable({
   onOpenChat,
 }: {
   stats: LocalStats;
-  metric: "tokens" | "cost";
+  metric: UsageMetric;
   groupBy: "provider" | "model";
   focusId: string | null;
   rangeLabel: string;
   onOpenChat?: (chatId: string, agentId: string, title: string) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const tableMetric: "tokens" | "cost" = metric === "cost" ? "cost" : "tokens";
   const [tab, setTab] = useState<BreakdownTab>("model");
   const [sortKey, setSortKey] = useState<string>(metric);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [detail, setDetail] = useState<DetailModalData | null>(null);
 
-  // Follow primary metric switch when sorting by tokens or cost
+  // Follow primary metric switch when sorting by tokens, cost, or tps
   useEffect(() => {
-    setSortKey((prev) =>
-      prev === "tokens" || prev === "cost" ? metric : prev,
-    );
-  }, [metric]);
+    setSortKey((prev) => {
+      if (prev !== "tokens" && prev !== "cost" && prev !== "tps") return prev;
+      return tab === "model" ? metric : tableMetric;
+    });
+  }, [metric, tableMetric, tab]);
 
   const toggleSort = (key: string) => {
     if (sortKey === key) {
@@ -137,7 +141,7 @@ export function BreakdownTable({
   const handleTabChange = (next: string) => {
     if (!next) return;
     setTab(next as BreakdownTab);
-    setSortKey(metric);
+    setSortKey(next === "model" ? metric : tableMetric);
     setSortDir("desc");
   };
 
@@ -147,9 +151,12 @@ export function BreakdownTable({
       matchesFocus(m.provider, m.id, m.model),
     );
     const totalSum =
-      base.reduce((s, m) => s + (metric === "cost" ? m.costUsd : m.tokens), 0) ||
-      1;
+      base.reduce(
+        (s, m) => s + (tableMetric === "cost" ? m.costUsd : m.tokens),
+        0,
+      ) || 1;
     const getters: Record<string, (m: LocalStatsModel) => number> = {
+      tps: (m) => m.avgTps ?? 0,
       hit: (m) => m.cacheHitRate,
       sessions: (m) => m.sessions,
       cost: (m) => m.costUsd,
@@ -158,50 +165,68 @@ export function BreakdownTable({
     const sorted = sortByKey(base, getters[sortKey] ?? getters[metric], sortDir);
     const peak = Math.max(
       1,
-      ...sorted.map((m) => (metric === "cost" ? m.costUsd : m.tokens)),
+      ...sorted.map((m) =>
+        metric === "tps"
+          ? (m.avgTps ?? 0)
+          : metric === "cost"
+            ? m.costUsd
+            : m.tokens,
+      ),
     );
     return { rows: sorted, totalSum, peak };
-  }, [stats.models, focusId, groupBy, metric, sortKey, sortDir]);
+  }, [stats.models, focusId, groupBy, metric, tableMetric, sortKey, sortDir]);
 
   const agentRows = useMemo(() => {
     const base = (stats.agents ?? []).filter((a) =>
       matchesFocus(a.provider, undefined, a.model),
     );
     const totalSum =
-      base.reduce((s, a) => s + (metric === "cost" ? a.costUsd : a.tokens), 0) ||
-      1;
+      base.reduce(
+        (s, a) => s + (tableMetric === "cost" ? a.costUsd : a.tokens),
+        0,
+      ) || 1;
     const getters: Record<string, (a: LocalStatsAgent) => number> = {
       runs: (a) => a.runs,
       codeTotal: (a) => a.additions + a.deletions,
       cost: (a) => a.costUsd,
       tokens: (a) => a.tokens,
     };
-    const sorted = sortByKey(base, getters[sortKey] ?? getters[metric], sortDir);
+    const sorted = sortByKey(
+      base,
+      getters[sortKey] ?? getters[tableMetric],
+      sortDir,
+    );
     const peak = Math.max(
       1,
-      ...sorted.map((a) => (metric === "cost" ? a.costUsd : a.tokens)),
+      ...sorted.map((a) => (tableMetric === "cost" ? a.costUsd : a.tokens)),
     );
     return { rows: sorted, totalSum, peak };
-  }, [stats.agents, focusId, groupBy, metric, sortKey, sortDir]);
+  }, [stats.agents, focusId, groupBy, tableMetric, sortKey, sortDir]);
 
   const projectRows = useMemo(() => {
     const base = stats.projects ?? [];
     const totalSum =
-      base.reduce((s, p) => s + (metric === "cost" ? p.costUsd : p.tokens), 0) ||
-      1;
+      base.reduce(
+        (s, p) => s + (tableMetric === "cost" ? p.costUsd : p.tokens),
+        0,
+      ) || 1;
     const getters: Record<string, (p: LocalStatsProject) => number> = {
       sessions: (p) => p.sessions,
       codeTotal: (p) => p.additions + p.deletions,
       cost: (p) => p.costUsd,
       tokens: (p) => p.tokens,
     };
-    const sorted = sortByKey(base, getters[sortKey] ?? getters[metric], sortDir);
+    const sorted = sortByKey(
+      base,
+      getters[sortKey] ?? getters[tableMetric],
+      sortDir,
+    );
     const peak = Math.max(
       1,
-      ...sorted.map((p) => (metric === "cost" ? p.costUsd : p.tokens)),
+      ...sorted.map((p) => (tableMetric === "cost" ? p.costUsd : p.tokens)),
     );
     return { rows: sorted, totalSum, peak };
-  }, [stats.projects, metric, sortKey, sortDir]);
+  }, [stats.projects, tableMetric, sortKey, sortDir]);
 
   const sessionRows = useMemo(() => {
     const base = (stats.sessions ?? []).filter((s) =>
@@ -213,13 +238,17 @@ export function BreakdownTable({
       cost: (s) => s.costUsd,
       tokens: (s) => s.tokens,
     };
-    const sorted = sortByKey(base, getters[sortKey] ?? getters[metric], sortDir);
+    const sorted = sortByKey(
+      base,
+      getters[sortKey] ?? getters[tableMetric],
+      sortDir,
+    );
     const peak = Math.max(
       1,
-      ...sorted.map((s) => (metric === "cost" ? s.costUsd : s.tokens)),
+      ...sorted.map((s) => (tableMetric === "cost" ? s.costUsd : s.tokens)),
     );
     return { rows: sorted, peak };
-  }, [stats.sessions, focusId, groupBy, metric, sortKey, sortDir]);
+  }, [stats.sessions, focusId, groupBy, tableMetric, sortKey, sortDir]);
 
   const timeSeriesCols = useMemo(() => {
     const rawPool =
@@ -229,14 +258,26 @@ export function BreakdownTable({
             name: p.name,
             seriesTokens: p.seriesTokens ?? [],
             seriesCost: p.seriesCost ?? [],
-            sortVal: metric === "cost" ? p.costUsd : p.tokens,
+            seriesTps: p.seriesTps ?? [],
+            sortVal:
+              metric === "tps"
+                ? (p.avgTps ?? 0)
+                : metric === "cost"
+                  ? p.costUsd
+                  : p.tokens,
           }))
         : (stats.models ?? []).map((m) => ({
             id: m.id,
             name: m.model,
             seriesTokens: m.seriesTokens ?? [],
             seriesCost: m.seriesCost ?? [],
-            sortVal: metric === "cost" ? m.costUsd : m.tokens,
+            seriesTps: m.seriesTps ?? [],
+            sortVal:
+              metric === "tps"
+                ? (m.avgTps ?? 0)
+                : metric === "cost"
+                  ? m.costUsd
+                  : m.tokens,
           }));
     const filtered = focusId
       ? rawPool.filter((item) => item.id === focusId)
@@ -244,6 +285,7 @@ export function BreakdownTable({
     const ordered = [...filtered].sort((a, b) => b.sortVal - a.sortVal);
     const cols = ordered.slice(0, 5);
     const slots = stats.timeSlots ?? [];
+    const overallTps = stats.seriesTps ?? [];
     const rows = slots
       .map((slot, i) => {
         const totCost = ordered.reduce(
@@ -254,16 +296,22 @@ export function BreakdownTable({
           (sum, s) => sum + (s.seriesTokens[i] ?? 0),
           0,
         );
+        const slotAvgTps = focusId
+          ? (cols[0]?.seriesTps[i] ?? 0)
+          : (overallTps[i] ?? 0);
         return {
           slot,
           label: formatSlotLabel(slot, stats.resolution),
           values: cols.map((c) =>
-            metric === "cost"
-              ? (c.seriesCost[i] ?? 0)
-              : (c.seriesTokens[i] ?? 0),
+            metric === "tps"
+              ? (c.seriesTps[i] ?? 0)
+              : metric === "cost"
+                ? (c.seriesCost[i] ?? 0)
+                : (c.seriesTokens[i] ?? 0),
           ),
           cost: totCost,
           tokens: totTokens,
+          avgTps: slotAvgTps,
         };
       })
       .reverse();
@@ -316,6 +364,7 @@ export function BreakdownTable({
               <tr>
                 <th className="w-8">#</th>
                 <th>{t("usage.colModel")}</th>
+                {renderSortTh(t("usage.colOutputTps"), "tps")}
                 {renderSortTh(t("usage.colCacheHit"), "hit")}
                 {renderSortTh(t("usage.colSessions"), "sessions")}
                 {renderSortTh(t("usage.colEstCost"), "cost")}
@@ -326,13 +375,20 @@ export function BreakdownTable({
             <tbody>
               {modelRows.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center">
+                  <td colSpan={8} className="py-6 text-center">
                     {t("usage.emptyRows")}
                   </td>
                 </tr>
               ) : (
                 modelRows.rows.map((m, idx) => {
-                  const val = metric === "cost" ? m.costUsd : m.tokens;
+                  const val =
+                    metric === "tps"
+                      ? (m.avgTps ?? 0)
+                      : metric === "cost"
+                        ? m.costUsd
+                        : m.tokens;
+                  const shareVal =
+                    tableMetric === "cost" ? m.costUsd : m.tokens;
                   const color =
                     modelColorMap.get(m.id) ?? providerAccent(m.provider);
                   return (
@@ -348,11 +404,21 @@ export function BreakdownTable({
                             [t("usage.colTotalTokens"), fmtTokens(m.tokens)],
                             [t("usage.colEstCost"), fmtUsd(m.costUsd)],
                             [
-                              t("usage.modalCacheHitRate"),
-                              fmtPct(m.cacheHitRate),
+                              t("usage.colOutputTps"),
+                              fmtTps(m.avgTps ?? 0),
                             ],
                           ],
                           rows: [
+                            [
+                              t("usage.modalOutputTps"),
+                              (m.avgTps ?? 0) > 0
+                                ? `${fmtTps(m.avgTps)} · ${t("usage.tpsSamplesShort", { count: m.tpsSamples ?? 0 })}`
+                                : "—",
+                            ],
+                            [
+                              t("usage.modalCacheHitRate"),
+                              fmtPct(m.cacheHitRate),
+                            ],
                             [
                               t("usage.modalSessions"),
                               t("usage.sessionsTimes", { count: m.sessions }),
@@ -401,11 +467,23 @@ export function BreakdownTable({
                           <div
                             className="usage-inline-bar-fill"
                             style={{
-                              width: `${Math.max(4, (val / modelRows.peak) * 100)}%`,
+                              width:
+                                val > 0
+                                  ? `${Math.max(4, (val / modelRows.peak) * 100)}%`
+                                  : "0%",
                               backgroundColor: color,
                             }}
                           />
                         </div>
+                      </td>
+                      <td
+                        className={
+                          metric === "tps"
+                            ? "strong tabular-nums"
+                            : "tabular-nums"
+                        }
+                      >
+                        {fmtTps(m.avgTps ?? 0)}
                       </td>
                       <td className="tabular-nums">{fmtPct(m.cacheHitRate)}</td>
                       <td className="tabular-nums">{m.sessions}</td>
@@ -419,7 +497,7 @@ export function BreakdownTable({
                         {fmtUsd(m.costUsd)}
                       </td>
                       <td className="tabular-nums">
-                        {fmtPct(val / modelRows.totalSum)}
+                        {fmtPct(shareVal / modelRows.totalSum)}
                       </td>
                       <td
                         className={
@@ -569,7 +647,7 @@ export function BreakdownTable({
                       </td>
                       <td
                         className={
-                          metric === "tokens"
+                          tableMetric === "tokens"
                             ? "strong tabular-nums"
                             : "tabular-nums"
                         }
@@ -743,7 +821,7 @@ export function BreakdownTable({
                       </td>
                       <td
                         className={
-                          metric === "tokens"
+                          tableMetric === "tokens"
                             ? "strong tabular-nums"
                             : "tabular-nums"
                         }
@@ -941,7 +1019,7 @@ export function BreakdownTable({
                       </td>
                       <td
                         className={
-                          metric === "tokens"
+                          tableMetric === "tokens"
                             ? "strong tabular-nums"
                             : "tabular-nums"
                         }
@@ -975,7 +1053,11 @@ export function BreakdownTable({
                     {col.name}
                   </th>
                 ))}
-                <th>{t("usage.colTotalCost")}</th>
+                <th>
+                  {metric === "tps"
+                    ? t("usage.colAvgTps")
+                    : t("usage.colTotalCost")}
+                </th>
                 <th>{t("usage.colTotalTokens")}</th>
               </tr>
             </thead>
@@ -1003,12 +1085,12 @@ export function BreakdownTable({
                     ))}
                     <td
                       className={
-                        metric === "cost"
+                        metric === "cost" || metric === "tps"
                           ? "strong tabular-nums"
                           : "tabular-nums"
                       }
                     >
-                      {fmtUsd(r.cost)}
+                      {metric === "tps" ? fmtTps(r.avgTps) : fmtUsd(r.cost)}
                     </td>
                     <td
                       className={

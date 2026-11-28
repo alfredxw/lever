@@ -85,6 +85,7 @@ func parseCodexFile(path string) (parsedFile, error) {
 	var requestLedgerActive bool
 	var lastCumulative *codexTokenUsage
 	var lastSignature string
+	var reqStartTS time.Time
 	seenResponses := make(map[string]bool)
 
 	isForkCopy := func(ts time.Time) bool {
@@ -93,6 +94,7 @@ func parseCodexFile(path string) (parsedFile, error) {
 		}
 		if ts.Sub(forkAnchor) < time.Second {
 			forkAnchor = ts
+			reqStartTS = time.Time{}
 			return true
 		}
 		suppressingFork = false
@@ -101,11 +103,30 @@ func parseCodexFile(path string) (parsedFile, error) {
 	}
 
 	err = readLines(f, func(line []byte) {
+		isRespItem := bytes.Contains(line, []byte(`"response_item"`))
+		isRespTrigger := isRespItem && (bytes.Contains(line, []byte(`"custom_tool_call_output"`)) ||
+			bytes.Contains(line, []byte(`"function_call_output"`)) ||
+			bytes.Contains(line, []byte(`"role":"user"`)) ||
+			bytes.Contains(line, []byte(`"role": "user"`)))
 		if !bytes.Contains(line, []byte(`"session_meta"`)) &&
 			!bytes.Contains(line, []byte(`"turn_context"`)) &&
 			!bytes.Contains(line, []byte(`"token_count"`)) &&
 			!bytes.Contains(line, []byte(`"token_usage_record"`)) &&
-			!(out.Title == "" && (bytes.Contains(line, []byte(`"user_message"`)) || bytes.Contains(line, []byte(`"response_item"`)))) {
+			!bytes.Contains(line, []byte(`"user_message"`)) &&
+			!(out.Title == "" && isRespItem) &&
+			!isRespTrigger {
+			return
+		}
+		// Fast path: capture trigger timestamps from large tool-output / user response_item lines
+		// without JSON-unmarshaling multi-MB payloads once the session title is known.
+		if isRespTrigger && out.Title != "" &&
+			!bytes.Contains(line, []byte(`"token_usage_record"`)) &&
+			!bytes.Contains(line, []byte(`"token_count"`)) &&
+			!bytes.Contains(line, []byte(`"turn_context"`)) &&
+			!bytes.Contains(line, []byte(`"session_meta"`)) {
+			if ts, ok := extractFastTimestamp(line); ok && !isForkCopy(ts) {
+				reqStartTS = ts
+			}
 			return
 		}
 		var entry codexRolloutLine
@@ -115,16 +136,21 @@ func parseCodexFile(path string) (parsedFile, error) {
 		ts, hasTS := parseTimestamp(entry.Timestamp)
 
 		if entry.Type == "response_item" {
-			if out.Title == "" {
-				var msg struct {
-					Type    string `json:"type"`
-					Role    string `json:"role"`
-					Content []struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"content"`
+			var msg struct {
+				Type    string `json:"type"`
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			if json.Unmarshal(entry.Payload, &msg) == nil {
+				if hasTS && (msg.Type == "function_call_output" || msg.Type == "custom_tool_call_output" || (msg.Type == "message" && msg.Role == "user")) {
+					if !isForkCopy(ts) {
+						reqStartTS = ts
+					}
 				}
-				if json.Unmarshal(entry.Payload, &msg) == nil && msg.Type == "message" && msg.Role == "user" {
+				if out.Title == "" && msg.Type == "message" && msg.Role == "user" {
 					for _, block := range msg.Content {
 						txt := strings.TrimSpace(block.Text)
 						if txt == "" ||
@@ -187,6 +213,9 @@ func parseCodexFile(path string) (parsedFile, error) {
 
 		case "turn_context":
 			requestLedgerActive = false
+			if hasTS && !isForkCopy(ts) {
+				reqStartTS = ts
+			}
 			var tc struct {
 				Model string `json:"model"`
 				CWD   string `json:"cwd"`
@@ -218,16 +247,22 @@ func parseCodexFile(path string) (parsedFile, error) {
 				}
 				seenResponses[rec.ResponseID] = true
 				requestLedgerActive = true
+				var durMs int64
+				if !reqStartTS.IsZero() && ts.After(reqStartTS) {
+					durMs = sanitizeDurationMs(ts.Sub(reqStartTS))
+				}
+				reqStartTS = ts
 				totals := rec.Usage.toTotals()
 				if totals.Total > 0 {
 					out.Records = append(out.Records, usageRecord{
-						Provider:  "codex",
-						SessionID: sessionID,
-						Model:     currentModel,
-						CWD:       out.CWD,
-						Timestamp: ts,
-						Totals:    totals,
-						DedupeKey: "codex:" + sessionID + ":" + rec.ResponseID,
+						Provider:   "codex",
+						SessionID:  sessionID,
+						Model:      currentModel,
+						CWD:        out.CWD,
+						Timestamp:  ts,
+						Totals:     totals,
+						DurationMs: durMs,
+						DedupeKey:  "codex:" + sessionID + ":" + rec.ResponseID,
 					})
 				}
 			}
@@ -246,8 +281,13 @@ func parseCodexFile(path string) (parsedFile, error) {
 		if json.Unmarshal(entry.Payload, &payload) != nil {
 			return
 		}
-		if out.Title == "" && payload.Type == "user_message" && payload.Message != "" {
-			out.Title = trimTitle(payload.Message)
+		if payload.Type == "user_message" {
+			if hasTS && !isForkCopy(ts) {
+				reqStartTS = ts
+			}
+			if out.Title == "" && payload.Message != "" {
+				out.Title = trimTitle(payload.Message)
+			}
 			return
 		}
 		if payload.Type != "token_count" || payload.Info == nil || !hasTS || currentModel == "" {
@@ -313,13 +353,19 @@ func parseCodexFile(path string) (parsedFile, error) {
 		if totals.Total == 0 {
 			return
 		}
+		var durMs int64
+		if !reqStartTS.IsZero() && ts.After(reqStartTS) {
+			durMs = sanitizeDurationMs(ts.Sub(reqStartTS))
+		}
+		reqStartTS = ts
 		out.Records = append(out.Records, usageRecord{
-			Provider:  "codex",
-			SessionID: sessionID,
-			Model:     currentModel,
-			CWD:       out.CWD,
-			Timestamp: ts,
-			Totals:    totals,
+			Provider:   "codex",
+			SessionID:  sessionID,
+			Model:      currentModel,
+			CWD:        out.CWD,
+			Timestamp:  ts,
+			Totals:     totals,
+			DurationMs: durMs,
 		})
 	})
 

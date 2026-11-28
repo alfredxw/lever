@@ -52,8 +52,26 @@ export function fmtPct(ratio: number): string {
   return `${pct.toFixed(1).replace(/\.0$/, "")}%`;
 }
 
-export function fmtMetricValue(value: number, metric: "tokens" | "cost"): string {
-  return metric === "cost" ? fmtUsd(value) : fmtTokens(value);
+export type UsageMetric = "tokens" | "cost" | "tps";
+
+export function fmtTps(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K tok/s`;
+  if (n >= 100) return `${Math.round(n)} tok/s`;
+  return `${n.toFixed(1)} tok/s`;
+}
+
+export function fmtAxisTps(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
+  if (Number.isInteger(n)) return `${n}`;
+  return n.toFixed(1);
+}
+
+export function fmtMetricValue(value: number, metric: UsageMetric): string {
+  if (metric === "cost") return fmtUsd(value);
+  if (metric === "tps") return fmtTps(value);
+  return fmtTokens(value);
 }
 
 const PROVIDER_PALETTE: Record<string, [string, string]> = {

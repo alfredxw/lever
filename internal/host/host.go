@@ -70,6 +70,7 @@ func start(dir, address, devOrigin string, control *desktopControl) (*httpapi.Se
 			slog.Error("serve Lever HTTP", "error", err)
 		}
 	}()
+	a.WarmLocalStats()
 	return s, nil
 }
 func Stop(s *httpapi.Server) error {

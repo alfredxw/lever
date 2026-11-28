@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -186,6 +187,18 @@ func pbTimestamp(f pbFields) (time.Time, bool) {
 	return time.Unix(int64(secs), int64(nanos)).UTC(), true
 }
 
+func pbDuration(f pbFields) time.Duration {
+	if len(f) == 0 {
+		return 0
+	}
+	secs := f.num(1)
+	nanos := f.num(2)
+	if secs > 86400 {
+		return 0
+	}
+	return time.Duration(secs)*time.Second + time.Duration(nanos)
+}
+
 func normalizeAgyModelName(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -202,11 +215,12 @@ func normalizeAgyModelName(raw string) string {
 }
 
 type agyMetadata struct {
-	model   string
-	modelID uint64
-	ts      time.Time
-	hasTS   bool
-	usages  []pbFields
+	model      string
+	modelID    uint64
+	ts         time.Time
+	hasTS      bool
+	durationMs int64
+	usages     []pbFields
 }
 
 func decodeAgyMetadata(raw []byte, isStep bool) (agyMetadata, error) {
@@ -277,18 +291,28 @@ func decodeAgyMetadata(raw []byte, isStep bool) (agyMetadata, error) {
 	}
 	var ts time.Time
 	var hasTS bool
+	var durationMs int64
 	if isStep {
+		tStart, hasStart := pbTimestamp(data.nested(1))
+		tRespEnd, hasRespEnd := pbTimestamp(data.nested(7))
 		if t, ok := pbTimestamp(data.nested(8)); ok {
 			ts, hasTS = t, true
-		} else if t, ok := pbTimestamp(data.nested(1)); ok {
-			ts, hasTS = t, true
+		} else if hasStart {
+			ts, hasTS = tStart, true
+		}
+		if hasStart && hasRespEnd && tRespEnd.After(tStart) {
+			durationMs = sanitizeDurationMs(tRespEnd.Sub(tStart))
 		}
 	} else {
 		if t, ok := pbTimestamp(data.nested(9).nested(4)); ok {
 			ts, hasTS = t, true
 		}
+		// gen_metadata field 11 = TTFT, field 12 = streaming generation duration
+		if totalDur := pbDuration(data.nested(11)) + pbDuration(data.nested(12)); totalDur > 0 {
+			durationMs = sanitizeDurationMs(totalDur)
+		}
 	}
-	return agyMetadata{model: chosen, modelID: modelID, ts: ts, hasTS: hasTS, usages: usages}, nil
+	return agyMetadata{model: chosen, modelID: modelID, ts: ts, hasTS: hasTS, durationMs: durationMs, usages: usages}, nil
 }
 
 func openReadOnlySQLite(path string) (*sql.DB, error) {
@@ -300,10 +324,16 @@ func openReadOnlySQLite(path string) (*sql.DB, error) {
 	if !strings.HasPrefix(slash, "/") {
 		slash = "/" + slash
 	}
+	// If no non-empty WAL file exists, open with immutable=1 to avoid WAL/shm
+	// locking overhead and allow reading WAL-mode DBs whose -shm was cleaned up.
+	query := "mode=ro&_pragma=busy_timeout(100)&_pragma=query_only(1)"
+	if wfi, err := os.Stat(abs + "-wal"); err != nil || wfi.Size() == 0 {
+		query = "mode=ro&immutable=1&_pragma=query_only(1)"
+	}
 	uri := url.URL{
 		Scheme:   "file",
 		Path:     slash,
-		RawQuery: "mode=ro&_pragma=busy_timeout(100)&_pragma=query_only(1)",
+		RawQuery: query,
 	}
 	db, err := sql.Open("sqlite", uri.String())
 	if err != nil {
@@ -537,7 +567,7 @@ func parseAntigravityDB(ctx context.Context, path string, fallbackTime time.Time
 
 	collect := func(list []indexedMeta, isStep bool) {
 		for _, item := range list {
-			for _, u := range item.meta.usages {
+			for uIdx, u := range item.meta.usages {
 				outTok := max(int64(u.num(3)), int64(u.num(9)+u.num(10)))
 				totals := computeTotal(model.TokenTotals{
 					UncachedInput: int64(u.num(2)),
@@ -589,13 +619,18 @@ func parseAntigravityDB(ctx context.Context, path string, fallbackTime time.Time
 						break
 					}
 				}
+				var durMs int64
+				if uIdx == 0 {
+					durMs = item.meta.durationMs
+				}
 				rec := usageRecord{
-					Provider:  "antigravity",
-					SessionID: sessionID,
-					Model:     modelName,
-					Timestamp: ts,
-					Totals:    totals,
-					DedupeKey: dedupeKey,
+					Provider:   "antigravity",
+					SessionID:  sessionID,
+					Model:      modelName,
+					Timestamp:  ts,
+					Totals:     totals,
+					DurationMs: durMs,
+					DedupeKey:  dedupeKey,
 				}
 				if dedupeKey != "" {
 					if idx, ok := dedupeIdx[dedupeKey]; ok {
@@ -606,6 +641,9 @@ func parseAntigravityDB(ctx context.Context, path string, fallbackTime time.Time
 						prev.Totals.Output = max(prev.Totals.Output, rec.Totals.Output)
 						prev.Totals.Reasoning = max(prev.Totals.Reasoning, rec.Totals.Reasoning)
 						prev.Totals = computeTotal(prev.Totals)
+						if rec.DurationMs > 0 && (prev.DurationMs == 0 || !isStep) {
+							prev.DurationMs = rec.DurationMs
+						}
 						if agyConcreteModelRe.MatchString(rec.Model) && !agyConcreteModelRe.MatchString(prev.Model) {
 							prev.Model = rec.Model
 						}

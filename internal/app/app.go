@@ -200,6 +200,7 @@ func (a *App) Shutdown() {
 	a.mu.Unlock()
 	a.Terminals.Close()
 	a.wg.Wait()
+	a.localStats.Close()
 	if a.independentProviders {
 		lease.Release()
 		runhost.StopIdleSessions(a.Store.Dir)

@@ -19,6 +19,8 @@ import {
   windowLabel,
 } from "@/features/usage/format";
 import {
+  prefetchLocalStats,
+  prefetchLocalStatsSummary,
   useLocalStatsSummary,
   useSubscriptionUsage,
 } from "@/features/usage/queries";
@@ -103,7 +105,14 @@ export function SubscriptionUsage({
   const [popRange, setPopRange] = useState<"today" | "7d">("today");
   const [now, setNow] = useState(Date.now);
   const timeZone = useMemo(browserTimeZone, []);
-  const localSummary = useLocalStatsSummary(timeZone, open);
+  const localSummary = useLocalStatsSummary(timeZone, true);
+
+  const warmSummary = () => {
+    void prefetchLocalStatsSummary(timeZone);
+  };
+  const warmFullStats = () => {
+    void prefetchLocalStats("7d", "all", timeZone);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -138,6 +147,8 @@ export function SubscriptionUsage({
           className="navigation-item data-[state=open]:bg-control-hover data-[state=open]:text-foreground"
           aria-label={t("usage.title")}
           title={t("usage.navigation")}
+          onPointerEnter={warmSummary}
+          onFocus={warmSummary}
         >
           <UsageIndicator subscriptions={summary} />
           <span>{t("usage.navigation")}</span>
@@ -383,6 +394,8 @@ export function SubscriptionUsage({
             <button
               type="button"
               className="usage-pop-footer-btn"
+              onPointerEnter={warmFullStats}
+              onFocus={warmFullStats}
               onClick={() => {
                 setOpen(false);
                 onOpenUsageStats();
