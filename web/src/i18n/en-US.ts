@@ -3434,12 +3434,12 @@ export const enUS = {
   "profile.delegationAllowRemote": "Allow cross-device delegation",
   "profile.delegationAllowRemoteHint":
     "Allow this Agent in “All Agents” mode to delegate to online Agents on other devices in the same Hub personal space.",
-  "profile.delegationNested": "Allow delegated Agents to delegate further",
+  "profile.delegationNested": "Maximum delegation depth",
   "profile.delegationNestedHint":
-    "Enable 2-level delegation (e.g., Main Agent → Lead → Workers) with automatic cycle prevention. Off by default (1 level).",
-  "settings.nestedDelegation": "Nested delegation by default",
+    "Allow up to three successive delegations from the originating Agent. Repeated targets are blocked.",
+  "settings.nestedDelegation": "Default delegation depth",
   "settings.nestedDelegationDescription":
-    "Allow delegated Agents to delegate one additional level (up to 2 levels total, no cycles). Individual Agents can override this in Profile.",
+    "Allow up to three successive delegations from the originating Agent. Repeated targets are blocked.",
   "chat.activeDelegations.label": "Background delegated tasks",
   "chat.activeDelegations.title": "Background tasks",
   "chat.activeDelegations.waiting": "{{count}} awaiting approval",

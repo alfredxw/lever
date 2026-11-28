@@ -11,6 +11,9 @@ import { QuotedMessage } from "./QuotedMessage";
 export function UserMessage({
   sessionId,
   message: run,
+  apiBase = "/api",
+  showAttachments = true,
+  previewFiles = true,
   archived,
   onQuote,
   onForward,
@@ -21,6 +24,9 @@ export function UserMessage({
 }: {
   sessionId?: string;
   message: MessageData;
+  apiBase?: string;
+  showAttachments?: boolean;
+  previewFiles?: boolean;
   archived?: boolean;
   children?: ReactNode;
   leadingAction?: ReactNode;
@@ -36,14 +42,25 @@ export function UserMessage({
       aria-label={t("chat.you")}
     >
       <MessageContent>
-        <Attachments files={run.attachments ?? []} defaultExpanded />
+        {showAttachments && (
+          <Attachments
+            files={run.attachments ?? []}
+            apiBase={apiBase}
+            previewHTML={previewFiles}
+            defaultExpanded
+          />
+        )}
         {(run.input || !!run.references?.length || run.quote || children) && (
           <Bubble align="end" variant="muted">
             <BubbleContent className="flex flex-col gap-2">
               {run.quote && <QuotedMessage quote={run.quote} />}
               <MessageInput
                 text={run.input}
-                previewEndpoint={`/api/runs/${encodeURIComponent(run.id)}/preview`}
+                previewEndpoint={
+                  previewFiles
+                    ? `${apiBase}/runs/${encodeURIComponent(run.id)}/preview`
+                    : undefined
+                }
                 references={run.references}
                 sessionId={sessionId}
               />

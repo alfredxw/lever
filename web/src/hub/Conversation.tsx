@@ -30,7 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { label, submit, type Workspace } from "./HubApp";
 import { readLocal, saveLocal } from "./client";
-import { taskDraftKey } from "./Tasks";
+import { createTaskFromChat } from "./Tasks";
 import { formatChatTime, HubAgentAvatar } from "./ui";
 
 export type Command = Omit<Intent, "id">;
@@ -657,17 +657,7 @@ export function Conversation({
               className="hub-topic-pill ml-auto"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                const id = crypto.randomUUID();
-                const selected = window.getSelection()?.toString() ?? "";
-                saveLocal(taskDraftKey(ws.key, id), {
-                  id,
-                  title: privateChat ? "" : (chatRecord?.title ?? ""),
-                  body: selected,
-                  source: privateChat
-                    ? undefined
-                    : { deviceId: device.id, chatId: chat, sessionId: session },
-                });
-                ws.go("tasks/new/" + id);
+                createTaskFromChat(ws, privateChat ? undefined : {deviceId:device.id,chatId:chat,sessionId:session},privateChat?"":chatRecord?.title??"");
               }}
             >
               <ListPlus className="size-3 opacity-70" />

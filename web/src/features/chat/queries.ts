@@ -21,7 +21,7 @@ const initialChatPageSize = 12;
 export function useChatActivity(chatId: string, enabled: boolean) {
   return useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     enabled,
     subscribed: enabled,
     select: useCallback(

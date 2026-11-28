@@ -453,7 +453,7 @@ function TopicConversationContent({
   const { data: overview } = useChatActivity(session.chatId, enabled);
   const { data: handoffSourceTitle } = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     enabled: enabled && Boolean(handoffFrom),
     select: (data) => {
       if (!handoffFrom) return "";

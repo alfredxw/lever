@@ -160,7 +160,7 @@ export function useAutomationRuntime(
 ) {
   const overview = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     enabled: !!agent,
   });
   const defaultPermissionMode =

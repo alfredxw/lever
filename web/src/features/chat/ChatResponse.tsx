@@ -222,7 +222,7 @@ export function ChatMarkdown({
   citations?: Citation[];
   fallbackItems?: Item[];
   running?: boolean;
-  endpoint: string;
+  endpoint?: string;
   files?: ChatFiles;
 }) {
   const { markdown, citations: activeCitations } = useMemo(() => {
@@ -239,13 +239,13 @@ export function ChatMarkdown({
       chatFileTarget(url, window.location.origin);
     const imageURL = (src?: string) => {
       const target = targetFor(src);
-      if (target)
+      if (target && endpoint)
         return chatPreviewURL(endpoint, "image", target.path, target.fragment);
       if (src?.startsWith("//")) return `https:${src}`;
       if (src && /^https?:\/\//i.test(src)) return src;
     };
     return {
-      ...chatHtmlBlockComponents,
+      ...(endpoint && chatHtmlBlockComponents),
       img: ({ src, ...props }) => <ChatImage {...props} src={imageURL(src)} />,
       source: ({ srcSet, media }) => {
         const src = srcSet && /^\S+$/.test(srcSet) && imageURL(srcSet);
@@ -267,7 +267,9 @@ export function ChatMarkdown({
       },
       a: ({ href, children }) => {
         const preview =
-          href && chatHtmlPreview(href, endpoint, window.location.origin);
+          href &&
+          endpoint &&
+          chatHtmlPreview(href, endpoint, window.location.origin);
         if (preview)
           return <ChatHtmlLink preview={preview}>{children}</ChatHtmlLink>;
         const target = targetFor(href);
@@ -275,6 +277,7 @@ export function ChatMarkdown({
           const { path, fragment, location } = target;
           const name = path.split("/").at(-1) || path;
           if (
+            endpoint &&
             !location &&
             /\.(?:png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(path)
           ) {
@@ -329,7 +332,7 @@ export function ChatMarkdown({
               running={running}
               components={components}
               rehypePlugins={rehypePlugins}
-              BlockComponent={VisualizationBlock}
+              BlockComponent={endpoint ? VisualizationBlock : undefined}
             />
           </InlineHtmlPreview>
         </TooltipProvider>

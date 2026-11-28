@@ -17,7 +17,14 @@ export interface Identity {
   id: string;
   publicKey: string /* []byte */;
 }
+export interface DirectPairReceipt {
+  membership: Membership;
+  grant: string;
+  host: Device;
+  lanAddr?: string;
+}
 export interface PairInput extends Identity {
+  reciprocal?: DirectPairReceipt;
   code: string;
   name: string;
   platform: string;
@@ -25,6 +32,7 @@ export interface PairInput extends Identity {
   proof: string /* []byte */;
 }
 export interface Membership {
+  features?: string[];
   hub: Identity;
   spaceId: string;
   spaceKind?: string;
@@ -39,6 +47,7 @@ export interface Space {
   kind: string;
 }
 export interface Device extends Identity {
+  node?: NodeDescriptor;
   spaceId: string;
   name: string;
   role: Role;
@@ -156,9 +165,15 @@ export interface FileStat {
   additions: number /* int */;
   deletions: number /* int */;
 }
+export interface DiffSummary {
+  files?: number /* int */;
+  additions?: number /* int */;
+  deletions?: number /* int */;
+}
 export interface Record {
   canSteer?: boolean;
   files?: FileStat[];
+  diff?: DiffSummary;
   error?: string;
   workingCopyId?: string;
   workingCopyName?: string;
@@ -189,6 +204,7 @@ export interface Record {
   attachments?: AttachmentRef[];
   text?: string;
   items?: Item[];
+  stepCount?: number /* int */;
   truncated?: boolean;
   superseded?: boolean;
   queuePaused?: boolean;
@@ -267,6 +283,9 @@ export interface ClearSync {
   items: ClearMark[];
 }
 export interface Frame {
+  features?: string[];
+  tunnelId?: string;
+  node?: NodeDescriptor;
   controllerId?: string;
   delegation?: boolean;
   digest?: string;
@@ -375,4 +394,49 @@ export interface Receipt {
 export interface InboxItem {
   intent: Intent;
   receipt: Receipt;
+}
+/**
+ * Features describe the binary. AccessLevel describes the owner's current grant.
+ */
+export type AccessLevel = string;
+export const AccessNone: AccessLevel = "none";
+export const AccessChat: AccessLevel = "chat";
+export const AccessWorkspace: AccessLevel = "workspace";
+export const AccessAdmin: AccessLevel = "admin";
+export const FeatureWorkspaceAssets = "workspace_assets_v1";
+export const FeatureAgentSkills = "agent_skills_v1";
+export const FeatureHealth = "peer_health_v1";
+export const FeatureChatControls = "chat_controls_v1";
+export const FeatureTerminal = "terminal_v1";
+export const FeatureDelegationTargets = "delegation_targets_v1";
+export const FeatureDelegate = "delegation_v1";
+export const FeatureManage = "agent_manage_v1";
+export const FeatureGit = "git_v1";
+export const FeatureHotCache = "hot_cache_v1";
+export const FeaturePeer = "peer_v1";
+export const FeatureTunnel = "tunnel_v1";
+export const FeatureFiles = "fs_v1";
+export type Feature = typeof FeatureWorkspaceAssets | typeof FeatureAgentSkills | typeof FeatureHealth | typeof FeatureChatControls | typeof FeatureTerminal | typeof FeatureDelegationTargets | typeof FeatureDelegate | typeof FeatureManage | typeof FeatureGit | typeof FeatureHotCache | typeof FeaturePeer | typeof FeatureTunnel | typeof FeatureFiles;
+export interface BrowseRootInfo {
+  id: string;
+  name: string;
+}
+export interface NodeDescriptor {
+  browseRoots?: BrowseRootInfo[];
+  leverVersion?: string;
+  delegationEnabled?: boolean;
+  cacheEpoch?: string;
+  cacheRevision?: number /* int64 */;
+  nodeId: string;
+  publicKey: string /* []byte */;
+  name: string;
+  platform: string;
+  protocolVersion: number /* int */;
+  minCompatibleProtocol: number /* int */;
+  features: string[];
+  online: boolean;
+  draining: boolean;
+  canControl: boolean;
+  accessLevel: AccessLevel;
+  readOnlyFs: boolean;
 }

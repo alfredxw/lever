@@ -1,10 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Check,
   Copy,
-  ExternalLink,
   Globe,
   Laptop,
   Link2,
@@ -22,9 +21,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
+import { clearNodeState } from "@/features/nodes/nodes";
 import type { Agent, Chat, SharedScope } from "@/api/types.gen";
 import type { Device, InboxItem, Role } from "@/api/hub.gen";
-import { deviceLink, type Transport } from "@/hub/client";
+import { deviceLink } from "@/hub/client";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,10 +49,13 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SettingsGroup, SettingsRow } from "./SettingsControls";
 
-const Workspace = lazy(() =>
-  import("@/hub/HubApp").then((v) => ({ default: v.HubApp })),
-);
-
+interface PairTarget {
+  hub: string;
+  code: string;
+  role: string;
+  link?: string;
+}
+type Access = "chat" | "workspace" | "admin";
 export interface Binding extends SharedScope {
   login: boolean;
   loginSupported: boolean;
@@ -65,6 +68,10 @@ export interface Binding extends SharedScope {
   role: Role;
   online: boolean;
   error?: string;
+  accessLevel?: Access | "none";
+  requireApproval?: boolean;
+  readOnlyFs?: boolean;
+  legacyPermissions?: boolean;
   exposeAll: boolean;
   agents: string[];
   acked: number;
@@ -82,6 +89,7 @@ interface LocalInfo {
 }
 
 interface LANTicketResult {
+ fingerprint:string;
   code: string;
   expires: number;
   hostId: string;
@@ -144,12 +152,12 @@ function parsePairingInput(raw: string, fallbackOrigin: string) {
         throw new Error();
       const hub = (u.searchParams.get("hub") ?? "").trim();
       const code = (u.searchParams.get("code") ?? "").trim();
-      if (!hub || !code) throw new Error();
-      return { ok: true as const, hub, code, parsedLink: true };
+      if ((!hub && !u.searchParams.get("lan")) || !code) throw new Error();
+      return { ok: true as const, hub, code, link: trimmed };
     } catch {
       return {
         ok: false as const,
-        error: "配对链接格式无效，请粘贴 leverdevice://pair?hub=...&code=...",
+        error: "请粘贴目标设备或 Hub 生成的完整配对链接",
       };
     }
   }
@@ -159,7 +167,7 @@ function parsePairingInput(raw: string, fallbackOrigin: string) {
       ok: false as const,
       error: "使用短码配对时请填写 Hub 地址（或直接粘贴完整配对链接）",
     };
-  return { ok: true as const, hub, code: trimmed, parsedLink: false };
+  return { ok: true as const, hub, code: trimmed, link: undefined };
 }
 
 function DeviceIcon({ platform, role }: { platform?: string; role?: string }) {
@@ -226,7 +234,6 @@ export function RemoteDevices({
     refetchInterval: 10000,
   });
   const qc = useQueryClient();
-  const [opened, setOpened] = useState<Binding>();
   const [addingHub, setAddingHub] = useState(false);
   const [pairModalOpen, setPairModalOpen] = useState(false);
   const [editingDevice, setEditingDevice] = useState<EditableDevice>();
@@ -261,6 +268,31 @@ export function RemoteDevices({
     [directBinding],
   );
 
+  const [privacyAgent,setPrivacyAgent]=useState("");
+  const [privacyChat,setPrivacyChat]=useState("");
+  const privateAgent=activeAgents.find(a=>a.id===privacyAgent)??activeAgents[0];
+  const privateChats=chats.filter(c=>c.agentId===privateAgent?.id);
+  const privateChat=privateChats.find(c=>c.id===privacyChat)??privateChats[0];
+  const [browsePath, setBrowsePath] = useState("");
+  const browseRoots = useQuery({
+    queryKey: ["remote", "browse-roots"],
+    queryFn: () =>
+      api<{ id: string; path: string }[]>("/remote", {
+        action: "browse_roots",
+      }),
+  });
+  const pairedPeers = useQuery({
+    queryKey: ["remote", "peers"],
+    queryFn: () =>
+      api<{ nodeId: string; name: string; address: string }[]>("/remote", {
+        action: "peers",
+      }),
+  });
+  const pendingDirect = useQuery({
+    queryKey:["remote","pending-controllers",directScope?.spaceId],
+    enabled:!!directScope, refetchInterval:5000,
+    queryFn:()=>api<TrustedController[]>("/remote",{action:"pending_controllers",scope:directScope}),
+  });
   const directTrusted = useQuery({
     queryKey: ["remote", "trusted", directScope?.hubId, directScope?.spaceId],
     enabled: !!directScope,
@@ -282,7 +314,10 @@ export function RemoteDevices({
 
   const mutation = useMutation({
     mutationFn: (input: unknown) => api("/remote", input),
-    onSuccess: () => {
+    onSuccess: (_, input) => {
+      const {action,id}=input as {action:string;id?:string};
+      if(action==="forget_peer" && id) clearNodeState(id,qc);
+      if(action==="local_only") void qc.invalidateQueries({queryKey:["overview"]});
       void qc.invalidateQueries({ queryKey: ["remote"] });
     },
     onError: (err) => {
@@ -290,40 +325,17 @@ export function RemoteDevices({
     },
   });
 
-  const pairHub = async (pair: { hub: string; code: string; role: string }) => {
-    const scope = await api<SharedScope>("/remote", { action: "pair", pair });
-    if (pair.role !== "controller") {
-      // Carry over current local expose_all preference (defaults to all agents incl. future).
-      const exposeAll = directBinding ? directBinding.exposeAll : true;
-      try {
-        if (exposeAll) {
-          await api("/remote", { action: "expose_all", scope, enabled: true });
-        } else if (directBinding) {
-          for (const agentId of directBinding.agents) {
-            await api("/remote", { action: "expose", scope, agentId });
-          }
-        }
-      } catch {
-        /* Pairing already succeeded. */
-      }
-    }
+  const pairHub = async (pair: PairTarget) => {
+    await api("/remote", {
+      action: "pair",
+      pair: {
+        ...pair,
+        exposeAll: directBinding?.exposeAll,
+        agentIds: directBinding?.agents,
+      },
+    });
     await qc.invalidateQueries({ queryKey: ["remote"] });
   };
-
-  const control = useMemo<Transport>(
-    () => ({
-      kind: "host",
-      request: <T,>(path: string, method = "GET", body?: unknown) =>
-        api<T>("/remote", {
-          action: "control",
-          scope: opened && { hubId: opened.hubId, spaceId: opened.spaceId },
-          method,
-          path,
-          body,
-        }),
-    }),
-    [opened],
-  );
 
   const directExposedAgents = useMemo(() => {
     if (!directBinding || directBinding.exposeAll) return activeAgents;
@@ -364,7 +376,8 @@ export function RemoteDevices({
             {title}
           </h2>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            支持免 Hub 局域网扫码直连手机，也可按需接入自托管 Lever Hub 实现公网远程访问与锁屏推送。
+            支持免 Hub 局域网扫码直连手机，也可按需接入自托管 Lever Hub
+            实现公网远程访问与锁屏推送。
           </p>
         </div>
         <Button onClick={() => setPairModalOpen(true)}>
@@ -393,7 +406,9 @@ export function RemoteDevices({
                   <Badge variant="outline">可选 · 当前仅局域网可用</Badge>
                 </div>
                 <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  不连接 Hub 也可直接点击右上角「配对新设备」在同 Wi-Fi 下扫码连接手机；连接 Hub 后可支持公网跨网访问、多机共享任务与系统锁屏推送。
+                  不连接 Hub 也可直接点击右上角「配对新设备」在同 Wi-Fi
+                  下扫码连接手机；连接 Hub
+                  后可支持公网跨网访问、多机共享任务与系统锁屏推送。
                 </p>
               </div>
             </div>
@@ -402,7 +417,7 @@ export function RemoteDevices({
               submitLabel="连接 Hub"
               onPair={async (pair) => {
                 await pairHub(pair);
-                toast.success("已连接到 Lever Hub");
+                toast.success("配对成功");
               }}
             />
           </div>
@@ -418,7 +433,6 @@ export function RemoteDevices({
             mutate={(input, onSuccess) =>
               mutation.mutate(input, onSuccess ? { onSuccess } : undefined)
             }
-            openWorkspace={() => setOpened(b)}
             onOpenPair={() => setPairModalOpen(true)}
             onEditDevice={(dev) => setEditingDevice(dev)}
           />
@@ -483,6 +497,9 @@ export function RemoteDevices({
             </SettingsRow>
           )}
 
+          {pendingDirect.data?.map(controller=><SettingsRow key={controller.id} title={controller.name} description="此设备已提交配对，正在等待本机确认">
+            <Button variant="ghost" onClick={()=>mutation.mutate({action:"discard_controller",scope:directScope,controllerId:controller.id})}>拒绝</Button>
+            <Button onClick={()=>mutation.mutate({action:"trust",scope:directScope,controllerId:controller.id})}>允许接入</Button></SettingsRow>)}
           {(directTrusted.data ?? []).map((t) => {
             const summary = summarizeControllerScope(t, directExposedIds);
             return (
@@ -533,6 +550,130 @@ export function RemoteDevices({
               </SettingsRow>
             );
           })}
+        </SettingsGroup>
+      )}
+
+      {directBinding && (
+        <AccessSettings
+          binding={directBinding}
+          mutate={(v) => mutation.mutate(v)}
+        />
+      )}
+      {privateAgent && (
+        <SettingsGroup title="仅本机可见">
+          <SettingsRow
+            title="Agent"
+            description="开启后，其他设备无法打开这个 Agent 及其对话。"
+          >
+            <Select value={privateAgent.id} onValueChange={setPrivacyAgent}>
+              <SelectTrigger size="sm" aria-label="选择要设置的 Agent">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {activeAgents.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Switch
+              aria-label="Agent 仅本机可见"
+              checked={!!privateAgent.localOnly}
+              disabled={mutation.isPending}
+              onCheckedChange={(enabled) =>
+                mutation.mutate({
+                  action: "local_only",
+                  operation: "agent",
+                  id: privateAgent.id,
+                  enabled,
+                })
+              }
+            />
+          </SettingsRow>
+          {privateChat && (
+            <SettingsRow title="对话" description="可单独保留一段私人对话。">
+              <Select value={privateChat.id} onValueChange={setPrivacyChat}>
+                <SelectTrigger size="sm" aria-label="选择要设置的对话">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {privateChats.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Switch
+                aria-label="对话仅本机可见"
+                checked={!!privateAgent.localOnly || !!privateChat.localOnly}
+                disabled={mutation.isPending || privateAgent.localOnly}
+                onCheckedChange={(enabled) =>
+                  mutation.mutate({
+                    action: "local_only",
+                    operation: "chat",
+                    id: privateChat.id,
+                    enabled,
+                  })
+                }
+              />
+            </SettingsRow>
+          )}
+        </SettingsGroup>
+      )}
+      {!!pairedPeers.data?.length && (
+        <SettingsGroup title="已配对的直连电脑">
+          {pairedPeers.data.map((p) => (
+            <SettingsRow key={p.nodeId} title={p.name} description={p.address}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (confirm("解除与这台电脑的配对？"))
+                    mutation.mutate({ action: "forget_peer", id: p.nodeId });
+                }}
+              >
+                解除配对
+              </Button>
+            </SettingsRow>
+          ))}
+        </SettingsGroup>
+      )}
+      {list.some((b) => b.accessLevel === "admin") && (
+        <SettingsGroup title="远程创建 Agent 的允许目录">
+          {browseRoots.data?.map((r) => (
+            <SettingsRow key={r.id} title={r.path}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  mutation.mutate({ action: "remove_browse_root", id: r.id })
+                }
+              >
+                移除
+              </Button>
+            </SettingsRow>
+          ))}
+          <SettingsRow title="添加本机目录">
+            <Input
+              aria-label="允许目录"
+              value={browsePath}
+              onChange={(e) => setBrowsePath(e.target.value)}
+            />
+            <Button
+              size="sm"
+              disabled={!browsePath.trim() || mutation.isPending}
+              onClick={() =>
+                mutation.mutate(
+                  { action: "add_browse_root", path: browsePath.trim() },
+                  { onSuccess: () => setBrowsePath("") },
+                )
+              }
+            >
+              添加
+            </Button>
+          </SettingsRow>
         </SettingsGroup>
       )}
 
@@ -725,11 +866,7 @@ export function RemoteDevices({
 
       {hubBindings.length > 0 && (
         <div className="flex justify-start">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setAddingHub(true)}
-          >
+          <Button variant="ghost" size="sm" onClick={() => setAddingHub(true)}>
             <Plus data-icon="inline-start" />
             接入其他 Hub 空间
           </Button>
@@ -744,7 +881,7 @@ export function RemoteDevices({
         directTrustedCount={directTrusted.data?.length ?? 0}
         onPairHub={async (pair) => {
           await pairHub(pair);
-          toast.success("已连接到 Lever Hub");
+          toast.success("配对成功");
         }}
         onRefreshStatus={() =>
           void qc.invalidateQueries({ queryKey: ["remote"] })
@@ -782,9 +919,9 @@ export function RemoteDevices({
       <Dialog open={addingHub} onOpenChange={setAddingHub}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>连接新的 Lever Hub</DialogTitle>
+            <DialogTitle>配对设备或 Hub</DialogTitle>
             <DialogDescription>
-              可将本机同时接入另一个 Hub 或协作空间。
+              粘贴另一台电脑或 Hub 生成的配对链接。
             </DialogDescription>
           </DialogHeader>
           <PairHubForm
@@ -798,33 +935,118 @@ export function RemoteDevices({
           />
         </DialogContent>
       </Dialog>
-
-      {/* Embedded Shared Workspace Dialog */}
-      <Dialog
-        open={!!opened}
-        onOpenChange={(open) => {
-          if (!open) setOpened(undefined);
-        }}
-      >
-        <DialogContent className="h-[92dvh] w-[96vw] max-w-none overflow-hidden p-0 sm:max-w-[96vw]">
-          <DialogTitle className="sr-only">共享空间</DialogTitle>
-          {opened && (
-            <Suspense
-              fallback={
-                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                  正在连接共享空间…
-                </div>
-              }
-            >
-              <Workspace transport={control} origin={opened.origin} />
-            </Suspense>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
 
+function AddressPair({
+  onPair,
+}: {
+  onPair: (target: PairTarget) => Promise<void>;
+}) {
+  const [address, setAddress] = useState("");
+  const [code, setCode] = useState("");
+  const [candidate, setCandidate] = useState<{
+    address: string;
+    link: string;
+    fingerprint: string;
+    name: string;
+  }>();
+  const discover = useMutation({
+    mutationFn: () => api<string[]>("/remote", { action: "discover_peers" }),
+  });
+  const probe = useMutation({
+    mutationFn: (id?: string) =>
+      api<NonNullable<typeof candidate>>("/remote", {
+        action: "probe_peer",
+        path: address,
+        id,
+      }),
+    onSuccess: setCandidate,
+  });
+  const pair = useMutation({
+    mutationFn: async () => {
+      if (!candidate) return;
+      const link = new URL(candidate.link);
+      link.searchParams.set("code", code.trim());
+      await onPair({
+        hub: "",
+        code: "",
+        role: "workstation",
+        link: link.toString(),
+      });
+      setCandidate(undefined);
+      setCode("");
+      setAddress("");
+    },
+  });
+  return (
+    <details className="border-t pt-3 text-sm">
+      <summary className="cursor-pointer">按局域网地址或发现设备配对</summary>
+      <div className="mt-3 flex flex-col gap-2">
+        <div className="flex gap-2">
+          <Input
+            aria-label="设备 IP 和端口"
+            placeholder="IP:Port"
+            value={address}
+            onChange={(e) => {
+              setAddress(e.target.value);
+              setCandidate(undefined);
+            }}
+          />
+          <Button
+            variant="outline"
+            disabled={!address.trim() || probe.isPending}
+            onClick={() => probe.mutate(undefined)}
+          >
+            读取指纹
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={discover.isPending}
+            onClick={() => discover.mutate()}
+          >
+            发现设备
+          </Button>
+        </div>
+        {discover.data?.length === 0 && <p>未发现设备，可手动输入地址。</p>}
+        {discover.data?.map((id) => (
+          <Button key={id} variant="ghost" onClick={() => probe.mutate(id)}>
+            {id}
+          </Button>
+        ))}
+        {candidate && (
+          <>
+            <p>
+              {candidate.name} · {candidate.address}
+            </p>
+            <p className="font-mono">{candidate.fingerprint}</p>
+            <label>
+              核对目标设备显示的指纹后，输入其六位配对码
+              <Input
+                inputMode="numeric"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </label>
+            <Button
+              disabled={!/^\d{6}$/.test(code) || pair.isPending}
+              onClick={() => pair.mutate()}
+            >
+              确认指纹并配对
+            </Button>
+          </>
+        )}
+        {(probe.error || discover.error || pair.error) && (
+          <p role="alert">
+            {String(probe.error ?? discover.error ?? pair.error)}
+          </p>
+        )}
+      </div>
+    </details>
+  );
+}
 function PairHubForm({
   inline,
   submitLabel = "连接 Hub",
@@ -832,11 +1054,7 @@ function PairHubForm({
 }: {
   inline?: boolean;
   submitLabel?: string;
-  onPair: (pair: {
-    hub: string;
-    code: string;
-    role: string;
-  }) => Promise<void>;
+  onPair: (pair: PairTarget) => Promise<void>;
 }) {
   const [link, setLink] = useState("");
   const [origin, setOrigin] = useState("");
@@ -872,7 +1090,12 @@ function PairHubForm({
         }
         setPending(true);
         try {
-          await onPair({ hub: parsed.hub, code: parsed.code, role });
+          await onPair({
+            hub: parsed.hub,
+            code: parsed.code,
+            role,
+            link: parsed.link,
+          });
           setLink("");
           setOrigin("");
         } catch (err) {
@@ -886,7 +1109,7 @@ function PairHubForm({
         <div className="flex items-center gap-2">
           <Input
             aria-label="配对链接或短码"
-            placeholder="粘贴 leverdevice://pair?hub=...&code=... 或短码"
+            placeholder="粘贴设备或 Hub 配对链接，或输入 Hub 短码"
             autoComplete="off"
             className="flex-1 font-mono text-xs"
             value={link}
@@ -950,10 +1173,60 @@ function PairHubForm({
     </form>
   );
 
-  if (inline) return form;
+  if (inline) return <div className="space-y-4">{form}<AddressPair onPair={onPair} /></div>;
   return (
     <SettingsGroup title="Lever Hub 连接">
-      <div className="p-4">{form}</div>
+      <div className="space-y-4 p-4">{form}<AddressPair onPair={onPair}/></div>
+    </SettingsGroup>
+  );
+}
+
+function AccessSettings({
+  binding,
+  mutate,
+}: {
+  binding: Binding;
+  mutate: (input: unknown) => void;
+}) {
+  if (binding.role === "controller") return null;
+  const change = (values: Record<string, unknown>) =>
+    mutate({
+      action: "access",
+      scope: { hubId: binding.hubId, spaceId: binding.spaceId },
+      ...values,
+    });
+  return (
+    <SettingsGroup title="远程设备可使用的本机权限">
+      <SettingsRow title="权限档位" description={binding.legacyPermissions?"此连接沿用旧版逐项授权。选择档位后将启用节点工作区。":undefined}>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          spacing={0}
+          value={binding.legacyPermissions?"":binding.accessLevel ?? "workspace"}
+          onValueChange={(value) => value && change({ accessLevel: value })}
+          aria-label="本机权限档位"
+        >
+          <ToggleGroupItem value="chat">对话</ToggleGroupItem>
+          <ToggleGroupItem value="workspace">工作区</ToggleGroupItem>
+          <ToggleGroupItem value="admin">管理</ToggleGroupItem>
+        </ToggleGroup>
+      </SettingsRow>
+      {binding.accessLevel !== "chat" && (
+        <SettingsRow title="工作区文件只读">
+          <Switch
+            aria-label="工作区文件只读"
+            checked={!!binding.readOnlyFs}
+            onCheckedChange={(readOnlyFs) => change({ readOnlyFs })}
+          />
+        </SettingsRow>
+      )}
+      <SettingsRow title="新设备接入需本机确认">
+        <Switch
+          aria-label="新设备接入需本机确认"
+          checked={binding.requireApproval ?? true}
+          onCheckedChange={(requireApproval) => change({ requireApproval })}
+        />
+      </SettingsRow>
     </SettingsGroup>
   );
 }
@@ -964,7 +1237,6 @@ function HubBindingPanel({
   chats,
   isPending,
   mutate,
-  openWorkspace,
   onOpenPair,
   onEditDevice,
 }: {
@@ -973,7 +1245,6 @@ function HubBindingPanel({
   chats: Chat[];
   isPending: boolean;
   mutate: (input: unknown, onSuccess?: () => void) => void;
-  openWorkspace: () => void;
   onOpenPair: () => void;
   onEditDevice: (device: EditableDevice) => void;
 }) {
@@ -1104,12 +1375,6 @@ function HubBindingPanel({
           }
         >
           <div className="flex flex-wrap items-center gap-2">
-            {canControl && (
-              <Button variant="outline" size="sm" onClick={openWorkspace}>
-                <ExternalLink data-icon="inline-start" />
-                打开共享空间
-              </Button>
-            )}
             <Button
               variant="ghost"
               size="sm"
@@ -1237,7 +1502,9 @@ function HubBindingPanel({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={!manualControllerId.trim() || !b.online || isPending}
+                  disabled={
+                    !manualControllerId.trim() || !b.online || isPending
+                  }
                   onClick={() =>
                     mutate(
                       {
@@ -1259,6 +1526,8 @@ function HubBindingPanel({
           )}
         </SettingsGroup>
       )}
+
+      <AccessSettings binding={b} mutate={mutate} />
 
       {/* 3. 本机 Agent 开放范围 */}
       {canExecute && (
@@ -1284,7 +1553,9 @@ function HubBindingPanel({
                 mutate({ action: "expose_all", scope, enabled });
               }}
             >
-              <ToggleGroupItem value="all">全部 Agent（含新增）</ToggleGroupItem>
+              <ToggleGroupItem value="all">
+                全部 Agent（含新增）
+              </ToggleGroupItem>
               <ToggleGroupItem value="selected">仅选定 Agent</ToggleGroupItem>
             </ToggleGroup>
           </SettingsRow>
@@ -1579,7 +1850,14 @@ function PairDeviceModal({
       void generateHub(hubRole);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, channel, canIssueHub, hubRole, hubBinding?.hubId, hubBinding?.spaceId]);
+  }, [
+    open,
+    channel,
+    canIssueHub,
+    hubRole,
+    hubBinding?.hubId,
+    hubBinding?.spaceId,
+  ]);
 
   useEffect(() => {
     if (!open || channel !== "lan") return;
@@ -1607,7 +1885,9 @@ function PairDeviceModal({
   }, [open, channel, canIssueHub, hubDevices.data, hubDevCount]);
 
   const hubLink =
-    hubTicket && hubBinding ? deviceLink(hubBinding.origin, hubTicket.code) : "";
+    hubTicket && hubBinding
+      ? deviceLink(hubBinding.origin, hubTicket.code)
+      : "";
   const cliCommand =
     hubTicket && hubBinding
       ? `lever remote pair --hub ${hubBinding.origin} --code ${hubTicket.code} --role executor`
@@ -1655,8 +1935,7 @@ function PairDeviceModal({
             局域网直连（免 Hub）
           </ToggleGroupItem>
           <ToggleGroupItem value="hub" className="flex-1">
-            <Globe data-icon="inline-start" />
-            经 Hub 配对
+            <Globe data-icon="inline-start" />经 Hub 配对
           </ToggleGroupItem>
         </ToggleGroup>
 
@@ -1686,10 +1965,11 @@ function PairDeviceModal({
                       {lanTicket.code}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      确保手机与本机在同一 Wi-Fi，打开手机 <strong>Lever</strong> 扫码即可直连
+                      确保手机与本机在同一 Wi-Fi，打开手机{" "}
+                      <strong>Lever</strong> 扫码即可直连
                     </p>
                     <p className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                      {lanTicket.lan} · 有效期至{" "}
+                      指纹 {lanTicket.fingerprint}<br />{lanTicket.lan} · 有效期至{" "}
                       {new Date(lanTicket.expires * 1000).toLocaleTimeString()}
                     </p>
                   </div>
@@ -1725,20 +2005,23 @@ function PairDeviceModal({
                 尚未连接自托管 Lever Hub（可选）
               </div>
               <p className="mt-1">
-                如果只需在同 Wi-Fi 下使用手机，切回左侧「局域网直连」直接扫码即可。如需公网访问与推送，可粘贴 Hub 配对链接接入本机：
+                如果只需在同 Wi-Fi
+                下使用手机，切回左侧「局域网直连」直接扫码即可。如需公网访问与推送，可粘贴
+                Hub 配对链接接入本机：
               </p>
             </div>
-            <PairHubForm
-              inline
-              submitLabel="连接 Hub"
-              onPair={onPairHub}
-            />
+            <PairHubForm inline submitLabel="连接 Hub" onPair={onPairHub} />
           </div>
         ) : hubBinding.role === "executor" ? (
           <div className="flex flex-col gap-3 py-1 text-xs leading-relaxed text-muted-foreground">
             <div className="rounded-xl border border-border bg-muted/35 p-3">
               本机当前以 <strong className="text-foreground">仅执行</strong>{" "}
-              角色接入 <code className="font-mono text-foreground">{hubBinding.origin}</code>，不能直接签发 Hub 配对码。请前往 Hub 网页生成，或切换左侧「局域网直连」直接扫码。
+              角色接入{" "}
+              <code className="font-mono text-foreground">
+                {hubBinding.origin}
+              </code>
+              ，不能直接签发 Hub 配对码。请前往 Hub
+              网页生成，或切换左侧「局域网直连」直接扫码。
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -1755,8 +2038,13 @@ function PairDeviceModal({
         ) : !hubBinding.online ? (
           <div className="flex flex-col gap-3 py-1 text-xs leading-relaxed text-muted-foreground">
             <div className="rounded-xl border border-border bg-muted/35 p-3">
-              当前与 <code className="font-mono text-foreground">{hubBinding.origin}</code> 离线
-              {hubBinding.error ? `（${hubBinding.error}）` : ""}。可先切换到左侧「局域网直连」扫码，或恢复网络后重试。
+              当前与{" "}
+              <code className="font-mono text-foreground">
+                {hubBinding.origin}
+              </code>{" "}
+              离线
+              {hubBinding.error ? `（${hubBinding.error}）` : ""}
+              。可先切换到左侧「局域网直连」扫码，或恢复网络后重试。
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={onRefreshStatus}>
@@ -1833,7 +2121,9 @@ function PairDeviceModal({
                       </p>
                       <p className="text-[11px] text-muted-foreground tabular-nums">
                         有效期至{" "}
-                        {new Date(hubTicket.expires * 1000).toLocaleTimeString()}
+                        {new Date(
+                          hubTicket.expires * 1000,
+                        ).toLocaleTimeString()}
                       </p>
                     </div>
                   )}
@@ -1927,7 +2217,11 @@ function DeviceScopeDialog({
   const [selectedAgents, setSelectedAgents] = useState<string[]>(() =>
     hasWildcard
       ? exposedAgents.map((a) => a.id)
-      : [...new Set(perms.filter((p) => p.agentId !== "*").map((p) => p.agentId))],
+      : [
+          ...new Set(
+            perms.filter((p) => p.agentId !== "*").map((p) => p.agentId),
+          ),
+        ],
   );
   const [ops, setOps] = useState<string[]>(() =>
     hasWildcard
@@ -1976,7 +2270,10 @@ function DeviceScopeDialog({
   const canConfigureTrust =
     device.canExecute && !isSelf && device.role !== "executor";
   const canRenameHub =
-    !device.isDirect && device.canControl && device.hostOnline && !device.revoked;
+    !device.isDirect &&
+    device.canControl &&
+    device.hostOnline &&
+    !device.revoked;
   const canRenameDirect = device.isDirect && !isSelf && isTrusted;
 
   const savePermissions = () => {
@@ -2096,7 +2393,8 @@ function DeviceScopeDialog({
                       信任此控制端
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      开启后，即使 Hub 离线也可在局域网直连，并可按下方范围免确认执行操作。
+                      开启后，即使 Hub
+                      离线也可在局域网直连，并可按下方范围免确认执行操作。
                     </p>
                   </div>
                   <Switch

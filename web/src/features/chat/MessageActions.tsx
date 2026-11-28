@@ -11,7 +11,7 @@ import { formatMessageTime } from "./messageTime";
 
 export type MessageActionHandlers = {
   onQuote?: (message: MessageQuote) => void;
-  onForward: (message: MessageQuote) => void;
+  onForward?: (message: MessageQuote) => void;
 };
 
 export function MessageActions({
@@ -76,15 +76,17 @@ export function MessageActions({
                 <Quote />
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t("chat.forward")}
-              title={t("chat.forward")}
-              onClick={() => onForward(message)}
-            >
-              <Forward />
-            </Button>
+            {onForward && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t("chat.forward")}
+                title={t("chat.forward")}
+                onClick={() => onForward(message)}
+              >
+                <Forward />
+              </Button>
+            )}
           </>
         )}
         {children}

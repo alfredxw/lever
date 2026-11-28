@@ -50,12 +50,24 @@ export class APIError extends Error {
     this.code = code;
   }
 }
+type NodeRequest = <T>(
+  path: string,
+  method: string,
+  body?: unknown,
+) => Promise<T>;
+let requestOnDevice: NodeRequest | undefined;
+export function bindMobileNodeRequests(request: NodeRequest) {
+  requestOnDevice = request;
+}
 export async function api<T>(
   path: string,
   body?: unknown,
   method = "POST",
   signal?: AbortSignal,
 ): Promise<T> {
+  if (requestOnDevice && path.startsWith("/nodes/")) {
+    return requestOnDevice<T>("/api" + path, body === undefined ? "GET" : method, body);
+  }
   const response = await fetch(
     `/api${path}`,
     body === undefined
@@ -100,7 +112,7 @@ export const active = (status: string) =>
     status,
   );
 
-function updateHistoryRun<Page extends { runs: Run[] }>(
+export function updateHistoryRun<Page extends { runs: Run[] }>(
   history: InfiniteData<Page> | undefined,
   run: Run,
 ): InfiniteData<Page> | undefined {
@@ -119,7 +131,7 @@ function updateHistoryRun<Page extends { runs: Run[] }>(
 }
 
 export function connectEvents(after: number, onEvent?: (event: Event) => void) {
-  const stream = new EventSource(`/api/events?after=${after}`);
+  const stream = new EventSource(`/api/events?scope=local&after=${after}`);
   stream.addEventListener("reset", () => {
     void queryClient.invalidateQueries();
   });

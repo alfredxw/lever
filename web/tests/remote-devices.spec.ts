@@ -7,7 +7,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AddressInfo } from "node:net";
-import type { InboxItem, Record as Shared } from "../src/api/hub.gen";
+import type { Dispatch } from "../src/api/hub.gen";
 
 test("dispatch from desktop, answer on mobile and accept the same Run", async ({
   page,
@@ -113,20 +113,6 @@ test("dispatch from desktop, answer on mobile and accept the same Run", async ({
     const device = bindings.find(
       (b: { hubId: string }) => b.hubId === scope!.hubId,
     ).deviceId;
-    const confirm = async (kind: string) => {
-      let found: InboxItem | undefined;
-      await expect
-        .poll(async () => {
-          const items: InboxItem[] = await host("/remote", {
-            action: "inbox",
-            scope,
-          });
-          found = items.find((i) => i.intent.kind === kind);
-          return !!found;
-        })
-        .toBe(true);
-      return host("/remote", { action: "accept", scope, id: found!.intent.id });
-    };
     await page.getByRole("button", { name: "Tasks", exact: true }).click();
     await page.getByRole("button", { name: "新建任务", exact: true }).click();
     await page.getByLabel("标题", { exact: true }).fill("设备审批回归");
@@ -141,26 +127,40 @@ test("dispatch from desktop, answer on mobile and accept the same Run", async ({
       .getByRole("combobox", { name: "Agent", exact: true })
       .selectOption(agent.id);
     await page.getByRole("button", { name: "确认派发", exact: true }).click();
-    const receipt = await confirm("dispatch_task");
     const taskURL = page.url();
+    const taskId = new URL(taskURL).pathname.split("/").at(-1);
+    let receipt!: Dispatch;
+    await expect
+      .poll(async () => {
+        const task = await (
+          await page.request.get(path + "/tasks/" + taskId)
+        ).json();
+        receipt = task.history.find((d: Dispatch) => !!d.runId);
+        return !!receipt?.chatId;
+      })
+      .toBe(true);
+    await expect
+      .poll(
+        async () => (await host("/remote", { action: "inbox", scope })).length,
+      )
+      .toBe(0);
     await page.getByRole("button", { name: "打开 Chat", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole("button", { name: "允许一次", exact: true }).click();
-    await confirm("answer");
+    await page
+      .getByRole("button", { name: /^(允许一次|仅允许此操作)$/ })
+      .click();
     await expect(
-      page.getByText("已回答", { exact: false }).first(),
+      page.getByText("已允许", { exact: false }).first(),
     ).toBeVisible();
-    const archive: Shared[] = await (
+    const ownerPage = await (
       await page.request.get(
-        path + "/archive/" + device + "?chat=" + receipt.chatId,
+        origin + "/api/nodes/" + device + "/chats/" + receipt.chatId,
       )
     ).json();
-    const answered = archive.find(
-      (r) =>
-        r.kind === "request" &&
-        r.runId === receipt.runId &&
-        r.status === "answered",
-    )!;
+    const answered = ownerPage.requests.find(
+      (q: { runId: string; status: string }) =>
+        q.runId === receipt.runId && q.status === "answered",
+    );
     expect(answered).toBeTruthy();
     await page.goto(
       origin +
@@ -174,12 +174,12 @@ test("dispatch from desktop, answer on mobile and accept the same Run", async ({
         answered.id,
     );
     const card = page.locator("#hub-record-" + answered.id);
-    await expect(card).toContainText("已回答");
+    await expect(card).toContainText("已允许");
     await expect(card.getByRole("button")).toHaveCount(0);
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.goto(taskURL);
     await page.getByRole("button", { name: "验收", exact: true }).click();
-    const taskId = new URL(taskURL).pathname.split("/").at(-1);
+
     await expect
       .poll(
         async () =>

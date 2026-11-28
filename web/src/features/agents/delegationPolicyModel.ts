@@ -43,8 +43,9 @@ export function allowsRemoteDelegation(
 export function effectiveMaxDelegationDepth(
   profile?: Pick<Profile, "maxDelegationDepth">,
   defaults?: Pick<DelegationSettings, "maxDepth">,
-): 1 | 2 {
+): 1 | 2 | 3 {
+  if (profile?.maxDelegationDepth === 3) return 3;
   if (profile?.maxDelegationDepth === 2) return 2;
   if (profile?.maxDelegationDepth === 1) return 1;
-  return defaults?.maxDepth === 2 ? 2 : 1;
+  return defaults?.maxDepth === 3 ? 3 : defaults?.maxDepth === 2 ? 2 : 1;
 }

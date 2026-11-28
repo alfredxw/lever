@@ -180,6 +180,9 @@ function groupBy<T>(items: T[], key: (item: T) => string) {
 
 export function AgentSidebar({
   overview,
+  remoteRows,
+  deviceFilter,
+  showLocal = true,
   activity,
   ordering: { agents, sort, setSort, moveAgent },
   recent,
@@ -196,6 +199,9 @@ export function AgentSidebar({
   onPreview,
   ...navigation
 }: SidebarNavigation & {
+  remoteRows?: ReactNode;
+  deviceFilter?: ReactNode;
+  showLocal?: boolean;
   overview: UseQueryResult<WorkbenchOverview>;
   activity?: WorkbenchOverview;
   ordering: ReturnType<typeof useAgentOrder>;
@@ -668,6 +674,7 @@ export function AgentSidebar({
           </kbd>
         )}
       </Button>
+      {deviceFilter}
       <div className="sidebar-filters">
         <TabsList variant="line" aria-label={t("agents.views")}>
           <TabsTrigger value="all">{t("agents.all")}</TabsTrigger>
@@ -745,7 +752,12 @@ export function AgentSidebar({
         active={filter === "all"}
         panelRef={allPanelRef}
       >
-        {() => renderDirectory()}
+        {() => (
+          <>
+            {showLocal && renderDirectory()}
+            {remoteRows}
+          </>
+        )}
       </SidebarListPanel>
       <AgentSidebarMenus
         menu={menu}

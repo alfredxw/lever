@@ -316,7 +316,7 @@ export function Profile({
   );
   const overviewQuery = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
   });
   const globalPermissionMode =
     overviewQuery.data?.permissionSettings?.defaultMode ?? "auto";
@@ -1743,15 +1743,9 @@ export function Profile({
               {t("profile.delegationNestedHint")}
             </p>
           </div>
-          <Switch
-            id={`${scopeId}-nested-delegation`}
-            size="sm"
-            disabled={busy}
-            checked={effectiveMaxDelegationDepth(p, delegationDefaults) === 2}
-            onCheckedChange={(checked) =>
-              change({ maxDelegationDepth: checked ? 2 : 1 }, "immediate")
-            }
-          />
+          <ToggleGroup type="single" size="sm" aria-label={t("profile.delegationNested")} value={String(effectiveMaxDelegationDepth(p,delegationDefaults))} disabled={busy} onValueChange={v=>{if(v)change({maxDelegationDepth:Number(v)},"immediate")}}>
+              {[1,2,3].map(depth=><ToggleGroupItem key={depth} value={String(depth)}>{depth}</ToggleGroupItem>)}
+          </ToggleGroup>
         </div>
       )}
 

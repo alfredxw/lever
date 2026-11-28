@@ -22,7 +22,7 @@ export function useMentionSources(
   const { t } = useTranslation();
   const overview = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     select: summaries,
     enabled,
     subscribed: enabled,

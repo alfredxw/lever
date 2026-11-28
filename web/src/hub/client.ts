@@ -1,3 +1,4 @@
+import { APIError } from "@/api/client";
 import { call } from "mygo-runtime";
 import type { Identity, Space } from "@/api/hub.gen";
 
@@ -32,6 +33,17 @@ export const browserTransport: Transport = {
 export const mobileTransport: Transport = {
   kind: "mobile",
   async request<T>(path: string, method = "GET", body?: unknown) {
+    if (path.startsWith("/api/nodes/")) {
+      const reply = await call<{ data?: T; status?: number; error?: string }>(
+        "Mobile.RequestNode",
+        method,
+        path,
+        body === undefined ? "" : JSON.stringify(body),
+      );
+      if (reply.status)
+        throw new APIError(reply.error || "设备请求失败", reply.status);
+      return reply.data as T;
+    }
     const result = await call<string>(
       "Mobile.Request",
       method,

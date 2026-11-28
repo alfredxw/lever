@@ -368,3 +368,21 @@ export function deriveLiveActivity(
     thoughtLine: "",
   };
 }
+
+// Keep consecutive activity together until there is a visible message.
+export function responseParts(items: Item[]) {
+  const parts: (Item | Item[])[] = [];
+  for (const item of items) {
+    if (
+      (item.kind === "reasoning" || item.kind === "text") &&
+      !item.text.trim()
+    ) {
+      continue;
+    }
+    const previous = parts.at(-1);
+    if (item.kind === "text" || item.kind === "user") parts.push(item);
+    else if (Array.isArray(previous)) previous.push(item);
+    else parts.push([item]);
+  }
+  return parts;
+}

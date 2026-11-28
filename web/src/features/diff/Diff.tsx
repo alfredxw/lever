@@ -161,6 +161,7 @@ function readPreferences(): typeof defaults {
 
 export default function Diff({
   agent,
+  nodeId,
   dark,
   canReview,
   reviewChatId,
@@ -170,6 +171,7 @@ export default function Diff({
   onFeedback,
 }: {
   agent: Agent;
+  nodeId?: string;
   dark: boolean;
   canReview: boolean;
   reviewChatId?: string;
@@ -183,7 +185,9 @@ export default function Diff({
 }) {
   const { t, i18n } = useTranslation();
   const sessionId = useContext(WorkspaceSession);
-  const gitRoots = useGitRoots(agent.id, agent.profile.roots, sessionId);
+  const resource = nodeId ? nodeId + "/" + agent.id : agent.id;
+  const base = (nodeId ? "/nodes/" + encodeURIComponent(nodeId) : "") + "/agents/" + encodeURIComponent(agent.id);
+  const gitRoots = useGitRoots(agent.id, agent.profile.roots, sessionId,nodeId);
   const [rootID, setRootID] = useState(
     initialTurn?.rootId ?? target?.rootId ?? agent.profile.primaryRootId,
   );
@@ -216,11 +220,11 @@ export default function Diff({
   const reviewingTurn = mode === "turn";
   const [latestReview, setLatestReview] = useState<TurnReview>();
   const changes = useQuery({
-    queryKey: ["changes", agent.id, sessionId, initialTurn?.runId, canReview],
+    queryKey: ["changes", resource, sessionId, initialTurn?.runId, canReview],
     enabled: canReview && reviewingTurn && (!!initialTurn || !latestReview),
     queryFn: ({ signal }) =>
       api<TurnReview>(
-        `/agents/${agent.id}/changes?${new URLSearchParams({ ...scopeParams(sessionId), run: initialTurn?.runId ?? "" })}`,
+        `${base}/changes?${new URLSearchParams({ ...scopeParams(sessionId), run: initialTurn?.runId ?? "" })}`,
         undefined,
         "GET",
         signal,
@@ -259,11 +263,11 @@ export default function Diff({
     roots.find((r) => r.id === agent.profile.primaryRootId) ??
     roots[0];
   const branches = useQuery({
-    queryKey: ["branches", agent.id, root?.id, root?.path, sessionId],
+    queryKey: ["branches", resource, root?.id, root?.path, sessionId],
     enabled: !!root && mode === "branch",
     queryFn: ({ signal }) =>
       api<GitBranches>(
-        `/agents/${agent.id}/branches?${new URLSearchParams({ root: root!.id, ...scopeParams(sessionId) })}`,
+        `${base}/branches?${new URLSearchParams({ root: root!.id, ...scopeParams(sessionId) })}`,
         undefined,
         "GET",
         signal,
@@ -283,11 +287,11 @@ export default function Diff({
     }));
   }
   const commits = useQuery({
-    queryKey: ["commits", agent.id, root?.id, root?.path, sessionId],
+    queryKey: ["commits", resource, root?.id, root?.path, sessionId],
     enabled: false,
     queryFn: ({ signal }) =>
       api<GitCommit[]>(
-        `/agents/${agent.id}/commits?${new URLSearchParams({ root: root!.id, ...scopeParams(sessionId) })}`,
+        `${base}/commits?${new URLSearchParams({ root: root!.id, ...scopeParams(sessionId) })}`,
         undefined,
         "GET",
         signal,
@@ -315,7 +319,7 @@ export default function Diff({
   };
   const diffKey = [
     "diff",
-    agent.id,
+    resource,
     root?.path,
     diffParams,
     change?.after,
@@ -323,7 +327,7 @@ export default function Diff({
   ];
   function fetchDiff(signal: AbortSignal, path = "") {
     return api<DiffResult>(
-      `/agents/${agent.id}/diff?${new URLSearchParams({ ...diffParams, ...scopeParams(sessionId), path })}`,
+      `${base}/diff?${new URLSearchParams({ ...diffParams, ...scopeParams(sessionId), path })}`,
       undefined,
       "GET",
       signal,
@@ -948,7 +952,7 @@ export default function Diff({
     setFilter("");
     setSelected("");
     setCollapsed(new Set());
-    void queryClient.invalidateQueries({ queryKey: ["diff", agent.id] });
+    void queryClient.invalidateQueries({ queryKey: ["diff", resource] });
   }, [target, agent.id]);
   function reveal(path: string) {
     pendingReveal.current = path;
@@ -971,7 +975,7 @@ export default function Diff({
     if (!reviewingTurn) {
       void gitRoots.refetch();
       void queryClient.invalidateQueries({
-        queryKey: ["git-summary", agent.id],
+        queryKey: ["git-summary", resource],
       });
     } else if (canReview)
       void changes.refetch().then(({ data, isSuccess }) => {

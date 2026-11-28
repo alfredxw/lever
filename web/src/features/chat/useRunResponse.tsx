@@ -9,23 +9,7 @@ import { RunWork } from "./RunWork";
 import { isWorking } from "./RunStatus";
 import { UserMessage } from "./UserMessage";
 
-// Keep consecutive activity together until there is a visible message.
-function responseParts(items: Item[]) {
-  const parts: (Item | Item[])[] = [];
-  for (const item of items) {
-    if (
-      (item.kind === "reasoning" || item.kind === "text") &&
-      !item.text.trim()
-    ) {
-      continue;
-    }
-    const previous = parts.at(-1);
-    if (item.kind === "text" || item.kind === "user") parts.push(item);
-    else if (Array.isArray(previous)) previous.push(item);
-    else parts.push([item]);
-  }
-  return parts;
-}
+import { responseParts } from "./runActivityLogic";
 
 export type RunResponseProps = MessageActionHandlers & {
   run: Run;

@@ -53,11 +53,15 @@ export function ImageAttachment({
 
 export function Attachments({
   files,
+  apiBase = "/api",
+  previewHTML = true,
   onRemove,
   fileLinksOnly,
   defaultExpanded,
 }: {
   files: FileAttachment[];
+  apiBase?: string;
+  previewHTML?: boolean;
   onRemove?: (file: FileAttachment) => void;
   fileLinksOnly?: boolean;
   defaultExpanded?: boolean;
@@ -68,7 +72,7 @@ export function Attachments({
   const group = (
     <AttachmentGroup className="attachment-strip max-w-full items-center">
       {files.map((file) => {
-        const url = `/api/attachments/${encodeURIComponent(file.id)}`;
+        const url = `${apiBase}/attachments/${encodeURIComponent(file.id)}`;
         const remove = onRemove && (
           <AttachmentActions>
             <AttachmentAction
@@ -105,10 +109,10 @@ export function Attachments({
                     : `${(file.size / 1024 / 1024).toFixed(1)} MB`}
               </AttachmentDescription>
             </AttachmentContent>
-            {fileKind(file.name) === "html" ? (
+            {previewHTML && fileKind(file.name) === "html" ? (
               <>
                 <HtmlAttachmentTrigger
-                  preview={attachmentPreview(file)}
+                  preview={attachmentPreview(file, apiBase)}
                   title={
                     fileLinksOnly
                       ? t("composer.fileLinkOnly", { name: file.name })
@@ -149,10 +153,11 @@ export function Attachments({
       })}
     </AttachmentGroup>
   );
-  if (!files.some((file) => fileKind(file.name) === "html")) return group;
+  if (!previewHTML || !files.some((file) => fileKind(file.name) === "html"))
+    return group;
   const initial =
     defaultExpanded && files.length === 1
-      ? attachmentPreview(files[0])
+      ? attachmentPreview(files[0], apiBase)
       : undefined;
   const content = (
     <InlineHtmlPreview key={initial?.src} defaultPreview={initial}>
@@ -162,10 +167,10 @@ export function Attachments({
   return host ? content : <HtmlPreviewHost>{content}</HtmlPreviewHost>;
 }
 
-function attachmentPreview(file: FileAttachment): HtmlPreview {
+function attachmentPreview(file: FileAttachment, apiBase: string): HtmlPreview {
   return {
     src: chatPreviewURL(
-      `/api/attachments/${encodeURIComponent(file.id)}/preview`,
+      `${apiBase}/attachments/${encodeURIComponent(file.id)}/preview`,
       "html",
       file.name,
     ),

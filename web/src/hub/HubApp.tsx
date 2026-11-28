@@ -1,4 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { APIError } from "@/api/client";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -39,6 +49,8 @@ import type {
   Record as Shared,
   Task,
 } from "@/api/hub.gen";
+import { NodeAgentForm, NodeTargetSelect, canManage } from "@/features/nodes/NodeAgentForm";
+import { clearNodeState, type NodeOverview } from "@/features/nodes/nodes";
 import { fetchArchive, savedArchive } from "./archive";
 import {
   clearSaved,
@@ -51,9 +63,15 @@ import {
 import { ScanPairing } from "./ScanPairing";
 import { DevicesPanel, ProfilePanel } from "./Devices";
 import { Conversation, type Command } from "./Conversation";
-import { NewTask, TaskDetail } from "./Tasks";
+import { createTaskFromChat, NewTask, TaskDetail } from "./Tasks";
 import { formatChatTime, HubAgentAvatar, LeverMark } from "./ui";
 import "./hub.css";
+
+const NodeWorkspace = lazy(() =>
+  import("@/features/nodes/NodeWorkspace").then((m) => ({
+    default: m.NodeWorkspace,
+  })),
+);
 
 export function HubApp({
   transport,
@@ -205,16 +223,16 @@ function Entry({
                 <span>或粘贴配对链接</span>
                 <span className="h-px flex-1 bg-border" />
               </div>
-                  <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-                    配对链接
-                    <Input
-                      aria-label="配对链接"
-                      placeholder="粘贴局域网直连或 Hub 配对链接"
-                      value={link}
-                      onChange={(e) => setLink(e.target.value)}
-                      required
-                    />
-                  </label>
+              <label className="flex flex-col gap-1.5 text-[13px] font-medium">
+                配对链接
+                <Input
+                  aria-label="配对链接"
+                  placeholder="粘贴局域网直连或 Hub 配对链接"
+                  value={link}
+                  onChange={(e) => setLink(e.target.value)}
+                  required
+                />
+              </label>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -239,7 +257,11 @@ function Entry({
             </div>
           )}
 
-          <Button type="submit" className="h-10 w-full rounded-xl" disabled={busy}>
+          <Button
+            type="submit"
+            className="h-10 w-full rounded-xl"
+            disabled={busy}
+          >
             {transport.kind === "mobile"
               ? busy
                 ? "正在配对…"
@@ -384,6 +406,7 @@ function Workbench({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [createNode,setCreateNode]=useState("");
   const path = "/api/spaces/" + space.id;
   const key = prefix + space.id;
 
@@ -454,6 +477,7 @@ function Workbench({
     let off: (() => void) | undefined;
     if (transport.kind === "mobile") {
       off = on<string>("lever:mobile-changed", (reason) => {
+        void qc.invalidateQueries({ queryKey: ["node"] });
         if (reason === "unpaired") {
           clearSaved(account.hub.id, account.userId);
           qc.clear();
@@ -531,26 +555,81 @@ function Workbench({
   });
 
   const devices = useQuery(cachedQuery<Device[]>("devices"));
-  const publicIndex = (index: Record<string, Shared[]>) =>
-    Object.fromEntries(
-      Object.entries(index).map(([id, rows]) => [
-        id,
-        rows.filter((v) => !v.private),
-      ]),
-    );
+  type CachedIndex = Record<string, { epoch: string; rows: Shared[] }>;
+  const cacheKey = key + ":node-index-v1";
+  const epochFor = (d: Device) =>
+    d.node?.features?.includes("peer_v1") ? d.node.cacheEpoch : "legacy";
+  function cachedIndex() {
+    const stored = readLocal<CachedIndex>(cacheKey, {});
+    const visible: Record<string, Shared[]> = {};
+    for (const d of devices.data ?? []) {
+      const epoch = epochFor(d);
+      if (!d.revoked && epoch && stored[d.id]?.epoch === epoch)
+        visible[d.id] = stored[d.id].rows;
+    }
+    return visible;
+  }
   const archive = useQuery({
-    queryKey: [key, "index", devices.data?.map((d) => d.id)],
+    queryKey: [
+      key,
+      "index",
+      devices.data?.map((d) => [d.id, d.revoked, epochFor(d)]),
+    ],
     enabled: !!devices.data,
-    initialData: native
-      ? () =>
-          publicIndex(readLocal<Record<string, Shared[]>>(key + ":index", {}))
-      : undefined,
+    initialData: native ? cachedIndex : undefined,
     initialDataUpdatedAt: 0,
     queryFn: async ({ signal }) => {
+      const previousIndex = native ? cachedIndex() : {};
+      const epochs = new Map<string, string>();
       const entries = await Promise.all(
         (devices.data ?? [])
-          .filter((d) => d.role !== "controller")
+          .filter((d) => !d.revoked && d.role !== "controller")
           .map(async (d) => {
+            if (d.node?.features?.includes("peer_v1")) {
+              const resource = "/nodes/" + encodeURIComponent(d.id) + "/overview";
+              try {
+                const view = await transport.request<NodeOverview>(
+                  (transport.kind === "mobile" ? "/api" : path) + resource,
+                );
+                if (view.node.cacheEpoch && view.node.cacheEpoch === epochFor(d))
+                  epochs.set(d.id, view.node.cacheEpoch);
+                const rows: Shared[] = [
+                  ...(view.agents ?? []).map((a) => ({
+                    kind: "agent",
+                    id: a.id,
+                    title: a.name,
+                    description: a.profile.description,
+                    provider: a.profile.provider,
+                    model: a.profile.model,
+                    avatarSpec: a.avatar ?? undefined,
+                  })),
+                  ...(view.chats ?? []).map((c) => ({ ...c, kind: "chat" })),
+                  ...(view.conversations ?? []).map((c) => ({
+                    ...c,
+                    kind: "session",
+                    type: c.kind,
+                  })),
+                ];
+                return [d.id, rows] as const;
+              } catch (error) {
+                const unavailable =
+                  error instanceof APIError &&
+                  [502, 503, 504].includes(error.status);
+                const epoch = epochFor(d);
+                if (
+                  native &&
+                  !d.online &&
+                  unavailable &&
+                  epoch &&
+                  previousIndex[d.id]
+                ) {
+                  epochs.set(d.id, epoch);
+                  return [d.id, previousIndex[d.id]] as const;
+                }
+                return [d.id, [] as Shared[]] as const;
+              }
+            }
+            epochs.set(d.id, "legacy");
             const previous =
               savedArchive(key, d.id)?.records ??
               readLocal<Shared[]>(key + ":index:" + d.id, []).filter(
@@ -582,7 +661,13 @@ function Workbench({
           }),
       );
       const result = Object.fromEntries(entries);
-      if (native) saveLocal(key + ":index", publicIndex(result));
+      if (native && !signal.aborted) {
+        const cache: CachedIndex = {};
+        for (const [id, epoch] of epochs)
+          cache[id] = { epoch, rows: result[id].filter((v) => !v.private) };
+        saveLocal(cacheKey, cache);
+        localStorage.removeItem(key + ":index");
+      }
       return result;
     },
   });
@@ -594,6 +679,15 @@ function Workbench({
     (section === "tasks" ? tasks.error : null);
   const hubOffline = !error && resourceError?.message === "暂时无法连接 Hub";
   const list = devices.data ?? [];
+  const adminNodes = list.flatMap((d) =>
+    d.node &&
+    !d.revoked &&
+    d.online &&
+    canManage({ ...d.node, online: d.online, draining: d.draining })
+      ? [{ ...d.node, name: d.name, online: d.online, draining: d.draining }]
+      : [],
+  );
+  const createTarget = adminNodes.find((n) => n.nodeId === createNode);
   const index = archive.data ?? {};
 
   const [search, setSearch] = useSavedFilter(
@@ -831,6 +925,18 @@ function Workbench({
       data-collapsed={collapsed}
       aria-busy={busy}
     >
+      <Dialog open={!!createNode} onOpenChange={open => {if (!open) setCreateNode("")}}>
+        <DialogContent className="max-h-[85dvh] overflow-auto">
+          <DialogHeader><DialogTitle>新建 Agent</DialogTitle></DialogHeader>
+          {createTarget ? <>
+            <NodeTargetSelect nodes={adminNodes} value={createNode} change={setCreateNode}/>
+            <NodeAgentForm key={createNode} node={createTarget} done={agent => {
+              setCreateNode(""); refresh(); go("devices/" + createTarget.nodeId + "/agents/" + agent.id);
+            }}/>
+          </> : <p>设备离线或已关闭管理权限。</p>}
+        </DialogContent>
+      </Dialog>
+
       {/* Primary Navigation: Bottom Tab Bar on Mobile / Left Rail on Desktop */}
       <nav aria-label="工作区" className="hub-nav">
         <div className="hub-nav-brand">
@@ -849,7 +955,10 @@ function Workbench({
               onClick={() => go(item.id)}
             >
               <span className="relative inline-flex items-center justify-center">
-                <Icon className="size-[20px]" strokeWidth={active ? 2.2 : 1.75} />
+                <Icon
+                  className="size-[20px]"
+                  strokeWidth={active ? 2.2 : 1.75}
+                />
                 {!!item.badge && item.badge > 0 && (
                   <span className="hub-nav-badge" aria-hidden="true">
                     {item.badge > 99 ? "99+" : item.badge}
@@ -923,6 +1032,19 @@ function Workbench({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-44 p-1.5">
+                    {!!adminNodes.length && (
+                      <button
+                        type="button"
+                        className="hub-menu-item"
+                        onClick={() => {
+                          setPlusMenuOpen(false);
+                          setCreateNode(adminNodes[0].nodeId);
+                        }}
+                      >
+                        <Plus className="size-4 text-muted-foreground" />
+                        <span>新建 Agent</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="hub-menu-item"
@@ -972,11 +1094,7 @@ function Workbench({
                   </PopoverContent>
                 </Popover>
               ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => go("tasks/new")}
-                >
+                <Button type="button" size="sm" onClick={() => go("tasks/new")}>
                   <Plus data-icon="inline-start" className="size-3.5" />
                   新建任务
                 </Button>
@@ -1008,9 +1126,7 @@ function Workbench({
                   <input
                     type="search"
                     aria-label="搜索"
-                    placeholder={
-                      section === "tasks" ? "搜索任务" : "搜索"
-                    }
+                    placeholder={section === "tasks" ? "搜索任务" : "搜索"}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
@@ -1066,7 +1182,11 @@ function Workbench({
               {/* Error / Offline banner inside mobile list too */}
               {(error || resourceError) && isMobileUI && (
                 <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-xl border border-border bg-muted/60 px-3 py-2 text-xs">
-                  <span className={hubOffline ? "text-muted-foreground" : "text-destructive"}>
+                  <span
+                    className={
+                      hubOffline ? "text-muted-foreground" : "text-destructive"
+                    }
+                  >
                     {hubOffline
                       ? "Hub 离线 · 显示本地缓存"
                       : error || resourceError?.message}
@@ -1294,6 +1414,11 @@ function Workbench({
           </div>
         )}
 
+        {section==="devices" && transport.kind==="mobile" && <PhonePairings devices={list} done={id => {
+          if (id) clearNodeState(id,qc);
+          void qc.invalidateQueries({queryKey:["me"]});
+          refresh();
+        }}/>}
         {section === "devices" ? (
           <DevicesPanel
             ws={ws}
@@ -1393,6 +1518,29 @@ function Workbench({
               </div>
             </div>
           )
+        ) : (transport.kind === "web" || transport.kind==="mobile") &&
+          device?.node?.features?.includes("peer_v1") &&
+          (device.online || !!device.node.cacheEpoch) &&
+          activeAgentId ? (
+          <Suspense fallback={null}>
+            <NodeWorkspace
+              key={[device.id, activeAgentId, chat, parts[7]].join("/")}
+              node={{
+                ...device.node,
+                online: device.online,
+                draining: device.draining,
+              }}
+              agentId={activeAgentId}
+              onAgentCreated={id=>go("devices/"+device.id+"/agents/"+id)}
+              openWorkspace={transport.kind==="mobile"?()=>{void call("Mobile.OpenWorkspace",device.id,activeAgentId,chat??"").catch(e=>setError(String(e)))}:undefined}
+              onCreateTask={transport.kind === "mobile" && !origin ? undefined : (chatId, title, sessionId) =>
+                createTaskFromChat(ws, { deviceId: device.id, chatId, sessionId }, title)}
+              targetRecord={["requests","runs"].includes(parts.at(-2)??"")?parts.at(-1):undefined}
+              initialChat={chat}
+              initialTopic={parts[6] === "topics" ? parts[7] : undefined}
+              dark={document.documentElement.classList.contains("dark")}
+            />
+          </Suspense>
         ) : device && (chat || agent) ? (
           <Conversation
             key={[device.id, chat, agent, parts[6], parts[7]].join("/")}
@@ -1491,4 +1639,82 @@ export async function submit(ws: Workspace, cmd: Command) {
   );
   localStorage.removeItem(k);
   return result;
+}
+
+function PhonePairings({
+  devices,
+  done,
+}: {
+  devices: { id: string; name: string }[];
+  done: (removed?: string) => void;
+}) {
+  const [link, setLink] = useState("");
+  const [error, setError] = useState("");
+  const peers = useQuery({
+    queryKey: ["mobile", "direct-peers"],
+    queryFn: () => call<string[]>("Mobile.DirectPeers"),
+  });
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  async function update(id?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      if (id) await call("Mobile.UnpairPeer", id);
+      else await pairPhone(link.trim());
+      await call("Mobile.Watch", true).catch(() => {});
+      setLink("");
+      setConfirm("");
+      await peers.refetch();
+      done(id);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <details className="m-3 rounded-md border p-3">
+      <summary>管理直连设备</summary>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <ScanPairing onLink={setLink} />
+        <Input
+          aria-label="设备配对链接"
+          placeholder="粘贴配对链接"
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+        />
+        <Button disabled={!link.trim() || busy} onClick={() => void update()}>
+          配对
+        </Button>
+      </div>
+      {(peers.data ?? []).map((id) => (
+        <div key={id} className="mt-2 flex items-center gap-2 text-sm">
+          <span className="mr-auto">
+            {devices.find((d) => d.id === id)?.name ?? id}
+          </span>
+          {confirm === id ? (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setConfirm("")}>
+                取消
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => void update(id)}
+              >
+                确认解除
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={() => setConfirm(id)}>
+              解除直连
+            </Button>
+          )}
+        </div>
+      ))}
+      {error && <p role="alert">{error}</p>}
+    </details>
+  );
 }

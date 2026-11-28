@@ -26,6 +26,12 @@ export function taskDraftKey(space: string, id?: string) {
   return space + ":new-task" + (id ? ":" + id : "");
 }
 
+export function createTaskFromChat(ws: Workspace, source: ChatRef | undefined, title: string) {
+  const id=crypto.randomUUID();
+  saveLocal(taskDraftKey(ws.key,id),{id,title,body:window.getSelection()?.toString()??"",source});
+  ws.go("tasks/new/"+id);
+}
+
 export function NewTask({ ws, draftId }: { ws: Workspace; draftId?: string }) {
   const key = taskDraftKey(ws.key, draftId);
   const [draft, setDraft] = useState(() =>

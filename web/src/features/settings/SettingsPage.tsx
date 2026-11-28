@@ -801,17 +801,9 @@ export function SettingsPage({
                 title={t("settings.nestedDelegation")}
                 description={t("settings.nestedDelegationDescription")}
               >
-                <Switch
-                  aria-label={t("settings.nestedDelegation")}
-                  checked={delegationSettings.maxDepth === 2}
-                  disabled={saveDelegationSettings.isPending}
-                  onCheckedChange={(checked) =>
-                    saveDelegationSettings.mutate(
-                      { ...delegationSettings, maxDepth: checked ? 2 : 1 },
-                      { onError: (error) => toast.error(error.message) },
-                    )
-                  }
-                />
+                <ToggleGroup type="single" size="sm" aria-label={t("settings.nestedDelegation")} value={String(delegationSettings.maxDepth || 1)} disabled={saveDelegationSettings.isPending} onValueChange={v=>{if(v)saveDelegationSettings.mutate({...delegationSettings,maxDepth:Number(v)},{onError:error=>toast.error(error.message)})}}>
+                  {[1,2,3].map(depth=><ToggleGroupItem key={depth} value={String(depth)}>{depth}</ToggleGroupItem>)}
+                </ToggleGroup>
               </SettingsRow>
               <SettingsRow
                 title={t("settings.agentDefaults")}

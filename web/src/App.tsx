@@ -132,6 +132,17 @@ import {
 } from "@/features/agents/desktopNotifications";
 import { useConversationReadState } from "@/features/agents/useConversationReadState";
 import { useRecentState } from "@/features/agents/useRecentState";
+import {
+  NodeDirectory,
+  NodeFilter,
+  useNodeDirectory,
+} from "@/features/nodes/NodeDirectory";
+import { nodeAgentKey } from "@/features/nodes/nodes";
+import {
+  canManage,
+  NodeAgentForm,
+  NodeTargetSelect,
+} from "@/features/nodes/NodeAgentForm";
 import { AgentSidebar } from "@/features/agents/AgentSidebar";
 import {
   AgentOrderContext,
@@ -204,6 +215,9 @@ const Files = lazy(() =>
   import("@/features/files/Files").then(({ Files }) => ({ default: Files })),
 );
 const Terminal = lazy(() => import("@/features/terminal/Terminal"));
+const NodeWorkspace = lazy(() =>
+  import("@/features/nodes/NodeWorkspace").then((m) => ({ default: m.NodeWorkspace })),
+);
 const WorkspaceNotes = lazy(() => import("@/features/tasks/WorkspaceNotes"));
 const BrowserPanel = lazy(() => import("@/features/browser/BrowserPanel"));
 const windowsDesktop = isDesktop && runtime().platform === "win32";
@@ -282,7 +296,7 @@ export default function App() {
   const draftKeys = useComposerDraftKeys();
   const overview = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     select: selectWorkbenchOverview,
   });
   const pendingRequests = overview.data?.requests;
@@ -302,10 +316,14 @@ export default function App() {
   const providers = useProviders();
   const availableConnections = providers.data?.filter((p) => p.available);
   const needsConnection = providers.isSuccess && !availableConnections?.length;
+  const nodeDirectory = useNodeDirectory();
+  const [nodeFilter, setNodeFilter] = useState("all");
+  const adminNodes = nodeDirectory.data?.map(({ node }) => node).filter(canManage) ?? [];
   const [selected, setSelected] = useState(
     () => localStorage.getItem("lever:agent") ?? "",
   );
   const [create, setCreate] = useState<{
+    nodeId?: string;
     defaultAgent?: Agent;
     source?: Agent;
   }>();
@@ -485,9 +503,13 @@ export default function App() {
   const projects = overview.data?.projects ?? noProjects;
   const agent = agents.find((a) => a.id === selected);
   const sharedWorkspace = selected === sharedWorkspaceId;
+  const remoteSelection = selected.startsWith("node/") ? selected.split("/") : undefined;
+  const remoteNode = nodeDirectory.data?.find(({ node }) => node.nodeId === remoteSelection?.[1]);
+  const createTarget = adminNodes.find((node) => node.nodeId === create?.nodeId);
   if (
     !agent &&
     !sharedWorkspace &&
+    !remoteSelection &&
     agents.length === 1 &&
     !agents[0].archived
   ) {
@@ -2037,6 +2059,13 @@ export default function App() {
                 label={t(sidebar ? "agents.hideList" : "agents.showList")}
               >
                 <AgentSidebar
+                  showLocal={nodeFilter === "all" || nodeFilter === "local" || !nodeDirectory.data?.length}
+                  deviceFilter={!!nodeDirectory.data?.length && (
+                    <NodeFilter nodes={nodeDirectory.data} value={nodeFilter} onChange={setNodeFilter} />
+                  )}
+                  remoteRows={!!nodeDirectory.data?.length && (
+                    <NodeDirectory nodes={nodeDirectory.data} filter={nodeFilter} selected={selected} onOpen={choose} />
+                  )}
                   overview={overview}
                   activity={agentActivity}
                   ordering={agentOrder}
@@ -2085,9 +2114,9 @@ export default function App() {
                     )
                   }
                   onCreate={() =>
-                    needsConnection
+                    needsConnection && !adminNodes.length
                       ? showProviderSettings()
-                      : setCreate({ defaultAgent: agent })
+                      : setCreate({ defaultAgent: agent, nodeId: needsConnection ? adminNodes[0]?.nodeId : undefined })
                   }
                   onDuplicate={(source) =>
                     setCreate({ defaultAgent: agent, source })
@@ -2102,7 +2131,14 @@ export default function App() {
                 />
               </SecondarySidebar>
               <main className="workbench" ref={workbench}>
-                <WorkspaceDrag
+                {remoteSelection && (remoteNode ? (
+                  <Suspense fallback={<Loading />}>
+                    <NodeWorkspace key={selected} node={remoteNode.node} agentId={remoteSelection[2]} index={remoteNode} dark={dark} />
+                  </Suspense>
+                ) : (
+                  <div className="p-4 text-muted-foreground">设备未连接</div>
+                ))}
+                {!remoteSelection && <WorkspaceDrag
                   scope={selected}
                   onDrop={(id, targetId) => {
                     const target = workspace.tabs.find(
@@ -2764,7 +2800,7 @@ export default function App() {
                       )}
                     </div>
                   </WorkspaceLayout>
-                </WorkspaceDrag>
+                </WorkspaceDrag>}
               </main>
             </div>
           </MotionConfig>
@@ -2822,7 +2858,28 @@ export default function App() {
             }}
           >
             <DialogContent className="agent-dialog">
-              {create && (
+              {create && !create.source && adminNodes.length > 0 && (
+                <div className="px-4 pt-3">
+                  <NodeTargetSelect
+                    local
+                    nodes={adminNodes}
+                    value={create.nodeId ?? ""}
+                    change={(nodeId) => setCreate({ ...create, nodeId })}
+                  />
+                </div>
+              )}
+              {create?.nodeId ? (createTarget ? (
+                <NodeAgentForm
+                  key={createTarget.nodeId}
+                  node={createTarget}
+                  done={(saved) => {
+                    setCreate(undefined);
+                    choose(nodeAgentKey(createTarget.nodeId, saved.id));
+                  }}
+                />
+              ) : (
+                <p className="p-4 text-muted-foreground">所选设备当前无法创建 Agent，请检查设备连接和管理权限。</p>
+              )) : create && (
                 <Profile
                   key={create.source?.id ?? "new"}
                   agents={overview.data?.agents ?? noAgents}

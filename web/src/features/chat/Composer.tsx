@@ -484,7 +484,7 @@ export function Composer({
     agents.filter((agent) => !agent.archived).length >= 2;
   const overview = useQuery({
     queryKey: ["overview"],
-    queryFn: () => api<Overview>("/overview"),
+    queryFn: () => api<Overview>("/overview?scope=local"),
     enabled: visible !== false && !archived,
     subscribed: visible !== false && !archived,
   });

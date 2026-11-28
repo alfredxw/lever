@@ -1073,6 +1073,7 @@ export interface DelegationSettings {
   maxDepth?: number /* int */;
   maxConcurrent?: number /* int */;
 }
+export const MaxDelegationHops = 3;
 export type DefaultPermissionMode = string;
 export const DefaultPermissionAuto: DefaultPermissionMode = "auto";
 export const DefaultPermissionYOLO: DefaultPermissionMode = "yolo";
@@ -1131,6 +1132,8 @@ export interface Avatar {
   color?: string;
 }
 export interface Agent {
+  nodeId?: string; // Assigned by the multi-device HTTP gateway.
+  localOnly?: boolean;
   id: string;
   name: string;
   avatar?: Avatar;
@@ -1148,6 +1151,8 @@ export interface SharedTaskRef extends SharedScope {
   dispatchId: string;
 }
 export interface Chat {
+  nodeId?: string; // Assigned by the multi-device HTTP gateway.
+  localOnly?: boolean;
   sharedScope?: SharedScope;
   sharedTaskRef?: SharedTaskRef;
   id: string;
@@ -1167,6 +1172,7 @@ export interface Chat {
  * unread cursor advances when its view has loaded or the user marks it read.
  */
 export interface Conversation {
+  nodeId?: string; // Assigned by the multi-device HTTP gateway.
   backgroundOnly?: boolean; // No foreground activity in this session yet.
   comparison?: ComparisonOrigin;
   id: string;
@@ -1488,6 +1494,7 @@ export interface Run {
   status: string;
   superseded?: boolean; // Excluded from the active conversation.
   items: Item[];
+  stepCount?: number /* int */; // Omitted non-text/non-user steps count when projected lazily.
   createdAgents?: CreatedAgent[];
   error?: string;
   createdAt: string;
@@ -1863,6 +1870,8 @@ export interface Overview {
   platform: string;
 }
 export interface Event {
+  readSequence?: number /* int64 */;
+  nodeId?: string; // Assigned by the multi-device HTTP gateway.
   sessionId?: string;
   runId?: string;
   requestId?: string;
