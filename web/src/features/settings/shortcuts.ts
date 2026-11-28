@@ -42,6 +42,7 @@ export const availableShortcuts = (
 
 export const fileSaveShortcut = `${mod}+s`;
 export const fileFindShortcut = `${mod}+f`;
+export const pasteAsTextShortcut = `${shiftedMod}+v`;
 export const closeWindowShortcut = isMac ? `${shiftedMod}+w` : "alt+f4";
 export const quitShortcut = "meta+q";
 
@@ -132,6 +133,7 @@ const reservedKeys = new Set([
     (key) => `${mod}+${key}`,
   ),
   `${shiftedMod}+z`,
+  pasteAsTextShortcut,
   isMac ? "ctrl+meta+f" : "ctrl+shift+r",
   ...(isMac
     ? [

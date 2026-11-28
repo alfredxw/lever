@@ -93,6 +93,7 @@ export const Dialogs = {
   openPath: bind<[string], void>("Dialogs.OpenPath", (path: string) => [path]),
   openPreviewInBrowser: bind<[string, string], void>("Dialogs.OpenPreviewInBrowser", (path: string, fragment: string) => [path, fragment]),
   pickDirectories: bind<[string, boolean], string[]>("Dialogs.PickDirectories", (defaultPath: string, multiple: boolean) => [defaultPath, multiple]),
+  readClipboardText: bind<[], string>("Dialogs.ReadClipboardText", () => []),
   showAbout: bind<[], void>("Dialogs.ShowAbout", () => []),
   /**
    * ShowContextMenu returns the chosen action, or an empty string on dismissal.

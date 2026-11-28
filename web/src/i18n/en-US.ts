@@ -1790,6 +1790,12 @@ export const enUS = {
   "attachments.remove": "Remove {{name}}",
   "attachments.countLimit": "Attach up to 8 files per message",
   "attachments.sizeLimit": "Attachments must total at most 20 MB",
+  "attachments.pastedAsFile":
+    "Long text attached as file (press {{shortcut}} to paste inline)",
+  "attachments.pastedAsFileLimit":
+    "Text exceeded message length limit and was attached as a file",
+  "attachments.pasteTooLargeForMessage":
+    "Pasted text exceeds the message length limit. Remove some text or an attachment, then paste again.",
   "attachments.preview": "Image preview",
   "attachments.image": "Image {{index}}",
   "attachments.zoomIn": "Zoom in",
@@ -2547,6 +2553,9 @@ export const enUS = {
   "settings.steerDescription":
     "Add a message to the running turn when supported.",
   "settings.newLine": "Insert a new line",
+  "settings.pasteAsText": "Paste large text inline",
+  "settings.pasteAsTextDescription":
+    "Paste plain text directly into the composer instead of turning large pastes into a file attachment.",
   "settings.suggestions": "Composer suggestions",
   "settings.suggestionsDescription":
     "Type @ to reference files, conversations, work items, or notes, or to ask an Agent to collaborate. Type / for commands and skills.",

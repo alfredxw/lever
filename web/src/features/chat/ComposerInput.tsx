@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api/client";
+import { Dialogs } from "@/api/desktop.gen";
 import type {
   NativeCommand,
   Reference,
@@ -23,10 +24,16 @@ import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { JSONContent } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import { Fragment, Slice } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
 import { ReferenceNode } from "./ReferenceNode";
 import { ComposerSuggestion } from "./ComposerSuggestion";
 import { useMentionSources } from "./useMentionSources";
-import { markdownPrompt, promptExtensions, serializePrompt } from "./prompt";
+import {
+  markdownPrompt,
+  promptExtensions,
+  serializePrompt,
+  textPrompt,
+} from "./prompt";
 import {
   matchComposerTrigger,
   rankMentionGroups,
@@ -35,6 +42,15 @@ import {
 } from "./composerSearch";
 import { composerCompositionEvents } from "./composerComposition";
 import { hasDraggedFiles } from "./composerFiles";
+import {
+  hasLeverReferenceHtml,
+  isPasteAsTextShortcut,
+  MAX_MESSAGE_TEXT_BYTES,
+  PASTE_AS_TEXT_WINDOW_MS,
+  pastedTextDisposition,
+  utf8ByteLength,
+  wouldTextPasteExceedLimit,
+} from "./composerTextPaste";
 import {
   actionOptions,
   goalOptions,
@@ -52,6 +68,7 @@ import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { useComposerShortcuts } from "@/features/settings/Preferences";
+import { isDesktop, isMac } from "@/features/settings/shortcuts";
 import { ComposerContext, ReferenceScopeContext } from "./ComposerContext";
 
 const extensions = [...promptExtensions, ReferenceNode];
@@ -96,6 +113,7 @@ export function ComposerInput({
   textbox,
   onSubmit,
   onFiles,
+  onPasteLargeText,
   onEscape,
   label,
   placeholder,
@@ -130,6 +148,10 @@ export function ComposerInput({
   textbox: RefObject<ComposerInputHandle | null>;
   onSubmit: (alternate: boolean) => void;
   onFiles?: (files: File[]) => void;
+  onPasteLargeText?: (
+    text: string,
+    options: { wouldExceedInputLimit: boolean },
+  ) => boolean;
   onEscape?: () => void;
   label: string;
   placeholder: string;
@@ -144,6 +166,7 @@ export function ComposerInput({
     [sessionId, workingCopyId],
   );
   const inserted = useRef<string>(undefined);
+  const pasteAsTextUntil = useRef(0);
   const compositionEvents = useMemo(composerCompositionEvents, []);
   const shortcuts = useComposerShortcuts();
   const listId = useId();
@@ -510,9 +533,66 @@ export function ComposerInput({
     return false;
   }
 
+  function consumePasteAsTextShortcut() {
+    const active = Date.now() <= pasteAsTextUntil.current;
+    pasteAsTextUntil.current = 0;
+    return active;
+  }
+
+  function insertPlainText(view: EditorView, inCode: boolean, text: string) {
+    if (inCode) {
+      const { from, to } = view.state.selection;
+      view.dispatch(
+        closeHistory(view.state.tr)
+          .insertText(text, from, to)
+          .scrollIntoView()
+          .setMeta("paste", true)
+          .setMeta("uiEvent", "paste"),
+      );
+      return;
+    }
+    const content = Fragment.fromJSON(
+      view.state.schema,
+      textPrompt(text).content,
+    );
+    view.dispatch(
+      closeHistory(view.state.tr)
+        .replaceSelection(Slice.maxOpen(content))
+        .scrollIntoView()
+        .setMeta("paste", true)
+        .setMeta("uiEvent", "paste"),
+    );
+  }
+
   function handleKeyDown(event: KeyboardEvent) {
     if (event.isComposing || event.keyCode === 229 || editor?.view.composing)
       return false;
+    if (!disabled && isPasteAsTextShortcut(event, isMac)) {
+      if (isDesktop && isMac && !event.altKey) {
+        pasteAsTextUntil.current = 0;
+        event.preventDefault();
+        void Dialogs.readClipboardText()
+          .then((text) => {
+            if (
+              text &&
+              editor &&
+              !editor.isDestroyed &&
+              editor.isEditable &&
+              editor.isFocused
+            ) {
+              insertPlainText(
+                editor.view,
+                editor.isActive("codeBlock") || editor.isActive("code"),
+                text,
+              );
+            }
+          })
+          .catch(() => {});
+        return true;
+      }
+      pasteAsTextUntil.current = Date.now() + PASTE_AS_TEXT_WINDOW_MS;
+      return false;
+    }
     if (menuOpen && handleMenuKey(event)) return true;
     if (event.key === "Escape" && onEscape) {
       event.preventDefault();
@@ -621,22 +701,71 @@ export function ComposerInput({
         return true;
       },
       handlePaste: (view, event) => {
+        const bypassAutoAttachment = consumePasteAsTextShortcut();
         const data = event.clipboardData;
         if (!data) return false;
-        if (data.files.length) {
+        const text = data.getData("text/plain");
+        if (data.files.length && !(bypassAutoAttachment && text)) {
           event.preventDefault();
           onFiles?.(Array.from(data.files));
           return true;
         }
+        const html = data.getData("text/html");
+        if (
+          !bypassAutoAttachment &&
+          text &&
+          onPasteLargeText &&
+          !hasLeverReferenceHtml(html)
+        ) {
+          const pastedBytes = utf8ByteLength(text);
+          let wouldExceedInputLimit = pastedBytes > MAX_MESSAGE_TEXT_BYTES;
+          if (
+            !wouldExceedInputLimit &&
+            !(
+              view.state.doc.content.size <= 2 &&
+              view.state.doc.textContent.length === 0
+            )
+          ) {
+            const currentBytes = utf8ByteLength(
+              serializePrompt(view.state.doc.toJSON()).text,
+            );
+            const selectedBytes = view.state.selection.empty
+              ? 0
+              : utf8ByteLength(
+                  serializePrompt({
+                    type: "doc",
+                    content: view.state.selection.content().content.toJSON(),
+                  }).text,
+                );
+            wouldExceedInputLimit = wouldTextPasteExceedLimit({
+              currentBytes,
+              selectedBytes,
+              pastedBytes,
+            });
+          }
+          if (
+            pastedTextDisposition({
+              text,
+              canAttach: true,
+              bypassAutoAttachment,
+              wouldExceedInputLimit,
+            }) === "attachment" &&
+            onPasteLargeText(text, { wouldExceedInputLimit })
+          ) {
+            event.preventDefault();
+            return true;
+          }
+        }
+        const inCode =
+          editor?.isActive("codeBlock") || editor?.isActive("code") || false;
+        if (bypassAutoAttachment && text) {
+          event.preventDefault();
+          insertPlainText(view, inCode, text);
+          return true;
+        }
         // Native HTML paste preserves copied reference identity and formatting.
         // Code stays literal, including Markdown and shell $variables.
-        if (
-          data.getData("text/html") ||
-          editor?.isActive("codeBlock") ||
-          editor?.isActive("code")
-        )
-          return false;
-        const text = data.getData("text/plain");
+        if (html || inCode) return false;
         if (!text) return false;
         event.preventDefault();
         const content = Fragment.fromJSON(
@@ -652,6 +781,9 @@ export function ComposerInput({
         );
         return true;
       },
+    },
+    onBlur: () => {
+      pasteAsTextUntil.current = 0;
     },
     onTransaction: ({ editor, transaction }) => {
       if (!transaction.docChanged || !dismissed.current.length) return;

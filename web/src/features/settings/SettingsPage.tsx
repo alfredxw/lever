@@ -65,7 +65,7 @@ import {
   SettingsRow,
 } from "./SettingsControls";
 import { ShortcutSettings, shortcutGroups } from "./ShortcutSettings";
-import { isMac } from "./shortcuts";
+import { formatShortcut, isMac, pasteAsTextShortcut } from "./shortcuts";
 import { SecondarySidebar } from "@/components/workbench/SecondarySidebar";
 import { AgentAvatar } from "@/features/agents/AgentAvatar";
 import { hasDesktopNotifications } from "@/features/agents/desktopNotifications";
@@ -184,6 +184,8 @@ const sectionGroups = [
           "queueMessage",
           "steerMessage",
           "newLine",
+          "pasteAsText",
+          "pasteAsTextDescription",
           "suggestions",
           "chooseSuggestion",
         ],
@@ -938,6 +940,12 @@ export function SettingsPage({
               ))}
               <SettingsRow title={t("settings.newLine")}>
                 <kbd>{shortcuts.newline}</kbd>
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.pasteAsText")}
+                description={t("settings.pasteAsTextDescription")}
+              >
+                <kbd>{formatShortcut(pasteAsTextShortcut)}</kbd>
               </SettingsRow>
               <SettingsRow
                 title={t("settings.suggestions")}

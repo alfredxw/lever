@@ -94,6 +94,10 @@ func (*Dialogs) WriteClipboard(text, markup string) error {
 	return mygo.Clipboard.Write(data)
 }
 
+func (*Dialogs) ReadClipboardText() string {
+	return mygo.Clipboard.ReadText()
+}
+
 func (*Dialogs) OpenDirectory(path string) error {
 	directory, err := workspace.Canonical(path)
 	if err != nil {

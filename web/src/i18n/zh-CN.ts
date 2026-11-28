@@ -1706,6 +1706,10 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "attachments.remove": "移除 {{name}}",
   "attachments.countLimit": "每条消息最多添加 8 个附件",
   "attachments.sizeLimit": "每条消息的附件总大小不能超过 20 MB",
+  "attachments.pastedAsFile": "长文本已自动转为附件（按 {{shortcut}} 可直接粘贴）",
+  "attachments.pastedAsFileLimit": "文本超过消息长度上限，已自动转为附件",
+  "attachments.pasteTooLargeForMessage":
+    "粘贴的文本超过消息长度上限，请精简文本或移除部分附件后重试。",
   "attachments.preview": "图片预览",
   "attachments.image": "图片 {{index}}",
   "attachments.zoomIn": "放大",
@@ -2441,6 +2445,9 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "settings.steerMessage": "追加到当前轮",
   "settings.steerDescription": "在运行时支持追加的情况下，将消息插入当前轮。",
   "settings.newLine": "插入换行",
+  "settings.pasteAsText": "直接粘贴纯文本",
+  "settings.pasteAsTextDescription":
+    "将大段文本以纯文本直接粘贴到输入框，而不自动转为文件附件。",
   "settings.suggestions": "输入建议",
   "settings.suggestionsDescription":
     "输入 @ 引用文件、会话、工作项或笔记，也可以请 Agent 协作。输入 / 选择命令和技能。",

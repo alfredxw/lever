@@ -65,6 +65,11 @@ import { ModelPicker } from "./ModelPicker";
 import { ComposerInput, type ComposerInputHandle } from "./ComposerInput";
 import type { ComposerBrowser, ComposerCommand } from "./composerActions";
 import { extractDroppedFiles, hasDraggedFiles } from "./composerFiles";
+import {
+  MAX_ATTACHMENT_COUNT,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+  nextPastedTextFileName,
+} from "./composerTextPaste";
 import { ComposerContext, KeepConversationOpen } from "./ComposerContext";
 import {
   clearSubmission,
@@ -105,6 +110,10 @@ import {
   useComposerShortcuts,
   usePreferences,
 } from "@/features/settings/Preferences";
+import {
+  formatShortcut,
+  pasteAsTextShortcut,
+} from "@/features/settings/shortcuts";
 import { ContextMeter } from "./ContextMeter";
 import { PermissionMenu } from "@/features/runtime/Permissions";
 import {
@@ -1149,22 +1158,23 @@ export function Composer({
           : undefined,
     });
   }
-  async function intake(files: File[]) {
-    if (!files.length || intakeBusy.current || sending || archived) return;
-    if (files.length + draft.files.length > 8) {
+  async function intake(files: File[]): Promise<number> {
+    if (!files.length || intakeBusy.current || sending || archived) return 0;
+    if (files.length + draft.files.length > MAX_ATTACHMENT_COUNT) {
       toast.error(t("attachments.countLimit"));
-      return;
+      return 0;
     }
     if (
       files.reduce((n, f) => n + f.size, 0) +
         draft.files.reduce((n, f) => n + f.size, 0) >
-      20 * 1024 * 1024
+      MAX_ATTACHMENT_TOTAL_BYTES
     ) {
       toast.error(t("attachments.sizeLimit"));
-      return;
+      return 0;
     }
     intakeBusy.current = true;
     setUploading(true);
+    let added = 0;
     try {
       for (const file of files) {
         const body = new FormData();
@@ -1177,6 +1187,7 @@ export function Composer({
             body,
           );
           setDraft((d) => ({ ...d, files: [...d.files, saved] }));
+          added += 1;
         } catch (error) {
           toast.error(
             `${file.name}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1188,6 +1199,51 @@ export function Composer({
       setUploading(false);
       textbox.current?.focus();
     }
+    return added;
+  }
+  function foldPastedText(
+    text: string,
+    { wouldExceedInputLimit }: { wouldExceedInputLimit: boolean },
+  ): boolean {
+    const filesSupported = comparisonAgents
+      ? true
+      : capabilities?.files !== false;
+    const canStage =
+      !archived &&
+      !sending &&
+      !uploading &&
+      !intakeBusy.current &&
+      filesSupported &&
+      draft.files.length < MAX_ATTACHMENT_COUNT;
+    if (!canStage) {
+      if (!wouldExceedInputLimit) return false;
+      toast.error(t("attachments.pasteTooLargeForMessage"));
+      return true;
+    }
+    const fileName = nextPastedTextFileName(
+      draft.files.map((file) => file.name),
+    );
+    const file = new File([text], fileName, {
+      type: "text/plain;charset=utf-8",
+    });
+    const existingBytes = draft.files.reduce((sum, item) => sum + item.size, 0);
+    if (existingBytes + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+      if (!wouldExceedInputLimit) return false;
+      toast.error(t("attachments.sizeLimit"));
+      return true;
+    }
+    void intake([file]).then((added) => {
+      if (added > 0) {
+        toast(
+          wouldExceedInputLimit
+            ? t("attachments.pastedAsFileLimit")
+            : t("attachments.pastedAsFile", {
+                shortcut: formatShortcut(pasteAsTextShortcut),
+              }),
+        );
+      }
+    });
+    return true;
   }
   async function remove(file: Attachment) {
     try {
@@ -1619,6 +1675,7 @@ export function Composer({
           disabled={sending}
           visible={visible}
           onFiles={(files) => void intake(files)}
+          onPasteLargeText={foldPastedText}
           onSubmit={submit}
         />
         {compact && backToMessagesButton}
