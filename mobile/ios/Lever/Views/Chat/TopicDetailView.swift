@@ -4,13 +4,18 @@ import UniformTypeIdentifiers
 
 /// Scheme A Full-Screen Topic View:
 /// - Pushed onto NavigationStack with native left-edge swipe-back (`InteractivePopEnabler`) & Liquid Glass tab bar auto-hide
+/// - Zero-stutter isolated right-edge interactive drawer (`RightEdgeDrawerOverlay`) for switching Topics & Chats
 /// - Dedicated per-topic paginated loading (`loadTopic` / `loadOlderTopicRuns`) for instant open even on 300MB+ chats
 /// - Full Desktop-aligned Composer: Multi-provider Model Picker + Starred Models + Provider & Effort Icons + Photos/Files + `@` Mention + `/` Skills & Commands
 struct TopicDetailView: View {
     @Bindable var store: LeverStore
     let route: TopicRoute
+    var onSelectTopic: (TopicRoute) -> Void = { _ in }
+    var onSelectChat: (ChatRoute) -> Void = { _ in }
+    var onStartNewChat: (ChatRoute) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var isDrawerOpen = false
     @State private var replyText = ""
     @State private var selectedProviderId: String?
     @State private var selectedModelId: String?
@@ -20,7 +25,8 @@ struct TopicDetailView: View {
     @State private var visibleRunLimit = 25
     @State private var isSending = false
     @State private var inlineError: String?
-    @State private var didInitialScroll = false
+    @State private var followRequest = 0
+    @State private var paginationAnchor: String?
     @State private var initialLoadFinished = false
 
     // Attachments, `@` Mentions & `/` Skills
@@ -122,8 +128,9 @@ struct TopicDetailView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topicHeader
+        ZStack(alignment: .trailing) {
+            VStack(spacing: 0) {
+                topicHeader
 
             if let banner = store.lastSyncBanner {
                 HStack(spacing: 8) {
@@ -207,7 +214,8 @@ struct TopicDetailView: View {
                                         Spacer()
                                         Button {
                                             Haptics.light()
-                                            let prevRemaining = remainingOlderCount
+                                            paginationAnchor = visibleRuns.first?.id
+                let prevRemaining = remainingOlderCount
                                             visibleRunLimit += 25
                                             if prevRemaining <= 25 && hasMoreRemote {
                                                 Task {
@@ -257,6 +265,7 @@ struct TopicDetailView: View {
                                         agentAvatarSpec: agentRecord?.avatarSpec,
                                         deviceId: route.deviceId,
                                         store: store,
+                                        agentId: route.agentId,
                                         agentSeed: agentSeed,
                                         isBusy: isSending,
                                         isSessionCleared: topic.isCleared,
@@ -284,25 +293,17 @@ struct TopicDetailView: View {
                             ConversationLoadingSkeleton(message: "正在从电脑同步话题消息…")
                         }
                     }
+                    .scrollTargetLayout()
                     .padding(.horizontal, 15)
                     .padding(.vertical, 12)
                 }
-                .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .background(LeverTheme.canvas)
-                .onChange(of: topic?.runs.last?.id) { _, _ in
-                    guard didInitialScroll else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("topic-bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: topic?.runs.isEmpty ?? true, initial: true) { _, isEmpty in
-                    if !isEmpty && !didInitialScroll {
-                        didInitialScroll = true
-                        DispatchQueue.main.async {
-                            proxy.scrollTo("topic-bottom", anchor: .bottom)
-                        }
-                    }
+                .modifier(TimelineScrollAnchor(firstID: visibleRuns.first?.id, followRequest: followRequest))
+                .onChange(of: visibleRuns.first?.id) { _, _ in
+                    guard let anchor = paginationAnchor else { return }
+                    proxy.scrollTo(anchor, anchor: .top)
+                    paginationAnchor = nil
                 }
             }
 
@@ -328,10 +329,60 @@ struct TopicDetailView: View {
                 .background(LeverTheme.unreadRed.opacity(0.10))
             }
 
-            topicComposer
+                topicComposer
+            }
+            .background(LeverTheme.canvas)
+
+            RightEdgeDrawerOverlay(
+                isOpen: $isDrawerOpen,
+                store: store,
+                deviceId: route.deviceId,
+                agentId: route.agentId,
+                agentName: agentName,
+                agentAvatar: agentRecord?.avatar,
+                agentAvatarSpec: agentRecord?.avatarSpec,
+                currentChatId: nil,
+                currentTopicId: route.topicId,
+                onDismissKeyboard: {
+                    inputFocused = false
+                },
+                onSelectTopic: { item in
+                    guard item.id != route.topicId || item.chatId != route.chatId || item.isPrivate != route.isPrivate else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                        onSelectTopic(TopicRoute(
+                            deviceId: route.deviceId,
+                            agentId: route.agentId,
+                            chatId: item.chatId,
+                            isPrivate: item.isPrivate,
+                            topicId: item.id
+                        ))
+                    }
+                },
+                onSelectChat: { item in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                        onSelectChat(ChatRoute(
+                            deviceId: route.deviceId,
+                            agentId: route.agentId,
+                            chatId: item.id,
+                            isPrivate: item.isPrivate,
+                            initialTopicId: nil
+                        ))
+                    }
+                },
+                onStartNewChat: {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                        onStartNewChat(ChatRoute(
+                            deviceId: route.deviceId,
+                            agentId: route.agentId,
+                            chatId: nil,
+                            isPrivate: false,
+                            initialTopicId: nil
+                        ))
+                    }
+                }
+            )
         }
-        .background(LeverTheme.canvas)
-        .background(InteractivePopEnabler())
+        .background(InteractivePopEnabler(isEnabled: !isDrawerOpen))
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .task {
@@ -430,7 +481,10 @@ struct TopicDetailView: View {
     // MARK: - Header
 
     private var topicHeader: some View {
-        HStack(spacing: 8) {
+        let hasOtherUnreadTopics = store.agentDrawerData(deviceId: route.deviceId, agentId: route.agentId)
+            .activeTopics.contains { $0.id != route.topicId && $0.isUnread }
+
+        return HStack(spacing: 8) {
             Button {
                 dismiss()
             } label: {
@@ -447,57 +501,85 @@ struct TopicDetailView: View {
 
             Spacer(minLength: 4)
 
-            VStack(spacing: 1.5) {
-                Text(topic?.title ?? "独立话题")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(LeverTheme.inkPrimary)
-                    .lineLimit(1)
-                NavSyncSubtitleView(
-                    isSyncing: isLoadingTopic || !initialLoadFinished,
-                    text: "\(agentName) · 独立话题"
-                )
+            Button {
+                openDrawer()
+            } label: {
+                VStack(spacing: 1.5) {
+                    Text(topic?.title ?? "独立话题")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(LeverTheme.inkPrimary)
+                        .lineLimit(1)
+                    NavSyncSubtitleView(
+                        isSyncing: isLoadingTopic || !initialLoadFinished,
+                        text: "\(agentName) · 独立话题"
+                    )
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
             Spacer(minLength: 4)
 
-            if let topic {
-                if topic.isCleared {
-                    Button {
-                        store.restoreSessions(deviceId: route.deviceId, sessionIds: [topic.id], banner: "已恢复此话题")
-                    } label: {
-                        Text("恢复")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(LeverTheme.inkPrimary)
-                            .padding(.horizontal, 10)
-                            .frame(height: 30)
-                            .background(LeverTheme.surfaceInset)
-                            .clipShape(Capsule())
+            WorkspaceActions(device: store.devices.first { $0.id == route.deviceId }, agent: route.agentId, chat: route.chatId, session: route.topicId)
+
+            HStack(spacing: 6) {
+                if let topic {
+                    if topic.isCleared {
+                        Button {
+                            store.restoreSessions(deviceId: route.deviceId, sessionIds: [topic.id], banner: "已恢复此话题")
+                        } label: {
+                            Text("恢复")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(LeverTheme.inkPrimary)
+                                .padding(.horizontal, 10)
+                                .frame(height: 30)
+                                .background(LeverTheme.surfaceInset)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    } else if topic.canClear {
+                        Button {
+                            store.clearSingleTopic(
+                                deviceId: route.deviceId,
+                                topicId: topic.id,
+                                unreadSequence: topic.unreadSequence,
+                                title: topic.title
+                            )
+                        } label: {
+                            Text("清理")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(LeverTheme.inkSecondary)
+                                .padding(.horizontal, 11)
+                                .frame(height: 30)
+                                .background(LeverTheme.surfaceInset)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清理此话题")
                     }
-                    .buttonStyle(.plain)
-                } else if topic.canClear {
-                    Button {
-                        store.clearSingleTopic(
-                            deviceId: route.deviceId,
-                            topicId: topic.id,
-                            unreadSequence: topic.unreadSequence,
-                            title: topic.title
-                        )
-                    } label: {
-                        Text("清理")
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(LeverTheme.inkSecondary)
-                            .padding(.horizontal, 11)
-                            .frame(height: 30)
-                            .background(LeverTheme.surfaceInset)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("清理此话题")
-                } else {
-                    Color.clear.frame(width: 44, height: 32)
                 }
-            } else {
-                Color.clear.frame(width: 44, height: 32)
+
+                Button {
+                    openDrawer()
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "sidebar.right")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(LeverTheme.inkPrimary)
+                            .frame(width: 34, height: 34)
+                            .background(LeverTheme.surfaceInset)
+                            .clipShape(Circle())
+
+                        if hasOtherUnreadTopics {
+                            Circle()
+                                .fill(LeverTheme.unreadRed)
+                                .frame(width: 8, height: 8)
+                                .offset(x: 1, y: -1)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("展开当前 Agent 话题与对话侧栏")
             }
         }
         .padding(.horizontal, 12)
@@ -506,6 +588,12 @@ struct TopicDetailView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(LeverTheme.hairline).frame(height: 0.5)
         }
+    }
+
+    private func openDrawer() {
+        inputFocused = false
+        Haptics.light()
+        isDrawerOpen = true
     }
 
     // MARK: - Composer
@@ -801,6 +889,7 @@ struct TopicDetailView: View {
         replyText = ""
         draftAttachments = []
         draftReferences = []
+        followRequest &+= 1
         isSending = true
         inlineError = nil
 
@@ -828,6 +917,7 @@ struct TopicDetailView: View {
     }
 
     private func handleAnswer(request: ArchiveRecord, answer: RequestAnswer?, allowRun: Bool) {
+        followRequest &+= 1
         isSending = true
         inlineError = nil
         Task {
@@ -848,6 +938,7 @@ struct TopicDetailView: View {
     }
 
     private func handleStop(runId: String) {
+        followRequest &+= 1
         isSending = true
         Task {
             defer { isSending = false }

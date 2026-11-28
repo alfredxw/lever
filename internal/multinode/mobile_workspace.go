@@ -19,22 +19,24 @@ import (
 
 // MobileWorkspace serves the bundled workbench to the native web view. Each
 // presentation gets its own loopback origin, one-use login and pinned Owner.
-type MobileWorkspace struct {
+type MobileWorkspace struct{ loopbackSession }
+
+type loopbackSession struct {
 	mu   sync.Mutex
 	stop func()
 	host string
 }
 
-func (m *MobileWorkspace) Close() { m.closeHost("") }
+func (m *loopbackSession) Close() { m.closeHost("") }
 
 // CloseHost accepts the loopback authority from a dismissed native view. A
 // delayed dismissal of an old presentation must not close its replacement.
-func (m *MobileWorkspace) CloseHost(host string) {
+func (m *loopbackSession) CloseHost(host string) {
 	if host != "" {
 		m.closeHost(host)
 	}
 }
-func (m *MobileWorkspace) closeHost(host string) {
+func (m *loopbackSession) closeHost(host string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.stop != nil && (host == "" || host == m.host) {
@@ -131,14 +133,18 @@ func (m *MobileWorkspace) Open(dir *MobileDirectory, assets fs.FS, id, agent, ch
 		}
 		mux.ServeHTTP(w, r)
 	})}
+	m.serve(host, listener, server, cancel)
+	link := url.URL{Scheme: "http", Host: host, Path: "/workspace", RawQuery: url.Values{"node": {id}, "agent": {agent}, "chat": {chat}}.Encode(), Fragment: "token=" + login}
+	return link.String(), nil
+}
+
+func (m *loopbackSession) serve(host string, listener net.Listener, server *http.Server, cancel context.CancelFunc) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.stop != nil {
 		m.stop()
 	}
 	m.host = host
-	m.stop = func() { cancel(); _ = server.Close() }
-	defer m.mu.Unlock()
-	link := url.URL{Scheme: "http", Host: host, Path: "/workspace", RawQuery: url.Values{"node": {id}, "agent": {agent}, "chat": {chat}}.Encode(), Fragment: "token=" + login}
+	m.stop = func() { cancel(); _ = listener.Close(); _ = server.Close() }
 	go func() { _ = server.Serve(listener) }()
-	return link.String(), nil
 }

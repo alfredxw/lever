@@ -39,6 +39,9 @@ final class LeverBridge: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<CoreEvent>.Continuation] = [:]
     private var initialized = false
+    private var credentialRevision = 0
+
+    func invalidateRequests() { lock.withLock { credentialRevision &+= 1 } }
 
     private init() {}
 
@@ -154,6 +157,18 @@ final class LeverBridge: @unchecked Sendable {
         }
     }
 
+    func fetchBinary(_ path: String) async throws -> Data {
+        try await runBlocking {
+            guard let pointer = self.withMutableCString(path, { LeverCore_FetchBinary($0) }) else { throw LeverCoreError.invalidResponse }
+            let result = pointer.pointee
+            defer { LeverCore_FreeBinary(pointer) }
+            if let error = result.error { throw LeverCoreError.http(Int(result.status), String(cString: error)) }
+            guard result.length > 0 else { return Data() }
+            guard let bytes = result.data else { throw LeverCoreError.invalidResponse }
+            return Data(bytes: bytes, count: Int(result.length))
+        }
+    }
+
     func requestVoid(_ method: String, path: String, body: Encodable? = nil) async throws {
         let bodyString: String
         if let body {
@@ -213,9 +228,11 @@ final class LeverBridge: @unchecked Sendable {
     }
 
     private func runBlocking<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-        try await Task.detached(priority: .userInitiated) {
-            try work()
-        }.value
+        let revision = lock.withLock { credentialRevision }
+        let value = try await Task.detached(priority: .userInitiated) { try work() }.value
+        try Task.checkCancellation()
+        guard lock.withLock({ revision == credentialRevision }) else { throw CancellationError() }
+        return value
     }
 
     private func withMutableCString<R>(_ string: String, _ body: (UnsafeMutablePointer<CChar>?) -> R) -> R {

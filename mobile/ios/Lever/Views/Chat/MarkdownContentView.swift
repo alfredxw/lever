@@ -2,77 +2,130 @@ import SwiftUI
 import Textual
 import UIKit
 
-// MARK: - Off-Main-Thread Pre-Parsed Markdown Cache (Eliminates Scroll Frame Drops)
-
 private final class AttributedStringBox: NSObject {
     let value: AttributedString
     init(_ value: AttributedString) { self.value = value }
 }
 
-/// Thread-safe `NSCache`-backed wrapper around `Textual`'s `AttributedStringMarkdownParser`.
-/// Pre-warming on background threads makes scroll-time `StructuredText` layout an O(1) cache hit
-/// instead of synchronous main-thread Markdown + LaTeX math parsing during touch deceleration.
-final class CachedMarkdownParser: MarkupParser, @unchecked Sendable {
+final class CachedMarkdownParser: @unchecked Sendable {
     static let shared = CachedMarkdownParser()
+    private let cache = NSCache<NSString, AttributedStringBox>()
+    private init() {
+        cache.countLimit = 400
+        cache.totalCostLimit = 24 * 1024 * 1024
+    }
 
-    private let cache: NSCache<NSString, AttributedStringBox> = {
-        let c = NSCache<NSString, AttributedStringBox>()
-        c.countLimit = 400
-        return c
-    }()
-
-    private init() {}
-
-    func attributedString(for input: String) throws -> AttributedString {
+    func parse(_ input: String, cacheFinal: Bool) async throws -> AttributedString {
         let key = input as NSString
-        if let hit = cache.object(forKey: key) {
-            return hit.value
-        }
-        let parsed = try AttributedStringMarkdownParser.markdown(syntaxExtensions: [.math]).attributedString(for: input)
-        cache.setObject(AttributedStringBox(parsed), forKey: key)
+        if cacheFinal, let hit = cache.object(forKey: key) { return hit.value }
+        let base = try AttributedString(markdown: input, including: \.textual)
+        let parsed = input.contains("$") ? try await Self.expandMath(in: base) : base
+        try Task.checkCancellation()
+        if cacheFinal { cache.setObject(AttributedStringBox(parsed), forKey: key, cost: input.utf8.count) }
         return parsed
     }
 
-    func prewarm(_ inputs: [String]) {
-        let trimmedList = inputs
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !trimmedList.isEmpty else { return }
-        Task(priority: .utility) { [weak self] in
-            for text in trimmedList {
-                guard let self else { return }
-                let key = text as NSString
-                if self.cache.object(forKey: key) != nil { continue }
-                // Yield between items so pre-warming never competes with 120Hz touch frames.
-                await Task.yield()
-                if let parsed = try? await AttributedStringMarkdownParser.markdown(syntaxExtensions: [.math]).attributedString(for: text) {
-                    self.cache.setObject(AttributedStringBox(parsed), forKey: key)
+    // Textual's math attachments are MainActor-isolated. Only the individual
+    // formulas enter its parser. Foundation parses the document off the UI actor.
+    private static func expandMath(in base: AttributedString) async throws -> AttributedString {
+        var output = AttributedString()
+        let math = #/(?s:\$\$.+?\$\$)|\$(?!\$)(?:\\\$|[^$\n])+\$/#
+        for run in base.runs {
+            try Task.checkCancellation()
+            let code = run.presentationIntent?.components.contains { if case .codeBlock = $0.kind { true } else { false } } ?? false
+            let slice = base[run.range]
+            guard !code, run.inlinePresentationIntent?.contains(.code) != true, slice.characters.contains("$") else {
+                output.append(slice)
+                continue
+            }
+            let text = String(slice.characters)
+            var start = text.startIndex
+            for match in text.matches(of: math) {
+                output.append(AttributedString(String(text[start..<match.range.lowerBound]), attributes: run.attributes))
+                let formula = String(text[match.range])
+                var attachment = try await MainActor.run {
+                    try AttributedStringMarkdownParser.markdown(syntaxExtensions: [.math]).attributedString(for: formula)
                 }
+                attachment.mergeAttributes(run.attributes, mergePolicy: .keepNew)
+                output.append(attachment)
+                start = match.range.upperBound
+            }
+            output.append(AttributedString(String(text[start...]), attributes: run.attributes))
+        }
+        return output
+    }
+
+    func prewarm(_ inputs: [String]) {
+        Task.detached(priority: .utility) {
+            for input in inputs {
+                let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { _ = try? await self.parse(text, cacheFinal: true) }
             }
         }
     }
 }
 
-/// Production 120fps SwiftUI streaming Markdown renderer powered by `Textual` (`gonzalezreal/textual`):
-/// - Pre-parsed `AttributedString` caching (`CachedMarkdownParser`) so scrolling never parses Markdown on the main thread
-/// - Equatable isolation so unchanged replies skip SwiftUI diffing during streaming / background sync
-/// - Zero inline `UITextInteraction` overlay drag competition during vertical scroll; long-press provides
-///   one-tap Copy or a dedicated full-selection sheet (same 120fps pattern as WeChat / ChatGPT / Claude iOS)
+/// Textual calls its parser during SwiftUI updates. Give it the result of a
+/// background parse; keep the previous rendering while the next token batch parses.
+private struct PreparedMarkdown: MarkupParser {
+    let source: String
+    let value: AttributedString
+    func attributedString(for input: String) throws -> AttributedString { value }
+}
+
+private struct LeverMarkdown: View {
+    let text: String
+    let streaming: Bool
+    @State private var prepared: PreparedMarkdown?
+    @Environment(\.leverMarkdownMedia) private var media
+    private struct Input: Hashable { let text: String; let streaming: Bool }
+
+    var body: some View {
+        Group {
+            if let prepared { StructuredText(prepared.source, parser: prepared) }
+            else { Text(verbatim: text) }
+        }
+        .textual.imageAttachmentLoader(media)
+        .textual.emojiAttachmentLoader(MarkdownMediaLoader())
+        .textual.highlighterTheme(Self.theme)
+        .task(id: Input(text: text, streaming: streaming)) {
+            let work = Task.detached(priority: .userInitiated) {
+                let source = streaming ? StreamingMarkdownNormalizer.normalize(text) : text
+                try Task.checkCancellation()
+                let parsed = try await CachedMarkdownParser.shared.parse(source, cacheFinal: !streaming)
+                return PreparedMarkdown(source: source, value: parsed)
+            }
+            let result = await withTaskCancellationHandler { try? await work.value } onCancel: { work.cancel() }
+            if !Task.isCancelled { prepared = result }
+        }
+    }
+
+    private static let theme = StructuredText.HighlighterTheme(
+        foregroundColor: .init(.primary), backgroundColor: .init(Color(uiColor: .secondarySystemBackground)),
+        tokenProperties: [
+            .keyword: AnyTextProperty(.fontWeight(.semibold)),
+            .comment: AnyTextProperty(.foregroundColor(.secondary)),
+            "inserted": AnyTextProperty(.foregroundColor(Color(uiColor: .systemGreen))),
+            "deleted": AnyTextProperty(.foregroundColor(Color(uiColor: .systemRed)))
+        ])
+}
+
 struct MarkdownContentView: View, Equatable {
     let text: String
     let foreground: Color
     var isUserBubble: Bool = false
+    var isStreaming = false
 
     @State private var showSelectSheet = false
 
     static func == (lhs: MarkdownContentView, rhs: MarkdownContentView) -> Bool {
-        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble
+        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble && lhs.isStreaming == rhs.isStreaming && lhs.foreground == rhs.foreground
     }
 
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            StructuredText(trimmed, parser: CachedMarkdownParser.shared)
+            LeverMarkdown(text: trimmed, streaming: isStreaming)
                 .font(.system(size: 15))
                 .foregroundStyle(foreground)
                 .textual.structuredTextStyle(LeverStructuredTextStyle(isUserBubble: isUserBubble))
@@ -93,7 +146,7 @@ struct MarkdownContentView: View, Equatable {
                     }
                 }
                 .sheet(isPresented: $showSelectSheet) {
-                    SelectableMarkdownSheet(markdown: trimmed)
+                    SelectableMarkdownSheet(markdown: trimmed, streaming: isStreaming)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
@@ -105,13 +158,14 @@ struct MarkdownContentView: View, Equatable {
 /// `UITextInteraction` gesture overlays to every cell inside the main scrolling timeline.
 private struct SelectableMarkdownSheet: View {
     let markdown: String
+    let streaming: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                StructuredText(markdown, parser: CachedMarkdownParser.shared)
+                LeverMarkdown(text: markdown, streaming: streaming)
                     .font(.system(size: 15))
                     .foregroundStyle(LeverTheme.inkPrimary)
                     .textual.structuredTextStyle(LeverStructuredTextStyle(isUserBubble: false))

@@ -629,3 +629,133 @@ func checkMobileWorkspace(t *testing.T, directory *multinode.MobileDirectory, no
 	}
 	call("GET", "/api/nodes/"+p.NewID()+"/overview", "", nil, 403, nil)
 }
+
+func TestMobileTerminalSession(t *testing.T) {
+	f := newFixture(t)
+	agent := f.agent("codex")
+	chat := f.chat(agent)
+	result, err := f.s.Remote.Manage(t.Context(), remote.Management{Action: "lan_ticket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := result.(remote.LANTicketResult)
+	var accounts multinode.Accounts
+	if err = accounts.Pair(t.Context(), ticket.Link, "fixture phone", "ios"); err != nil {
+		t.Fatal(err)
+	}
+	var directory multinode.MobileDirectory
+	var lan lanclient.Client
+	var gateway multinode.MobileTerminal
+	defer gateway.Close()
+	args := multinode.TerminalRequest{Node: f.a.Store.DeviceID, Agent: agent.ID, TerminalID: p.NewID(), Cols: 80, Rows: 24}
+	grant := func(level p.AccessLevel) {
+		t.Helper()
+		if _, err := f.s.Remote.Manage(t.Context(), remote.Management{Scope: ticket.Scope, Action: "access", AccessLevel: level}); err != nil {
+			t.Fatal(err)
+		}
+		directory.Refresh(t.Context(), accounts, &lan, nil)
+	}
+	grant(p.AccessChat)
+	if _, err = gateway.Open(&directory, args); err == nil {
+		t.Fatal("chat-only node offered a terminal")
+	}
+	grant(p.AccessAdmin)
+	target, err := gateway.Open(&directory, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 4 * time.Second}
+	rejected := func(header http.Header) {
+		t.Helper()
+		conn, resp, err := dialer.DialContext(t.Context(), target, header)
+		if conn != nil {
+			conn.Close()
+		}
+		if err == nil || resp == nil || resp.StatusCode != 403 {
+			t.Fatalf("unexpected handshake %v", err)
+		}
+		resp.Body.Close()
+	}
+	rejected(http.Header{"Origin": {"http://localhost"}})
+	conn, _, err := dialer.DialContext(t.Context(), target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	for {
+		kind, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind == websocket.BinaryMessage {
+			if err = conn.WriteJSON(map[string]string{"type": "ack"}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		var control struct{ Type, Cwd string }
+		if err = json.Unmarshal(data, &control); err != nil {
+			t.Fatal(err)
+		}
+		if control.Type == "error" {
+			t.Fatalf("terminal not ready: %s", data)
+		}
+		if control.Type == "ready" {
+			root, _ := filepath.EvalSymlinks(f.root)
+			if control.Cwd != root {
+				t.Fatal("terminal opened outside the intended agent")
+			}
+			break
+		}
+	}
+	rejected(nil)
+	// A burst larger than the eight-frame window must drain through ACKs.
+	if err = conn.WriteMessage(websocket.BinaryMessage, []byte("seq 1 50000; printf '\\nLEVER%s\\n' COMPLETE\r")); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(12 * time.Second))
+	var transcript bytes.Buffer
+	frames := 0
+	for {
+		kind, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind != websocket.BinaryMessage {
+			continue
+		}
+		start := max(0, transcript.Len()-24)
+		transcript.Write(data)
+		frames++
+		if err = conn.WriteJSON(map[string]string{"type": "ack"}); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(transcript.Bytes()[start:], []byte("LEVERCOMPLETE")) {
+			break
+		}
+	}
+	if frames <= 8 || transcript.Len() < 250000 {
+		t.Fatalf("incomplete PTY output: %d frames, %d bytes", frames, transcript.Len())
+	}
+	u, _ := url.Parse(target)
+	gateway.CloseHost(u.Host)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			var timeout interface{ Timeout() bool }
+			if errors.As(err, &timeout) && timeout.Timeout() {
+				t.Fatal("closing native proxy left socket open")
+			}
+			break
+		}
+	}
+	// The binary path must return the original bytes under the same node grant.
+	raw := []byte("native attachment fixture")
+	attachment := f.upload(chat.ID, "fixture.txt", raw)
+	got, _, err := directory.Attachment(t.Context(), args.Node, attachment.ID)
+	if err != nil || !bytes.Equal(got, raw) {
+		t.Fatalf("attachment round trip: %v", err)
+	}
+}

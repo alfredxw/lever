@@ -147,7 +147,7 @@ private struct RootContainerView: View {
         .tint(LeverTheme.inkPrimary)
 
         if #available(iOS 26.0, *) {
-            baseTabView.tabBarMinimizeBehavior(.onScrollDown)
+            baseTabView.tabBarMinimizeBehavior(.never)
         } else {
             baseTabView
         }

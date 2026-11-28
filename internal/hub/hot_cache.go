@@ -101,7 +101,7 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 			return err
 		}
 	}
-	save := func(path string, rev int64, v any, notices []p.Record) error {
+	save := func(path string, rev int64, v any, notices []p.Record, progress ...p.Record) error {
 		raw, err := json.Marshal(v)
 		if err != nil {
 			return err
@@ -116,6 +116,11 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 			updated, err := result.RowsAffected()
 			if err != nil || updated == 0 {
 				return err
+			}
+			for _, r := range progress {
+				if err = queueLiveActivity(tx, k.space, k.device, path, r); err != nil {
+					return err
+				}
 			}
 			for _, r := range notices {
 				if err = h.queuePagePush(tx, principal{space: k.space, device: k.device, user: user}, r, path); err != nil {
@@ -156,8 +161,37 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 		}
 		return result
 	}
+	// Keep the currently displayed sessions fresh even when forty newer chats
+	// would otherwise evict them. The Owner index still determines visibility.
+	tracked := map[string]bool{}
+	active, err := h.db.QueryContext(ctx, "SELECT DISTINCT session FROM live_activities WHERE space=? AND host=? AND expires>unixepoch()", k.space, k.device)
+	if err != nil {
+		return err
+	}
+	for active.Next() {
+		var session string
+		if err = active.Scan(&session); err != nil {
+			active.Close()
+			return err
+		}
+		tracked[session] = true
+	}
+	err = active.Err()
+	active.Close()
+	if err != nil {
+		return err
+	}
+	trackedChats := map[string]bool{}
+	for session := range tracked {
+		if s, ok := conversations[session]; ok {
+			trackedChats[s.ChatID] = true
+		}
+	}
 	wanted := map[string]bool{"overview": true}
-	for _, chat := range index.Chats[:min(len(index.Chats), 40)] {
+	for i, chat := range index.Chats {
+		if i >= 40 && !trackedChats[chat.ID] {
+			continue
+		}
 		path := "chats/" + url.PathEscape(chat.ID)
 		wanted[path] = true
 		rev := index.Revisions[chat.ID]
@@ -168,13 +202,14 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 		if err = fetchHot(ctx, client, user, path+"?limit=40", &page); err != nil {
 			return err
 		}
+		progress := liveRunRecords(page.Runs, page.Requests)
 		for i := range page.Runs {
 			p.HotRun(&page.Runs[i])
 		}
 		for i := range page.Sessions {
 			page.Sessions[i].Scope = model.Scope{}
 		}
-		if err = save(path, rev, page, notices(page.Runs, page.Requests, false)); err != nil {
+		if err = save(path, rev, page, notices(page.Runs, page.Requests, false), progress...); err != nil {
 			return err
 		}
 	}
@@ -184,8 +219,8 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 		if s.Kind != "topic" || !wanted["chats/"+s.ChatID] {
 			continue
 		}
-		if topicCount >= 40 {
-			break
+		if topicCount >= 40 && !tracked[s.ID] {
+			continue
 		}
 		topicCount++
 		path := "sessions/" + url.PathEscape(s.ID) + "/runs"
@@ -201,10 +236,11 @@ func (h *Hub) refreshHot(ctx context.Context, k deviceKey, user string, generati
 		if err = fetchHot(ctx, client, user, path+"?limit=40", &page); err != nil {
 			return err
 		}
+		progress := liveRunRecords(page.Runs, page.Requests)
 		for i := range page.Runs {
 			p.HotRun(&page.Runs[i])
 		}
-		if err = save(path, rev, page, notices(page.Runs, page.Requests, true)); err != nil {
+		if err = save(path, rev, page, notices(page.Runs, page.Requests, true), progress...); err != nil {
 			return err
 		}
 	}

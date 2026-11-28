@@ -327,6 +327,12 @@ CREATE TABLE IF NOT EXISTS archive_streams(space_id TEXT NOT NULL,device_id TEXT
 CREATE TABLE IF NOT EXISTS archive_updates(space_id TEXT NOT NULL,device_id TEXT NOT NULL,view TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,version INTEGER NOT NULL,PRIMARY KEY(space_id,device_id,view,kind,id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 CREATE INDEX IF NOT EXISTS archive_updates_version ON archive_updates(space_id,device_id,view,version);
 CREATE TABLE IF NOT EXISTS push_devices(space_id TEXT NOT NULL,device_id TEXT NOT NULL,platform TEXT NOT NULL,token TEXT NOT NULL,seal_key BLOB NOT NULL,PRIMARY KEY(space_id,device_id),UNIQUE(platform,token),FOREIGN KEY(space_id,device_id) REFERENCES devices);
+CREATE TABLE IF NOT EXISTS live_activities(space TEXT NOT NULL,recipient TEXT NOT NULL,activity TEXT NOT NULL,host TEXT NOT NULL,
+ session TEXT NOT NULL,run TEXT NOT NULL,token TEXT NOT NULL UNIQUE,last_sent INTEGER NOT NULL DEFAULT 0,expires INTEGER NOT NULL,phase TEXT NOT NULL DEFAULT '',
+ steps INTEGER NOT NULL DEFAULT 0,pending INTEGER NOT NULL DEFAULT 0,source_page TEXT NOT NULL DEFAULT '',due INTEGER NOT NULL DEFAULT 0,
+ attempts INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(space,recipient),
+ FOREIGN KEY(space,recipient) REFERENCES push_devices(space_id,device_id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS live_activity_run ON live_activities(space,host,session,run);
 CREATE TABLE IF NOT EXISTS push_outbox(id INTEGER PRIMARY KEY,space_id TEXT NOT NULL,recipient TEXT NOT NULL,host TEXT NOT NULL,kind TEXT NOT NULL,object TEXT NOT NULL,status TEXT NOT NULL,due INTEGER NOT NULL,expires INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,UNIQUE(space_id,recipient,host,kind,object),FOREIGN KEY(space_id,recipient) REFERENCES push_devices ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS push_due ON push_outbox(due,id);
 CREATE TRIGGER IF NOT EXISTS revoke_push AFTER UPDATE OF revoked,token ON devices WHEN NEW.revoked OR NEW.token IS NOT OLD.token BEGIN DELETE FROM push_devices WHERE space_id=NEW.space_id AND device_id=NEW.id; END;

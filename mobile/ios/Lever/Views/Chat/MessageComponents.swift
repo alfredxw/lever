@@ -11,6 +11,7 @@ struct RunTurnView: View, Equatable {
     var agentAvatarSpec: AvatarSpec? = nil
     var deviceId: String? = nil
     var store: LeverStore? = nil
+    var agentId: String = ""
     let agentSeed: String
     let isBusy: Bool
     var isSessionCleared: Bool = false
@@ -20,10 +21,12 @@ struct RunTurnView: View, Equatable {
     let onAnswer: (ArchiveRecord, RequestAnswer?, Bool) -> Void
     let onStop: (String) -> Void
 
+    @State private var showChanges = false
     @State private var showTools = false
 
     static func == (lhs: RunTurnView, rhs: RunTurnView) -> Bool {
         lhs.run == rhs.run
+            && lhs.deviceId == rhs.deviceId && lhs.agentId == rhs.agentId
             && lhs.requests == rhs.requests
             && lhs.agentName == rhs.agentName
             && lhs.agentAvatar == rhs.agentAvatar
@@ -33,6 +36,8 @@ struct RunTurnView: View, Equatable {
             && lhs.lazySteps == rhs.lazySteps
             && lhs.isLoadingSteps == rhs.isLoadingSteps
     }
+
+    private var device: DeviceInfo? { store?.devices.first { $0.id == deviceId } }
 
     private var userText: String {
         run.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -84,23 +89,7 @@ struct RunTurnView: View, Equatable {
                     Spacer(minLength: 48)
                     VStack(alignment: .trailing, spacing: 6) {
                         if !runAttachments.isEmpty {
-                            HStack(spacing: 6) {
-                                ForEach(runAttachments) { att in
-                                    HStack(spacing: 5) {
-                                        Image(systemName: att.isImage ? "photo" : "doc.fill")
-                                            .font(.system(size: 11))
-                                        Text(att.name)
-                                            .font(.system(size: 11.5, weight: .medium))
-                                            .lineLimit(1)
-                                            .frame(maxWidth: 140, alignment: .leading)
-                                    }
-                                    .foregroundStyle(LeverTheme.inkSecondary)
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 5)
-                                    .background(LeverTheme.surfaceInset)
-                                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                }
-                            }
+                            AttachmentPreviewViews(attachments: runAttachments, device: device, store: store)
                         }
 
                         if !userText.isEmpty {
@@ -242,7 +231,7 @@ struct RunTurnView: View, Equatable {
                                     .background(LeverTheme.surfaceInset)
                                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             } else {
-                                MarkdownTextView(text: item.text ?? "", foreground: LeverTheme.inkPrimary)
+                                MarkdownTextView(text: item.text ?? "", foreground: LeverTheme.inkPrimary, isStreaming: isActive && item.id == contentItems.last?.id)
                             }
                         }
 
@@ -256,8 +245,14 @@ struct RunTurnView: View, Equatable {
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
 
-                        if let diff = diffSummary {
-                            DiffSummaryBadge(files: diff.files, additions: diff.additions, deletions: diff.deletions)
+                        if diffSummary != nil || (!isActive && run.status != "queued" && device?.node?.features.contains("git_v1") == true) {
+                            Button { showChanges = true } label: {
+                                if let diff = diffSummary {
+                                    DiffSummaryBadge(files: diff.files, additions: diff.additions, deletions: diff.deletions)
+                                } else { Label("查看本轮变更", systemImage: "doc.text.magnifyingglass").font(.caption) }
+                            }
+                            .buttonStyle(.plain)
+                            .sheet(isPresented: $showChanges) { RunChangesSheetView(device: device, agent: agentId, run: run) }
                         }
 
                         if isActive {
@@ -315,6 +310,8 @@ struct RunTurnView: View, Equatable {
                 )
             }
         }
+        .environment(\.leverMarkdownMedia, MarkdownMediaLoader(space: store?.activeSpace?.id, device: deviceId,
+            pipeline: ["workspace","admin"].contains(device?.node?.accessLevel ?? "") ? store?.media.pipeline : nil))
     }
 }
 
@@ -733,15 +730,16 @@ struct MarkdownTextView: View, Equatable {
     let text: String
     let foreground: Color
     var isUserBubble: Bool = false
+    var isStreaming = false
 
     static func == (lhs: MarkdownTextView, rhs: MarkdownTextView) -> Bool {
-        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble
+        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble && lhs.isStreaming == rhs.isStreaming && lhs.foreground == rhs.foreground
     }
 
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            MarkdownContentView(text: trimmed, foreground: foreground, isUserBubble: isUserBubble)
+            MarkdownContentView(text: trimmed, foreground: foreground, isUserBubble: isUserBubble, isStreaming: isStreaming)
                 .equatable()
         }
     }

@@ -1346,6 +1346,7 @@ export interface ProviderCapabilities {
   skillContext?: boolean;
   resume: boolean;
 }
+export const MaxAttachmentBytes = 20 << 20;
 export interface Attachment {
   id: string;
   chatId: string;

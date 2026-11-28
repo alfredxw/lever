@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"lever/internal/lanclient"
+	"lever/internal/model"
 	p "lever/internal/remoteproto"
 )
 
@@ -83,6 +84,32 @@ func (d *MobileDirectory) Refresh(ctx context.Context, accounts Accounts, lan *l
 	return result
 }
 func (d *MobileDirectory) Clear() { d.mu.Lock(); d.nodes = nil; d.mu.Unlock() }
+func (d *MobileDirectory) node(id string) *Node {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.nodes[id]
+}
+
+func (d *MobileDirectory) Attachment(ctx context.Context, id, attachment string) ([]byte, string, error) {
+	n := d.node(id)
+	if n == nil {
+		return nil, "", &p.HTTPError{Status: 404, Message: "unknown device"}
+	}
+	resp, err := n.Open(ctx, "GET", "/attachments/"+attachment, nil, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, "", &p.HTTPError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, model.MaxAttachmentBytes+1))
+	if len(data) > model.MaxAttachmentBytes {
+		return nil, "", errors.New("附件超过大小限制")
+	}
+	return data, resp.Header.Get("Content-Type"), err
+}
+
 func (d *MobileDirectory) Request(ctx context.Context, space, method, path, body string) (json.RawMessage, bool, error) {
 	suffix, ok := strings.CutPrefix(path, space+"/nodes/")
 	if !ok {
@@ -95,9 +122,7 @@ func (d *MobileDirectory) Request(ctx context.Context, space, method, path, body
 	if !ok || route == "" {
 		return nil, true, errors.New("invalid node resource")
 	}
-	d.mu.RLock()
-	n := d.nodes[id]
-	d.mu.RUnlock()
+	n := d.node(id)
 	if n == nil {
 		return nil, true, &p.HTTPError{Status: 404, Message: "unknown device"}
 	}

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	MaxAttachmentBytes      = 20 << 20
+	MaxAttachmentBytes      = model.MaxAttachmentBytes
 	MaxAttachments          = 8
 	maxAttachmentImageBytes = 5 << 20
 )

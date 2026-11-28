@@ -258,6 +258,21 @@ func (q *peerRequest) overview(_ http.ResponseWriter, r *http.Request) (any, err
 	if err != nil {
 		return nil, err
 	}
+	if r.URL.Query().Get("progress") == "1" {
+		active, err := store.List[p.Record](ctx, tx, `SELECT json_object('kind','run','id',r.id,'chatId',r.chat_id,
+            'agentId',r.agent_id,'sessionId',r.session_id,'createdAt',json_extract(r.data,'$.createdAt'),'status',r.status,
+            'pendingCount',(SELECT count(*) FROM requests WHERE run_id=r.id AND status='pending'),
+            'stepCount',(SELECT count(*) FROM json_each(r.data,'$.items') WHERE value->>'kind' NOT IN ('text','user')))
+            FROM runs r WHERE r.status IN ('starting','running','waiting_user','cancelling','paused')
+            AND coalesce(json_extract(r.data,'$.superseded'),0)=0 AND r.chat_id IN `+visible+` ORDER BY r.sequence DESC`, args...)
+		if err != nil {
+			return nil, err
+		}
+		if active == nil {
+			active = []p.Record{}
+		}
+		out.ActiveRuns = &active
+	}
 	err = tx.QueryRow("SELECT coalesce(max(sequence),0) FROM events").Scan(&out.Cursor)
 	out.TagResources()
 	return out, err

@@ -461,9 +461,10 @@ struct AgentAvatarView: View {
 
 private final class SafePopGestureDelegate: NSObject, UIGestureRecognizerDelegate {
     weak var nav: UINavigationController?
+    var isAllowed: Bool = true
     init(nav: UINavigationController) { self.nav = nav }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let nav else { return false }
+        guard let nav, isAllowed else { return false }
         return nav.viewControllers.count > 1
     }
 }
@@ -472,22 +473,53 @@ private var safePopDelegateKey: UInt8 = 0
 
 /// Keeps UINavigationController's native left-edge swipe-to-go-back smooth even when
 /// `.toolbar(.hidden, for: .navigationBar)` is used for bespoke iOS headers,
-/// while safely disabling the gesture at root (`viewControllers.count <= 1`) to prevent stack hangs.
+/// while safely disabling the gesture at root (`viewControllers.count <= 1`) to prevent stack hangs
+/// and yielding to overlay drawers (`isEnabled = false`) when open.
 struct InteractivePopEnabler: UIViewControllerRepresentable {
+    var isEnabled: Bool = true
+
     func makeUIViewController(context: Context) -> PopEnablerController {
-        PopEnablerController()
+        let controller = PopEnablerController()
+        controller.isPopAllowed = isEnabled
+        return controller
     }
+
     func updateUIViewController(_ uiViewController: PopEnablerController, context: Context) {
-        uiViewController.enablePopGesture()
+        uiViewController.isPopAllowed = isEnabled
+        uiViewController.syncPopGesture()
     }
 
     final class PopEnablerController: UIViewController {
+        var isPopAllowed: Bool = true
+
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            enablePopGesture()
+            syncPopGesture(force: true)
         }
 
-        func enablePopGesture() {
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            if !isPopAllowed {
+                applyPopState(allowed: true)
+            }
+        }
+
+        private var isInTopViewController: Bool {
+            guard let nav = navigationController, let top = nav.topViewController else { return false }
+            var cur: UIViewController? = self
+            while let vc = cur {
+                if vc === top { return true }
+                cur = vc.parent
+            }
+            return false
+        }
+
+        func syncPopGesture(force: Bool = false) {
+            guard force || isInTopViewController else { return }
+            applyPopState(allowed: isPopAllowed)
+        }
+
+        private func applyPopState(allowed: Bool) {
             guard let nav = navigationController else { return }
             let delegate: SafePopGestureDelegate
             if let existing = objc_getAssociatedObject(nav, &safePopDelegateKey) as? SafePopGestureDelegate {
@@ -496,8 +528,12 @@ struct InteractivePopEnabler: UIViewControllerRepresentable {
                 delegate = SafePopGestureDelegate(nav: nav)
                 objc_setAssociatedObject(nav, &safePopDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             }
-            nav.interactivePopGestureRecognizer?.isEnabled = true
+            delegate.isAllowed = allowed
             nav.interactivePopGestureRecognizer?.delegate = delegate
+            nav.interactivePopGestureRecognizer?.isEnabled = allowed
+            if #available(iOS 26.0, *) {
+                nav.interactiveContentPopGestureRecognizer?.isEnabled = allowed
+            }
         }
     }
 }

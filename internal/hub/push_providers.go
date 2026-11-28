@@ -156,7 +156,7 @@ func (d *pushProviders) send(ctx context.Context, platform, recipient string, n 
 		return errors.New("push platform is not configured")
 	}
 	if d.relay != nil {
-		return d.relay.forward(ctx, relayDelivery{platform, recipient, n})
+		return d.relay.forward(ctx, relayDelivery{Platform: platform, Token: recipient, Notice: n})
 	}
 	body := "有新的执行结果"
 	switch n.Kind {
@@ -168,18 +168,7 @@ func (d *pushProviders) send(ctx context.Context, platform, recipient string, n 
 	if platform == "ios" {
 		msg := &apns2.Notification{DeviceToken: recipient, Topic: d.topic, CollapseID: n.Tag, PushType: apns2.PushTypeAlert, Priority: apns2.PriorityHigh, Expiration: time.Now().Add(24 * time.Hour),
 			Payload: map[string]any{"aps": map[string]any{"alert": map[string]string{"title": "Lever", "body": body}, "sound": "default"}, "lever": n.Payload}}
-		resp, err := d.apple.PushWithContext(ctx, msg)
-		if err != nil {
-			return errors.New("APNs connection failed")
-		}
-		if resp.Sent() {
-			return nil
-		}
-		switch resp.Reason {
-		case "Unregistered", "BadDeviceToken":
-			return errInvalidPushToken
-		}
-		return fmt.Errorf("APNs HTTP %d (%s)", resp.StatusCode, resp.Reason)
+		return d.sendApple(ctx, msg)
 	}
 	payload, err := json.Marshal(map[string]any{"message": map[string]any{
 		"token": recipient, "notification": map[string]string{"title": "Lever", "body": body},
@@ -217,4 +206,19 @@ func (d *pushProviders) send(ctx context.Context, platform, recipient string, n 
 		}
 	}
 	return fmt.Errorf("FCM HTTP %d", resp.StatusCode)
+}
+
+func (d *pushProviders) sendApple(ctx context.Context, msg *apns2.Notification) error {
+	resp, err := d.apple.PushWithContext(ctx, msg)
+	if err != nil {
+		return errors.New("APNs connection failed")
+	}
+	if resp.Sent() {
+		return nil
+	}
+	switch resp.Reason {
+	case "Unregistered", "BadDeviceToken":
+		return errInvalidPushToken
+	}
+	return fmt.Errorf("APNs HTTP %d (%s)", resp.StatusCode, resp.Reason)
 }

@@ -284,10 +284,15 @@ func (h *Hub) RunPush(ctx context.Context) {
 	defer tick.Stop()
 	for ctx.Err() == nil {
 		more, err := h.deliverNext(ctx)
+		live, liveErr := h.deliverLiveActivity(ctx)
+		if liveErr != nil && ctx.Err() == nil {
+			slog.Error("Live activity delivery", "error", liveErr)
+		}
+		more = more || live
 		if err != nil && ctx.Err() == nil {
 			slog.Error("Mobile push queue", "error", err)
 		}
-		if more && err == nil {
+		if more && err == nil && liveErr == nil {
 			continue
 		}
 		select {

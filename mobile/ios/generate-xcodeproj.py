@@ -15,39 +15,28 @@ PROJ_DIR = IOS_DIR / "Lever.xcodeproj"
 SCHEMES_DIR = PROJ_DIR / "xcshareddata" / "xcschemes"
 
 
+SPM_PACKAGES = [
+    ("textual", "https://github.com/gonzalezreal/textual", "upToNextMinorVersion", "0.5.0", ["Textual"]),
+    ("grdb", "https://github.com/groue/GRDB.swift.git", "upToNextMajorVersion", "7.12.0", ["GRDB"]),
+    ("nuke", "https://github.com/kean/Nuke.git", "upToNextMajorVersion", "14.0.0", ["Nuke", "NukeUI"]),
+    ("swiftterm", "https://github.com/migueldeicaza/SwiftTerm.git", "upToNextMajorVersion", "1.99.4", ["SwiftTerm"]),
+]
+
+
 def uid(seed: str) -> str:
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24].upper()
 
 
 def copy_icon() -> None:
     src = IOS_DIR.parent / "icon.png"
-    dst = APP_DIR / "Resources" / "Assets.xcassets" / "AppIcon.appiconset" / "AppIcon.png"
-    if src.exists():
+    assets = APP_DIR / "Resources" / "Assets.xcassets"
+    for asset in (
+        "AppIcon.appiconset/AppIcon.png",
+        "LeverPresetLogo.imageset/LeverPresetLogo.png",
+    ):
+        dst = assets / asset
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
-    preset_src = IOS_DIR.parent.parent / "cmd" / "lever-desktop" / "icon.png"
-    if not preset_src.exists():
-        preset_src = src
-    preset_dst = APP_DIR / "Resources" / "Assets.xcassets" / "LeverPresetLogo.imageset" / "LeverPresetLogo.png"
-    if preset_src.exists():
-        preset_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(preset_src, preset_dst)
-        contents = preset_dst.parent / "Contents.json"
-        contents.write_text(
-            '{\n'
-            '  "images": [\n'
-            '    {\n'
-            '      "filename": "LeverPresetLogo.png",\n'
-            '      "idiom": "universal"\n'
-            '    }\n'
-            '  ],\n'
-            '  "info": {\n'
-            '    "author": "xcode",\n'
-            '    "version": 1\n'
-            '  }\n'
-            '}\n',
-            encoding="utf-8",
-        )
     sync_desktop_provider_icons()
 
 
@@ -252,24 +241,15 @@ def generate() -> None:
     ID_ENTITLEMENTS_REF = uid("fileref:Lever.entitlements")
     ID_LIBRESOLV_REF = uid("fileref:libresolv.tbd")
     ID_LIBRESOLV_BUILD = uid("buildfile:libresolv.tbd")
-    ID_LIBSQLITE3_REF = uid("fileref:libsqlite3.tbd")
-    ID_LIBSQLITE3_BUILD = uid("buildfile:libsqlite3.tbd")
-    ID_TEXTUAL_PKG = uid("pkg:textual")
-    ID_TEXTUAL_PROD = uid("pkgprod:Textual")
-    ID_TEXTUAL_BUILD = uid("buildfile:Textual")
-
     build_files = [
         f"\t\t{ID_XCFRAMEWORK_BUILD} /* LeverCore.xcframework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ID_XCFRAMEWORK_REF} /* LeverCore.xcframework */; }};",
         f"\t\t{ID_LIBRESOLV_BUILD} /* libresolv.tbd in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ID_LIBRESOLV_REF} /* libresolv.tbd */; }};",
-        f"\t\t{ID_LIBSQLITE3_BUILD} /* libsqlite3.tbd in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ID_LIBSQLITE3_REF} /* libsqlite3.tbd */; }};",
-        f"\t\t{ID_TEXTUAL_BUILD} /* Textual in Frameworks */ = {{isa = PBXBuildFile; productRef = {ID_TEXTUAL_PROD} /* Textual */; }};",
         f"\t\t{ID_ASSETS_BUILD} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {ID_ASSETS_REF} /* Assets.xcassets */; }};",
     ]
     file_refs = [
         f"\t\t{ID_PRODUCT_APP} /* Lever.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lever.app; sourceTree = BUILT_PRODUCTS_DIR; }};",
         f"\t\t{ID_XCFRAMEWORK_REF} /* LeverCore.xcframework */ = {{isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LeverCore.xcframework; path = Frameworks/LeverCore.xcframework; sourceTree = \"<group>\"; }};",
         f"\t\t{ID_LIBRESOLV_REF} /* libresolv.tbd */ = {{isa = PBXFileReference; lastKnownFileType = \"sourcecode.text-based-dylib-definition\"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; }};",
-        f"\t\t{ID_LIBSQLITE3_REF} /* libsqlite3.tbd */ = {{isa = PBXFileReference; lastKnownFileType = \"sourcecode.text-based-dylib-definition\"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; }};",
         f"\t\t{ID_ASSETS_REF} /* Assets.xcassets */ = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Lever/Resources/Assets.xcassets; sourceTree = \"<group>\"; }};",
         f"\t\t{ID_INFO_PLIST_REF} /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Lever/Resources/Info.plist; sourceTree = \"<group>\"; }};",
         f"\t\t{ID_ENTITLEMENTS_REF} /* Lever.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Lever/Resources/Lever.entitlements; sourceTree = \"<group>\"; }};",
@@ -281,17 +261,48 @@ def generate() -> None:
         f"\t\t\t\t{ID_ENTITLEMENTS_REF} /* Lever.entitlements */,",
     ]
 
+    package_refs, product_refs, package_objects, product_objects, product_builds = [], [], [], [], []
+    for key, url, rule, version, products in SPM_PACKAGES:
+        pkg = uid(f"pkg:{key}")
+        package_refs.append(pkg)
+        package_objects.append(f'		{pkg} = {{isa = XCRemoteSwiftPackageReference; repositoryURL = "{url}"; requirement = {{kind = {rule}; minimumVersion = {version}; }}; }};')
+        for name in products:
+            product, build = uid(f"pkgprod:{name}"), uid(f"buildfile:{name}")
+            product_refs.append(product)
+            product_builds.append(build)
+            product_objects.append(f"		{product} = {{isa = XCSwiftPackageProductDependency; package = {pkg}; productName = {name}; }};")
+            build_files.append(f"		{build} /* {name} */ = {{isa = PBXBuildFile; productRef = {product}; }};")
+
+    widget = uid("target:widget")
+    widget_product = uid("product:widget")
+    widget_sources = uid("phase:widget-sources")
+    widget_configs = uid("configlist:widget")
+    widget_dependency = uid("dependency:widget")
+    widget_proxy = uid("proxy:widget")
+    embed_phase, embed_build = uid("phase:embed"), uid("buildfile:embed")
+    widget_entries = []
+    widget_dir = IOS_DIR / "LeverLiveActivity"
+    shared = IOS_DIR / "Shared"
+    swift_files += sorted(p.relative_to(IOS_DIR).as_posix() for root in (shared, widget_dir) for p in root.glob("*.swift"))
+    file_refs.append(f'		{widget_product} = {{isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = LeverLiveActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    build_files.append(f'		{embed_build} = {{isa = PBXBuildFile; fileRef = {widget_product}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
+
     for rel in swift_files:
         name = Path(rel).name
         f_id = uid(f"fileref:{rel}")
         b_id = uid(f"buildfile:{rel}")
         file_refs.append(
-            f"\t\t{f_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = {rel}; sourceTree = \"<group>\"; }};"
+            f"\t\t{f_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = \"{name}\"; path = \"{rel}\"; sourceTree = \"<group>\"; }};"
         )
         build_files.append(
             f"\t\t{b_id} /* {name} in Sources */ = {{isa = PBXBuildFile; fileRef = {f_id} /* {name} */; }};"
         )
-        source_build_entries.append(f"\t\t\t\t{b_id} /* {name} in Sources */,")
+        if rel.startswith(("Shared/", "LeverLiveActivity/")):
+            widget_build = uid(f"widget-build:{rel}")
+            build_files.append(f"		{widget_build} = {{isa = PBXBuildFile; fileRef = {f_id}; }};")
+            widget_entries.append(widget_build)
+        if not rel.startswith("LeverLiveActivity/"):
+            source_build_entries.append(f"\t\t\t\t{b_id} /* {name} in Sources */,")
         source_group_children.append(f"\t\t\t\t{f_id} /* {name} */,")
 
     common_target_settings = """
@@ -339,6 +350,24 @@ def generate() -> None:
 				TARGETED_DEVICE_FAMILY = "1,2";
 """
 
+    widget_settings = """
+        APPLICATION_EXTENSION_API_ONLY = YES;
+        CODE_SIGN_STYLE = Automatic;
+        CURRENT_PROJECT_VERSION = 1;
+        MARKETING_VERSION = 0.1.0;
+        INFOPLIST_FILE = LeverLiveActivity/Info.plist;
+        PRODUCT_BUNDLE_IDENTIFIER = "app.lever.mobile.live-activity";
+        PRODUCT_NAME = LeverLiveActivityExtension;
+        SKIP_INSTALL = YES;
+        SWIFT_VERSION = 5.0;
+        TARGETED_DEVICE_FAMILY = "1,2";
+    """
+    widget_config_ids = [uid(f"widget-config:{name}") for name in ("Debug", "Release")]
+    widget_config_objects = [
+        f"{config} = {{isa = XCBuildConfiguration; buildSettings = {{{widget_settings}}}; name = {name}; }};"
+        for name, config in zip(("Debug", "Release"), widget_config_ids)
+    ]
+
     pbxproj = f"""// !$*UTF8*$!
 {{
 	archiveVersion = 1;
@@ -346,6 +375,19 @@ def generate() -> None:
 	}};
 	objectVersion = 56;
 	objects = {{
+
+        {widget} /* LeverLiveActivityExtension */ = {{
+            isa = PBXNativeTarget; buildConfigurationList = {widget_configs};
+            buildPhases = ({widget_sources}, ); buildRules = (); dependencies = ();
+            name = LeverLiveActivityExtension; productReference = {widget_product};
+            productType = "com.apple.product-type.app-extension";
+        }};
+        {widget_configs} = {{isa = XCConfigurationList; buildConfigurations = ({', '.join(widget_config_ids)}, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; }};
+        {chr(10).join(widget_config_objects)}
+        {widget_sources} = {{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({', '.join(widget_entries)}); runOnlyForDeploymentPostprocessing = 0; }};
+        {widget_proxy} = {{isa = PBXContainerItemProxy; containerPortal = {ID_PROJECT}; proxyType = 1; remoteGlobalIDString = {widget}; remoteInfo = LeverLiveActivityExtension; }};
+        {widget_dependency} = {{isa = PBXTargetDependency; target = {widget}; targetProxy = {widget_proxy}; }};
+        {embed_phase} = {{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = ({embed_build}, ); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; }};
 
 /* Begin PBXBuildFile section */
 {chr(10).join(build_files)}
@@ -362,8 +404,7 @@ def generate() -> None:
 			files = (
 				{ID_XCFRAMEWORK_BUILD} /* LeverCore.xcframework in Frameworks */,
 				{ID_LIBRESOLV_BUILD} /* libresolv.tbd in Frameworks */,
-				{ID_LIBSQLITE3_BUILD} /* libsqlite3.tbd in Frameworks */,
-				{ID_TEXTUAL_BUILD} /* Textual in Frameworks */,
+				{', '.join(product_builds)},
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
@@ -392,7 +433,6 @@ def generate() -> None:
 			children = (
 				{ID_XCFRAMEWORK_REF} /* LeverCore.xcframework */,
 				{ID_LIBRESOLV_REF} /* libresolv.tbd */,
-				{ID_LIBSQLITE3_REF} /* libsqlite3.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -401,6 +441,7 @@ def generate() -> None:
 			isa = PBXGroup;
 			children = (
 				{ID_PRODUCT_APP} /* Lever.app */,
+                {widget_product},
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -415,14 +456,16 @@ def generate() -> None:
 				{ID_SOURCES_PHASE} /* Sources */,
 				{ID_FRAMEWORKS_PHASE} /* Frameworks */,
 				{ID_RESOURCES_PHASE} /* Resources */,
+                {embed_phase},
 			);
 			buildRules = (
 			);
 			dependencies = (
+                {widget_dependency},
 			);
 			name = Lever;
 			packageProductDependencies = (
-				{ID_TEXTUAL_PROD} /* Textual */,
+				{', '.join(product_refs)},
 			);
 			productName = Lever;
 			productReference = {ID_PRODUCT_APP} /* Lever.app */;
@@ -449,13 +492,14 @@ def generate() -> None:
 			);
 			mainGroup = {ID_MAIN_GROUP};
 			packageReferences = (
-				{ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */,
+				{', '.join(package_refs)},
 			);
 			productRefGroup = {ID_PRODUCTS_GROUP} /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				{ID_TARGET} /* Lever */,
+                {widget},
 			);
 		}};
 /* End PBXProject section */
@@ -555,22 +599,11 @@ def generate() -> None:
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		{ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */ = {{
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/gonzalezreal/textual";
-			requirement = {{
-				kind = upToNextMinorVersion;
-				minimumVersion = 0.5.0;
-			}};
-		}};
+{chr(10).join(package_objects)}
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		{ID_TEXTUAL_PROD} /* Textual */ = {{
-			isa = XCSwiftPackageProductDependency;
-			package = {ID_TEXTUAL_PKG} /* XCRemoteSwiftPackageReference "textual" */;
-			productName = Textual;
-		}};
+{chr(10).join(product_objects)}
 /* End XCSwiftPackageProductDependency section */
 	}};
 	rootObject = {ID_PROJECT} /* Project object */;

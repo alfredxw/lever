@@ -432,6 +432,8 @@ type ProviderCapabilities struct {
 	Resume           bool `json:"resume"`
 }
 
+const MaxAttachmentBytes = 20 << 20
+
 type Attachment struct {
 	ID        string `json:"id"`
 	ChatID    string `json:"chatId"`

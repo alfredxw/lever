@@ -123,6 +123,8 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	m.HandleFunc("GET /api/spaces/{space}/node-events", h.handler("controller", h.nodeEvents))
 	m.HandleFunc("GET /api/spaces/{space}/events", h.handler("controller", h.events))
 	m.HandleFunc("GET /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
+	m.HandleFunc("PUT /api/spaces/{space}/push/live-activity", h.handler("controller", h.liveActivity))
+	m.HandleFunc("DELETE /api/spaces/{space}/push/live-activity", h.handler("controller", h.liveActivity))
 	m.HandleFunc("PUT /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("PATCH /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("DELETE /api/spaces/{space}/push", h.handler("controller", h.pushDevice))

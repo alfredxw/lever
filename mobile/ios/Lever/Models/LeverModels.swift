@@ -550,6 +550,7 @@ struct GlobalSearchHit: Identifiable, Equatable {
     enum Kind: String {
         case agent = "Agent"
         case chat = "对话"
+        case message = "消息"
         case topic = "话题"
     }
     let id: String
@@ -805,6 +806,8 @@ struct PeerNodeInfo: Codable, Sendable, Equatable {
     let features: [String]
     let accessLevel: String
     let cacheEpoch: String?
+    var draining: Bool? = nil
+    var readOnlyFs: Bool? = nil
     var supportsChat: Bool { minCompatibleProtocol <= 1 && protocolVersion >= 1 && features.contains("peer_v1") }
 }
 
@@ -843,6 +846,7 @@ struct PeerIndex: Decodable {
     let agents: [Agent]?
     let chats: [Chat]?
     let conversations: [Session]?
+    let activeRuns: [ArchiveRecord]?
     var records: [ArchiveRecord] {
         (agents ?? []).map(\.record) + (chats ?? []).map(\.record) + (conversations ?? []).map(\.record)
     }
@@ -852,6 +856,7 @@ struct PeerHistory: Decodable {
     struct Run: Decodable {
         let id, sessionId, chatId, input, status: String
         let error, createdAt, updatedAt: String?
+        let superseded: Bool?
         let sequence, unreadSequence: Int64?
         let attachments: [AttachmentRef]?
         let items: [RunItem]?
@@ -859,7 +864,7 @@ struct PeerHistory: Decodable {
         let selection: ModelSelection?
         var record: ArchiveRecord {
             var r = ArchiveRecord(kind: "run", id: id, chatId: chatId, sessionId: sessionId, status: status)
-            r.text = input; r.items = items; r.stepCount = stepCount; r.sequence = sequence; r.unreadSequence = unreadSequence
+            r.superseded = superseded; r.text = input; r.items = items; r.stepCount = stepCount; r.sequence = sequence; r.unreadSequence = unreadSequence
             r.attachments = attachments; r.error = error; r.createdAt = createdAt; r.updatedAt = updatedAt
             r.provider = selection?.provider; r.model = selection?.model; r.effort = selection?.effort; r.fast = selection?.fast
             return r

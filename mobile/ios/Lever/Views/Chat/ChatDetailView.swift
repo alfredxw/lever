@@ -14,7 +14,6 @@ struct ChatDetailView: View {
     let onOpenTopic: (TopicRoute) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var workspace: WorkspaceDestination?
     @State private var currentChatId: String?
     @State private var currentIsPrivate: Bool = false
 
@@ -42,7 +41,8 @@ struct ChatDetailView: View {
     @State private var suggestionDismissed = false
     @State private var isSending = false
     @State private var inlineError: String?
-    @State private var didInitialScroll = false
+    @State private var followRequest = 0
+    @State private var paginationAnchor: String?
     @State private var initialLoadFinished = false
     @FocusState private var inputFocused: Bool
 
@@ -211,6 +211,7 @@ struct ChatDetailView: View {
                                                 agentAvatarSpec: agentRecord?.avatarSpec,
                                                 deviceId: route.deviceId,
                                                 store: store,
+                                                agentId: route.agentId,
                                                 agentSeed: agentSeed,
                                                 isBusy: isSending,
                                                 isSessionCleared: snapshot.mainSession.map { store.isSessionCleared(deviceId: route.deviceId, session: $0) } ?? false,
@@ -296,25 +297,17 @@ struct ChatDetailView: View {
                                 emptyChatPlaceholder
                             }
                         }
+                        .scrollTargetLayout()
                         .padding(.horizontal, 15)
                         .padding(.vertical, 12)
                     }
-                    .defaultScrollAnchor(.bottom)
                     .scrollDismissesKeyboard(.interactively)
                     .background(LeverTheme.canvas)
-                    .onChange(of: snapshot.entries.last?.id) { _, _ in
-                        guard didInitialScroll else { return }
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: snapshot.entries.isEmpty, initial: true) { _, isEmpty in
-                        if !isEmpty && !didInitialScroll {
-                            didInitialScroll = true
-                            DispatchQueue.main.async {
-                                proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                            }
-                        }
+                    .modifier(TimelineScrollAnchor(firstID: visibleEntries.first?.id, followRequest: followRequest))
+                    .onChange(of: visibleEntries.first?.id) { _, _ in
+                        guard let anchor = paginationAnchor else { return }
+                        proxy.scrollTo(anchor, anchor: .top)
+                        paginationAnchor = nil
                     }
                 }
 
@@ -358,7 +351,7 @@ struct ChatDetailView: View {
                         currentChatId = item.chatId
                         currentIsPrivate = item.isPrivate
                         visibleEntryLimit = 24
-                        didInitialScroll = false
+                        followRequest &+= 1
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
                         onOpenTopic(TopicRoute(
@@ -375,7 +368,7 @@ struct ChatDetailView: View {
                     currentChatId = item.id
                     currentIsPrivate = item.isPrivate
                     visibleEntryLimit = 24
-                    didInitialScroll = false
+                    followRequest &+= 1
                     initialLoadFinished = false
                     selectedProviderId = nil
                     selectedModelId = nil
@@ -394,7 +387,7 @@ struct ChatDetailView: View {
                     currentChatId = nil
                     currentIsPrivate = false
                     visibleEntryLimit = 24
-                    didInitialScroll = false
+                    followRequest &+= 1
                     composeNewTopic = true
                     selectedProviderId = nil
                     selectedModelId = nil
@@ -406,10 +399,7 @@ struct ChatDetailView: View {
                 }
             )
         }
-        .background(InteractivePopEnabler())
-        .sheet(item: $workspace, onDismiss: { Task { try? await LeverBridge.shared.requestVoid("POST", path: "/native/workspace/close") } }) { destination in
-            PeerWorkspaceBrowser(url: destination.url).ignoresSafeArea()
-        }
+        .background(InteractivePopEnabler(isEnabled: !isDrawerOpen))
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .task {
@@ -548,6 +538,8 @@ struct ChatDetailView: View {
 
             Spacer(minLength: 4)
 
+            WorkspaceActions(device: store.devices.first { $0.id == route.deviceId }, agent: route.agentId, chat: currentChatId, session: snapshot.mainSession?.id)
+
             // Right Drawer Trigger Button (also accessible by swiping left from right edge!)
             Button {
                 openDrawer()
@@ -584,20 +576,9 @@ struct ChatDetailView: View {
     private func loadOlderButton(chatId: String) -> some View {
         HStack {
             Spacer()
-            if store.hasNativeOwner(route.deviceId) {
-                Button {
-                    Task {
-                        do {
-                            let location: String = try await LeverBridge.shared.request("POST", path: "/native/workspace",
-                                body: ["node": route.deviceId, "agent": route.agentId, "chat": currentChatId ?? ""])
-                            if let url = URL(string: location) { workspace = WorkspaceDestination(url: url) }
-                        } catch { inlineError = error.localizedDescription }
-                    }
-                } label: { Image(systemName: "folder").frame(width: 34, height: 34) }
-                .accessibilityLabel("打开设备工作区")
-            }
             Button {
                 Haptics.light()
+                paginationAnchor = visibleEntries.first?.id
                 let prevRemaining = remainingOlderCount
                 visibleEntryLimit += 24
                 if prevRemaining <= 24 && hasMoreRemoteMain {
@@ -955,9 +936,7 @@ struct ChatDetailView: View {
     private func openDrawer() {
         inputFocused = false
         Haptics.light()
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-            isDrawerOpen = true
-        }
+        isDrawerOpen = true
     }
 
     private func markMainSessionRead() {
@@ -1118,6 +1097,7 @@ struct ChatDetailView: View {
         composerText = ""
         draftAttachments = []
         draftReferences = []
+        followRequest &+= 1
         isSending = true
         inlineError = nil
 
@@ -1150,6 +1130,7 @@ struct ChatDetailView: View {
     }
 
     private func handleAnswer(chatId: String, request: ArchiveRecord, answer: RequestAnswer?, allowRun: Bool) {
+        followRequest &+= 1
         isSending = true
         inlineError = nil
         Task {
@@ -1170,145 +1151,11 @@ struct ChatDetailView: View {
     }
 
     private func handleStop(chatId: String, runId: String) {
+        followRequest &+= 1
         isSending = true
         Task {
             defer { isSending = false }
             try? await store.stopRun(deviceId: route.deviceId, chatId: chatId, isPrivate: currentIsPrivate, runId: runId)
         }
     }
-}
-
-// MARK: - Isolated 120fps Right-Edge Interactive Drawer Container
-
-/// Owns `dragOffset` locally so dragging the right-edge drawer NEVER re-evaluates ChatDetailView's timeline.
-private struct RightEdgeDrawerOverlay: View {
-    @Binding var isOpen: Bool
-    let store: LeverStore
-    let deviceId: String
-    let agentId: String
-    let agentName: String
-    let agentAvatar: String?
-    let agentAvatarSpec: AvatarSpec?
-    let currentChatId: String?
-    let onDismissKeyboard: () -> Void
-    let onSelectTopic: (AgentDrawerTopicItem) -> Void
-    let onSelectChat: (AgentDrawerChatItem) -> Void
-    let onStartNewChat: () -> Void
-
-    @State private var dragOffset: CGFloat = 0
-    private let drawerWidth: CGFloat = 312
-
-    private var progress: CGFloat {
-        if isOpen {
-            return max(0, min(1, 1 - dragOffset / drawerWidth))
-        } else {
-            return max(0, min(1, -dragOffset / drawerWidth))
-        }
-    }
-
-    private var offsetX: CGFloat {
-        (1 - progress) * drawerWidth
-    }
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            if !isOpen {
-                Color.clear
-                    .frame(width: 30)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 10, coordinateSpace: .local)
-                            .onChanged { value in
-                                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                                if value.translation.width < 0 {
-                                    if dragOffset == 0 {
-                                        onDismissKeyboard()
-                                    }
-                                    dragOffset = max(-drawerWidth, value.translation.width)
-                                }
-                            }
-                            .onEnded { value in
-                                let shouldOpen = value.translation.width < -68 || value.predictedEndTranslation.width < -130
-                                withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-                                    isOpen = shouldOpen
-                                    dragOffset = 0
-                                }
-                                if shouldOpen { Haptics.light() }
-                            }
-                    )
-            }
-
-            if isOpen || dragOffset < 0 {
-                Color.black
-                    .opacity(0.32 * Double(progress))
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        close()
-                    }
-                    .zIndex(20)
-
-                AgentDrawerView(
-                    store: store,
-                    deviceId: deviceId,
-                    agentId: agentId,
-                    agentName: agentName,
-                    agentAvatar: agentAvatar,
-                    agentAvatarSpec: agentAvatarSpec,
-                    currentChatId: currentChatId,
-                    onSelectTopic: { item in
-                        close()
-                        onSelectTopic(item)
-                    },
-                    onSelectChat: { item in
-                        close()
-                        onSelectChat(item)
-                    },
-                    onStartNewChat: {
-                        close()
-                        onStartNewChat()
-                    },
-                    onClose: {
-                        close()
-                    }
-                )
-                .frame(width: drawerWidth)
-                .offset(x: offsetX)
-                .shadow(color: Color.black.opacity(0.18), radius: 24, x: -8, y: 0)
-                .gesture(
-                    DragGesture(minimumDistance: 10, coordinateSpace: .local)
-                        .onChanged { value in
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            if value.translation.width > 0 {
-                                dragOffset = min(drawerWidth, value.translation.width)
-                            }
-                        }
-                        .onEnded { value in
-                            let shouldClose = value.translation.width > 68 || value.predictedEndTranslation.width > 130
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                                isOpen = !shouldClose
-                                dragOffset = 0
-                            }
-                        }
-                )
-                .zIndex(30)
-            }
-        }
-    }
-
-    private func close() {
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-            isOpen = false
-            dragOffset = 0
-        }
-    }
-}
-
-private struct WorkspaceDestination: Identifiable {
-    let url: URL
-    var id: URL { url }
-}
-private struct PeerWorkspaceBrowser: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
-    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }

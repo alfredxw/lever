@@ -6,60 +6,134 @@
 	objectVersion = 56;
 	objects = {
 
+        A5A0AA9F4FB5BC8D9254438A /* LeverLiveActivityExtension */ = {
+            isa = PBXNativeTarget; buildConfigurationList = 0F2F9B54D12A43C3DA590081;
+            buildPhases = (63CE7886BFE0F651D1CD249B, ); buildRules = (); dependencies = ();
+            name = LeverLiveActivityExtension; productReference = 4C47665D1BA4105DF9684DC4;
+            productType = "com.apple.product-type.app-extension";
+        };
+        0F2F9B54D12A43C3DA590081 = {isa = XCConfigurationList; buildConfigurations = (731F32BAF2A7FB45D0AF0ED2, D8298818B7734E0834D62B26, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+        731F32BAF2A7FB45D0AF0ED2 = {isa = XCBuildConfiguration; buildSettings = {
+        APPLICATION_EXTENSION_API_ONLY = YES;
+        CODE_SIGN_STYLE = Automatic;
+        CURRENT_PROJECT_VERSION = 1;
+        MARKETING_VERSION = 0.1.0;
+        INFOPLIST_FILE = LeverLiveActivity/Info.plist;
+        PRODUCT_BUNDLE_IDENTIFIER = "app.lever.mobile.live-activity";
+        PRODUCT_NAME = LeverLiveActivityExtension;
+        SKIP_INSTALL = YES;
+        SWIFT_VERSION = 5.0;
+        TARGETED_DEVICE_FAMILY = "1,2";
+    }; name = Debug; };
+D8298818B7734E0834D62B26 = {isa = XCBuildConfiguration; buildSettings = {
+        APPLICATION_EXTENSION_API_ONLY = YES;
+        CODE_SIGN_STYLE = Automatic;
+        CURRENT_PROJECT_VERSION = 1;
+        MARKETING_VERSION = 0.1.0;
+        INFOPLIST_FILE = LeverLiveActivity/Info.plist;
+        PRODUCT_BUNDLE_IDENTIFIER = "app.lever.mobile.live-activity";
+        PRODUCT_NAME = LeverLiveActivityExtension;
+        SKIP_INSTALL = YES;
+        SWIFT_VERSION = 5.0;
+        TARGETED_DEVICE_FAMILY = "1,2";
+    }; name = Release; };
+        63CE7886BFE0F651D1CD249B = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (FC97AAE2B8275CF30109D778, 447A92628F053730F1B611BF); runOnlyForDeploymentPostprocessing = 0; };
+        0DD22CB6C2E8E29B0AF6C12D = {isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = A5A0AA9F4FB5BC8D9254438A; remoteInfo = LeverLiveActivityExtension; };
+        A4C80477431259D93FE11E57 = {isa = PBXTargetDependency; target = A5A0AA9F4FB5BC8D9254438A; targetProxy = 0DD22CB6C2E8E29B0AF6C12D; };
+        F0AB04EE052351C80F3286E9 = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (39F95DEC07F755CBA70D5AF6, ); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+
 /* Begin PBXBuildFile section */
 		892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */; };
 		D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = EF3D370F9E7072622532FDC7 /* libresolv.tbd */; };
-		24FC8D054EF66297A0F6F1BA /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */; };
-		D283F090D7867C61E3BF9414 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 98B0BFB62A1777F5271D13FD /* Textual */; };
 		BCDEA934D2501353B4C4CE9F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */; };
+		D283F090D7867C61E3BF9414 /* Textual */ = {isa = PBXBuildFile; productRef = 98B0BFB62A1777F5271D13FD; };
+		871E6A6D599CBB389053F493 /* GRDB */ = {isa = PBXBuildFile; productRef = 89853DCA710B94C07CA81C9C; };
+		A77C733AB7DF8DA2D0A668D8 /* Nuke */ = {isa = PBXBuildFile; productRef = 6AF54ECD60AF548D575E8D7A; };
+		2F02161A13FB528FBCB276C2 /* NukeUI */ = {isa = PBXBuildFile; productRef = EAA4B04DE8834F268B517782; };
+		C95838A45B5E0778E58F2163 /* SwiftTerm */ = {isa = PBXBuildFile; productRef = CD9A37E62C00288810FF0572; };
+		39F95DEC07F755CBA70D5AF6 = {isa = PBXBuildFile; fileRef = 4C47665D1BA4105DF9684DC4; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		68F22B0A38A8B50DCCF1EFD6 /* LeverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BDA077271B0671437109A1 /* LeverApp.swift */; };
+		BFA307E0ED3901728E43B4B4 /* AppDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99E805EAEC735C860E1A0019 /* AppDatabase.swift */; };
+		C76B1A55A6F6CF3A4C339739 /* LegacyCacheMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE3B814789D5ABC26AD2521 /* LegacyCacheMigrator.swift */; };
 		BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF458FF520B178EFFCC596A9 /* KeychainStore.swift */; };
 		3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */; };
-		266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B671069DAB71F1479E38E4C /* LocalCache.swift */; };
-		7750BF612CED2D127DFFCAFD /* SQLiteCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */; };
+		7E064652524D0427088E6A03 /* LeverImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6684A58C71459979426C05 /* LeverImagePipeline.swift */; };
 		FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700092EB08D52553B063B7AD /* LeverModels.swift */; };
+		00BA9626CA4B12F5C5621FC9 /* LeverStore+Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA9118F316BF9DEF18AD69DB /* LeverStore+Composer.swift */; };
+		DE07FD5219E00D5080D435C4 /* LeverStore+Projections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8723CFD441544A20AF0BA5D0 /* LeverStore+Projections.swift */; };
+		B772E8E4FAC1EE9C6493ADFF /* LeverStore+ReadClear.swift in Sources */ = {isa = PBXBuildFile; fileRef = 444202A72A908577259C1450 /* LeverStore+ReadClear.swift */; };
+		46CB6CA741243284CFA27A08 /* LeverStore+Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E3F2CFA8DD1C4CD47EC99F /* LeverStore+Sync.swift */; };
 		189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */; };
+		3D5C908439C01CA38CCB02BE /* LiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD06C984FE943C871C941CB /* LiveActivityCoordinator.swift */; };
 		5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */; };
 		5B38E1F2F2EB4DC64795CDE8 /* RuntimeIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECB111581CFAA701EBDA1457 /* RuntimeIcons.swift */; };
 		DA8FD62F592E323D0F98D7BF /* AgentDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95CB66199240AF6885D30A99 /* AgentDrawerView.swift */; };
+		B46755B233755AA691684AF9 /* AttachmentPreviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FDEB6407B1DD527B08F918E /* AttachmentPreviewViews.swift */; };
 		3CDDDB2100A699493E0A715B /* ChatDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */; };
 		6320BFA88934A64181FCD9DD /* ComposerOverlayViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92FF9715482407B8CFE942CE /* ComposerOverlayViews.swift */; };
 		EE00B66C197466C265737C9B /* MarkdownContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC9DDC5B0BA72884393286A /* MarkdownContentView.swift */; };
+		E989B246EBC99AD433D2CE68 /* MarkdownMediaLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D418D21BEE67F2138CEACA12 /* MarkdownMediaLoader.swift */; };
 		9CABDC77C0424FAFCD3A79B4 /* MessageComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */; };
 		66A28804C7B7E6F2845981B8 /* ModelPickerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E2E5C53EDDEFB07A2B4127 /* ModelPickerSheetView.swift */; };
+		DEF0E739FE09A909C22D4AF5 /* RunChangesSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2411B1E5A75BCAFBC6F375DC /* RunChangesSheetView.swift */; };
+		4C995D6AB56F47283B17747E /* StreamingMarkdownNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4E21A7A86D1CF6368D1BD2 /* StreamingMarkdownNormalizer.swift */; };
+		760ACCBDB799D507C8AD9A86 /* TimelineScrollAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9393B534B01CCCC51966F94 /* TimelineScrollAnchor.swift */; };
 		46D031EC3366D97CBDFA45E8 /* TopicDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734C8DF3F2C0883DC7E466F /* TopicDetailView.swift */; };
+		5F8711C7D2C0ADEF41B5F1E5 /* WorkspaceActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD493C867A77DFD26407F0B1 /* WorkspaceActions.swift */; };
 		D8A4C8A9978A9A339A63381F /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC1DFBB329B7908A05DECC4B /* FeedView.swift */; };
 		E57E504DF635401259223BC5 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B726BCC74D553569B2B6FD4 /* PairingView.swift */; };
 		6F0398DDE8A160733FB7E905 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448F490B3A677FC4BC317678 /* SettingsView.swift */; };
+		E9740669978FD82FF13185DF /* RemoteTerminalClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDC9359C55B23CCF55965E /* RemoteTerminalClient.swift */; };
+		55B9446F3696A6CA52C5AD28 /* TerminalSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D06E9840FD68B20AF3485808 /* TerminalSheetView.swift */; };
+		FDB8FECF592A2912541057F4 /* LeverLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 556391837C0034A3348D9622 /* LeverLiveActivity.swift */; };
+		FC97AAE2B8275CF30109D778 = {isa = PBXBuildFile; fileRef = 556391837C0034A3348D9622; };
+		F03F173B140B24387EEC546A /* LeverActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 702C9A022AFA7410991C8D52 /* LeverActivityAttributes.swift */; };
+		447A92628F053730F1B611BF = {isa = PBXBuildFile; fileRef = 702C9A022AFA7410991C8D52; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		E2C2A2171291AF99E44DA06F /* Lever.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lever.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LeverCore.xcframework; path = Frameworks/LeverCore.xcframework; sourceTree = "<group>"; };
 		EF3D370F9E7072622532FDC7 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
-		2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Lever/Resources/Assets.xcassets; sourceTree = "<group>"; };
 		3FB6BD64A997C517BC11CC6E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Lever/Resources/Info.plist; sourceTree = "<group>"; };
 		6568386E81175B9AF27FE35A /* Lever.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Lever/Resources/Lever.entitlements; sourceTree = "<group>"; };
-		C3BDA077271B0671437109A1 /* LeverApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverApp.swift; path = Lever/App/LeverApp.swift; sourceTree = "<group>"; };
-		DF458FF520B178EFFCC596A9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainStore.swift; path = Lever/Core/KeychainStore.swift; sourceTree = "<group>"; };
-		2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverBridge.swift; path = Lever/Core/LeverBridge.swift; sourceTree = "<group>"; };
-		4B671069DAB71F1479E38E4C /* LocalCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalCache.swift; path = Lever/Core/LocalCache.swift; sourceTree = "<group>"; };
-		DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SQLiteCache.swift; path = Lever/Core/SQLiteCache.swift; sourceTree = "<group>"; };
-		700092EB08D52553B063B7AD /* LeverModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverModels.swift; path = Lever/Models/LeverModels.swift; sourceTree = "<group>"; };
-		DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverStore.swift; path = Lever/Store/LeverStore.swift; sourceTree = "<group>"; };
-		AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverTheme.swift; path = Lever/Theme/LeverTheme.swift; sourceTree = "<group>"; };
-		ECB111581CFAA701EBDA1457 /* RuntimeIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RuntimeIcons.swift; path = Lever/Theme/RuntimeIcons.swift; sourceTree = "<group>"; };
-		95CB66199240AF6885D30A99 /* AgentDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentDrawerView.swift; path = Lever/Views/Chat/AgentDrawerView.swift; sourceTree = "<group>"; };
-		73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatDetailView.swift; path = Lever/Views/Chat/ChatDetailView.swift; sourceTree = "<group>"; };
-		92FF9715482407B8CFE942CE /* ComposerOverlayViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposerOverlayViews.swift; path = Lever/Views/Chat/ComposerOverlayViews.swift; sourceTree = "<group>"; };
-		DDC9DDC5B0BA72884393286A /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MarkdownContentView.swift; path = Lever/Views/Chat/MarkdownContentView.swift; sourceTree = "<group>"; };
-		2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MessageComponents.swift; path = Lever/Views/Chat/MessageComponents.swift; sourceTree = "<group>"; };
-		C4E2E5C53EDDEFB07A2B4127 /* ModelPickerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ModelPickerSheetView.swift; path = Lever/Views/Chat/ModelPickerSheetView.swift; sourceTree = "<group>"; };
-		0734C8DF3F2C0883DC7E466F /* TopicDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TopicDetailView.swift; path = Lever/Views/Chat/TopicDetailView.swift; sourceTree = "<group>"; };
-		FC1DFBB329B7908A05DECC4B /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FeedView.swift; path = Lever/Views/Feed/FeedView.swift; sourceTree = "<group>"; };
-		4B726BCC74D553569B2B6FD4 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingView.swift; path = Lever/Views/Onboarding/PairingView.swift; sourceTree = "<group>"; };
-		448F490B3A677FC4BC317678 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Lever/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		4C47665D1BA4105DF9684DC4 = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = LeverLiveActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C3BDA077271B0671437109A1 /* LeverApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverApp.swift"; path = "Lever/App/LeverApp.swift"; sourceTree = "<group>"; };
+		99E805EAEC735C860E1A0019 /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "AppDatabase.swift"; path = "Lever/Core/Database/AppDatabase.swift"; sourceTree = "<group>"; };
+		EBE3B814789D5ABC26AD2521 /* LegacyCacheMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LegacyCacheMigrator.swift"; path = "Lever/Core/Database/LegacyCacheMigrator.swift"; sourceTree = "<group>"; };
+		DF458FF520B178EFFCC596A9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "KeychainStore.swift"; path = "Lever/Core/KeychainStore.swift"; sourceTree = "<group>"; };
+		2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverBridge.swift"; path = "Lever/Core/LeverBridge.swift"; sourceTree = "<group>"; };
+		DD6684A58C71459979426C05 /* LeverImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverImagePipeline.swift"; path = "Lever/Core/Media/LeverImagePipeline.swift"; sourceTree = "<group>"; };
+		700092EB08D52553B063B7AD /* LeverModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverModels.swift"; path = "Lever/Models/LeverModels.swift"; sourceTree = "<group>"; };
+		AA9118F316BF9DEF18AD69DB /* LeverStore+Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverStore+Composer.swift"; path = "Lever/Store/LeverStore+Composer.swift"; sourceTree = "<group>"; };
+		8723CFD441544A20AF0BA5D0 /* LeverStore+Projections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverStore+Projections.swift"; path = "Lever/Store/LeverStore+Projections.swift"; sourceTree = "<group>"; };
+		444202A72A908577259C1450 /* LeverStore+ReadClear.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverStore+ReadClear.swift"; path = "Lever/Store/LeverStore+ReadClear.swift"; sourceTree = "<group>"; };
+		E7E3F2CFA8DD1C4CD47EC99F /* LeverStore+Sync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverStore+Sync.swift"; path = "Lever/Store/LeverStore+Sync.swift"; sourceTree = "<group>"; };
+		DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverStore.swift"; path = "Lever/Store/LeverStore.swift"; sourceTree = "<group>"; };
+		1AD06C984FE943C871C941CB /* LiveActivityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LiveActivityCoordinator.swift"; path = "Lever/Store/LiveActivityCoordinator.swift"; sourceTree = "<group>"; };
+		AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverTheme.swift"; path = "Lever/Theme/LeverTheme.swift"; sourceTree = "<group>"; };
+		ECB111581CFAA701EBDA1457 /* RuntimeIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "RuntimeIcons.swift"; path = "Lever/Theme/RuntimeIcons.swift"; sourceTree = "<group>"; };
+		95CB66199240AF6885D30A99 /* AgentDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "AgentDrawerView.swift"; path = "Lever/Views/Chat/AgentDrawerView.swift"; sourceTree = "<group>"; };
+		0FDEB6407B1DD527B08F918E /* AttachmentPreviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "AttachmentPreviewViews.swift"; path = "Lever/Views/Chat/AttachmentPreviewViews.swift"; sourceTree = "<group>"; };
+		73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ChatDetailView.swift"; path = "Lever/Views/Chat/ChatDetailView.swift"; sourceTree = "<group>"; };
+		92FF9715482407B8CFE942CE /* ComposerOverlayViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ComposerOverlayViews.swift"; path = "Lever/Views/Chat/ComposerOverlayViews.swift"; sourceTree = "<group>"; };
+		DDC9DDC5B0BA72884393286A /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "MarkdownContentView.swift"; path = "Lever/Views/Chat/MarkdownContentView.swift"; sourceTree = "<group>"; };
+		D418D21BEE67F2138CEACA12 /* MarkdownMediaLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "MarkdownMediaLoader.swift"; path = "Lever/Views/Chat/MarkdownMediaLoader.swift"; sourceTree = "<group>"; };
+		2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "MessageComponents.swift"; path = "Lever/Views/Chat/MessageComponents.swift"; sourceTree = "<group>"; };
+		C4E2E5C53EDDEFB07A2B4127 /* ModelPickerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ModelPickerSheetView.swift"; path = "Lever/Views/Chat/ModelPickerSheetView.swift"; sourceTree = "<group>"; };
+		2411B1E5A75BCAFBC6F375DC /* RunChangesSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "RunChangesSheetView.swift"; path = "Lever/Views/Chat/RunChangesSheetView.swift"; sourceTree = "<group>"; };
+		3A4E21A7A86D1CF6368D1BD2 /* StreamingMarkdownNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StreamingMarkdownNormalizer.swift"; path = "Lever/Views/Chat/StreamingMarkdownNormalizer.swift"; sourceTree = "<group>"; };
+		A9393B534B01CCCC51966F94 /* TimelineScrollAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "TimelineScrollAnchor.swift"; path = "Lever/Views/Chat/TimelineScrollAnchor.swift"; sourceTree = "<group>"; };
+		0734C8DF3F2C0883DC7E466F /* TopicDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "TopicDetailView.swift"; path = "Lever/Views/Chat/TopicDetailView.swift"; sourceTree = "<group>"; };
+		DD493C867A77DFD26407F0B1 /* WorkspaceActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WorkspaceActions.swift"; path = "Lever/Views/Chat/WorkspaceActions.swift"; sourceTree = "<group>"; };
+		FC1DFBB329B7908A05DECC4B /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "FeedView.swift"; path = "Lever/Views/Feed/FeedView.swift"; sourceTree = "<group>"; };
+		4B726BCC74D553569B2B6FD4 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PairingView.swift"; path = "Lever/Views/Onboarding/PairingView.swift"; sourceTree = "<group>"; };
+		448F490B3A677FC4BC317678 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SettingsView.swift"; path = "Lever/Views/Settings/SettingsView.swift"; sourceTree = "<group>"; };
+		FEEDC9359C55B23CCF55965E /* RemoteTerminalClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "RemoteTerminalClient.swift"; path = "Lever/Views/Terminal/RemoteTerminalClient.swift"; sourceTree = "<group>"; };
+		D06E9840FD68B20AF3485808 /* TerminalSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "TerminalSheetView.swift"; path = "Lever/Views/Terminal/TerminalSheetView.swift"; sourceTree = "<group>"; };
+		556391837C0034A3348D9622 /* LeverLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverLiveActivity.swift"; path = "LeverLiveActivity/LeverLiveActivity.swift"; sourceTree = "<group>"; };
+		702C9A022AFA7410991C8D52 /* LeverActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LeverActivityAttributes.swift"; path = "Shared/LeverActivityAttributes.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,8 +143,7 @@
 			files = (
 				892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */,
 				D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */,
-				24FC8D054EF66297A0F6F1BA /* libsqlite3.tbd in Frameworks */,
-				D283F090D7867C61E3BF9414 /* Textual in Frameworks */,
+				D283F090D7867C61E3BF9414, 871E6A6D599CBB389053F493, A77C733AB7DF8DA2D0A668D8, 2F02161A13FB528FBCB276C2, C95838A45B5E0778E58F2163,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -93,24 +166,40 @@
 				3FB6BD64A997C517BC11CC6E /* Info.plist */,
 				6568386E81175B9AF27FE35A /* Lever.entitlements */,
 				C3BDA077271B0671437109A1 /* LeverApp.swift */,
+				99E805EAEC735C860E1A0019 /* AppDatabase.swift */,
+				EBE3B814789D5ABC26AD2521 /* LegacyCacheMigrator.swift */,
 				DF458FF520B178EFFCC596A9 /* KeychainStore.swift */,
 				2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */,
-				4B671069DAB71F1479E38E4C /* LocalCache.swift */,
-				DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */,
+				DD6684A58C71459979426C05 /* LeverImagePipeline.swift */,
 				700092EB08D52553B063B7AD /* LeverModels.swift */,
+				AA9118F316BF9DEF18AD69DB /* LeverStore+Composer.swift */,
+				8723CFD441544A20AF0BA5D0 /* LeverStore+Projections.swift */,
+				444202A72A908577259C1450 /* LeverStore+ReadClear.swift */,
+				E7E3F2CFA8DD1C4CD47EC99F /* LeverStore+Sync.swift */,
 				DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */,
+				1AD06C984FE943C871C941CB /* LiveActivityCoordinator.swift */,
 				AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */,
 				ECB111581CFAA701EBDA1457 /* RuntimeIcons.swift */,
 				95CB66199240AF6885D30A99 /* AgentDrawerView.swift */,
+				0FDEB6407B1DD527B08F918E /* AttachmentPreviewViews.swift */,
 				73DB2D3D531130856CAD8CF1 /* ChatDetailView.swift */,
 				92FF9715482407B8CFE942CE /* ComposerOverlayViews.swift */,
 				DDC9DDC5B0BA72884393286A /* MarkdownContentView.swift */,
+				D418D21BEE67F2138CEACA12 /* MarkdownMediaLoader.swift */,
 				2A229E25DC0FA403CC8EFF36 /* MessageComponents.swift */,
 				C4E2E5C53EDDEFB07A2B4127 /* ModelPickerSheetView.swift */,
+				2411B1E5A75BCAFBC6F375DC /* RunChangesSheetView.swift */,
+				3A4E21A7A86D1CF6368D1BD2 /* StreamingMarkdownNormalizer.swift */,
+				A9393B534B01CCCC51966F94 /* TimelineScrollAnchor.swift */,
 				0734C8DF3F2C0883DC7E466F /* TopicDetailView.swift */,
+				DD493C867A77DFD26407F0B1 /* WorkspaceActions.swift */,
 				FC1DFBB329B7908A05DECC4B /* FeedView.swift */,
 				4B726BCC74D553569B2B6FD4 /* PairingView.swift */,
 				448F490B3A677FC4BC317678 /* SettingsView.swift */,
+				FEEDC9359C55B23CCF55965E /* RemoteTerminalClient.swift */,
+				D06E9840FD68B20AF3485808 /* TerminalSheetView.swift */,
+				556391837C0034A3348D9622 /* LeverLiveActivity.swift */,
+				702C9A022AFA7410991C8D52 /* LeverActivityAttributes.swift */,
 			);
 			name = Lever;
 			sourceTree = "<group>";
@@ -120,7 +209,6 @@
 			children = (
 				FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */,
 				EF3D370F9E7072622532FDC7 /* libresolv.tbd */,
-				2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -129,6 +217,7 @@
 			isa = PBXGroup;
 			children = (
 				E2C2A2171291AF99E44DA06F /* Lever.app */,
+                4C47665D1BA4105DF9684DC4,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -143,14 +232,16 @@
 				28BE49E1E42D704C38EEA420 /* Sources */,
 				CA8003021206097066E984FF /* Frameworks */,
 				E26E44B743A848DED8844ED9 /* Resources */,
+                F0AB04EE052351C80F3286E9,
 			);
 			buildRules = (
 			);
 			dependencies = (
+                A4C80477431259D93FE11E57,
 			);
 			name = Lever;
 			packageProductDependencies = (
-				98B0BFB62A1777F5271D13FD /* Textual */,
+				98B0BFB62A1777F5271D13FD, 89853DCA710B94C07CA81C9C, 6AF54ECD60AF548D575E8D7A, EAA4B04DE8834F268B517782, CD9A37E62C00288810FF0572,
 			);
 			productName = Lever;
 			productReference = E2C2A2171291AF99E44DA06F /* Lever.app */;
@@ -177,13 +268,14 @@
 			);
 			mainGroup = ADCF10F76EBF2A74473E9DC4;
 			packageReferences = (
-				F237B8C458AE4F42F3827F27 /* XCRemoteSwiftPackageReference "textual" */,
+				F237B8C458AE4F42F3827F27, EC9BB256561009B90425A2B0, 0B009235DF35BEE0E85A844D, 84ADF0C212078EBA2490D2BE,
 			);
 			productRefGroup = 5151B46607EBC8890D8DFCC2 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				F68208A47F64C6806838030C /* Lever */,
+                A5A0AA9F4FB5BC8D9254438A,
 			);
 		};
 /* End PBXProject section */
@@ -205,24 +297,39 @@
 			buildActionMask = 2147483647;
 			files = (
 				68F22B0A38A8B50DCCF1EFD6 /* LeverApp.swift in Sources */,
+				BFA307E0ED3901728E43B4B4 /* AppDatabase.swift in Sources */,
+				C76B1A55A6F6CF3A4C339739 /* LegacyCacheMigrator.swift in Sources */,
 				BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */,
 				3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */,
-				266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */,
-				7750BF612CED2D127DFFCAFD /* SQLiteCache.swift in Sources */,
+				7E064652524D0427088E6A03 /* LeverImagePipeline.swift in Sources */,
 				FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */,
+				00BA9626CA4B12F5C5621FC9 /* LeverStore+Composer.swift in Sources */,
+				DE07FD5219E00D5080D435C4 /* LeverStore+Projections.swift in Sources */,
+				B772E8E4FAC1EE9C6493ADFF /* LeverStore+ReadClear.swift in Sources */,
+				46CB6CA741243284CFA27A08 /* LeverStore+Sync.swift in Sources */,
 				189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */,
+				3D5C908439C01CA38CCB02BE /* LiveActivityCoordinator.swift in Sources */,
 				5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */,
 				5B38E1F2F2EB4DC64795CDE8 /* RuntimeIcons.swift in Sources */,
 				DA8FD62F592E323D0F98D7BF /* AgentDrawerView.swift in Sources */,
+				B46755B233755AA691684AF9 /* AttachmentPreviewViews.swift in Sources */,
 				3CDDDB2100A699493E0A715B /* ChatDetailView.swift in Sources */,
 				6320BFA88934A64181FCD9DD /* ComposerOverlayViews.swift in Sources */,
 				EE00B66C197466C265737C9B /* MarkdownContentView.swift in Sources */,
+				E989B246EBC99AD433D2CE68 /* MarkdownMediaLoader.swift in Sources */,
 				9CABDC77C0424FAFCD3A79B4 /* MessageComponents.swift in Sources */,
 				66A28804C7B7E6F2845981B8 /* ModelPickerSheetView.swift in Sources */,
+				DEF0E739FE09A909C22D4AF5 /* RunChangesSheetView.swift in Sources */,
+				4C995D6AB56F47283B17747E /* StreamingMarkdownNormalizer.swift in Sources */,
+				760ACCBDB799D507C8AD9A86 /* TimelineScrollAnchor.swift in Sources */,
 				46D031EC3366D97CBDFA45E8 /* TopicDetailView.swift in Sources */,
+				5F8711C7D2C0ADEF41B5F1E5 /* WorkspaceActions.swift in Sources */,
 				D8A4C8A9978A9A339A63381F /* FeedView.swift in Sources */,
 				E57E504DF635401259223BC5 /* PairingView.swift in Sources */,
 				6F0398DDE8A160733FB7E905 /* SettingsView.swift in Sources */,
+				E9740669978FD82FF13185DF /* RemoteTerminalClient.swift in Sources */,
+				55B9446F3696A6CA52C5AD28 /* TerminalSheetView.swift in Sources */,
+				F03F173B140B24387EEC546A /* LeverActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -387,22 +494,18 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		F237B8C458AE4F42F3827F27 /* XCRemoteSwiftPackageReference "textual" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/gonzalezreal/textual";
-			requirement = {
-				kind = upToNextMinorVersion;
-				minimumVersion = 0.5.0;
-			};
-		};
+		F237B8C458AE4F42F3827F27 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/gonzalezreal/textual"; requirement = {kind = upToNextMinorVersion; minimumVersion = 0.5.0; }; };
+		EC9BB256561009B90425A2B0 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/groue/GRDB.swift.git"; requirement = {kind = upToNextMajorVersion; minimumVersion = 7.12.0; }; };
+		0B009235DF35BEE0E85A844D = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/kean/Nuke.git"; requirement = {kind = upToNextMajorVersion; minimumVersion = 14.0.0; }; };
+		84ADF0C212078EBA2490D2BE = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git"; requirement = {kind = upToNextMajorVersion; minimumVersion = 1.99.4; }; };
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		98B0BFB62A1777F5271D13FD /* Textual */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = F237B8C458AE4F42F3827F27 /* XCRemoteSwiftPackageReference "textual" */;
-			productName = Textual;
-		};
+		98B0BFB62A1777F5271D13FD = {isa = XCSwiftPackageProductDependency; package = F237B8C458AE4F42F3827F27; productName = Textual; };
+		89853DCA710B94C07CA81C9C = {isa = XCSwiftPackageProductDependency; package = EC9BB256561009B90425A2B0; productName = GRDB; };
+		6AF54ECD60AF548D575E8D7A = {isa = XCSwiftPackageProductDependency; package = 0B009235DF35BEE0E85A844D; productName = Nuke; };
+		EAA4B04DE8834F268B517782 = {isa = XCSwiftPackageProductDependency; package = 0B009235DF35BEE0E85A844D; productName = NukeUI; };
+		CD9A37E62C00288810FF0572 = {isa = XCSwiftPackageProductDependency; package = 84ADF0C212078EBA2490D2BE; productName = SwiftTerm; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;

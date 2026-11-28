@@ -8,6 +8,14 @@ package main
 #include <stdlib.h>
 #include <stdint.h>
 
+typedef struct {
+    int32_t status;
+    char* content_type;
+    char* error;
+    void* data;
+    int64_t length;
+} lever_binary_result;
+
 typedef char* (*lever_secret_get_fn)(const char* key);
 typedef int   (*lever_secret_set_fn)(const char* key, const char* value);
 typedef int   (*lever_secret_del_fn)(const char* key);
@@ -47,6 +55,7 @@ import (
 	"unsafe"
 
 	"lever/internal/lanclient"
+	"lever/internal/model"
 	"lever/internal/multinode"
 	p "lever/internal/remoteproto"
 	"lever/web/hubassets"
@@ -72,6 +81,7 @@ type core struct {
 	pushMu    sync.Mutex
 	directory multinode.MobileDirectory
 	workspace multinode.MobileWorkspace
+	terminal  multinode.MobileTerminal
 	lan       lanclient.Client
 	stopWatch context.CancelFunc
 
@@ -252,6 +262,7 @@ func (c *core) forget(st p.ClientState) error {
 	}
 	c.lan.Forget(st)
 	c.workspace.Close()
+	c.terminal.Close()
 	c.directory.Clear()
 	c.mu.Lock()
 	if c.stopWatch != nil {
@@ -417,9 +428,32 @@ func (c *core) request(method, path, body string) (json.RawMessage, error) {
 		}
 		return json.RawMessage("true"), c.unpair(id)
 	}
-	if path == "/native/workspace/close" && method == "POST" {
-		c.workspace.Close()
+	if method == "POST" && (path == "/native/workspace/close" || path == "/native/terminal/close") {
+		if path == "/native/workspace/close" && (body == "" || body == "{}" || body == "null") {
+			c.workspace.Close()
+			return json.RawMessage("true"), nil
+		}
+		var args struct{ Host string }
+		if err := json.Unmarshal([]byte(body), &args); err != nil {
+			return nil, err
+		}
+		if path == "/native/terminal/close" {
+			c.terminal.CloseHost(args.Host)
+		} else {
+			c.workspace.CloseHost(args.Host)
+		}
 		return json.RawMessage("true"), nil
+	}
+	if path == "/native/terminal" && method == "POST" {
+		var args multinode.TerminalRequest
+		if err := json.Unmarshal([]byte(body), &args); err != nil {
+			return nil, err
+		}
+		location, err := c.terminal.Open(&c.directory, args)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(location)
 	}
 	if path == "/native/workspace" && method == "POST" {
 		var args struct{ Node, Agent, Chat string }
@@ -537,6 +571,7 @@ func (c *core) watch(active bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !active {
+		c.terminal.Close()
 		if c.stopWatch != nil {
 			c.stopWatch()
 			c.stopWatch = nil
@@ -703,6 +738,74 @@ func LeverCore_Init(
 	instance.eventFn = eventFn
 	instance.freeFn = freeFn
 	instance.cbMu.Unlock()
+}
+
+//export LeverCore_FetchBinary
+func LeverCore_FetchBinary(path *C.char) *C.lever_binary_result {
+	res := (*C.lever_binary_result)(C.calloc(1, C.size_t(C.sizeof_lever_binary_result)))
+	if res == nil {
+		return nil
+	}
+	b, mime, err := instance.media(C.GoString(path))
+	if err != nil {
+		res.error = C.CString(err.Error())
+		var he *p.HTTPError
+		if errors.As(err, &he) {
+			res.status = C.int32_t(he.Status)
+		}
+		return res
+	}
+	res.status = 200
+	res.content_type = C.CString(mime)
+	res.length = C.int64_t(len(b))
+	res.data = C.CBytes(b)
+	return res
+}
+
+//export LeverCore_FreeBinary
+func LeverCore_FreeBinary(res *C.lever_binary_result) {
+	if res == nil {
+		return
+	}
+	C.free(res.data)
+	C.free(unsafe.Pointer(res.error))
+	C.free(unsafe.Pointer(res.content_type))
+	C.free(unsafe.Pointer(res))
+}
+
+func (c *core) media(path string) ([]byte, string, error) {
+	accounts, err := c.accounts()
+	if err != nil {
+		return nil, "", err
+	}
+	suffix, ok := strings.CutPrefix(path, accounts.SpacePath()+"/")
+	parts := strings.Split(suffix, "/")
+	if !ok || strings.ContainsAny(suffix, "%?#\\\\") || strings.Contains(suffix, "..") {
+		return nil, "", errors.New("无效的媒体路径")
+	}
+	if len(parts) == 4 && parts[0] == "nodes" && parts[2] == "attachments" && parts[3] != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return c.directory.Attachment(ctx, parts[1], parts[3])
+	}
+	if len(parts) == 3 && parts[0] == "avatars" && parts[1] != "" && parts[2] != "" {
+		raw, err := c.request("GET", path, "")
+		if err != nil {
+			return nil, "", err
+		}
+		var image struct {
+			Data      []byte
+			MediaType string
+		}
+		if err := json.Unmarshal(raw, &image); err != nil {
+			return nil, "", err
+		}
+		if len(image.Data) > model.MaxAttachmentBytes {
+			return nil, "", errors.New("头像超过大小限制")
+		}
+		return image.Data, image.MediaType, nil
+	}
+	return nil, "", errors.New("无效的媒体路径")
 }
 
 //export LeverCore_Free

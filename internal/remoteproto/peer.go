@@ -42,6 +42,7 @@ func HubPairLink(link string) (origin, code string, err error) {
 
 // NodeOverview contains the same resource types that the local workbench uses.
 type NodeOverview struct {
+	ActiveRuns    *[]Record            `json:"activeRuns,omitempty"` // Present only on a live progress request.
 	Node          NodeDescriptor       `json:"node"`
 	Agents        []model.Agent        `json:"agents"`
 	Chats         []model.Chat         `json:"chats"`

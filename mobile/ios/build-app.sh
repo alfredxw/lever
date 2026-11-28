@@ -17,7 +17,6 @@ case "$MODE" in
       -project "$PROJ" \
       -scheme Lever \
       -configuration Debug \
-      -sdk iphonesimulator \
       -destination 'generic/platform=iOS Simulator' \
       -derivedDataPath "$DERIVED" \
       ARCHS=arm64 \
@@ -56,7 +55,7 @@ case "$MODE" in
 <plist version="1.0">
 <dict>
 	<key>method</key>
-	<string>development</string>
+	<string>debugging</string>
 	<key>signingStyle</key>
 	<string>automatic</string>
 	<key>teamID</key>
@@ -68,8 +67,8 @@ EOF
     xcodebuild \
       -project "$PROJ" \
       -scheme Lever \
+      -clonedSourcePackagesDirPath "$BUILD_ROOT/sim/SourcePackages" \
       -configuration Release \
-      -sdk iphoneos \
       -destination 'generic/platform=iOS' \
       -archivePath "$ARCHIVE" \
       DEVELOPMENT_TEAM="$TEAM" \

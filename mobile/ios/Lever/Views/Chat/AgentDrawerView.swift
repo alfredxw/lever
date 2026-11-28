@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-/// Right-edge slide-over drawer inside ChatDetailView displaying the current Agent's
+/// Right-edge slide-over drawer inside ChatDetailView & TopicDetailView displaying the current Agent's
 /// un-cleared Topics and Chats, with an interactive toggle to inspect and restore
 /// cleared Topics and Chats (bidirectionally synced with Lever Desktop).
 struct AgentDrawerView: View {
@@ -11,6 +12,7 @@ struct AgentDrawerView: View {
     let agentAvatar: String?
     let agentAvatarSpec: AvatarSpec?
     let currentChatId: String?
+    var currentTopicId: String? = nil
     let onSelectTopic: (AgentDrawerTopicItem) -> Void
     let onSelectChat: (AgentDrawerChatItem) -> Void
     let onStartNewChat: () -> Void
@@ -229,7 +231,8 @@ struct AgentDrawerView: View {
     }
 
     private func topicRow(_ item: AgentDrawerTopicItem, clearedStyle: Bool) -> some View {
-        HStack(spacing: 8) {
+        let isCurrent = item.id == currentTopicId
+        return HStack(spacing: 8) {
             Button {
                 Haptics.light()
                 onSelectTopic(item)
@@ -241,7 +244,7 @@ struct AgentDrawerView: View {
 
                     VStack(alignment: .leading, spacing: 2.5) {
                         Text(item.title)
-                            .font(.system(size: 13.5, weight: item.isUnread ? .semibold : .medium))
+                            .font(.system(size: 13.5, weight: (isCurrent || item.isUnread) ? .semibold : .medium))
                             .foregroundStyle(clearedStyle ? LeverTheme.inkSecondary : LeverTheme.inkPrimary)
                             .lineLimit(1)
 
@@ -274,6 +277,10 @@ struct AgentDrawerView: View {
                         Circle()
                             .fill(LeverTheme.unreadRed)
                             .frame(width: 6.5, height: 6.5)
+                    } else if isCurrent {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(LeverTheme.inkPrimary)
                     }
                 }
                 .contentShape(Rectangle())
@@ -316,11 +323,11 @@ struct AgentDrawerView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(clearedStyle ? LeverTheme.surfaceElevated.opacity(0.6) : LeverTheme.surfaceElevated)
+        .background(isCurrent ? LeverTheme.surfaceInset : (clearedStyle ? LeverTheme.surfaceElevated.opacity(0.6) : LeverTheme.surfaceElevated))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(LeverTheme.hairline, lineWidth: 0.5)
+                .strokeBorder(isCurrent ? LeverTheme.hairlineStrong : LeverTheme.hairline, lineWidth: 0.5)
         )
         .contextMenu {
             if clearedStyle {
@@ -468,5 +475,453 @@ struct AgentDrawerView: View {
         case "unread": return LeverTheme.inkPrimary
         default: return LeverTheme.inkTertiary.opacity(0.65)
         }
+    }
+}
+
+// MARK: - Isolated 120fps Interactive Right-Edge Drawer Container
+
+/// Shared stepless interactive drawer overlay for ChatDetailView & TopicDetailView.
+/// Owns `progress` locally so 120fps dragging never re-evaluates the underlying timeline,
+/// and uses a screen-scoped UIKit `UIPanGestureRecognizer` so pulling out and pushing back
+/// track the finger 1:1 over both the drawer's `ScrollView` and the dimmed backdrop.
+struct RightEdgeDrawerOverlay: View {
+    @Binding var isOpen: Bool
+    let store: LeverStore
+    let deviceId: String
+    let agentId: String
+    let agentName: String
+    let agentAvatar: String?
+    let agentAvatarSpec: AvatarSpec?
+    let currentChatId: String?
+    var currentTopicId: String? = nil
+    let onDismissKeyboard: () -> Void
+    let onSelectTopic: (AgentDrawerTopicItem) -> Void
+    let onSelectChat: (AgentDrawerChatItem) -> Void
+    let onStartNewChat: () -> Void
+
+    @State private var progress: CGFloat = 0
+    @State private var isPresented = false
+    @State private var isDragging = false
+    @State private var dragStartProgress: CGFloat = 0
+
+    private let drawerWidth: CGFloat = 312
+
+    private var offsetX: CGFloat {
+        (1 - progress) * drawerWidth
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if isPresented {
+                Color.black
+                    .opacity(0.32 * Double(progress))
+                    .ignoresSafeArea()
+                    .allowsHitTesting(isOpen || isDragging)
+                    .onTapGesture {
+                        close()
+                    }
+                    .zIndex(20)
+
+                AgentDrawerView(
+                    store: store,
+                    deviceId: deviceId,
+                    agentId: agentId,
+                    agentName: agentName,
+                    agentAvatar: agentAvatar,
+                    agentAvatarSpec: agentAvatarSpec,
+                    currentChatId: currentChatId,
+                    currentTopicId: currentTopicId,
+                    onSelectTopic: { item in
+                        close()
+                        onSelectTopic(item)
+                    },
+                    onSelectChat: { item in
+                        close()
+                        onSelectChat(item)
+                    },
+                    onStartNewChat: {
+                        close()
+                        onStartNewChat()
+                    },
+                    onClose: {
+                        close()
+                    }
+                )
+                .frame(width: drawerWidth)
+                .offset(x: offsetX)
+                .shadow(color: Color.black.opacity(0.18 * Double(progress)), radius: 24, x: -8, y: 0)
+                .allowsHitTesting(isOpen)
+                .zIndex(30)
+            }
+        }
+        .background(
+            DrawerPanGestureInstaller(
+                drawerWidth: drawerWidth,
+                isOpen: isOpen,
+                currentProgress: progress,
+                onBegin: handlePanBegan,
+                onDelta: handlePanDelta,
+                onEnd: handlePanEnded
+            )
+        )
+        .onChange(of: isOpen) { _, newValue in
+            guard !isDragging else { return }
+            if newValue {
+                if !isPresented || progress < 0.999 {
+                    animateDrawer(open: true)
+                }
+            } else {
+                if isPresented && progress > 0.001 {
+                    animateDrawer(open: false)
+                }
+            }
+        }
+    }
+
+    private func handlePanBegan() {
+        isDragging = true
+        let start: CGFloat = isOpen ? (progress > 0.001 ? progress : 1) : progress
+        dragStartProgress = start
+        if start < 0.05 {
+            onDismissKeyboard()
+        }
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            isPresented = true
+            progress = start
+        }
+    }
+
+    private func handlePanDelta(_ deltaX: CGFloat) {
+        let clamped = max(0, min(1, progress - deltaX / drawerWidth))
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            progress = clamped
+        }
+    }
+
+    private func handlePanEnded(_ deltaX: CGFloat, velocityX: CGFloat) {
+        let current = max(0, min(1, progress - deltaX / drawerWidth))
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            progress = current
+        }
+        isDragging = false
+
+        let targetOpen: Bool
+        if velocityX < -350 {
+            targetOpen = true
+        } else if velocityX > 350 {
+            targetOpen = false
+        } else if dragStartProgress > 0.5 {
+            targetOpen = current > 0.72
+        } else {
+            targetOpen = current > 0.26
+        }
+
+        let target: CGFloat = targetOpen ? 1 : 0
+        let remaining = target - current
+        let progressVelocity = -velocityX / drawerWidth
+        let initialVelocity: Double
+        if abs(remaining) > 0.04 {
+            initialVelocity = max(-6, min(12, Double(progressVelocity / remaining)))
+        } else {
+            initialVelocity = 0
+        }
+
+        let shouldTriggerHaptic = targetOpen && !isOpen
+        animateDrawer(open: targetOpen, initialVelocity: initialVelocity, hapticOnOpen: shouldTriggerHaptic)
+    }
+
+    private func animateDrawer(open: Bool, initialVelocity: Double = 0, hapticOnOpen: Bool = false) {
+        if open {
+            if hapticOnOpen {
+                Haptics.light()
+            }
+            if !isPresented {
+                var tx = Transaction()
+                tx.disablesAnimations = true
+                withTransaction(tx) {
+                    progress = 0
+                    isPresented = true
+                    isOpen = true
+                }
+                DispatchQueue.main.async {
+                    guard isOpen && !isDragging else { return }
+                    withAnimation(.interpolatingSpring(duration: 0.30, bounce: 0.0, initialVelocity: initialVelocity)) {
+                        progress = 1
+                    }
+                }
+            } else {
+                isOpen = true
+                withAnimation(.interpolatingSpring(duration: 0.30, bounce: 0.0, initialVelocity: initialVelocity)) {
+                    progress = 1
+                }
+            }
+        } else {
+            if progress <= 0.001 {
+                isOpen = false
+                progress = 0
+                isPresented = false
+                return
+            }
+            withAnimation(
+                .interpolatingSpring(duration: 0.28, bounce: 0.0, initialVelocity: initialVelocity),
+                completionCriteria: .logicallyComplete
+            ) {
+                isOpen = false
+                progress = 0
+            } completion: {
+                if !isOpen && !isDragging && progress <= 0.001 {
+                    isPresented = false
+                }
+            }
+        }
+    }
+
+    private func close() {
+        animateDrawer(open: false)
+    }
+}
+
+private struct DrawerPanGestureInstaller: UIViewControllerRepresentable {
+    let drawerWidth: CGFloat
+    let isOpen: Bool
+    let currentProgress: CGFloat
+    let onBegin: () -> Void
+    let onDelta: (CGFloat) -> Void
+    let onEnd: (CGFloat, CGFloat) -> Void
+
+    func makeUIViewController(context: Context) -> DrawerPanGestureController {
+        let controller = DrawerPanGestureController()
+        apply(to: controller)
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: DrawerPanGestureController, context: Context) {
+        apply(to: uiViewController)
+        uiViewController.installIfNeeded()
+    }
+
+    static func dismantleUIViewController(_ uiViewController: DrawerPanGestureController, coordinator: ()) {
+        uiViewController.uninstall()
+    }
+
+    private func apply(to controller: DrawerPanGestureController) {
+        controller.drawerWidth = drawerWidth
+        controller.isOpen = isOpen
+        controller.currentProgress = currentProgress
+        controller.onBegin = onBegin
+        controller.onDelta = onDelta
+        controller.onEnd = onEnd
+    }
+}
+
+private final class DrawerPanGestureController: UIViewController, UIGestureRecognizerDelegate {
+    var drawerWidth: CGFloat = 312
+    var isOpen: Bool = false
+    var currentProgress: CGFloat = 0
+    var onBegin: () -> Void = {}
+    var onDelta: (CGFloat) -> Void = { _ in }
+    var onEnd: (CGFloat, CGFloat) -> Void = { _, _ in }
+
+    private weak var installedView: UIView?
+    private var touchStartX: CGFloat = 0
+    private weak var touchView: UIView?
+    private var didBeginPan = false
+
+    private lazy var panGesture: UIPanGestureRecognizer = {
+        let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        recognizer.delegate = self
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.cancelsTouchesInView = true
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        return recognizer
+    }()
+
+    override func loadView() {
+        let container = UIView()
+        container.backgroundColor = .clear
+        container.isUserInteractionEnabled = false
+        view = container
+    }
+
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        installIfNeeded()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        installIfNeeded()
+    }
+
+    deinit {
+        uninstall()
+    }
+
+    func installIfNeeded() {
+        guard let targetView = resolveScreenContainerView() else { return }
+        if installedView === targetView { return }
+        uninstall()
+        targetView.addGestureRecognizer(panGesture)
+        installedView = targetView
+    }
+
+    func uninstall() {
+        installedView?.removeGestureRecognizer(panGesture)
+        installedView = nil
+    }
+
+    private func resolveScreenContainerView() -> UIView? {
+        if let nav = navigationController {
+            var cur: UIViewController? = self
+            while let vc = cur {
+                if vc.parent === nav {
+                    return vc.view
+                }
+                cur = vc.parent
+            }
+        }
+        return parent?.view ?? view.superview
+    }
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        guard let host = installedView else { return }
+        switch recognizer.state {
+        case .began:
+            didBeginPan = true
+            recognizer.setTranslation(.zero, in: host)
+            onBegin()
+        case .changed:
+            guard didBeginPan else { return }
+            let deltaX = recognizer.translation(in: host).x
+            recognizer.setTranslation(.zero, in: host)
+            onDelta(deltaX)
+        case .ended, .cancelled:
+            guard didBeginPan else { return }
+            didBeginPan = false
+            let deltaX = recognizer.translation(in: host).x
+            let velocityX = recognizer.velocity(in: host).x
+            onEnd(deltaX, velocityX)
+        default:
+            break
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === panGesture, let host = installedView else { return true }
+        touchStartX = touch.location(in: host).x
+        touchView = touch.view
+        let drawerActive = isOpen || currentProgress > 0.01
+        if isInsideInteractiveControl(touch.view, drawerActive: drawerActive) {
+            return false
+        }
+        return true
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === panGesture, let host = installedView else { return false }
+        let vel = panGesture.velocity(in: host)
+        let trans = panGesture.translation(in: host)
+        let dx = abs(vel.x) > 1 ? vel.x : trans.x
+        let dy = abs(vel.y) > 1 ? vel.y : trans.y
+        let drawerActive = isOpen || currentProgress > 0.01
+
+        if drawerActive {
+            guard abs(dx) > abs(dy) * 1.1 else { return false }
+            if isOpen && currentProgress >= 0.99 {
+                return dx > 0
+            }
+            return true
+        } else {
+            guard dx < 0 else { return false }
+            let isFromRightEdge = touchStartX >= host.bounds.width - 44
+            let horizontalRatio: CGFloat = isFromRightEdge ? 1.15 : 1.5
+            guard abs(dx) > abs(dy) * horizontalRatio else { return false }
+            if !isFromRightEdge && hasHorizontalScrollRoomToRight(from: touchView) {
+                return false
+            }
+            if !isFromRightEdge && isScrollViewDecelerating(from: touchView) {
+                return false
+            }
+            return true
+        }
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard gestureRecognizer === panGesture else { return false }
+        let drawerActive = isOpen || currentProgress > 0.01
+
+        if let scrollView = otherGestureRecognizer.view as? UIScrollView,
+           otherGestureRecognizer === scrollView.panGestureRecognizer {
+            if drawerActive {
+                return !scrollView.isDecelerating
+            }
+            let hostWidth = installedView?.bounds.width ?? 0
+            if touchStartX >= hostWidth - 44 {
+                return true
+            }
+            let isHorizontallyScrollable = scrollView.contentSize.width > scrollView.bounds.width + 2
+            return !isHorizontallyScrollable && !scrollView.isDecelerating
+        }
+
+        if drawerActive, let nav = navigationController {
+            if otherGestureRecognizer === nav.interactivePopGestureRecognizer {
+                return true
+            }
+            if #available(iOS 26.0, *),
+               otherGestureRecognizer === nav.interactiveContentPopGestureRecognizer {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func isInsideInteractiveControl(_ view: UIView?, drawerActive: Bool) -> Bool {
+        var cur = view
+        while let v = cur {
+            if v is UISwitch || v is UISlider {
+                return true
+            }
+            if !drawerActive, (v is UITextField || v is UITextView) {
+                return true
+            }
+            cur = v.superview
+        }
+        return false
+    }
+
+    private func hasHorizontalScrollRoomToRight(from view: UIView?) -> Bool {
+        var cur = view
+        while let v = cur {
+            if let sv = v as? UIScrollView, sv.isScrollEnabled {
+                let maxOffsetX = sv.contentSize.width - sv.bounds.width + sv.adjustedContentInset.right
+                if maxOffsetX > 2 && sv.contentOffset.x < maxOffsetX - 2 {
+                    return true
+                }
+            }
+            cur = v.superview
+        }
+        return false
+    }
+
+    private func isScrollViewDecelerating(from view: UIView?) -> Bool {
+        var cur = view
+        while let v = cur {
+            if let sv = v as? UIScrollView, sv.isDecelerating {
+                return true
+            }
+            cur = v.superview
+        }
+        return false
     }
 }

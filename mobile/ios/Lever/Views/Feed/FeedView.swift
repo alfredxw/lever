@@ -26,10 +26,8 @@ struct FeedView: View {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var searchHits: [GlobalSearchHit] {
-        guard !trimmedQuery.isEmpty else { return [] }
-        return store.globalSearch(query: trimmedQuery)
-    }
+    @State private var searchHits: [GlobalSearchHit] = []
+    private struct Search: Hashable { let query: String; let revision: Int }
 
     private func isAgentTopicsExpanded(_ row: AgentFeedRow) -> Bool {
         guard !row.activeTopics.isEmpty else { return false }
@@ -161,9 +159,37 @@ struct FeedView: View {
                             navPath.append(.topic(topicRoute))
                         }
                     )
+                    .id(route)
                 case .topic(let topicRoute):
-                    TopicDetailView(store: store, route: topicRoute)
+                    TopicDetailView(
+                        store: store,
+                        route: topicRoute,
+                        onSelectTopic: { nextTopic in
+                            guard nextTopic != topicRoute else { return }
+                            let parentChat = ChatRoute(
+                                deviceId: nextTopic.deviceId,
+                                agentId: nextTopic.agentId,
+                                chatId: nextTopic.chatId,
+                                isPrivate: nextTopic.isPrivate,
+                                initialTopicId: nil
+                            )
+                            navPath = [.chat(parentChat), .topic(nextTopic)]
+                        },
+                        onSelectChat: { chatRoute in
+                            navPath = [.chat(chatRoute)]
+                        },
+                        onStartNewChat: { newChatRoute in
+                            navPath = [.chat(newChatRoute)]
+                        }
+                    )
+                    .id(topicRoute)
                 }
+            }
+            .task(id: Search(query: trimmedQuery, revision: store.dataVersion)) {
+                guard !trimmedQuery.isEmpty else { searchHits = []; return }
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
+                let hits = await store.globalSearch(query: trimmedQuery)
+                if !Task.isCancelled { searchHits = hits }
             }
             .onChange(of: store.pendingNavigationRoute, initial: true) { _, route in
                 guard let route else { return }
@@ -240,7 +266,7 @@ struct FeedView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(LeverTheme.inkTertiary)
-                TextField("搜索 Agent、历史对话或话题", text: $searchText)
+                TextField("搜索 Agent、对话、话题或消息", text: $searchText)
                     .font(.system(size: 14.5))
                     .foregroundStyle(LeverTheme.inkPrimary)
                     .textInputAutocapitalization(.never)
@@ -337,7 +363,7 @@ struct FeedView: View {
                         )
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
-                                Text(hit.title)
+                                Text(highlighted(hit.title))
                                     .font(.system(size: 15, weight: .medium))
                                     .foregroundStyle(LeverTheme.inkPrimary)
                                     .lineLimit(1)
@@ -351,7 +377,7 @@ struct FeedView: View {
                                     .clipShape(Capsule())
                             }
                             HStack {
-                                Text(hit.subtitle)
+                                Text(highlighted(hit.subtitle))
                                     .font(.system(size: 13))
                                     .foregroundStyle(LeverTheme.inkTertiary)
                                     .lineLimit(1)
@@ -430,6 +456,19 @@ struct FeedView: View {
         } else {
             navPath = [.chat(chatRoute)]
         }
+    }
+
+    private func highlighted(_ text: String) -> AttributedString {
+        var value = AttributedString(text)
+        for word in trimmedQuery.split(whereSeparator: \.isWhitespace) {
+            var remainder = value.startIndex..<value.endIndex
+            while let match = value[remainder].range(of: String(word), options: [.caseInsensitive, .diacriticInsensitive]) {
+                value[match].inlinePresentationIntent = .stronglyEmphasized
+                value[match].foregroundColor = LeverTheme.inkPrimary
+                remainder = match.upperBound..<value.endIndex
+            }
+        }
+        return value
     }
 
     private func openSearchHit(_ hit: GlobalSearchHit) {

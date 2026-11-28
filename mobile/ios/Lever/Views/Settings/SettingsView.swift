@@ -46,6 +46,9 @@ struct SettingsView: View {
                         }
                     }
 
+                    Toggle("锁屏实时进度", isOn: $store.lockScreenProgress)
+                        .tint(LeverTheme.switchTint)
+
                     Toggle(isOn: Binding(
                         get: { store.silenceWhenDesktopActive },
                         set: { enabled in

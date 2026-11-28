@@ -99,6 +99,9 @@ func TestMobileArchiveAndPush(t *testing.T) {
 	run := p.Change{Record: p.Record{Kind: "run", ID: p.NewID(), ChatID: chat.ID, SessionID: topic.ID, Status: "running"}}
 	request := p.Change{Record: p.Record{Kind: "request", ID: p.NewID(), ChatID: chat.ID, SessionID: topic.ID, RunID: run.ID, Status: "pending", Text: "secret command and local path"}}
 	commit(0, 4, true, chat, topic, run)
+	t.Run("live activity token progress and privacy", func(t *testing.T) {
+		testLiveActivityDelivery(t, h, device(p.Controller, "ios"), a, run.Record)
+	})
 	first := readPage(chat.ID, p.ArchiveCursor{})
 	if !first.Full || len(first.Changes) != 3 {
 		t.Fatal(first)
@@ -363,4 +366,100 @@ func TestHubReadCursorsSyncAndMerge(t *testing.T) {
 	if !found {
 		t.Fatal("session s1 missing from archive page")
 	}
+}
+
+func testLiveActivityDelivery(t *testing.T, h *Hub, phone p.ClientState, owner principal, run p.Record) {
+	var posted []byte
+	apns := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("apns-topic") != "app.lever.mobile.push-type.liveactivity" || r.Header.Get("apns-push-type") != "liveactivity" {
+			t.Error("incorrect ActivityKit topic or push type")
+		}
+		posted, _ = io.ReadAll(r.Body)
+	}))
+	defer apns.Close()
+	key := p.Token()
+	publisher := &Hub{push: &pushProviders{relayKey: key, topic: "app.lever.mobile", apple: &apns2.Client{Host: apns.URL, HTTPClient: apns.Client()}}}
+	relay := httptest.NewServer(publisher.Handler(nil))
+	defer relay.Close()
+	original := h.push
+	defer func() { h.push = original }()
+	h.push = &pushProviders{relay: &relayConfig{Origin: relay.URL, key: key, IOS: true}}
+	defer phone.Do(t.Context(), "DELETE", phone.SpacePath()+"/push", nil, nil)
+	if err := phone.Do(t.Context(), "PUT", phone.SpacePath()+"/push", p.PushRegistration{Token: strings.Repeat("ab", 32), Key: make([]byte, 32)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	path := phone.SpacePath() + "/push/live-activity"
+	in := map[string]string{"deviceId": owner.device, "activityId": "fixture", "sessionId": run.SessionID, "runId": run.ID, "token": strings.Repeat("bc", 32)}
+	if err := phone.Do(t.Context(), "PUT", path, in, nil); err != nil {
+		t.Fatal(err)
+	}
+	deliver := func(want bool, event string) {
+		t.Helper()
+		posted = nil
+		more, err := h.deliverLiveActivity(t.Context())
+		if err != nil || more != want {
+			t.Fatalf("delivery %v, %v", more, err)
+		}
+		if event == "" {
+			if len(posted) > 0 {
+				t.Fatal("unexpected APNs delivery")
+			}
+			return
+		}
+		var data struct {
+			Aps struct {
+				Event string
+				State map[string]json.RawMessage `json:"content-state"`
+			}
+		}
+		if json.Unmarshal(posted, &data) != nil || data.Aps.Event != event || len(data.Aps.State) != 3 || data.Aps.State["phase"] == nil || data.Aps.State["stepCount"] == nil || data.Aps.State["pendingCount"] == nil {
+			t.Fatal("invalid ActivityKit payload", string(posted))
+		}
+		for _, secret := range []string{run.ID, run.SessionID, run.ChatID, "private fixture", "secret command"} {
+			if bytes.Contains(posted, []byte(secret)) {
+				t.Fatal("private data in ActivityKit payload")
+			}
+		}
+	}
+	queue := func(steps int, status string) {
+		t.Helper()
+		run.StepCount = steps
+		run.Status = status
+		if err := write(h.db, func(tx *sql.Tx) error { return queueLiveActivity(tx, owner.space, owner.device, "", run) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliver(true, "update") // state was already present before the token registered
+	queue(3, "running")
+	deliver(false, "")
+	queue(5, "running")
+	// APNs ignores updates with the same integer timestamp. Advance the
+	// delivery clock for the remaining state transitions in this fixture.
+	advance := func() {
+		t.Helper()
+		if _, err := h.db.Exec("UPDATE live_activities SET last_sent=0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	advance()
+	deliver(true, "update")
+	if _, err := h.db.Exec("UPDATE devices SET desktop_active_until=unixepoch()+60 WHERE id=?", owner.device); err != nil {
+		t.Fatal(err)
+	}
+	queue(5, "waiting_user")
+	advance()
+	deliver(true, "")
+	if _, err := h.db.Exec("UPDATE devices SET desktop_active_until=0 WHERE id=?", owner.device); err != nil {
+		t.Fatal(err)
+	}
+	queue(6, "completed")
+	deliver(true, "end")
+	deliver(false, "")
+	if err := phone.Do(t.Context(), "PUT", path, in, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.Do(t.Context(), "DELETE", phone.SpacePath()+"/push", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	deliver(false, "")
 }

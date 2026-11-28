@@ -382,6 +382,9 @@ func (h *Hub) commitBatch(a principal, generation int64, b *batchFile) error {
 					return err
 				}
 			}
+			if err := queueLiveActivity(tx, a.space, a.device, "", v.Record); err != nil {
+				return err
+			}
 			if v.Status != oldStatus && (!f.Full || existed || v.Kind == "request" || epoch != "") {
 				if err := h.queuePush(tx, a, v.Record); err != nil {
 					return err

@@ -25,6 +25,7 @@ type relayConfig struct {
 	key       string
 }
 type relayDelivery struct {
+	Activity *activityState `json:"activity,omitempty"`
 	Platform string         `json:"platform"`
 	Token    string         `json:"token"`
 	Notice   p.PushEnvelope `json:"notice"`
@@ -76,6 +77,22 @@ func (h *Hub) relayPush(w http.ResponseWriter, r *http.Request, _ principal) err
 	var d relayDelivery
 	if err := read(r, &d); err != nil {
 		return err
+	}
+	if d.Activity != nil {
+		token, e := hex.DecodeString(d.Token)
+		if e != nil || len(token) < 16 || len(token) > 256 || d.Platform != "ios" || !d.Activity.valid() {
+			return invalid("invalid live activity")
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		err := h.push.sendActivity(ctx, d.Token, *d.Activity)
+		if errors.Is(err, errInvalidPushToken) {
+			return problem{410, "activity expired"}
+		}
+		if err != nil {
+			return problem{502, "platform delivery failed"}
+		}
+		return send(w, true)
 	}
 	if !h.push.available(d.Platform) || len(d.Token) < 16 || len(d.Token) > 4096 || strings.ContainsAny(d.Token, " \t\r\n") || len(d.Notice.Payload) > 4096 || len(d.Notice.Tag) != 64 {
 		return invalid("invalid notification")
