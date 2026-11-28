@@ -170,7 +170,7 @@ make desktop
 ### Works、自动化、Skills 与插件生态
 - **Works（笔记 + 看板 + 外部来源）**：用块编辑器记录工作笔记并内嵌待办与 `@Agent` 交接，在支持自定义分组与视图的 **Board** 看板统一管理，自动同步 **GitHub Issue/PR** 与 **Lark Todos** 并一键派发给 Agent。
 - **自动化**：让 Agent 主动干活——支持定时触发（单次、每天、工作日、指定星期、每月、固定间隔）与事件触发（**IMAP 邮件**、带 Bearer Token 与 `Idempotency-Key` 的自定义 **Webhook**），执行结果自动进入新 Topic、原 Chat 或看板工作项。
-- **Skills 与插件生态**：统一浏览、筛选并按 Agent 启停 Lever 托管目录、用户目录与 Scope 目录下的 Skills（托管的 `SKILL.md` 可直接在 Files 编辑）。支持通过 Git 仓库（子目录、版本锁定、更新预览与一键回退）或本地目录安装运行时、任务源、事件源与个人消息渠道插件，并内置 **Lark Bot**。
+- **Skills 与插件生态**：统一浏览、筛选并按 Agent 启停 Lever 托管目录、用户目录与 Scope 目录下的 Skills（托管的 `SKILL.md` 可直接在 Files 编辑）。内置 **Lark Bot** 和 **Larkx** 消息渠道，也可通过 Git 仓库（子目录、版本锁定、更新预览与一键回退）或本地目录安装运行时、任务源、事件源与个人消息渠道插件。
 
 ## 支持的运行时
 
@@ -188,7 +188,7 @@ Lever 直接编排本机已安装的 CLI 与 ACP 服务，沿用原有登录态�
 各连接的追加、暂停、会话恢复、附件和权限差异见[运行时基础能力表](docs/provider-capabilities.md)。
 
 > [!TIP]
-> 除上述 6 个运行时插件外，Lever 还内置 **GitHub**、**Lark Todos**、**IMAP Mail** 与 **Lark Bot** 插件，均可在侧栏 **插件** 页面统一管理。
+> 除上述 6 个运行时插件外，Lever 还内置 **GitHub**、**Lark Todos**、**IMAP Mail**、**Lark Bot** 和 **Larkx 个人渠道**。Larkx 支持 macOS 和 Linux 后端。各插件均可在侧栏 **插件** 页面管理。
 
 <details>
 <summary><strong>运行时配置提示、原生应用续聊与本机 CLI</strong></summary>

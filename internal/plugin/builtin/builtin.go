@@ -18,7 +18,7 @@ var manifests embed.FS
 
 func Plugins() ([]model.Plugin, error) {
 	// Keep the order in which the plugins are offered in a new installation.
-	dirs := []string{"acp", "antigravity", "claude", "codex", "dsh", "pi", "github", "lark-bot", "lark-todos", "imap-mail"}
+	dirs := []string{"acp", "antigravity", "claude", "codex", "dsh", "pi", "github", "lark-bot", "larkx", "lark-todos", "imap-mail"}
 	result := make([]model.Plugin, 0, len(dirs))
 	for _, dir := range dirs {
 		data, err := manifests.ReadFile(dir + "/" + plugin.ManifestFile)

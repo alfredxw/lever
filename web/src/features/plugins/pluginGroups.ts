@@ -48,6 +48,7 @@ export function groupPlugins(
       const terms = [
         pluginName(plugin, t),
         plugin.manifest.name,
+        plugin.manifest.id,
         plugin.id,
         pluginDescription(plugin, t),
         ...offered.map(({ label }) => t(label)),

@@ -4,7 +4,7 @@
 
 ## 包结构
 
-仓库的 `internal/plugin/builtin/` 为每个内置插件提供独立的目录和 `lever-plugin.json`。GitHub、Lark Todos 和 Lark Bot 的适配器也在各自目录。Provider 插件通过清单引用 `internal/provider/` 的运行时驱动。内置清单随 Lever 编译进可执行文件。
+仓库的 `internal/plugin/builtin/` 为每个内置插件提供独立的目录和 `lever-plugin.json`。GitHub、Lark Todos、Lark Bot 和 Larkx 的适配器也在各自目录。Provider 插件通过清单引用 `internal/provider/` 的运行时驱动。内置清单和 Larkx 适配器随 Lever 编译进可执行文件。
 
 本地安装选择包含清单的目录。Lever 保存清单快照并引用该目录，不复制或删除源文件。
 
@@ -51,7 +51,7 @@ example-agent/
 | `description` | 可选说明，最多 1000 字符 |
 | `contributes.providers` | 最多 32 个 Provider 贡献，贡献 ID 在同一插件内唯一 |
 | `contributes.taskSources` | 任务来源。内置来源包含 `id` 和 `name`；外部任务来源（最多 32 个）须从包目录安装，指定 `driver: "task-stdio-v1"`、包内相对可执行文件 `command`，可选声明 `multiInstance`（允许同一插件添加多个实例）与 `customName`（允许自定义名称） |
-| `contributes.channels` | 内置渠道使用 `id`、`name`；本地个人渠道还须指定 `driver: "personal-stdio-v1"` 和包内相对可执行文件 `command`，不能混合声明 Provider 或事件源 |
+| `contributes.channels` | 渠道使用 `id` 和 `name`。个人渠道还须指定 `driver: "personal-stdio-v1"` 和包内相对可执行文件 `command`，同一清单只能声明这一项贡献 |
 | `contributes.eventSources` | 内置事件源使用 `id`、`name`、`fields`；外部事件源（最多 32 个）须从包目录安装，指定 `driver: "poll-stdio-v1"`、包内相对可执行文件 `command` 与最多 32 个字段（`kind` 为 `text` 或 `secret`，`secret` 不能设 `default`） |
 | Provider 的 `driver` | `codex`、`claude`、`pi`、`antigravity` 或 `acp` |
 | Provider 的 `command` | 可执行程序。ACP 必填；其他适配器留空时查找托管安装或本机对应 CLI |
@@ -61,7 +61,7 @@ example-agent/
 
 ## 安装与会话身份
 
-个人渠道需要包含可执行文件的本地目录或 Git 包。扫码或恢复监听时启动程序，每个安装和登录会话使用独立的私有数据目录。只安装可信的可执行程序，它与其他本地进程一样具备本机用户权限。宿主提供固定配置页、按账号/Agent 隔离的 Chat（默认单 Chat 按 Topic 分组：每个 Agent 共用 1 个渠道 Chat，每段连续飞书私聊、群主聊天或话题建为独立 Topic；也可切换为多 Chat 按飞书会话拆分，每个飞书私聊或群聊各自对应 1 个 Chat）、仅本人指令路由和持久投递记录，不加载第三方前端脚本。
+外部个人渠道需要包含可执行文件的本地目录或 Git 包。扫码或恢复监听时启动程序，每个安装和登录会话使用独立的私有数据目录。只安装可信的可执行程序，它与其他本地进程一样具备本机用户权限。宿主提供固定配置页、按账号/Agent 隔离的 Chat（默认单 Chat 按 Topic 分组：每个 Agent 共用 1 个渠道 Chat，每段连续飞书私聊、群主聊天或话题建为独立 Topic；也可切换为多 Chat 按飞书会话拆分，每个飞书私聊或群聊各自对应 1 个 Chat）、仅本人指令路由和持久投递记录，不加载第三方前端脚本。
 
 适配器将账号凭据写入 `LEVER_CHANNEL_HOME`，将可跨登录复用的运行环境写入 `LEVER_CHANNEL_CACHE`。退出登录会删除该会话目录，卸载会同时删除缓存。适配器首次准备依赖时可发送 `{"event":"connecting","phase":"preparing"}`，宿主会显示准备状态，并允许用户取消。
 
@@ -183,6 +183,16 @@ lark-cli auth login --scope task:task:read
 如果机器人收不到私聊，在 Lark Bot 页面打开 **开发者后台**。确认机器人能力已启用，应用已获得接收私聊和以应用身份发消息的权限，并通过长连接订阅 `im.message.receive_v1`。按租户要求提交发布。如果后台需要长连接在线，可以先在 Lever 连接，再发布事件配置。 [飞书长连接配置](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)
 
 Lark Bot 接收绑定用户的私聊文本，沿用 Agent 的运行权限和队列。遇到审批或问题时在 Lever 处理。Chat 会显示回复的投递状态，明确失败时可以单独重试回发。Lever 后端运行时维持长连接，App Secret 保存在本机数据目录的独立凭据文件中。暂停接收允许已接收的消息继续处理。解绑会停止后续收发，并保留已有 Chat。
+
+## Larkx 个人渠道
+
+在 **插件 → 消息渠道 → Larkx** 选择飞书或 Lark，点击 **扫码连接**。首次连接时，启动器从 GitHub 和 PyPI 准备锁定版本的 Python 环境和 LarkAgentX。后端支持 macOS 和 Linux 的 arm64、x86_64。LarkAgentX 使用非官方网页协议，上游将用途限于非商业的学习和研究。[上游版本说明](https://github.com/cv-cat/LarkAgentX/blob/d288ef4df8a42f6286c5506b7185f64430071490/README.md?plain=1#L99-L103)
+
+扫码后，在 **指令与 Agent** 中为 Agent 添加指令，例如 `/ai`。你在私聊、群聊或话题中发送 `/ai 总结这段讨论`，Agent 就会以你的账号回到原会话作答。只有本人发送的实时指令会触发。暂停监听保留登录状态，退出账号会清除本次登录凭据。
+
+在 **回复与上下文 → 回复后缀** 中可填写文本、emoji、Markdown 或网址，留空即可关闭。默认后缀显示为 —— [Lever](https://github.com/alfredxw/lever)。
+
+已安装旧版 `inhouse.larkx` 的用户会沿用原安装 ID、登录、指令、聊天和启停状态，后续适配器随 Lever 更新。原先使用插件目录中自建 `.venv` 的用户可通过 `LEVER_LARKX_PYTHON` 指定该环境的 Python。
 
 ## 本机检测与配置目录
 

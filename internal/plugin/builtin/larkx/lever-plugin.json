@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "lever.larkx",
+  "name": "Larkx",
+  "version": "0.3.0",
+  "contributes": {
+    "providers": [],
+    "channels": [
+      { "id": "larkx", "name": "Feishu / Lark", "driver": "personal-stdio-v1", "command": "bridge" }
+    ]
+  }
+}

@@ -863,11 +863,15 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "plugins.description.new-email":
     "IMAP 邮箱收到新邮件时触发。可在「自动化」中配置邮箱。",
   "plugins.description.feishu": "在飞书或 Lark 私聊中与 Lever Agent 对话。",
+  "plugins.description.larkx":
+    "在飞书或 Lark 中用斜杠指令调用 Lever Agent，以本人身份回复。",
   "channels.feishu": "飞书机器人",
   "personal.account": "账号与连接",
   "personal.ownerOnly": "仅本人可唤起",
   "personal.consent":
     "扫码即授权插件以你的个人账号回复。其他人发送指令不会唤起 Agent。",
+  "personal.larkxConsent":
+    "首次连接会下载 LarkAgentX。它使用非官方网页协议，上游仅允许用于非商业的学习和研究。扫码后，只有你自己发送的指令会触发 Agent，回复以你的账号发出。",
   "personal.scan": "扫码连接",
   "personal.logout": "退出账号",
   "personal.state.signedOut": "未登录",
@@ -907,6 +911,9 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "personal.thread": "话题回复",
   "personal.direct": "直接回复",
   "personal.signature": "署名 · {agent} 替换为 Agent 名",
+  "personal.replySuffix": "回复后缀",
+  "personal.replySuffixHint":
+    "支持 Markdown、网址和 emoji，{agent} 会替换为 Agent 名称。发送时自动加上「——」，留空即可关闭。",
   "personal.routeModel": "{{name}} 的渠道模型",
   "personal.inheritModel": "跟随 Agent",
   "personal.overrideModel": "指定模型",

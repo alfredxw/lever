@@ -19,6 +19,7 @@ privacy:
 	python3 scripts/privacy_check.py
 test: privacy
 	go test -race ./internal/...
+	python3 -B -m unittest discover -s internal/plugin/builtin/larkx
 	pnpm --dir web build
 	pnpm --dir web test:e2e
 generate:

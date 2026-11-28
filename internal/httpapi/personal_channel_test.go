@@ -46,7 +46,8 @@ if test ! -f "$LEVER_CHANNEL_CACHE/prepared"; then
 fi
 printf '%s\n' '{"event":"online","account":"100","region":"feishu"}'
 while test ! -f ready; do sleep .02; done
-cat inbox
+# The inbox is prepared before reconnect. Stamp live pushes when emitting them.
+sed "s/\"created\":0/\"created\":$(date +%s)/" inbox
 while IFS= read -r input; do
   printf '%s\n' "$input" >> calls
   id=$(printf '%s\n' "$input" | sed 's/.*"id":"\([^"]*\)".*/\1/')
@@ -128,7 +129,7 @@ done
 	event := func(id, sender, chat, text, kind, thread, parent string) string {
 		data, err := json.Marshal(map[string]any{"event": "message", "message": map[string]any{
 			"id": id, "sender": sender, "chat": chat, "chatName": map[string]string{"300": "研发群", "400": "张三"}[chat],
-			"text": text, "kind": kind, "thread": thread, "parent": parent, "created": time.Now().Unix(),
+			"text": text, "kind": kind, "thread": thread, "parent": parent, "created": 0,
 		}})
 		if err != nil {
 			t.Fatal(err)
@@ -380,7 +381,7 @@ set -eu
 acct=$(cat account)
 printf '{"event":"online","account":"%s","region":"feishu"}\n' "$acct"
 if test -f inbox; then
-  cat inbox
+  sed "s/\"created\":0/\"created\":$(date +%s)/" inbox
 fi
 while IFS= read -r input; do
   id=$(printf '%s\n' "$input" | sed 's/.*"id":"\([^"]*\)".*/\1/')
@@ -416,7 +417,7 @@ done
 	event := func(id, sender, chat, chatName, text, kind, thread string) string {
 		data, err := json.Marshal(map[string]any{"event": "message", "message": map[string]any{
 			"id": id, "sender": sender, "chat": chat, "chatName": chatName, "text": text,
-			"kind": kind, "thread": thread, "parent": "", "created": time.Now().Unix(),
+			"kind": kind, "thread": thread, "parent": "", "created": 0,
 		}})
 		if err != nil {
 			t.Fatal(err)

@@ -170,7 +170,7 @@ Many local multi-CLI tools already let you drive coding CLIs without vendor lock
 ### Works, Automations, Skills & Plugins
 - **Works (Notes + Board + Sync):** Draft rich block **Notes** with inline tasks and `@Agent` handovers, track progress on a customizable Kanban **Board** with saved views, and auto-sync **GitHub Issues/PRs** and **Lark Todos** straight into dispatchable work items.
 - **Automations:** Let Agents start work on their own—on flexible schedules (once, daily, weekdays, weekly, monthly, interval) or incoming events (**IMAP Mail** and custom **Webhooks** with Bearer auth and `Idempotency-Key`), routing results into fresh Topics, existing Chats, or Board items.
-- **Skills & Extensible Plugins:** Discover, filter, and toggle Skills across Lever-managed, user, and Scope directories per Agent (with built-in editing for Lever-managed `SKILL.md`). Install Runtime, Task Source, Event Source, or Personal Channel plugins—including built-in **Lark Bot**—from Git repositories (with version pinning, update previews, and one-click rollback) or local directories.
+- **Skills & Extensible Plugins:** Discover, filter, and toggle Skills across Lever-managed, user, and Scope directories per Agent (with built-in editing for Lever-managed `SKILL.md`). Use the built-in **Lark Bot** and **Larkx** channels, or install runtime, task source, event source, and personal channel plugins from Git repositories (with version pinning, update previews, and one-click rollback) or local directories.
 
 ## Supported Runtimes
 
@@ -186,7 +186,7 @@ Lever orchestrates the CLIs already installed on your machine—reusing your exi
 | **Custom ACP** | Generic ACP v1 | Any ACP executable & args, or packaged plugin (`lever-plugin.json`) | Custom command |
 
 > [!TIP]
-> Alongside the 6 runtime plugins above, Lever ships with built-in **GitHub**, **Lark Todos**, **IMAP Mail**, and **Lark Bot** plugins—all managed under **Plugins** in the sidebar.
+> Alongside the 6 runtime plugins above, Lever includes **GitHub**, **Lark Todos**, **IMAP Mail**, **Lark Bot**, and the **Larkx personal channel**. Larkx runs on macOS and Linux hosts. Manage these plugins under **Plugins** in the sidebar.
 
 <details>
 <summary><strong>Runtime setup tips, native app continuity & local CLI</strong></summary>

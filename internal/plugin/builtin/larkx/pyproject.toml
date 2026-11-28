@@ -1,0 +1,13 @@
+[project]
+name = "lever-larkx-channel"
+version = "0.2.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "larkx @ https://github.com/cv-cat/LarkAgentX/archive/d288ef4df8a42f6286c5506b7185f64430071490.tar.gz#sha256=e66417c064772c8042f70a17013a5203dd66c722a0417b8f9e856c86a00936fc",
+]
+
+[tool.uv]
+package = false
+environments = [
+    "sys_platform == 'darwin' or sys_platform == 'linux'",
+]

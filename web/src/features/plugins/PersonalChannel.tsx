@@ -4,6 +4,7 @@ import {
   useId,
   useRef,
   useState,
+  type ChangeEvent,
   type KeyboardEvent,
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -326,7 +327,9 @@ export function PersonalChannel({
   const view = query.data;
   if (!view)
     return query.error ? <ErrorNotice error={query.error} /> : <Loading />;
-  const busy = action.isPending || !plugin.enabled;
+  const builtinLarkx = plugin.builtin && plugin.manifest.id === "lever.larkx";
+  const unsupported = builtinLarkx && view.state === "unsupported";
+  const busy = action.isPending || !plugin.enabled || unsupported;
   const connecting = view.state === "preparing" || view.state === "connecting";
   const pairing = !view.account && (view.state === "pairing" || connecting);
   const last = view.last;
@@ -343,13 +346,15 @@ export function PersonalChannel({
               ? `${view.region === "lark" ? "Lark" : t("channels.platformFeishu")} · ${view.account}`
               : t("personal.ownerOnly")
           }
-          description={t("personal.consent")}
+          description={t(
+            builtinLarkx ? "personal.larkxConsent" : "personal.consent",
+          )}
         >
           <span role="status" className="text-control text-muted-foreground">
             {t(`personal.state.${plugin.enabled ? view.state : "disabled"}`)}
           </span>
         </SettingsRow>
-        {!view.account && !pairing && (
+        {!view.account && !pairing && !unsupported && (
           <SettingsChoiceRow
             title={t("channels.platform")}
             value={region}
@@ -467,6 +472,7 @@ export function PersonalChannel({
       <PersonalSettings
         key={plugin.id}
         pluginId={plugin.id}
+        builtinLarkx={builtinLarkx}
         initial={view.settings}
         path={path}
         agents={agents}
@@ -478,12 +484,14 @@ export function PersonalChannel({
 
 function PersonalSettings({
   pluginId,
+  builtinLarkx,
   initial,
   path,
   agents,
   refresh,
 }: {
   pluginId: string;
+  builtinLarkx: boolean;
   initial: PersonalChannelSettings;
   path: string;
   agents: Agent[];
@@ -591,6 +599,13 @@ function PersonalSettings({
 
   const { settings, routes, restricted, chats, contextLimit, customReaction } =
     draft;
+  const signatureField = {
+    id: key + "sign",
+    value: settings.signature,
+    onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      set({ signature: event.target.value }, "debounced"),
+    onBlur: () => autoSave.flush(),
+  };
   const validation = validateDraft(draft);
   const showEmojiError =
     validation.emojiInvalid && (!validation.emojiEmpty || touchedEmoji);
@@ -871,18 +886,29 @@ function PersonalSettings({
             set({ threadReply: value === "thread" }, "immediate")
           }
         />
-        <SettingsRow title={t("personal.signature")} id={key + "sign"}>
-          <Input
-            id={key + "sign"}
-            placeholder="AI · {agent}"
-            maxLength={120}
-            value={settings.signature}
-            onChange={(event) =>
-              set({ signature: event.target.value }, "debounced")
-            }
-            onBlur={() => autoSave.flush()}
-            onKeyDown={flushOnEnter}
-          />
+        <SettingsRow
+          title={t(
+            builtinLarkx ? "personal.replySuffix" : "personal.signature",
+          )}
+          description={builtinLarkx ? t("personal.replySuffixHint") : undefined}
+          id={signatureField.id}
+        >
+          {builtinLarkx ? (
+            <Textarea
+              {...signatureField}
+              aria-describedby={signatureField.id + "-description"}
+              rows={2}
+              maxLength={4000}
+              className="w-full sm:w-72"
+            />
+          ) : (
+            <Input
+              {...signatureField}
+              placeholder="AI · {agent}"
+              maxLength={120}
+              onKeyDown={flushOnEnter}
+            />
+          )}
         </SettingsRow>
         {supportsChannelModel && (
           <SettingsRow

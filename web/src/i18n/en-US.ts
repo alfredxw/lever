@@ -887,11 +887,15 @@ export const enUS = {
     "Trigger an automation when an IMAP mailbox receives new mail. Configure the mailbox in Automations.",
   "plugins.description.feishu":
     "Talk to a Lever Agent in a Feishu or Lark direct message.",
+  "plugins.description.larkx":
+    "Call a Lever Agent with a slash command in Feishu or Lark and reply from your personal account.",
   "channels.feishu": "Lark Bot",
   "personal.account": "Account",
   "personal.ownerOnly": "Only your own commands",
   "personal.consent":
     "Scanning authorizes automatic replies from your personal account. Other people cannot invoke your Agents.",
+  "personal.larkxConsent":
+    "The first connection downloads LarkAgentX, which uses an unofficial web protocol. Its authors restrict use to noncommercial study and research. Scanning lets your own commands trigger replies from your personal account.",
   "personal.scan": "Scan to connect",
   "personal.logout": "Sign out",
   "personal.state.signedOut": "Not connected",
@@ -935,6 +939,9 @@ export const enUS = {
   "personal.thread": "Thread",
   "personal.direct": "Main chat",
   "personal.signature": "Signature · {agent} inserts the Agent name",
+  "personal.replySuffix": "Reply suffix",
+  "personal.replySuffixHint":
+    "Use Markdown, URLs, or emoji. {agent} inserts the Agent name. Replies add a leading ——. Leave blank to omit the suffix.",
   "personal.routeModel": "Channel model for {{name}}",
   "personal.inheritModel": "Follow Agent",
   "personal.overrideModel": "Choose model",

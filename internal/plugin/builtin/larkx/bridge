@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+umask 077
+base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+scratch=
+finish_setup() {
+    status=$?
+    if [ -n "$scratch" ]; then rm -rf "$scratch"; fi
+    if [ "$status" -ne 0 ]; then printf '%s\n' '{"event":"dependency"}'; fi
+}
+trap finish_setup 0
+trap 'exit 1' HUP INT TERM
+
+if [ -n "${LEVER_LARKX_PYTHON:-}" ]; then
+    exec "$LEVER_LARKX_PYTHON" -I -B -u "$base/bridge.py" "$@"
+fi
+checksum() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi
+}
+
+cache=${LEVER_CHANNEL_CACHE:-"${LEVER_CHANNEL_HOME:?}/runtime"}
+python_version=3.11.15
+revision=$(checksum < "$base/uv.lock")
+export UV_PROJECT_ENVIRONMENT="$cache/env-$python_version-${revision%% *}"
+python="$UV_PROJECT_ENVIRONMENT/bin/python"
+if [ ! -x "$python" ] || [ ! -f "$UV_PROJECT_ENVIRONMENT/.ready" ]; then
+    # Older personal-stdio-v1 hosts also understand the connecting event.
+    printf '%s\n' '{"event":"connecting","phase":"preparing"}'
+    version=0.11.7
+    case "$(uname -s)/$(uname -m)" in
+        Darwin/arm64) target=aarch64-apple-darwin; digest=66e37d91f839e12481d7b932a1eccbfe732560f42c1cfb89faddfa2454534ba8 ;;
+        Darwin/x86_64) target=x86_64-apple-darwin; digest=0a4bc8fcde4974ea3560be21772aeecab600a6f43fa6e58169f9fa7b3b71d302 ;;
+        Linux/aarch64) target=aarch64-unknown-linux-musl; digest=46647dc16cbb7d6700f762fdd7a67d220abe18570914732bc310adc91308d272 ;;
+        Linux/x86_64) target=x86_64-unknown-linux-musl; digest=64ddb5f1087649e3f75aa50d139aa4f36ddde728a5295a141e0fa9697bfb7b0f ;;
+        *) printf '%s\n' '{"event":"dependency","phase":"unsupported"}'; exit 0 ;;
+    esac
+    mkdir -p "$cache"
+    uv="$cache/uv-$version-$target"
+    if [ ! -x "$uv" ]; then
+        scratch=$(mktemp -d "$LEVER_CHANNEL_HOME/.uv-XXXXXX")
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --connect-timeout 15 --max-time 180 --retry 2 \
+            "https://github.com/astral-sh/uv/releases/download/$version/uv-$target.tar.gz" -o "$scratch/archive"
+        actual=$(checksum < "$scratch/archive")
+        [ "${actual%% *}" = "$digest" ]
+        tar -xzOf "$scratch/archive" "uv-$target/uv" > "$scratch/uv"
+        chmod 700 "$scratch/uv"
+        mv -f "$scratch/uv" "$uv"
+        rm -rf "$scratch"
+        scratch=
+    fi
+    export UV_CACHE_DIR="$cache/packages" UV_PYTHON_INSTALL_DIR="$cache/python" UV_PYTHON_BIN_DIR="$cache/bin"
+    "$uv" sync --project "$base" --frozen --managed-python --python "$python_version" --system-certs --no-progress >&2
+    LARKX_HOME="$LEVER_CHANNEL_HOME" LARKX_NO_DOTENV=1 PYTHON_DOTENV_DISABLED=1 "$python" -I -B -c \
+        'from larkx import LarkAuth, LarkClient, QrLogin; from larkx.proto import compose, decoders; from larkx.proto.gateway import resolve_cmd; resolve_cmd("messages.PutMessageRequest")'
+    touch "$UV_PROJECT_ENVIRONMENT/.ready"
+fi
+exec "$python" -I -B -u "$base/bridge.py" "$@"

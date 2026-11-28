@@ -12,6 +12,7 @@ import (
 	"lever/internal/plugin"
 	"lever/internal/plugin/builtin"
 	"lever/internal/plugin/builtin/lark-bot"
+	"lever/internal/plugin/builtin/larkx"
 	"lever/internal/store"
 )
 
@@ -28,6 +29,11 @@ func (a *App) initPlugins(ctx context.Context) error {
 			return err
 		}
 		for _, p := range plugins {
+			if p.ID == larkx.PluginID {
+				if err := adoptLarkx(ctx, tx, &p); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO plugins(id,data) VALUES(?,?)
 ON CONFLICT(id) DO UPDATE SET data=json_set(plugins.data,'$.manifest',json_extract(excluded.data,'$.manifest'))
@@ -50,6 +56,39 @@ WHERE json_extract(plugins.data,'$.manifest')<>json_extract(excluded.data,'$.man
 		_, err := tx.ExecContext(ctx, `UPDATE providers SET data=json_set(data,'$.pluginId','lever.'||json_extract(data,'$.type'),'$.contributionId',json_extract(data,'$.type')) WHERE COALESCE(json_extract(data,'$.pluginId'),'')=''`)
 		return err
 	})
+}
+
+// Personal channel bindings, receipts and credential directories all use the
+// installation ID. Adopt the installed channel in place, including on later
+// starts when its manifest already has the built-in ID.
+func adoptLarkx(ctx context.Context, tx *sql.Tx, p *model.Plugin) error {
+	previous, err := store.Get[model.Plugin](ctx, tx, `SELECT data FROM plugins
+WHERE json_extract(data,'$.installed')=1 AND (json_extract(data,'$.manifest.id')=? OR
+ (json_extract(data,'$.manifest.id')=? AND json_extract(data,'$.manifest.contributes.channels[0].id')='larkx'
+  AND json_extract(data,'$.manifest.contributes.channels[0].driver')=?))
+ORDER BY json_extract(data,'$.builtin') DESC LIMIT 1`,
+		larkx.PluginID, larkx.LegacyID, plugin.PersonalChannelDriver)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	p.ID = previous.ID
+	// Upgrade the stock signature once. An empty string explicitly disables it.
+	if !previous.Builtin || previous.Manifest.Version == "0.2.0" {
+		if _, err := tx.ExecContext(ctx, `UPDATE channel_connections SET data=json_set(data,'$.signature',?)
+WHERE kind=? AND (json_extract(data,'$.signature') IS NULL OR json_extract(data,'$.signature')=?)`,
+			larkx.DefaultSignature, p.ID, personalDefaultSignature); err != nil {
+			return err
+		}
+	}
+	if previous.Builtin {
+		return nil
+	}
+	p.Enabled = previous.Enabled
+	_, err = tx.ExecContext(ctx, "UPDATE plugins SET data=? WHERE id=?", store.JSON(p), p.ID)
+	return err
 }
 
 func pluginProvider(p model.Plugin, config model.Provider) model.Provider {
@@ -114,6 +153,9 @@ func validatePluginProviders(m model.PluginManifest) error {
 }
 
 func checkPluginID(ctx context.Context, q store.Queryer, manifestID string) error {
+	if manifestID == larkx.LegacyID {
+		return conflict("Larkx is now included with Lever. Open it under Plugins.")
+	}
 	var installed bool
 	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM plugins WHERE json_extract(data,'$.manifest.id')=? AND json_extract(data,'$.installed')=1)", manifestID).Scan(&installed); err != nil {
 		return err

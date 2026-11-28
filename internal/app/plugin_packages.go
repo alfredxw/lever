@@ -29,6 +29,18 @@ type packagePreview struct {
 
 func (a *App) packageRoot() string { return filepath.Join(a.Store.Dir, "plugin-packages") }
 
+func (a *App) newPackageDir() (string, error) {
+	root := a.packageRoot()
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return "", err
+	}
+	root, err := workspace.Canonical(root)
+	if err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(root, "pkg-")
+}
+
 func (a *App) removePackage(release *model.PluginRelease) {
 	if release == nil || !strings.HasPrefix(release.Package, "pkg-") || filepath.Base(release.Package) != release.Package {
 		return
@@ -148,10 +160,7 @@ func (a *App) PreviewPlugin(ctx context.Context, id string, input model.PluginPr
 			}
 		}
 	}
-	if err = os.MkdirAll(a.packageRoot(), 0700); err != nil {
-		return result, err
-	}
-	dir, err := os.MkdirTemp(a.packageRoot(), "pkg-")
+	dir, err := a.newPackageDir()
 	if err != nil {
 		return result, err
 	}

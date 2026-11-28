@@ -14,6 +14,7 @@ import (
 
 	"lever/internal/model"
 	"lever/internal/plugin"
+	"lever/internal/plugin/builtin/larkx"
 	"lever/internal/provider"
 	"lever/internal/store"
 	"lever/internal/workspace"
@@ -29,19 +30,38 @@ var personalCommand = regexp.MustCompile(`^/[\p{L}\p{N}_-]{1,48}$`)
 var personalReaction = regexp.MustCompile(`^[A-Za-z0-9_+-]{1,64}$`)
 var personalID = regexp.MustCompile(`^[1-9][0-9]{0,30}$`)
 
+const personalDefaultSignature = "AI · {agent}"
+
+func isPersonalChannel(p model.Plugin) bool {
+	channels := p.Manifest.Contributes.Channels
+	return len(channels) == 1 && channels[0].Driver == plugin.PersonalChannelDriver
+}
+
+func isBuiltinLarkx(p model.Plugin) bool {
+	return p.Builtin && p.Manifest.ID == larkx.PluginID
+}
+
+func unsupportedPersonalChannel(p model.Plugin) bool {
+	return isBuiltinLarkx(p) && !larkx.Supported()
+}
+
 func (a *App) personalConfig(ctx context.Context, id string) (model.Plugin, personalConfig, error) {
 	var config personalConfig
 	p, err := store.Get[model.Plugin](ctx, a.Store.DB, "SELECT data FROM plugins WHERE id=?", id)
 	if err != nil {
 		return p, config, err
 	}
-	if !p.Installed || p.Builtin || len(p.Manifest.Contributes.Channels) != 1 || p.Manifest.Contributes.Channels[0].Driver != plugin.PersonalChannelDriver {
+	if !p.Installed || !isPersonalChannel(p) {
 		return p, config, sql.ErrNoRows
 	}
 	config, err = store.Get[personalConfig](ctx, a.Store.DB, "SELECT data FROM channel_connections WHERE kind=?", id)
 	if errors.Is(err, sql.ErrNoRows) {
+		signature := personalDefaultSignature
+		if isBuiltinLarkx(p) {
+			signature = larkx.DefaultSignature
+		}
 		return p, personalConfig{Region: "feishu", PersonalChannelSettings: model.PersonalChannelSettings{
-			ChatMode: model.PersonalChannelChatSingle, ThreadReply: true, ContextLimit: 20, Signature: "AI · {agent}", Routes: []model.PersonalChannelRoute{}, ChatIDs: []string{},
+			ChatMode: model.PersonalChannelChatSingle, ThreadReply: true, ContextLimit: 20, Signature: signature, Routes: []model.PersonalChannelRoute{}, ChatIDs: []string{},
 		}}, nil
 	}
 	if err == nil && !config.ChatMode.Valid() {
@@ -70,6 +90,8 @@ func (a *App) PersonalChannel(ctx context.Context, id string) (model.PersonalCha
 	view := model.PersonalChannelView{Settings: config.PersonalChannelSettings, State: "signedOut", Region: config.Region, Account: config.Account}
 	if !p.Enabled {
 		view.State = "disabled"
+	} else if unsupportedPersonalChannel(p) {
+		view.State = "unsupported"
 	} else if worker := a.personal[id]; worker != nil {
 		view.State, view.QR = worker.state, worker.qr
 	} else if config.Account != "" {
@@ -98,7 +120,7 @@ WHERE t.binding=? ORDER BY t.rowid DESC LIMIT 1`, personalBinding(id, config)).S
 func (a *App) ConfigurePersonal(ctx context.Context, id string, settings model.PersonalChannelSettings) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	_, config, err := a.personalConfig(ctx, id)
+	p, config, err := a.personalConfig(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -112,8 +134,14 @@ func (a *App) ConfigurePersonal(ctx context.Context, id string, settings model.P
 	if utf8.RuneCountInString(settings.Prompt) > 4000 || strings.ContainsRune(settings.Prompt, '\x00') {
 		return invalid("Channel instructions must contain at most 4000 characters and no NUL characters")
 	}
-	if settings.ContextLimit < 0 || settings.ContextLimit > 50 || len(settings.Signature) > 240 ||
-		strings.ContainsAny(settings.Signature, "\r\n") || settings.Reaction != "" && !personalReaction.MatchString(settings.Reaction) ||
+	if isBuiltinLarkx(p) {
+		if utf8.RuneCountInString(settings.Signature) > 4000 || strings.ContainsRune(settings.Signature, '\x00') {
+			return invalid("Reply suffix must contain at most 4000 characters and no NUL characters")
+		}
+	} else if len(settings.Signature) > 240 || strings.ContainsAny(settings.Signature, "\r\n") {
+		return invalid("Signature must fit on one line and contain at most 240 bytes")
+	}
+	if settings.ContextLimit < 0 || settings.ContextLimit > 50 || settings.Reaction != "" && !personalReaction.MatchString(settings.Reaction) ||
 		len(settings.Routes) > 64 || len(settings.ChatIDs) > 256 {
 		return invalid("Invalid channel settings, reaction or context limit (0–50)")
 	}
@@ -257,6 +285,9 @@ func (a *App) PersonalAction(ctx context.Context, id, action, region string) err
 	if a.closed || !p.Enabled && action != "logout" {
 		return conflict("Enable the channel plugin first")
 	}
+	if (action == "login" || action == "connect") && unsupportedPersonalChannel(p) {
+		return invalid("Larkx requires a macOS or Linux host with an arm64 or x86_64 processor")
+	}
 	login := false
 	oldSession := config.Session
 	cancelBinding := ""
@@ -304,7 +335,7 @@ func (a *App) resumePersonalLocked(id string) {
 	if id != "" {
 		if a.personal[id] == nil {
 			p, config, err := a.personalConfig(a.ctx, id)
-			if err == nil && p.Enabled && config.Account != "" && config.Listening {
+			if err == nil && p.Enabled && !unsupportedPersonalChannel(p) && config.Account != "" && config.Listening {
 				a.startPersonalLocked(p, config, false)
 			}
 		}
@@ -313,7 +344,7 @@ func (a *App) resumePersonalLocked(id string) {
 	plugins, err := a.Plugins(a.ctx)
 	if err == nil {
 		for _, p := range plugins {
-			if !p.Builtin && len(p.Manifest.Contributes.Channels) != 0 {
+			if isPersonalChannel(p) {
 				a.resumePersonalLocked(p.ID)
 			}
 		}

@@ -16,6 +16,7 @@ import (
 	"lever/internal/device"
 	"lever/internal/model"
 	"lever/internal/plugin"
+	"lever/internal/plugin/builtin/larkx"
 	"lever/internal/store"
 )
 
@@ -23,6 +24,7 @@ type personalWorker struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	install, name string
+	builtinLarkx  bool
 	session       string
 	state, qr     string
 	started       int64
@@ -36,14 +38,15 @@ type personalCall struct {
 }
 
 type personalRequest struct {
-	ID       string `json:"id"`
-	Method   string `json:"method"`
-	Message  string `json:"message,omitempty"`
-	Chat     string `json:"chat,omitempty"`
-	Thread   string `json:"thread,omitempty"`
-	Reaction string `json:"reaction,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
+	ID        string `json:"id"`
+	Method    string `json:"method"`
+	Message   string `json:"message,omitempty"`
+	Chat      string `json:"chat,omitempty"`
+	Thread    string `json:"thread,omitempty"`
+	Reaction  string `json:"reaction,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 type personalResponse struct {
@@ -58,30 +61,35 @@ type personalEvent struct {
 
 func (a *App) startPersonalLocked(p model.Plugin, config personalConfig, login bool) {
 	ctx, cancel := context.WithCancel(a.ctx)
-	worker := &personalWorker{ctx: ctx, cancel: cancel, install: p.ID, name: p.Manifest.Name,
+	worker := &personalWorker{ctx: ctx, cancel: cancel, install: p.ID, name: p.Manifest.Name, builtinLarkx: isBuiltinLarkx(p),
 		session: config.Session, state: "connecting", started: time.Now().Unix(), requests: make(chan personalCall)}
 	a.personal[p.ID] = worker
 	action := "listen"
 	if login {
 		action = "login"
 	}
-	path, err := plugin.PackageExecutable(p.Directory, p.Manifest.Contributes.Channels[0].Command)
-	if err == nil {
-		home := a.personalHome(p.ID, config.Session)
-		if err = os.MkdirAll(home, 0700); err == nil {
-			cmd := device.Command(path, action, config.Region)
-			cmd.Dir, cmd.Stderr = p.Directory, io.Discard
-			cmd.Env = append(cmd.Env, "LEVER_CHANNEL_HOME="+home, "LEVER_CHANNEL_CACHE="+filepath.Join(filepath.Dir(home), "runtime"))
-			worker.process, err = device.StartFrames(cmd, 512<<10)
+	var err error
+	directory := p.Directory
+	cleanup := func() {}
+	if worker.builtinLarkx {
+		directory, err = a.newPackageDir()
+		if err == nil {
+			cleanup = func() { os.RemoveAll(directory) }
+			err = larkx.Unpack(directory)
 		}
 	}
+	if err == nil {
+		worker.process, err = a.launchPersonal(p, config, directory, action)
+	}
 	if err != nil {
+		cleanup()
 		worker.state = "error"
 		cancel()
 		slog.Warn("personal channel adapter could not start", "plugin", p.ID, "error", err)
 		return
 	}
 	a.wg.Go(func() {
+		defer cleanup()
 		err := a.personalProcess(worker, login)
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -96,6 +104,24 @@ func (a *App) startPersonalLocked(p model.Plugin, config personalConfig, login b
 			}
 		}
 	})
+}
+
+func (a *App) launchPersonal(p model.Plugin, config personalConfig, directory, action string) (*device.Process, error) {
+	path, err := plugin.PackageExecutable(directory, p.Manifest.Contributes.Channels[0].Command)
+	if err != nil {
+		return nil, err
+	}
+	home, err := filepath.Abs(a.personalHome(p.ID, config.Session))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return nil, err
+	}
+	cmd := device.Command(path, action, config.Region)
+	cmd.Dir, cmd.Stderr = directory, io.Discard
+	cmd.Env = append(cmd.Env, "LEVER_CHANNEL_HOME="+home, "LEVER_CHANNEL_CACHE="+filepath.Join(filepath.Dir(home), "runtime"))
+	return device.StartFrames(cmd, 512<<10)
 }
 
 func (worker *personalWorker) call(request personalRequest) personalResponse {
@@ -377,7 +403,9 @@ func (a *App) deliverPersonal(worker *personalWorker, delivery channelDelivery) 
 	err := a.Store.DB.QueryRowContext(worker.ctx, "SELECT chat,thread,signature FROM personal_channel_turns WHERE run_id=?", delivery.run.ID).Scan(&request.Chat, &request.Thread, &signature)
 	status, answer := "failed", ""
 	if err == nil {
-		if signature != "" {
+		if worker.builtinLarkx {
+			request.Signature = signature
+		} else if signature != "" {
 			request.Text += "\n\n—— " + signature
 		}
 		result := worker.call(request)
