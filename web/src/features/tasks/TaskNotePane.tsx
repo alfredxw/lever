@@ -5,6 +5,8 @@ import { APIError } from "@/api/client";
 import type { TaskNoteSummary } from "@/api/types.gen";
 import { ErrorNotice, Loading } from "@/components/common";
 import { taskNoteQuery } from "./noteQueries";
+import { MarkdownSourceNote } from "./MarkdownSourceNote";
+import { NoteImport } from "./NoteImport";
 import { TaskNoteView } from "./TaskNoteView";
 import { useTaskDraftSummaries } from "./useTaskNote";
 
@@ -13,7 +15,10 @@ export function TaskNotePane({
   notes,
   empty,
   ...props
-}: Omit<ComponentProps<typeof TaskNoteView>, "note" | "saveError"> & {
+}: Omit<
+  ComponentProps<typeof TaskNoteView>,
+  "note" | "saveError" | "library"
+> & {
   id: string;
   notes: UseQueryResult<TaskNoteSummary[]>;
   empty: ReactNode;
@@ -42,11 +47,21 @@ export function TaskNotePane({
         <Loading />
       ) : notes.error && !notes.data && !draft ? null : conflict && !draft ? (
         <ErrorNotice error={conflict} retry={() => void notes.refetch()} />
+      ) : current && /\.(md|markdown)$/i.test(current.path) ? (
+        <MarkdownSourceNote
+          key={id}
+          note={current}
+          library={notes.data ?? []}
+          saveError={draft?.error ?? conflict}
+          onOpenNote={props.onOpenNote}
+          toolbarAction={props.toolbarAction}
+        />
       ) : current ? (
         <TaskNoteView
           key={id}
           {...props}
           note={current}
+          library={notes.data ?? []}
           saveError={draft?.error ?? conflict}
         />
       ) : note.error ? (
@@ -57,7 +72,10 @@ export function TaskNotePane({
       ) : id ? (
         <Loading />
       ) : (
-        empty
+        <div className="task-notes-empty">
+          {empty}
+          <NoteImport onOpen={props.onOpenNote} />
+        </div>
       )}
     </>
   );

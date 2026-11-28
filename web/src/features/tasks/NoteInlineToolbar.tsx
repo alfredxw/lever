@@ -152,10 +152,12 @@ export function NoteInlineToolbar({
   editor,
   scrollTarget,
   onFindText,
+  onPreviewImage,
 }: {
   editor: Editor;
   scrollTarget?: HTMLElement;
   onFindText: (text: string) => void;
+  onPreviewImage: (pos: number) => void;
 }) {
   const { t } = useTranslation();
   // Keep the bubble and its popups in the same focus scope, outside the scrolling document.
@@ -350,6 +352,14 @@ export function NoteInlineToolbar({
         >
           {image && (
             <>
+              <Button
+                variant="ghost"
+                size="xs"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onPreviewImage(editor.state.selection.from)}
+              >
+                {t("tasks.image.view")}
+              </Button>
               <Button
                 type="button"
                 variant="ghost"

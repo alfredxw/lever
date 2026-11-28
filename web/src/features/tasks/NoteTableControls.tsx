@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import {
   addColumn,
   addRow,
   CellSelection,
+  moveTableColumn,
+  moveTableRow,
   removeColumn,
   removeRow,
   TableMap,
@@ -61,6 +63,14 @@ export function NoteTableControls({
   const [edge, setEdge] = useState<Edge>();
   const [band, setBand] = useState<NoteTableBand>();
 
+  const dragged = useRef<{
+    axis: NoteTableAxis;
+    from: number;
+    doc: typeof editor.state.doc;
+    start: number;
+    to: number;
+  }>(undefined);
+  const skipClick = useRef(false);
   const node = editor.state.doc.nodeAt(pos);
   const selection = editor.state.selection;
   const cellSelection =
@@ -295,7 +305,77 @@ export function NoteTableControls({
                 row ? { top: from, height: size } : { left: from, width: size }
               }
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => select(axis, index)}
+              onClick={() => {
+                if (!skipClick.current) select(axis, index);
+                skipClick.current = false;
+              }}
+              data-note-band={axis}
+              data-band-index={index}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                skipClick.current = false;
+                dragged.current = {
+                  axis,
+                  from: index,
+                  to: index,
+                  doc: editor.state.doc,
+                  start: row ? e.clientY : e.clientX,
+                };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const d = dragged.current;
+                if (
+                  !d ||
+                  d.axis !== axis ||
+                  d.from !== index ||
+                  Math.abs((row ? e.clientY : e.clientX) - d.start) < 4
+                )
+                  return;
+                skipClick.current = true;
+                const rect = element.getBoundingClientRect();
+                const coordinate = row
+                  ? e.clientY - rect.top
+                  : e.clientX - root.getBoundingClientRect().left - x;
+                const bands = row ? rows : columns;
+                const found = bands.findIndex(
+                  (v, i) =>
+                    i < bands.length - 1 &&
+                    coordinate >= v &&
+                    coordinate < bands[i + 1],
+                );
+                if (found >= 0) d.to = found;
+                root
+                  .querySelector("[data-band-drop]")
+                  ?.removeAttribute("data-band-drop");
+                root
+                  .querySelector(
+                    `[data-note-band="${axis}"][data-band-index="${d.to}"]`,
+                  )
+                  ?.setAttribute("data-band-drop", "");
+              }}
+              onPointerUp={() => {
+                const d = dragged.current;
+                dragged.current = undefined;
+                root
+                  .querySelector("[data-band-drop]")
+                  ?.removeAttribute("data-band-drop");
+                if (!d || d.from === d.to || d.doc !== editor.state.doc) return;
+                const move = row ? moveTableRow : moveTableColumn;
+                move({ from: d.from, to: d.to, pos: pos + 1 })(
+                  editor.state,
+                  (tr) => {
+                    isolateNoteEdit(tr);
+                    editor.view.dispatch(tr);
+                  },
+                );
+              }}
+              onPointerCancel={() => {
+                dragged.current = undefined;
+                root
+                  .querySelector("[data-band-drop]")
+                  ?.removeAttribute("data-band-drop");
+              }}
               aria-label={t("tasks.table.select." + axis, { index: index + 1 })}
               aria-haspopup="dialog"
               aria-expanded={

@@ -49,14 +49,14 @@ export function imageSlice(slice: Slice | undefined) {
   if (images.every(noteImage)) return images;
 }
 
-export function appendTaskImages(
+export function appendTaskBlocks(
   tr: Transaction,
   id: string,
-  images: readonly Node[],
+  blocks: readonly Node[],
 ) {
   const task = taskBlocks(tr.doc).find((block) => block.id === id);
   if (!task?.checkbox) return false;
-  const content = Fragment.fromArray(images);
+  const content = Fragment.fromArray(blocks);
   let position: number;
   if (task.listItem) {
     // The title starts immediately inside the item's opening token.
@@ -74,7 +74,7 @@ export function appendTaskImages(
       end,
       bulletList.create(
         null,
-        listItem.create(null, [task.paragraph, ...images]),
+        listItem.create(null, [task.paragraph, ...blocks]),
       ),
     );
     position = end + 2;
@@ -82,7 +82,7 @@ export function appendTaskImages(
   tr.setSelection(
     NodeSelection.create(
       tr.doc,
-      position + content.size - images.at(-1)!.nodeSize,
+      position + content.size - blocks.at(-1)!.nodeSize,
     ),
   );
   return true;

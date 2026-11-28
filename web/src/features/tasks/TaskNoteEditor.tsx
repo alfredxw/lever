@@ -7,7 +7,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Image, Paperclip, Plus } from "lucide-react";
+import { FileText, Image, Paperclip, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
@@ -19,7 +19,7 @@ import {
   Slice,
   type Node as ProseMirrorNode,
 } from "@tiptap/pm/model";
-import type { Agent, TaskNote } from "@/api/types.gen";
+import type { Agent, TaskNote, TaskNoteSummary } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -37,11 +37,13 @@ import {
 } from "./NoteBlockMenu";
 import { noteImage, uploadNoteAsset } from "./noteAsset";
 import {
-  appendTaskImages,
+  appendTaskBlocks,
   imageDropPosition,
   imageSlice,
   taskAtImagePosition,
 } from "./noteImageEditing";
+import { NoteTableSize, type TableSize } from "./NoteTableSize";
+import { NoteImageGallery } from "./NoteImageGallery";
 import { NoteTableControls } from "./NoteTableControls";
 import { tableAtSelection, type NoteTableTarget } from "./NoteTableMenu";
 import { NoteInlineToolbar } from "./NoteInlineToolbar";
@@ -50,6 +52,7 @@ import {
   parseTaskMarkdown,
   taskDocumentChange,
   taskNoteExtensions,
+  noteTaskIndex,
 } from "./taskDocument";
 import {
   isolateNoteEdit,
@@ -66,17 +69,44 @@ import {
 } from "./useTaskNote";
 
 const basicBlockItems = noteBlockItems.filter(
-  ({ type }) => !["table", "columns"].includes(String(type)),
+  ({ type }) => !["table", "columns", "noteWhiteboard"].includes(String(type)),
 );
 const commonBlockItems = [
   noteBlockItems.find(({ type }) => type === "task")!,
   { type: "image", label: "tasks.block.image", icon: Image },
   { type: "file", label: "tasks.block.file", icon: Paperclip },
   ...noteBlockItems.filter(
-    ({ type }) => type === "table" || type === "columns" || type === "callout",
+    ({ type }) =>
+      type === "table" ||
+      type === "columns" ||
+      type === "callout" ||
+      type === "noteWhiteboard",
   ),
 ] as const;
 
+const blockKeywords: Record<string, string> = {
+  paragraph: "duanluo dl zhengwen zw",
+  bulletList: "wuxuliebiao wxlb",
+  orderedList: "youxuliebiao yxlb",
+  task: "daiban db renwu rw",
+  blockquote: "yinyong yy",
+  codeBlock: "daimakuai dmk",
+  callout: "gaoliangkuai glk tishikuai tsk",
+  columns: "fenlan fl",
+  table: "biaoge bg",
+  horizontalRule: "fengexian fgx",
+  noteWhiteboard: "huaban hb drawnix whiteboard",
+  image: "tupian tp",
+  file: "wenjian wj fujian fj",
+};
+const blockSyntax: Record<string, string> = {
+  bulletList: "- ␣",
+  orderedList: "1. ␣",
+  task: "[ ] ␣",
+  blockquote: "> ␣",
+  codeBlock: "```",
+  horizontalRule: "---",
+};
 type InsertKind = NoteBlockType | "image" | "file";
 
 type SuggestionQuery = {
@@ -88,16 +118,21 @@ type SuggestionQuery = {
   | { kind: "slash"; allowed: InsertKind[]; manual?: boolean }
 );
 
-export type NoteSelection = { doc: ProseMirrorNode; pos: number | undefined };
+export type NoteSelection = { revision?: object; pos: number | undefined };
 
 function noteSelection(editor: Editor): NoteSelection {
   const {
-    doc,
     selection: { $from },
   } = editor.state;
   return {
-    doc,
-    pos: $from.parent.type.name === "paragraph" ? $from.before() : undefined,
+    revision: noteTaskIndex.getState(editor.state)?.revision,
+    pos:
+      $from.parent.type.name === "paragraph" &&
+      (!$from.parent.content.size ||
+        $from.parent.attrs.taskId ||
+        $from.node(-1).type.name === "listItem")
+        ? $from.before()
+        : undefined,
   };
 }
 
@@ -154,6 +189,8 @@ function slashAtCaret(editor: Editor): SuggestionQuery | undefined {
 export function TaskNoteEditor({
   note,
   agents,
+  library,
+  onOpenNote,
   onEditor,
   onStateChange,
   onFindText,
@@ -161,19 +198,24 @@ export function TaskNoteEditor({
 }: {
   note: TaskNote;
   agents: Agent[];
+  library: TaskNoteSummary[];
+  onOpenNote: (id: string) => void;
   onEditor: (editor: Editor | null) => void;
   onStateChange: (state: NoteSelection) => void;
-  onFindText: (text: string) => void;
+  onFindText: (text: string, replace?: boolean) => void;
   assetInput: React.RefObject<HTMLInputElement | null>;
 }) {
   const { t } = useTranslation();
   const id = useId();
   const [suggestion, setSuggestion] = useState<SuggestionQuery>();
   const suggestionRef = useRef<SuggestionQuery>(undefined);
+  const [pickingSize, setPickingSize] = useState(false);
   function showSuggestion(next?: SuggestionQuery) {
+    setPickingSize(false);
     suggestionRef.current = next;
     setSuggestion(next);
   }
+  const [imagePosition, setImagePosition] = useState<number>();
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeEmpty, setActiveEmpty] = useState<number>();
   const assetTrigger = useRef<{
@@ -217,42 +259,74 @@ export function TaskNoteEditor({
             ["common", commonBlockItems],
           ] as const);
       const seen = new Set<InsertKind>();
-      return groups.flatMap(([group, items]) =>
-        items.flatMap((item) => {
-          const label = t(item.label, { level: item.type });
-          const alias =
-            typeof item.type === "number" ? `h${item.type}` : item.type;
-          if (
-            !slash.allowed.includes(item.type) ||
-            (query && seen.has(item.type)) ||
-            !`${label} ${t(item.label, { level: item.type, lng: "en-US" })} ${alias}`
-              .toLocaleLowerCase()
-              .includes(query)
-          )
-            return [];
-          seen.add(item.type);
-          return [
-            {
-              id: group + "-" + item.type,
-              label,
-              icon: item.icon,
-              type: item.type,
-              group,
-            },
-          ];
-        }),
-      );
+      return groups
+        .flatMap(([group, items]) =>
+          items.flatMap((item) => {
+            const label = t(item.label, { level: item.type });
+            const alias =
+              typeof item.type === "number" ? `h${item.type}` : item.type;
+            if (
+              !slash.allowed.includes(item.type) ||
+              (query && seen.has(item.type)) ||
+              !`${label} ${t(item.label, { level: item.type, lng: "en-US" })} ${alias} ${typeof item.type === "number" ? "biaoti bt" + item.type : blockKeywords[item.type]}`
+                .toLocaleLowerCase()
+                .includes(query)
+            )
+              return [];
+            seen.add(item.type);
+            return [
+              {
+                rank: [
+                  label,
+                  String(alias),
+                  ...(blockKeywords[item.type] || "").split(" "),
+                ].some((v) => v.toLowerCase().startsWith(query))
+                  ? 0
+                  : 1,
+                hint:
+                  typeof item.type === "number"
+                    ? "#".repeat(item.type) + " ␣"
+                    : blockSyntax[item.type] ||
+                      ("key" in item ? String(item.key) : ""),
+                id: group + "-" + item.type,
+                label,
+                icon: item.icon,
+                type: item.type,
+                group,
+              },
+            ];
+          }),
+        )
+        .sort((a, b) => (query ? a.rank - b.rank : 0));
     }
     return mention
-      ? agents
-          .filter(
-            (agent) =>
-              !agent.archived && agent.name.toLocaleLowerCase().includes(query),
-          )
-          .slice(0, 30)
-          .map((agent) => ({ id: agent.id, label: agent.name, agent }))
+      ? [
+          ...agents
+            .filter(
+              (agent) =>
+                !agent.archived &&
+                agent.name.toLocaleLowerCase().includes(query),
+            )
+            .slice(0, 30)
+            .map((agent) => ({ id: agent.id, label: agent.name, agent })),
+          ...library
+            .filter(
+              (n) =>
+                n.id !== note.id &&
+                n.state !== "deleted" &&
+                !n.conflict &&
+                n.title.toLocaleLowerCase().includes(query),
+            )
+            .slice(0, 20)
+            .map((n) => ({
+              id: n.id,
+              label: n.title,
+              linkedNote: n,
+              icon: FileText,
+            })),
+        ]
       : [];
-  }, [slash, mention, query, agents, t]);
+  }, [slash, mention, query, agents, library, note.id, t]);
 
   const selected = matches[activeIndex] ?? matches[0];
 
@@ -311,10 +385,14 @@ export function TaskNoteEditor({
     showSuggestion();
   }
 
-  function chooseBlock(type: InsertKind) {
+  function chooseBlock(type: InsertKind, size?: TableSize) {
     if (!editor || !slash || composing.current || editor.view.composing) return;
     const current = slash.manual ? slash : slashAtCaret(editor);
     if (current?.from !== slash.from || current.to !== slash.to) return;
+    if (type === "table" && !size) {
+      setPickingSize(true);
+      return;
+    }
     const trigger = { from: current.from, to: current.to };
     if (type === "image" || type === "file") {
       if (!assetInput.current) return;
@@ -326,7 +404,9 @@ export function TaskNoteEditor({
     const chain = editor.chain().focus();
     if (slash.manual) chain.setTextSelection(slash.from);
     if (
-      chain.setNoteBlock(type, false, slash.manual ? undefined : trigger).run()
+      chain
+        .setNoteBlock(type, false, slash.manual ? undefined : trigger, size)
+        .run()
     )
       showSuggestion();
   }
@@ -355,7 +435,22 @@ export function TaskNoteEditor({
 
   function choose(item: NonNullable<typeof selected>) {
     if ("agent" in item) chooseAgent(item.agent);
-    else chooseBlock(item.type);
+    else if (
+      "linkedNote" in item &&
+      editor &&
+      mention &&
+      !editor.view.composing
+    ) {
+      editor
+        .chain()
+        .focus()
+        .insertContentAt({ from: mention.from, to: mention.to }, [
+          { type: "noteLink", attrs: { id: item.id, label: item.label } },
+          { type: "text", text: " " },
+        ])
+        .run();
+      showSuggestion();
+    } else if ("type" in item) chooseBlock(item.type);
   }
 
   function tableTarget(
@@ -378,18 +473,35 @@ export function TaskNoteEditor({
     );
   }
 
+  const hoverFrame = useRef(0);
+  const lastBlock = useRef<{ element: HTMLElement; doc: ProseMirrorNode }>(
+    undefined,
+  );
+  useEffect(() => () => cancelAnimationFrame(hoverFrame.current), []);
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    cancelAnimationFrame(hoverFrame.current);
+    const { target, currentTarget, clientX, pointerType } = event;
+    hoverFrame.current = requestAnimationFrame(() =>
+      updateHover(target as HTMLElement, currentTarget, clientX, pointerType),
+    );
+  }
+  function updateHover(
+    target: HTMLElement,
+    container: HTMLDivElement,
+    clientX: number,
+    pointerType: string,
+  ) {
     if (
       !editor ||
+      editor.isDestroyed ||
       composing.current ||
       blockMenuOpen ||
       tableMenuOpen ||
       suggestion ||
-      event.pointerType === "touch"
+      pointerType === "touch"
     )
       return;
     const view = editor.view;
-    const target = event.target as HTMLElement;
     if (
       target.closest(
         ".task-note-block-trigger, .task-note-empty-trigger, .note-table-controls",
@@ -409,10 +521,7 @@ export function TaskNoteEditor({
       return;
     }
     setHoveredTable(undefined);
-    if (
-      target === event.currentTarget &&
-      event.clientX < view.dom.getBoundingClientRect().left
-    )
+    if (target === container && clientX < view.dom.getBoundingClientRect().left)
       return;
     const node = target.closest("p, h1, h2, h3, h4, h5, h6, pre");
     if (
@@ -424,11 +533,14 @@ export function TaskNoteEditor({
       setHoveredBlock(undefined);
       return;
     }
-    const next = noteBlockTarget(
-      editor,
-      view.posAtDOM(node, 0),
-      event.currentTarget,
-    );
+    if (
+      lastBlock.current?.element === node &&
+      lastBlock.current.doc === view.state.doc &&
+      hoveredBlock
+    )
+      return;
+    lastBlock.current = { element: node, doc: view.state.doc };
+    const next = noteBlockTarget(editor, view.posAtDOM(node, 0), container);
     setHoveredBlock((previous) =>
       previous?.doc === next?.doc &&
       previous?.position === next?.position &&
@@ -489,7 +601,7 @@ export function TaskNoteEditor({
       }
       const images = task ? assets.filter(noteImage) : [];
       if (task && images.length) {
-        if (!appendTaskImages(tr, task.id, images))
+        if (!appendTaskBlocks(tr, task.id, images))
           throw new Error(t("tasks.sourceRemoved"));
         assets = assets.filter((asset) => !noteImage(asset));
       }
@@ -519,6 +631,20 @@ export function TaskNoteEditor({
     handleKeyDown: (view, event) => {
       if (view.composing || event.isComposing || event.keyCode === 229)
         return false;
+      const mod = event.metaKey || event.ctrlKey;
+      if (
+        mod &&
+        !event.altKey &&
+        ((event.key.toLowerCase() === "f" && !event.shiftKey) ||
+          (event.key.toLowerCase() === "h" && event.shiftKey))
+      ) {
+        const { from, to } = view.state.selection;
+        const selected = view.state.doc.textBetween(from, to, "\n");
+        onFindText(selected.includes("\n") ? "" : selected, event.shiftKey);
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
       setHoveredBlock(undefined);
       if (
         !suggestion &&
@@ -707,7 +833,7 @@ export function TaskNoteEditor({
           return false;
         tr.delete(selection.from, selection.to);
       }
-      if (!appendTaskImages(tr, target.task.id, images)) return false;
+      if (!appendTaskBlocks(tr, target.task.id, images)) return false;
       if (!tr.doc.eq(doc)) {
         isolateNoteEdit(tr);
         view.focus();
@@ -733,7 +859,7 @@ export function TaskNoteEditor({
       const tr = view.state.tr;
       const images = imageSlice(slice);
       const task = images && taskAtImagePosition(view.state.selection.$from);
-      if (!images || !task || !appendTaskImages(tr, task.id, images))
+      if (!images || !task || !appendTaskBlocks(tr, task.id, images))
         tr.replaceSelection(slice);
       tr.scrollIntoView().setMeta("paste", true);
       isolateNoteEdit(tr);
@@ -889,8 +1015,32 @@ export function TaskNoteEditor({
       <div
         ref={root}
         className="task-note-editor"
+        onDoubleClick={(e) => {
+          const image = (e.target as Element).closest(
+            "figure[data-note-image] img",
+          );
+          const figure = image?.parentElement;
+          if (editor && figure && editor.view.dom.contains(figure)) {
+            const pos = editor.view.posAtDOM(
+              figure.parentNode!,
+              Array.prototype.indexOf.call(
+                figure.parentNode!.childNodes,
+                figure,
+              ),
+            );
+            if (noteImage(editor.state.doc.nodeAt(pos))) setImagePosition(pos);
+          }
+        }}
+        onClick={(e) => {
+          const link = (e.target as Element).closest<HTMLButtonElement>(
+            "[data-note-link]",
+          );
+          if (link?.dataset.noteLink) onOpenNote(link.dataset.noteLink);
+        }}
         onPointerMove={onPointerMove}
         onPointerLeave={() => {
+          cancelAnimationFrame(hoverFrame.current);
+          lastBlock.current = undefined;
           if (!blockMenuOpen) setHoveredBlock(undefined);
           if (!tableMenuOpen) setHoveredTable(undefined);
         }}
@@ -962,11 +1112,19 @@ export function TaskNoteEditor({
         {editor && (
           <NoteInlineToolbar
             editor={editor}
+            onPreviewImage={setImagePosition}
             scrollTarget={
               root.current?.closest<HTMLElement>(".task-note-scroll") ??
               undefined
             }
             onFindText={onFindText}
+          />
+        )}
+        {editor && imagePosition !== undefined && (
+          <NoteImageGallery
+            editor={editor}
+            position={imagePosition}
+            onClose={() => setImagePosition(undefined)}
           />
         )}
         {rect && bounds && (
@@ -1005,7 +1163,9 @@ export function TaskNoteEditor({
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        {matches.length ? (
+        {pickingSize && slash ? (
+          <NoteTableSize onChoose={(size) => chooseBlock("table", size)} />
+        ) : matches.length ? (
           (slash && !query
             ? (["basic", "common"] as const)
             : (["flat"] as const)
@@ -1043,7 +1203,10 @@ export function TaskNoteEditor({
                       tabIndex={-1}
                       aria-label={item.label}
                       aria-selected={selected?.id === item.id}
-                      title={group === "basic" ? item.label : undefined}
+                      title={
+                        item.label +
+                        ("hint" in item && item.hint ? " · " + item.hint : "")
+                      }
                       onMouseDown={(event) => event.preventDefault()}
                       onMouseEnter={() =>
                         setActiveIndex(

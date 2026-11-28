@@ -1,0 +1,28 @@
+@import "../../../node_modules/@plait-board/react-board/index.css";
+@import "../../../node_modules/@plait-board/react-text/index.css";
+.note-board-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.note-board-stage .drawnix {
+  height: 100%;
+  --island-bg-color: var(--popover);
+  --island-border-color: var(--border);
+  font-family: var(--font-sans);
+}
+.note-board-stage button:focus-visible {
+  outline: 0;
+  box-shadow: none;
+  background-color: var(--control-focus);
+}
+.note-board-stage .drawnix {
+  --color-primary: var(--foreground);
+  --color-on-surface: var(--foreground);
+  --color-surface-primary-container: var(--control-selected);
+  --button-selected-bg: var(--control-selected);
+  --button-hover-bg: var(--control-hover);
+  --button-selected-border: var(--border);
+  --focus-highlight-color: transparent;
+}

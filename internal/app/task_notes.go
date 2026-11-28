@@ -33,8 +33,14 @@ type noteCatalog struct {
 }
 
 type parsedNote struct {
+	info    fs.FileInfo
+	links   []string
 	note    model.TaskNote
 	markers map[string]notes.Marker
+}
+
+func (p parsedNote) matches(info fs.FileInfo) bool {
+	return p.info != nil && os.SameFile(info, p.info) && info.Size() == p.info.Size() && info.ModTime().Equal(p.info.ModTime()) && info.Mode() == p.info.Mode()
 }
 
 type noteTask struct {
@@ -84,7 +90,7 @@ func (a *App) readNotes(ctx context.Context) (noteCatalog, error) {
 			}
 			return nil
 		}
-		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".") || !strings.EqualFold(filepath.Ext(path), ".xml") {
+		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".") || (!strings.EqualFold(filepath.Ext(path), ".xml") && !markdownPath(path)) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
@@ -92,7 +98,27 @@ func (a *App) readNotes(ctx context.Context) (noteCatalog, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		file, err := workspace.Read(root, rel)
+		if markdownPath(rel) && taskNoteState(rel) != model.TaskNoteActive {
+			return nil
+		}
+		info, err := entry.Info()
+		parsed := a.noteFiles[rel]
+		if err == nil && !parsed.matches(info) {
+			var file model.FileContent
+			file, err = workspace.Read(root, rel)
+			if err == nil {
+				if markdownPath(rel) {
+					parsed, err = decodeMarkdownNote(file)
+				} else {
+					parsed, err = decodeTaskNote(file)
+				}
+				if err != nil {
+					catalog.broken[rel] = &Error{409, fmt.Sprintf("%s: %s", rel, err)}
+					return nil
+				}
+				parsed.info = info
+			}
+		}
 		if err != nil {
 			catalog.broken[rel] = fmt.Errorf("%w: %w", ErrTaskNotesUnavailable, err)
 			if catalog.unavailable == nil {
@@ -100,15 +126,7 @@ func (a *App) readNotes(ctx context.Context) (noteCatalog, error) {
 			}
 			return nil
 		}
-		parsed, ok := a.noteFiles[file.Version]
-		if !ok {
-			parsed, err = decodeTaskNote(file)
-			if err != nil {
-				catalog.broken[rel] = &Error{409, fmt.Sprintf("%s: %s", rel, err)}
-				return nil
-			}
-		}
-		files[file.Version] = parsed
+		files[rel] = parsed
 		note := parsed.note
 		note.Path = rel
 		note.Directory = root
@@ -118,7 +136,7 @@ func (a *App) readNotes(ctx context.Context) (noteCatalog, error) {
 		} else {
 			catalog.notes[note.ID] = note
 			catalog.summaries = append(catalog.summaries, model.TaskNoteSummary{
-				ID: note.ID, Title: note.Title, State: note.State, Directory: root,
+				ID: note.ID, Title: note.Title, State: note.State, Directory: root, Markdown: markdownPath(rel), Links: parsed.links,
 			})
 		}
 		for id, marker := range parsed.markers {
@@ -182,7 +200,7 @@ func decodeTaskNote(file model.FileContent) (parsedNote, error) {
 	markers, err := notes.Markers(doc.Blocks)
 	return parsedNote{
 		note:    model.TaskNote{ID: doc.ID, Title: doc.Title, Project: doc.Project, Version: file.Version, Content: body},
-		markers: markers,
+		markers: markers, links: notes.Links(doc.Blocks),
 	}, err
 }
 
@@ -250,6 +268,9 @@ func (a *App) CreateTaskNote(ctx context.Context, input model.TaskNote) (model.T
 }
 
 func (a *App) SaveTaskNote(ctx context.Context, id string, input model.TaskNote) (model.TaskNote, error) {
+	if markdownPath(input.Path) {
+		return a.saveMarkdownNote(ctx, id, input)
+	}
 	input.Project = strings.TrimSpace(input.Project)
 	return a.writeTaskNote(ctx, id, input, false)
 }
@@ -288,6 +309,9 @@ func (a *App) writeTaskNote(ctx context.Context, id string, input model.TaskNote
 		return result, err
 	}
 	current, exists := catalog.notes[id]
+	if exists && markdownPath(current.Path) {
+		return result, conflict("Reopen the Markdown file before saving")
+	}
 	if current.State == model.TaskNoteDeleted {
 		if create {
 			return result, conflict("This note ID is already in use")
@@ -353,6 +377,7 @@ func (a *App) writeTaskNote(ctx context.Context, id string, input model.TaskNote
 		input.State = current.State
 		_, err = workspace.Write(a.notesDir, current.Path, source, current.Version)
 		if errors.Is(err, workspace.ErrFileConflict) {
+			delete(a.noteFiles, current.Path)
 			return result, ErrTaskNoteVersion
 		}
 	}

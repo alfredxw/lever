@@ -11,7 +11,17 @@ import type { NoteAlignment } from "./noteFormatting";
 import { isolateNoteEdit } from "./taskEditing";
 
 export type NoteAsset = { path: string; name: string; image: boolean };
-type NoteImageLayout = { width: number | null; align: NoteAlignment };
+type NoteImageLayout = {
+  width: number | null;
+  align: NoteAlignment;
+  caption?: string;
+};
+
+export function markdownTitle(title?: string) {
+  return title
+    ? ' "' + title.replace(/["\\]/g, "\\$&").replace(/[\r\n]+/g, " ") + '"'
+    : "";
+}
 
 export function noteAssetURL(path: string, name: string) {
   const id = /^\.assets\/([a-f0-9]{64})$/.exec(path)?.[1];
@@ -65,6 +75,7 @@ function renderAsset({
   image,
   align,
   width,
+  caption,
 }: NoteAsset & NoteImageLayout): DOMOutputSpec {
   const url = noteAssetURL(path, name);
   return [
@@ -88,6 +99,7 @@ function renderAsset({
             },
           ]
         : ["a", { href: url, download: name }, name],
+    ...(caption && image ? [["figcaption", {}, caption] as DOMOutputSpec] : []),
   ];
 }
 
@@ -222,6 +234,7 @@ function noteAssetView({
       if (
         next.attrs.path !== node.attrs.path ||
         next.attrs.name !== node.attrs.name ||
+        next.attrs.caption !== node.attrs.caption ||
         next.attrs.image !== node.attrs.image
       )
         return false;
@@ -250,6 +263,7 @@ export const NoteAssetBlock = Node.create({
     return {
       path: { default: "", rendered: false },
       name: { default: "", rendered: false },
+      caption: { default: "", rendered: false },
       image: { default: false, rendered: false },
       width: { default: null, rendered: false },
       align: { default: "left", rendered: false },
@@ -269,6 +283,8 @@ export const NoteAssetBlock = Node.create({
                 name,
                 image,
                 ...(image && {
+                  caption:
+                    element.querySelector("figcaption")?.textContent || "",
                   width: imageWidth(
                     Number(element.querySelector("img")?.getAttribute("width")),
                   ),
@@ -287,7 +303,8 @@ export const NoteAssetBlock = Node.create({
     return noteAssetView;
   },
   renderMarkdown(node) {
-    const { path, name, image } = node.attrs as NoteAsset;
+    const { path, name, image, caption } = node.attrs as NoteAsset &
+      NoteImageLayout;
     const url = noteAssetURL(path, name);
     return url
       ? (image ? "!" : "") +
@@ -295,6 +312,7 @@ export const NoteAssetBlock = Node.create({
           name.replace(/[\\[\]]/g, "\\$&") +
           "](" +
           path +
+          markdownTitle(caption) +
           ")"
       : name;
   },

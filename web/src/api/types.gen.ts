@@ -609,6 +609,8 @@ export interface TaskNote {
   content: unknown;
 }
 export interface TaskNoteSummary {
+  markdown?: boolean;
+  links?: string[];
   id: string;
   title: string;
   state: TaskNoteState;

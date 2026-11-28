@@ -89,6 +89,8 @@ export const Appearance = {
 } as const;
 
 export const Dialogs = {
+  /** NotePDF renders the note's print layout in the calling desktop window. */
+  notePDF: bind<[], string>("Dialogs.NotePDF", () => []),
   openDirectory: bind<[string], void>("Dialogs.OpenDirectory", (path: string) => [path]),
   openPath: bind<[string], void>("Dialogs.OpenPath", (path: string) => [path]),
   openPreviewInBrowser: bind<[string, string], void>("Dialogs.OpenPreviewInBrowser", (path: string, fragment: string) => [path, fragment]),

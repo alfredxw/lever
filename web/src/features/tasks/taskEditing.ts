@@ -23,6 +23,8 @@ import {
 } from "@tiptap/pm/state";
 import { TableMap } from "@tiptap/pm/tables";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
+import type { TableSize } from "./NoteTableSize";
+import { stepBlock } from "./noteBlockMove";
 import { isMac } from "@/features/settings/shortcuts";
 
 export const noteHeadingLevels = [1, 2, 3, 4, 5, 6] as const;
@@ -34,6 +36,7 @@ export type NoteBlockType =
   | "task"
   | "callout"
   | "table"
+  | "noteWhiteboard"
   | "columns"
   | "blockquote"
   | "codeBlock"
@@ -75,6 +78,7 @@ declare module "@tiptap/core" {
         type: NoteBlockType,
         toggle?: boolean,
         trigger?: Range,
+        tableSize?: TableSize,
       ) => ReturnType;
     };
   }
@@ -186,7 +190,8 @@ function canChangeTextblock(node: ProseMirrorNode, type: string) {
   if (type === "codeBlock") {
     // Code blocks can represent text and line breaks, but not Agent references.
     return !node.content.content.some(
-      (child) => child.type.name === "agentMention",
+      (child) =>
+        child.isInline && !child.isText && child.type.name !== "hardBreak",
     );
   }
   return true;
@@ -214,6 +219,7 @@ function setNoteBlock(
   kind: NoteBlockType,
   toggle: boolean,
   { tr, commands, dispatch }: CommandProps,
+  tableSize: TableSize = { rows: 3, cols: 3 },
 ) {
   const { doc, selection } = tr;
   const { from, to, $from, $to } = selection;
@@ -284,6 +290,23 @@ function setNoteBlock(
     }
   } else if (kind === "callout") {
     if (!commands.toggleWrap("callout")) return false;
+  } else if (kind === "noteWhiteboard") {
+    if (
+      !$from.sameParent($to) ||
+      $from.parent.type !== paragraph ||
+      $from.parent.attrs.taskId
+    )
+      return false;
+    if (dispatch) {
+      const empty =
+        !$from.parent.content.size &&
+        $from
+          .node(-1)
+          .canReplaceWith($from.index(-1), $from.index(-1) + 1, type);
+      const at = empty ? $from.before() : $from.after();
+      tr.replaceWith(at, empty ? $from.after() : at, type.create());
+      tr.setSelection(NodeSelection.create(tr.doc, at)).scrollIntoView();
+    }
   } else if (kind === "columns") {
     if (
       !$from.sameParent($to) ||
@@ -314,7 +337,7 @@ function setNoteBlock(
       noteTableDepth($from) !== undefined
     )
       return false;
-    if (!commands.insertTable({ rows: 3, cols: 3, withHeaderRow: true }))
+    if (!commands.insertTable({ ...tableSize, withHeaderRow: true }))
       return false;
     if (dispatch) {
       const { $from: firstCell } = tr.selection;
@@ -432,9 +455,9 @@ export const TaskNoteEditing = Extension.create({
   addCommands() {
     return {
       setNoteBlock:
-        (kind, toggle = false, trigger) =>
+        (kind, toggle = false, trigger, tableSize) =>
         (props) => {
-          if (!trigger) return setNoteBlock(kind, toggle, props);
+          if (!trigger) return setNoteBlock(kind, toggle, props, tableSize);
           const { tr, can, chain, dispatch } = props;
           const { $from } = tr.selection;
           const empty = $from.parent.content.size === trigger.to - trigger.from;
@@ -461,7 +484,7 @@ export const TaskNoteEditing = Extension.create({
             tr.insert(pos, tr.doc.type.schema.nodes.paragraph.create());
             tr.setSelection(TextSelection.create(tr.doc, pos + 1));
           }
-          return chain().setNoteBlock(kind, toggle).run();
+          return chain().setNoteBlock(kind, toggle, undefined, tableSize).run();
         },
     };
   },
@@ -475,6 +498,10 @@ export const TaskNoteEditing = Extension.create({
         return true;
       };
     return {
+      "Ctrl-Shift-ArrowUp": () =>
+        stepBlock(editor.view, editor.state.selection.from, -1),
+      "Ctrl-Shift-ArrowDown": () =>
+        stepBlock(editor.view, editor.state.selection.from, 1),
       "Mod-Alt-0": convert("paragraph"),
       ...Object.fromEntries(
         noteHeadingLevels.map((level) => [
@@ -562,6 +589,47 @@ export const TaskNoteEditing = Extension.create({
           handleDOMEvents: {
             mousedown(view, event) {
               const { doc } = view.state;
+              if (
+                event.button === 0 &&
+                !event.shiftKey &&
+                event.target === view.dom &&
+                view.editable &&
+                !view.composing
+              ) {
+                let previous: HTMLElement | undefined;
+                for (const child of view.dom.children) {
+                  if (
+                    !(child instanceof HTMLElement) ||
+                    !child.getClientRects().length
+                  )
+                    continue;
+                  if (
+                    previous &&
+                    event.clientY < child.getBoundingClientRect().top &&
+                    event.clientY > previous.getBoundingClientRect().bottom
+                  ) {
+                    const pos = view.posAtDOM(
+                      view.dom,
+                      Array.prototype.indexOf.call(view.dom.childNodes, child),
+                    );
+                    const $pos = doc.resolve(pos);
+                    if (
+                      $pos.nodeBefore &&
+                      $pos.nodeAfter &&
+                      (!$pos.nodeBefore.isTextblock ||
+                        $pos.nodeBefore.type.name === "codeBlock") &&
+                      (!$pos.nodeAfter.isTextblock ||
+                        $pos.nodeAfter.type.name === "codeBlock")
+                    ) {
+                      event.preventDefault();
+                      moveAfterBlock(view, pos);
+                      view.focus();
+                      return true;
+                    }
+                  }
+                  previous = child;
+                }
+              }
               const last = doc.lastChild;
               if (
                 event.button !== 0 ||

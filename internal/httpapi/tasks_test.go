@@ -236,12 +236,15 @@ func TestTaskDispatchSendsOwnedImages(t *testing.T) {
 	title := func(text, id string) notes.Node {
 		return notes.Node{Type: "paragraph", Attrs: []byte(fmt.Sprintf(`{"taskId":%q}`, id)), Content: []notes.Node{{Type: "text", Text: text}}}
 	}
-	child := notes.Node{Type: "bulletList", Content: []notes.Node{{Type: "listItem", Content: []notes.Node{title("Subtask", subtaskID), picture(nested)}}}}
+	board := func(name string) notes.Node {
+		return notes.Node{Type: "noteWhiteboard", Attrs: []byte(fmt.Sprintf(`{"title":%q,"previewPath":%q,"scenePath":%q}`, name, first.Path, ".assets/"+strings.Repeat("1", 64)))}
+	}
+	child := notes.Node{Type: "bulletList", Content: []notes.Node{{Type: "listItem", Content: []notes.Node{title("Subtask", subtaskID), picture(nested), board("Nested")}}}}
 	save := func(extra ...notes.Node) {
 		t.Helper()
-		body := []notes.Node{title("Compare the screenshots", taskID), picture(first), picture(second), child}
+		body := []notes.Node{title("Compare the screenshots", taskID), picture(first), board("Design"), picture(second), child}
 		list := notes.Node{Type: "bulletList", Content: []notes.Node{{Type: "listItem", Content: append(body, extra...)}}}
-		note.Content, err = notes.Content([]notes.Node{list, picture(outside)})
+		note.Content, err = notes.Content([]notes.Node{list, picture(outside), board("Unrelated")})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +276,7 @@ func TestTaskDispatchSendsOwnedImages(t *testing.T) {
 	var run model.Run
 	f.request("POST", "/tasks/dispatch", input, 200, &run)
 	run = f.wait(run.ID, "completed")
-	if len(run.Attachments) != 2 || run.Attachments[0].Name != first.Name || run.Attachments[1].Name != second.Name {
+	if len(run.Attachments) != 3 || run.Attachments[0].Name != first.Name || run.Attachments[1].Name != "Design.png" || run.Attachments[2].Name != second.Name {
 		t.Fatalf("wrong task attachments: %#v", run.Attachments)
 	}
 	var receipt struct {
@@ -281,15 +284,15 @@ func TestTaskDispatchSendsOwnedImages(t *testing.T) {
 		Input  string `json:"input"`
 	}
 	if len(run.Items) != 1 || json.Unmarshal([]byte(strings.TrimPrefix(run.Items[0].Text, "wire:")), &receipt) != nil ||
-		receipt.Images != 2 || !strings.Contains(receipt.Input, input.Text) {
-		t.Fatalf("runtime did not receive the text and both images: %#v", run.Items)
+		receipt.Images != 3 || !strings.Contains(receipt.Input, input.Text) {
+		t.Fatalf("runtime did not receive the text, screenshots and board preview: %#v", run.Items)
 	}
 	if err := os.Remove(filepath.Join(f.a.Store.Dir, "notes", filepath.FromSlash(first.Path))); err != nil {
 		t.Fatal(err)
 	}
 	var replay model.Run
 	f.request("POST", "/tasks/dispatch", input, 200, &replay)
-	if replay.ID != run.ID || len(replay.Attachments) != 2 {
+	if replay.ID != run.ID || len(replay.Attachments) != len(run.Attachments) {
 		t.Fatalf("dispatch replay did not return the accepted run: %#v", replay)
 	}
 	for i, file := range replay.Attachments {

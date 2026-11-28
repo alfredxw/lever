@@ -265,6 +265,32 @@ export function NoteTableMenu({
         {originalSelection && (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
+              {t("tasks.table.verticalAlign")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {["top", "middle", "bottom"].map((align) => (
+                <DropdownMenuItem
+                  key={align}
+                  onSelect={() =>
+                    cellAction((chain) =>
+                      chain
+                        .setCellAttribute(
+                          "verticalAlign",
+                          align === "top" ? undefined : align,
+                        )
+                        .run(),
+                    )
+                  }
+                >
+                  {t("tasks.table." + align)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        {originalSelection && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
               <PaintBucket />
               {t("tasks.table.fill")}
             </DropdownMenuSubTrigger>

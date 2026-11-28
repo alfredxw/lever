@@ -1,4 +1,4 @@
-import type { Editor, Range } from "@tiptap/core";
+import type { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
@@ -9,7 +9,12 @@ import {
 import type { TFunction } from "i18next";
 import { buttonVariants } from "@/components/ui/button";
 import type { AgentMentionAction } from "./AgentMentionView";
-import { taskWidgets, type TaskBlock, type TaskStatus } from "./taskDocument";
+import {
+  noteTaskIndex,
+  taskWidgets,
+  type TaskBlock,
+  type TaskStatus,
+} from "./taskDocument";
 import { noteTableDepth } from "./taskEditing";
 
 export type TaskLine = TaskBlock & {
@@ -22,6 +27,20 @@ export type TaskLine = TaskBlock & {
   busy: boolean;
 };
 type Action = "open" | "check";
+
+function sameLineControls(a: TaskLine, b: TaskLine) {
+  return (
+    a.paragraph === b.paragraph &&
+    a.listItem === b.listItem &&
+    a.status === b.status &&
+    a.owner === b.owner &&
+    a.executionAgentId === b.executionAgentId &&
+    a.oneClickAgentId === b.oneClickAgentId &&
+    a.linked === b.linked &&
+    a.busy === b.busy &&
+    a.sending === b.sending
+  );
+}
 
 function decorateBlock(from: number, to: number, attrs: DecorationAttrs) {
   return Decoration.node(from, to, attrs, { key: JSON.stringify(attrs) });
@@ -50,7 +69,6 @@ export function useTaskControls({
   lines,
   active,
   loadingHandover,
-  matches,
   assignment,
   detail,
   inlineDetail,
@@ -62,7 +80,6 @@ export function useTaskControls({
   lines: TaskLine[];
   active: number | undefined;
   loadingHandover: boolean;
-  matches: Range[];
   assignment?: number;
   detail?: string;
   inlineDetail?: string;
@@ -75,6 +92,14 @@ export function useTaskControls({
   const [agentSlots, setAgentSlots] = useState(
     () => new Map<string, HTMLElement>(),
   );
+  const last = useRef<{
+    doc: ProseMirrorNode;
+    structure: object;
+    lines: TaskLine[];
+    active?: number;
+    loading: boolean;
+    t: TFunction;
+  }>(undefined);
   useLayoutEffect(() => {
     if (
       !editor ||
@@ -84,24 +109,59 @@ export function useTaskControls({
       editor.state.doc !== doc
     )
       return;
-    const decorations: Decoration[] = [];
-    const nextAgentSlots = new Map<string, HTMLElement>();
+    const current = taskWidgets.getState(editor.state) ?? DecorationSet.empty;
+    const decorations: Decoration[] = [],
+      remove: Decoration[] = [];
     const paragraph = active !== undefined ? doc.nodeAt(active) : null;
-    if (
+    const showPlaceholder =
       active !== undefined &&
       doc.childCount > 1 &&
       paragraph?.type.name === "paragraph" &&
       !paragraph.content.size &&
       !paragraph.attrs.taskId &&
-      noteTableDepth(doc.resolve(active)) === undefined
-    ) {
+      noteTableDepth(doc.resolve(active)) === undefined;
+    // Ordinary text edits preserve the order of task lines. ProseMirror has
+    // already mapped their widgets, so only replace controls on changed lines.
+    const structure = noteTaskIndex.getState(editor.state)?.structure;
+    const previous = last.current;
+    const track =
+      structure &&
+      !showPlaceholder &&
+      assignment === undefined &&
+      !detail &&
+      !inlineDetail;
+    const incremental =
+      track &&
+      previous &&
+      previous.doc !== doc &&
+      previous.structure === structure &&
+      previous.active === active &&
+      previous.loading === loadingHandover &&
+      previous.t === t;
+    last.current = track
+      ? { doc, structure, lines, active, loading: loadingHandover, t }
+      : undefined;
+    const nextAgentSlots = incremental
+      ? new Map(agentSlots)
+      : new Map<string, HTMLElement>();
+    if (showPlaceholder) {
       decorations.push(
         decorateBlock(active, active + paragraph.nodeSize, {
           "data-note-empty-label": t("tasks.placeholder"),
         }),
       );
     }
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
+      if (incremental) {
+        if (sameLineControls(line, previous.lines[index])) continue;
+        const end = line.pos + line.paragraph.nodeSize;
+        remove.push(
+          ...current
+            .find(line.pos, end)
+            .filter((widget) => widget.from >= line.pos && widget.to <= end),
+        );
+        if (line.id) nextAgentSlots.delete(line.id);
+      }
       if (!line.id && !line.title) continue;
       const { pos, paragraph, id, status, owner, linked, title, inTable } =
         line;
@@ -283,16 +343,14 @@ export function useTaskControls({
         );
       }
     }
-    for (const { from, to } of matches) {
-      const node = doc.nodeAt(from);
-      if (node?.isTextblock && from + node.nodeSize === to)
-        decorations.push(
-          decorateBlock(from, to, { class: "task-search-match" }),
-        );
-    }
-    const next = DecorationSet.create(doc, decorations);
-    const current = taskWidgets.getState(editor.state) ?? DecorationSet.empty;
-    if (!sameDecorations(current, next))
+    const next = incremental
+      ? current.remove(remove).add(doc, decorations)
+      : DecorationSet.create(doc, decorations);
+    if (
+      incremental
+        ? remove.length || decorations.length
+        : !sameDecorations(current, next)
+    )
       editor.view.dispatch(
         editor.state.tr
           .setMeta(taskWidgets, next)
@@ -314,7 +372,6 @@ export function useTaskControls({
     lines,
     active,
     loadingHandover,
-    matches,
     assignment,
     agentSlots,
     detail,

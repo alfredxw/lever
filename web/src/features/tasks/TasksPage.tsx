@@ -860,6 +860,7 @@ export default function TasksPage({
           />
         ) : (
           <TaskNotePane
+            onOpenNote={openNote}
             id={id}
             notes={notes}
             visible={visible}

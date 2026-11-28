@@ -22,6 +22,8 @@ type TaskNote struct {
 }
 
 type TaskNoteSummary struct {
+	Markdown  bool          `json:"markdown,omitempty"`
+	Links     []string      `json:"links,omitempty"`
 	ID        string        `json:"id"`
 	Title     string        `json:"title"`
 	State     TaskNoteState `json:"state"`

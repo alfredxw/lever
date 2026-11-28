@@ -78,7 +78,7 @@ async function cacheTaskNote(note: TaskNote) {
 
 export async function createTaskNote(
   input: Pick<TaskNote, "id" | "title"> &
-    Pick<Partial<TaskNote>, "project" | "content">,
+    Pick<Partial<TaskNote>, "project" | "content" | "directory">,
 ) {
   const created = await api<TaskNote>("/tasks/notes", input);
   await cacheTaskNote(created);
@@ -152,13 +152,24 @@ export async function setTaskNoteState(
   void queryClient.invalidateQueries({ queryKey: ["task-executions"] });
 }
 
+// Acknowledgements carry the exact immutable document sent to the server.
+const savedDocuments = new WeakMap<object, ProseMirrorNode>();
+
 export function noteDraftDocument(
   draft: NoteDraft,
   schema: Schema = taskNoteSchema,
 ) {
-  return draft.doc?.type.schema === schema
-    ? draft.doc
-    : schema.nodeFromJSON(draft.doc?.toJSON() ?? draft.note.content);
+  const content = draft.note.content;
+  const cached =
+    typeof content === "object" && content !== null
+      ? savedDocuments.get(content)
+      : undefined;
+  const doc = draft.doc ?? cached;
+  if (doc?.type.schema === schema) return doc;
+  const parsed = schema.nodeFromJSON(doc?.toJSON() ?? content);
+  if (!draft.doc && typeof content === "object" && content !== null)
+    savedDocuments.set(content, parsed);
+  return parsed;
 }
 
 function mergeField(before: string, local: string, remote: string) {
@@ -270,7 +281,9 @@ function persistTaskNote(id: string, flush: boolean): Promise<TaskNote> {
           continue;
         }
         retries = 0;
-        await cacheTaskNote(saved);
+        const cached = await cacheTaskNote(saved);
+        if (current.doc && typeof cached.content === "object" && cached.content)
+          savedDocuments.set(cached.content, current.doc);
         if (current === session.draft) {
           sessions.delete(id);
           publish(id);

@@ -254,6 +254,23 @@ function TaskNoteRow({
       );
   }
 
+  if (note.markdown && !note.conflict)
+    return (
+      <Button
+        {...drag}
+        variant="ghost"
+        className="sidebar-nav-item task-nav-child"
+        aria-current={current ? "page" : undefined}
+        onClick={onOpen}
+      >
+        <FileText aria-hidden="true" />
+        {label}
+        {unsaved && (
+          <span className="task-unsaved-dot" title={t("tasks.unsaved")} />
+        )}
+      </Button>
+    );
+
   if (note.conflict) {
     return (
       <Button

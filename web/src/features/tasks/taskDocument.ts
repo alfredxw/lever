@@ -11,7 +11,7 @@ import {
   Slice,
   type Node as ProseMirrorNode,
 } from "@tiptap/pm/model";
-import { Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Mapping, ReplaceStep } from "@tiptap/pm/transform";
 import { DecorationSet } from "@tiptap/pm/view";
 import { TableKit } from "@tiptap/extension-table";
@@ -19,7 +19,6 @@ import { MarkdownManager } from "@tiptap/markdown";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import type { Agent, TaskExecution, TaskWorkflow } from "@/api/types.gen";
 import {
-  promptCodeBlock,
   promptStarter,
   textPrompt,
 } from "@/features/chat/prompt";
@@ -32,8 +31,23 @@ import {
   TaskNoteEditing,
 } from "./taskEditing";
 
+import { NoteCodeBlock } from "./NoteCodeBlock";
+import {
+  NoteFolding,
+  changesNoteStructure,
+  changesNoteHeadings,
+} from "./noteFolding";
+import { CalloutView, ColumnsView } from "./NoteLayoutBlocks";
+import { NoteFind } from "./noteFind";
+import { NoteLink, MarkdownImage } from "./noteMarkdown";
+import { NoteWhiteboard } from "./NoteWhiteboard";
 import { NoteAssetBlock, noteImage, type NoteAsset } from "./noteAsset";
-import { NoteAlignment, NoteHighlight, NoteTextColor } from "./noteFormatting";
+import {
+  NoteAlignment,
+  NoteHighlight,
+  NoteTextColor,
+  toneAttribute,
+} from "./noteFormatting";
 
 const taskIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 type IssueSource = { id: string; repository: string };
@@ -59,6 +73,7 @@ export type TaskBlock = {
   title: string;
   agentId?: string;
   mention?: TaskMention;
+  headingAgentId?: string;
   issue?: IssueSource;
 };
 
@@ -159,6 +174,7 @@ export function taskBlocks(
         )
         .replace(/\s+/g, " ")
         .trim(),
+      headingAgentId: headings.at(-1)?.owner,
       agentId: mention?.agentId ?? headings.at(-1)?.owner,
       mention,
       issue: node.attrs.issue || undefined,
@@ -171,7 +187,14 @@ export function taskBlocks(
 export function taskImages(block: TaskBlock) {
   const images: NoteAsset[] = [];
   block.listItem?.forEach((child) => {
-    const image = noteImage(child);
+    const image =
+      child.type.name === "noteWhiteboard" && child.attrs.previewPath
+        ? {
+            path: child.attrs.previewPath,
+            name: child.attrs.title + ".png",
+            image: true,
+          }
+        : noteImage(child);
     if (image) images.push(image);
   });
   return images;
@@ -181,6 +204,14 @@ export function taskPrompt(block: TaskBlock) {
   let imageNumber = 0;
   function promptBlocks(node: JSONContent, direct = false): JSONContent[] {
     if (node.type === "agentMention") return [];
+    if (node.type === "paragraph" && node.attrs?.taskId)
+      node = { ...node, attrs: { ...node.attrs, taskId: undefined } };
+    if (node.type === "noteWhiteboard")
+      return textPrompt(
+        direct && node.attrs?.previewPath
+          ? `[Image ${++imageNumber}: ${node.attrs.title || "Whiteboard"}]`
+          : `[Whiteboard: ${node.attrs?.title || ""}]`,
+      ).content!;
     if (node.type === "noteAsset" && node.attrs?.image === true) {
       // The runtime receives image attachments in this same order.
       return direct
@@ -247,21 +278,70 @@ export function mergeTaskDocuments(
 
 export const taskWidgets = new PluginKey<DecorationSet>("task-widgets");
 
-function changesTaskStructure(tr: Transaction) {
-  return tr.steps.some((step, index) => {
-    if (!(step instanceof ReplaceStep)) return true;
-    const { slice } = step;
-    if (
-      slice.openStart ||
-      slice.openEnd ||
-      (slice.size && !slice.content.firstChild?.isInline)
-    )
-      return true;
-    const doc = tr.docs[index];
-    const from = doc.resolve(step.from);
-    return !from.parent.isTextblock || !from.sameParent(doc.resolve(step.to));
-  });
+type TaskIndex = { blocks: TaskBlock[]; revision: object; structure: object };
+export const noteTaskIndex = new PluginKey<TaskIndex>("note-task-index");
+function indexTasks(doc: ProseMirrorNode): TaskIndex {
+  return {
+    blocks: taskBlocks(doc, { includeListItems: true }),
+    revision: {},
+    structure: {},
+  };
 }
+
+const indexedTasks = new Plugin<TaskIndex>({
+  key: noteTaskIndex,
+  state: {
+    init: (_, state) => indexTasks(state.doc),
+    apply(tr, index) {
+      if (!tr.docChanged) return index;
+      if (changesNoteHeadings(tr)) return indexTasks(tr.doc);
+      let changed = false;
+      const blocks = index.blocks.map((block) => {
+        const pos = tr.mapping.map(block.pos);
+        const $pos = tr.doc.resolve(pos);
+        const paragraph = $pos.nodeAfter!;
+        const listItem = block.listItem ? $pos.parent : undefined;
+        if (
+          paragraph === block.paragraph &&
+          listItem === block.listItem &&
+          pos === block.pos
+        )
+          return block;
+        const mention =
+          paragraph === block.paragraph
+            ? block.mention && {
+                ...block.mention,
+                pos: pos + (block.mention.pos - block.pos),
+              }
+            : lastMention(paragraph, pos);
+        changed ||=
+          paragraph !== block.paragraph || listItem !== block.listItem;
+        return {
+          ...block,
+          pos,
+          paragraph,
+          listItem,
+          mention,
+          agentId: mention?.agentId ?? block.headingAgentId,
+          title:
+            paragraph === block.paragraph
+              ? block.title
+              : paragraph
+                  .textBetween(0, paragraph.content.size, " ", (child) =>
+                    child.type.name === "hardBreak" ? " " : "",
+                  )
+                  .replace(/\s+/g, " ")
+                  .trim(),
+        };
+      });
+      return {
+        blocks,
+        revision: changed ? {} : index.revision,
+        structure: index.structure,
+      };
+    },
+  },
+});
 
 const AgentMention = Node.create({
   name: "agentMention",
@@ -421,6 +501,7 @@ const TaskMarkers = Extension.create<{ noteId: string }>({
   },
   addProseMirrorPlugins() {
     return [
+      indexedTasks,
       new Plugin({
         key: taskWidgets,
         state: {
@@ -466,7 +547,7 @@ const TaskMarkers = Extension.create<{ noteId: string }>({
         },
         appendTransaction: (transactions, previous, state) => {
           // An edit inside one textblock cannot create a second task marker.
-          if (!transactions.some(changesTaskStructure)) return null;
+          if (!transactions.some(changesNoteStructure)) return null;
           const byId = new Map<string, TaskBlock[]>();
           for (const block of taskBlocks(state.doc)) {
             if (!block.id) continue;
@@ -520,6 +601,40 @@ const noteStarter = promptStarter
       return (this.parent?.() ?? []).map((extension) => {
         if (extension.name === "heading" || extension.name === "horizontalRule")
           return extension.extend(protectBlockInput);
+        if (extension.name === "paragraph")
+          return extension.extend({
+            renderMarkdown(node, helpers, context) {
+              const text = this.parent?.(node, helpers, context) ?? "";
+              if (!node.attrs?.taskId || node.attrs.taskCheckbox === false)
+                return text;
+              const bullet = context.parentType === "listItem" ? "" : "- ";
+              return bullet + (node.attrs.done ? "[x] " : "[ ] ") + text;
+            },
+          });
+        if (extension.name === "link")
+          return extension.extend({
+            parseMarkdown(token, helpers) {
+              // Tiptap applies link marks to text only. A board's Markdown link
+              // wraps an image and must retain the destination of that link.
+              if (
+                token.tokens?.length === 1 &&
+                token.tokens[0].type === "image"
+              ) {
+                const [image] = helpers.parseInline(token.tokens);
+                if (image)
+                  return {
+                    ...image,
+                    marks: [
+                      {
+                        type: "link",
+                        attrs: { href: token.href, title: token.title },
+                      },
+                    ],
+                  };
+              }
+              return this.parent?.(token, helpers) ?? [];
+            },
+          });
         if (extension.name !== "listItem") return extension;
         return extension.extend({
           parseMarkdown(token, helpers) {
@@ -557,7 +672,20 @@ const Callout = Node.create({
   content: "block+",
   defining: true,
   parseHTML: () => [{ tag: "aside[data-note-callout]" }],
-  renderHTML: () => ["aside", { "data-note-callout": "" }, 0],
+  addAttributes: () => ({
+    tone: toneAttribute,
+    emoji: {
+      default: "",
+      parseHTML: (el) => el.dataset.emoji || "",
+      renderHTML: (attrs) => (attrs.emoji ? { "data-emoji": attrs.emoji } : {}),
+    },
+  }),
+  addNodeView: () => ReactNodeViewRenderer(CalloutView),
+  renderHTML: ({ HTMLAttributes }) => [
+    "aside",
+    { "data-note-callout": "", ...HTMLAttributes },
+    0,
+  ],
   renderMarkdown: (node, helpers) =>
     helpers
       .renderChildren(node.content ?? [])
@@ -569,10 +697,25 @@ const Callout = Node.create({
 const Columns = Node.create({
   name: "columns",
   group: "block",
-  content: "noteColumn noteColumn",
+  content: "noteColumn{2,5}",
+  addAttributes: () => ({
+    ratios: {
+      default: null,
+      parseHTML: (el) => el.dataset.ratios?.split(",").map(Number) ?? null,
+      renderHTML: (attrs) =>
+        Array.isArray(attrs.ratios)
+          ? { "data-ratios": attrs.ratios.join(",") }
+          : {},
+    },
+  }),
+  addNodeView: () => ReactNodeViewRenderer(ColumnsView),
   isolating: true,
   parseHTML: () => [{ tag: "div[data-note-columns]" }],
-  renderHTML: () => ["div", { "data-note-columns": "" }, 0],
+  renderHTML: ({ HTMLAttributes }) => [
+    "div",
+    { "data-note-columns": "", ...HTMLAttributes },
+    0,
+  ],
   renderMarkdown: (node, helpers) =>
     helpers.renderChildren(node.content ?? [], "\n\n"),
 });
@@ -595,6 +738,14 @@ const NoteCellFill = Extension.create({
       {
         types: ["tableCell", "tableHeader"],
         attributes: {
+          verticalAlign: {
+            default: undefined,
+            parseHTML: (el) => el.dataset.verticalAlign,
+            renderHTML: (attrs) =>
+              ["middle", "bottom"].includes(attrs.verticalAlign)
+                ? { "data-vertical-align": attrs.verticalAlign }
+                : {},
+          },
           fill: {
             default: null,
             parseHTML: (element) => element.getAttribute("data-note-cell-fill"),
@@ -611,8 +762,12 @@ const NoteCellFill = Extension.create({
 
 export const taskNoteExtensions = (noteId = "") => [
   noteStarter,
-  promptCodeBlock.extend(protectBlockInput),
+  NoteCodeBlock.configure({ noteId }),
   AgentMention,
+  NoteLink,
+  NoteFind,
+  NoteFolding,
+  MarkdownImage,
   TaskMarkers.configure({ noteId }),
   TaskNoteEditing,
   NoteAlignment,
@@ -622,6 +777,7 @@ export const taskNoteExtensions = (noteId = "") => [
   Columns,
   NoteColumn,
   NoteAssetBlock,
+  NoteWhiteboard.configure({ noteId }),
   NoteCellFill,
   TableKit.configure({
     table: {
@@ -633,6 +789,72 @@ export const taskNoteExtensions = (noteId = "") => [
 ];
 const markdown = new MarkdownManager({ extensions: taskNoteExtensions() });
 export const taskNoteSchema = getSchema(taskNoteExtensions());
+export function parseNoteFile(source: string): JSONContent {
+  if (!source.trim()) return textPrompt(source);
+  const parsed = markdown.parse(source);
+  function restore(node: JSONContent): JSONContent {
+    const link = node.marks?.find((mark) => mark.type === "link")?.attrs?.href;
+    if (
+      node.type === "text" &&
+      typeof link === "string" &&
+      link.startsWith("lever-note:") &&
+      taskIdPattern.test(link.slice(11))
+    )
+      return {
+        type: "noteLink",
+        attrs: { id: link.slice(11), label: node.text?.replace(/^@/, "") },
+      };
+    if (!node.content) return node;
+    const content = node.content.map(restore);
+    const only = content.length === 1 ? content[0] : undefined;
+    if (node.type === "paragraph" && only) {
+      const href = only.marks?.find((mark) => mark.type === "link")?.attrs
+        ?.href;
+      const image = only.type === "markdownImage";
+      const asset = image ? only.attrs?.src : href;
+      if (typeof asset === "string" && /^\.assets\/[a-f0-9]{64}$/.test(asset)) {
+        if (
+          image &&
+          typeof href === "string" &&
+          /^\.assets\/[a-f0-9]{64}$/.test(href)
+        )
+          return {
+            type: "noteWhiteboard",
+            attrs: {
+              title: only.attrs?.alt,
+              scenePath: href,
+              previewPath: asset,
+            },
+          };
+        if (!image && only.text?.endsWith(".drawnix"))
+          return {
+            type: "noteWhiteboard",
+            attrs: { title: only.text.slice(0, -7), scenePath: asset },
+          };
+        return {
+          type: "noteAsset",
+          attrs: {
+            path: asset,
+            name: image ? only.attrs?.alt : only.text,
+            image,
+            ...(image && only.attrs?.title
+              ? { caption: only.attrs.title }
+              : {}),
+          },
+        };
+      }
+    }
+    return { ...node, content };
+  }
+  const result = restore(parsed);
+  taskNoteSchema.nodeFromJSON(result).check();
+  return result;
+}
+
+export function serializeNoteMarkdown(doc: JSONContent) {
+  return markdown.serialize(doc) + "\n";
+}
+
 export function parseTaskMarkdown(text: string): JSONContent {
   try {
     let unsupported = false;

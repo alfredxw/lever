@@ -6,6 +6,17 @@ import {
 } from "@tiptap/core";
 import { isolateNoteEdit } from "./taskEditing";
 
+export const noteTones = ["gray", "blue", "green", "yellow", "red", "purple"];
+export const toneAttribute = {
+  default: undefined,
+  parseHTML: (el: HTMLElement) =>
+    noteTones.includes(el.dataset.noteTone || "")
+      ? el.dataset.noteTone
+      : undefined,
+  renderHTML: ({ tone }: { tone?: string }) =>
+    tone && noteTones.includes(tone) ? { "data-note-tone": tone } : {},
+};
+
 export const noteAlignments = ["left", "center", "right"] as const;
 export type NoteAlignment = (typeof noteAlignments)[number];
 
@@ -47,6 +58,7 @@ export const NoteAlignment = Extension.create({
       {
         types: alignedBlocks,
         attributes: {
+          tone: toneAttribute,
           textAlign: {
             default: null,
             parseHTML: (element) => {

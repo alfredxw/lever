@@ -62,7 +62,7 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/tasks/notes", func(w http.ResponseWriter, r *http.Request) {
 		var input model.TaskNote
-		if err := read(w, r, &input); err != nil {
+		if err := readLimit(w, r, &input, 2<<20); err != nil {
 			respond(w, nil, err)
 			return
 		}
@@ -107,7 +107,7 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 		note, err := s.App.SetTaskNoteState(r.Context(), r.PathValue("id"), input.State, input.Directory)
 		respond(w, note, err)
 	})
-	mux.HandleFunc("POST /api/tasks/notes/{id}/assets", func(w http.ResponseWriter, r *http.Request) {
+	uploadNoteAsset := func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, app.MaxNoteAssetBytes+(64<<10))
 		reader, err := r.MultipartReader()
 		if err != nil {
@@ -128,9 +128,16 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 			respond(w, nil, &app.Error{Status: 400, Message: "Upload one attachment at a time"})
 			return
 		}
-		asset, err := s.App.SaveNoteAsset(r.Context(), r.PathValue("id"), part.FileName(), data)
+		var asset app.NoteAsset
+		if id := r.PathValue("id"); id != "" {
+			asset, err = s.App.SaveNoteAsset(r.Context(), id, part.FileName(), data)
+		} else {
+			asset, err = s.App.ImportNoteAsset(r.URL.Query().Get("directory"), part.FileName(), data)
+		}
 		respond(w, asset, err)
-	})
+	}
+	mux.HandleFunc("POST /api/tasks/notes/{id}/assets", uploadNoteAsset)
+	mux.HandleFunc("POST /api/tasks/note-assets", uploadNoteAsset)
 	mux.HandleFunc("GET /api/tasks/note-assets/{asset}", func(w http.ResponseWriter, r *http.Request) {
 		file, imageType, err := s.App.OpenNoteAsset(r.PathValue("asset"))
 		if err != nil {
@@ -152,6 +159,8 @@ func (s *Server) taskRoutes(mux *http.ServeMux) {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": name}))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		w.Header().Set("ETag", `"`+r.PathValue("asset")+`"`)
 		http.ServeContent(w, r, "", time.Time{}, file)
 	})
 	mux.HandleFunc("GET /api/tasks/executions", func(w http.ResponseWriter, r *http.Request) {

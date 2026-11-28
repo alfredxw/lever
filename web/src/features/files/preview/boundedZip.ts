@@ -11,6 +11,7 @@ import {
 export async function boundedZip(
   bytes: ArrayBuffer,
   limit = ARCHIVE_MAX_BYTES,
+  entryLimit = ARCHIVE_ENTRY_MAX_BYTES,
 ) {
   if (bytes.byteLength > limit)
     throw new Error("Archive exceeds the preview size limit.");
@@ -39,7 +40,7 @@ export async function boundedZip(
           size += chunk.length;
           total += chunk.length;
           if (
-            size > ARCHIVE_ENTRY_MAX_BYTES ||
+            size > entryLimit ||
             total > limit ||
             total > Math.max(1024 * 1024, bytes.byteLength * ARCHIVE_MAX_RATIO)
           ) {

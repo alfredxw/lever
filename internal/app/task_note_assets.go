@@ -35,19 +35,36 @@ func noteImageType(data []byte) string {
 }
 
 func (a *App) SaveNoteAsset(ctx context.Context, id, name string, data []byte) (NoteAsset, error) {
+	if !notes.IDPattern.MatchString(id) {
+		return NoteAsset{}, invalid("Invalid note ID")
+	}
+	a.notesMu.Lock()
+	defer a.notesMu.Unlock()
+	if _, err := a.taskNote(ctx, id); err != nil {
+		return NoteAsset{}, err
+	}
+	return a.storeNoteAsset(name, data)
+}
+
+// Import publishes immutable assets before the document that references them.
+func (a *App) ImportNoteAsset(directory, name string, data []byte) (NoteAsset, error) {
+	a.notesMu.Lock()
+	defer a.notesMu.Unlock()
+	if directory != a.notesDir {
+		return NoteAsset{}, ErrTaskNotesDirectoryChanged
+	}
+	return a.storeNoteAsset(name, data)
+}
+
+func (a *App) storeNoteAsset(name string, data []byte) (NoteAsset, error) {
 	var asset NoteAsset
-	if !notes.IDPattern.MatchString(id) || len(data) == 0 || len(data) > MaxNoteAssetBytes {
+	if len(data) == 0 || len(data) > MaxNoteAssetBytes {
 		return asset, invalid("Select a nonempty attachment up to 20 MiB")
 	}
 	// Use a content-addressed name so copies can always refer to the same asset.
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	contentType := noteImageType(data)
 	filename := fmt.Sprintf("%x", sha256.Sum256(data))
-	a.notesMu.Lock()
-	defer a.notesMu.Unlock()
-	if _, err := a.taskNote(ctx, id); err != nil {
-		return asset, err
-	}
 	root, err := os.OpenRoot(a.notesDir)
 	if err != nil {
 		return asset, err
@@ -124,6 +141,16 @@ func noteDispatch(note model.TaskNote, taskID string) (taskDelivery, error) {
 		Directory: note.Directory, Version: hash(body),
 	}}
 	for _, block := range body {
+		if block.Type == "noteWhiteboard" {
+			var board struct{ PreviewPath, Title string }
+			if err := json.Unmarshal(block.Attrs, &board); err != nil {
+				return taskDelivery{}, invalid("Invalid whiteboard in task note")
+			}
+			if board.PreviewPath != "" {
+				delivery.Images = append(delivery.Images, NoteAsset{Path: board.PreviewPath, Name: noteFilename(board.Title) + ".png", Image: true})
+			}
+			continue
+		}
 		if block.Type != "noteAsset" || len(block.Attrs) == 0 {
 			continue
 		}

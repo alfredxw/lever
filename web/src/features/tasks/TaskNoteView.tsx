@@ -2,17 +2,22 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
-  useEffectEvent,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
+import { NoteFindControl, type FindRequest } from "./NoteFindControl";
+import { appendTaskBlocks, taskAtImagePosition } from "./noteImageEditing";
+import { NoteTableSize, type TableSize } from "./NoteTableSize";
+import { NoteOutline } from "./NoteOutline";
+import { NoteImport } from "./NoteImport";
+import { NoteBacklinks } from "./NoteBacklinks";
+import { exportNoteMarkdown, printNote } from "./noteFiles";
 import { ShareNote } from "./ShareNote";
 import { useTranslation } from "react-i18next";
 import type { Editor } from "@tiptap/react";
-import type { Range } from "@tiptap/core";
 import {
   ChevronRight,
   Ellipsis,
@@ -20,7 +25,6 @@ import {
   List,
   Paperclip,
   Plus,
-  Search,
   UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,6 +33,7 @@ import type {
   Agent,
   Chat,
   TaskExecution,
+  TaskNoteSummary,
   TaskNote,
   TaskWorkflow,
 } from "@/api/types.gen";
@@ -41,13 +46,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { directoryName } from "@/lib/paths";
 import { TaskDetail } from "./TaskDetail";
 import type { OpenRun } from "@/features/chat/DelegatedTasks";
@@ -63,11 +66,16 @@ import {
   setTaskMarker,
   taskBlocks,
   taskImages,
+  noteTaskIndex,
   taskPrompt,
   taskStatus,
   type TaskBlock,
 } from "./taskDocument";
-import { isolateNoteEdit, noteTableDepth } from "./taskEditing";
+import {
+  isolateNoteEdit,
+  noteTableDepth,
+  type NoteBlockType,
+} from "./taskEditing";
 import { useTaskControls } from "./useTaskControls";
 import {
   noteHandoverQuery,
@@ -98,6 +106,8 @@ export function TaskNoteView({
   searchStep = 0,
   reveal,
   onRevealed,
+  onOpenNote,
+  library,
   onOpenChat,
   onOpenRun,
 }: {
@@ -113,6 +123,8 @@ export function TaskNoteView({
   searchStep?: number;
   reveal?: TaskReveal;
   onRevealed?: () => void;
+  onOpenNote: (id: string) => void;
+  library: TaskNoteSummary[];
   onOpenChat: (execution: TaskExecution, title: string) => void;
   onOpenRun: OpenRun;
 }) {
@@ -130,16 +142,17 @@ export function TaskNoteView({
   );
   const settingsTrigger = useRef<HTMLButtonElement>(null);
   const [detail, setDetail] = useState<string>();
-  const [outlineOpen, setOutlineOpen] = useState(false);
-  const [finding, setFinding] = useState(false);
-  const [find, setFind] = useState("");
-  const [findStep, setFindStep] = useState(0);
+  const [outlineOpen, setOutlineOpen] = useState(
+    () => localStorage.getItem("lever:notes:outline") === "true",
+  );
+  const [findRequest, setFindRequest] = useState<FindRequest>();
   const [editingProject, setEditingProject] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [narrow, setNarrow] = useState(false);
   const layout = useRef<HTMLDivElement>(null);
   const assetInput = useRef<HTMLInputElement>(null);
   const returnToEditor = useRef(false);
+  const [insertOpen, setInsertOpen] = useState(false);
   const dispatch = useTaskDispatch();
   const [selection, setSelection] = useState<NoteSelection>();
 
@@ -151,14 +164,17 @@ export function TaskNoteView({
 
   const refreshSelection = useCallback((next: NoteSelection) => {
     setSelection((current) =>
-      current?.doc === next.doc && current.pos === next.pos ? current : next,
+      current && current.revision === next.revision && current.pos === next.pos
+        ? current
+        : next,
     );
   }, []);
   const available = useMemo(
     () => agents.filter((agent) => !agent.archived),
     [agents],
   );
-  const doc = selection?.doc;
+  const doc = editor?.state.doc;
+  const indexed = editor && noteTaskIndex.getState(editor.state)?.blocks;
   const activeLine = selection?.pos;
   const agentNames = useMemo(
     () => new Map(agents.map(({ id, name }) => [id, name])),
@@ -166,7 +182,7 @@ export function TaskNoteView({
   );
   const lines = useMemo(() => {
     if (!doc) return [];
-    return taskBlocks(doc, { includeListItems: true }).map((block) => {
+    return (indexed ?? []).map((block) => {
       const execution = block.id ? executions.get(block.id) : undefined;
       const workflow = block.id ? workflows.get(block.id) : undefined;
       const status = taskStatus(block, execution, workflow);
@@ -193,7 +209,7 @@ export function TaskNoteView({
       };
     });
   }, [
-    doc,
+    indexed,
     agentNames,
     executions,
     workflows,
@@ -202,45 +218,12 @@ export function TaskNoteView({
     available,
     sendingIds,
   ]);
-  const headings = useMemo(() => {
-    const items: { pos: number; level: number; text: string }[] = [];
-    if (!outlineOpen) return items;
-    doc?.descendants((node, pos) => {
-      if (node.type.name !== "heading") return;
-      const text = node
-        .textBetween(0, node.content.size, " ", (child) =>
-          child.type.name === "agentMention" ? "@" + child.attrs.label : "",
-        )
-        .trim();
-      if (text) items.push({ pos, level: node.attrs.level, text });
-      return false;
-    });
-    return items;
-  }, [doc, outlineOpen]);
   const path = note.path?.split("/") ?? [];
   const archived = note.state === "archived";
   if (archived) path.shift();
   const folder = path.slice(0, -1);
   if (archived) folder.unshift(t("common.archived"));
   const title = note.title.trim() || t("tasks.note");
-  const matches = useMemo(() => {
-    const result: Range[] = [];
-    const text = (finding ? find : search).trim().toLocaleLowerCase();
-    if (text)
-      doc?.descendants((node, pos) => {
-        if (
-          node.isTextblock &&
-          node
-            .textBetween(0, node.content.size, " ", (child) =>
-              child.type.name === "agentMention" ? child.attrs.label : "",
-            )
-            .toLocaleLowerCase()
-            .includes(text)
-        )
-          result.push({ from: pos, to: pos + node.nodeSize });
-      });
-    return result;
-  }, [doc, find, finding, search]);
   const assignTask =
     assignment &&
     lines.find((line) =>
@@ -288,12 +271,6 @@ export function TaskNoteView({
     onRevealed?.();
   }, [editor, reveal, doc, lines, onRevealed, t]);
 
-  const locateSearchMatch = useEffectEvent((step: number) => {
-    if (step && matches.length)
-      locate(matches[(step - 1) % matches.length].from, false);
-  });
-  useEffect(() => locateSearchMatch(searchStep), [searchStep, editor]);
-
   async function dispatchLine(block: TaskBlock, options: TaskDispatchOptions) {
     if (
       !editor ||
@@ -326,8 +303,13 @@ export function TaskNoteView({
 
   function selectLine(pos: number, check: boolean, trigger: HTMLButtonElement) {
     if (!editor || editor.view.composing) return;
-    const line = lines.find((item) => item.pos === pos);
-    if (!line || editor.state.doc.nodeAt(pos) !== line.paragraph) return;
+    const current = noteTaskIndex
+      .getState(editor.state)
+      ?.blocks.find((item) => item.pos === pos);
+    const decorated =
+      current && lines.find((item) => item.paragraph === current.paragraph);
+    if (!current || !decorated) return;
+    const line = { ...decorated, ...current };
     if (check) {
       if (line.checkbox && !line.busy) setTaskMarker(editor, line, !line.done);
       return;
@@ -390,7 +372,6 @@ export function TaskNoteView({
     lines,
     active: activeLine,
     loadingHandover: handover.isPending,
-    matches,
     assignment: assignTask?.pos,
     detail,
     inlineDetail: narrow ? detail : undefined,
@@ -500,6 +481,52 @@ export function TaskNoteView({
     }
   }
 
+  function insertBlock(type: NoteBlockType, size?: TableSize) {
+    if (!editor || editor.view.composing) return;
+    const {
+      doc,
+      selection: { $from, empty },
+    } = editor.state;
+    const task = type === "noteWhiteboard" && taskAtImagePosition($from);
+    if (task) {
+      const tr = editor.state.tr;
+      if (
+        appendTaskBlocks(tr, task.id, [
+          editor.schema.nodes.noteWhiteboard.create(),
+        ])
+      ) {
+        isolateNoteEdit(tr);
+        editor.view.dispatch(tr);
+        returnToEditor.current = true;
+        return;
+      }
+    }
+    const depth =
+      type !== "table" &&
+      type !== "columns" &&
+      $from.parent.isTextblock &&
+      noteTableDepth($from) !== undefined
+        ? $from.depth
+        : 1;
+    const chain = editor.chain().focus();
+    if (
+      !(
+        empty &&
+        $from.parent.type.name === "paragraph" &&
+        !$from.parent.content.size &&
+        !$from.parent.attrs.taskId &&
+        $from.depth === depth
+      )
+    ) {
+      const pos = $from.depth ? $from.after(depth) : doc.content.size;
+      chain
+        .insertContentAt(pos, { type: "paragraph" })
+        .setTextSelection(pos + 1);
+    }
+    returnToEditor.current = chain
+      .setNoteBlock(type, false, undefined, size)
+      .run();
+  }
   return (
     <div ref={layout} className="task-note-workspace">
       <header className="task-document-toolbar">
@@ -531,45 +558,18 @@ export function TaskNoteView({
             <UserCog />
           </ToolbarButton>
         </TooltipProvider>
-        <Popover open={outlineOpen} onOpenChange={setOutlineOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("tasks.outline")}
-            >
-              <List />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            className="task-document-outline"
-            side="bottom"
-            align="start"
-          >
-            <nav aria-label={t("tasks.outline")}>
-              {headings.length ? (
-                headings.map((heading) => (
-                  <Button
-                    key={heading.pos}
-                    variant="ghost"
-                    size="sm"
-                    style={{
-                      paddingInlineStart: 8 + (heading.level - 1) * 10,
-                    }}
-                    onClick={() => {
-                      setOutlineOpen(false);
-                      locate(heading.pos, false);
-                    }}
-                  >
-                    <span className="truncate">{heading.text}</span>
-                  </Button>
-                ))
-              ) : (
-                <p>{t("tasks.emptyOutline")}</p>
-              )}
-            </nav>
-          </PopoverContent>
-        </Popover>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("tasks.outline")}
+          aria-expanded={outlineOpen}
+          onClick={() => {
+            setOutlineOpen(!outlineOpen);
+            localStorage.setItem("lever:notes:outline", String(!outlineOpen));
+          }}
+        >
+          <List />
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -581,6 +581,28 @@ export function TaskNoteView({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              disabled={!editor}
+              onSelect={() =>
+                editor &&
+                void exportNoteMarkdown(title, editor).catch((e) =>
+                  toast.error(String(e)),
+                )
+              }
+            >
+              {t("tasks.exportMarkdown")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!editor}
+              onSelect={() =>
+                editor &&
+                void printNote(title, editor).catch((e) =>
+                  toast.error(String(e)),
+                )
+              }
+            >
+              {t("tasks.printPDF")}
+            </DropdownMenuItem>
             <DropdownMenuItem
               aria-label={t("tasks.noteProject")}
               onSelect={() => setEditingProject(true)}
@@ -597,51 +619,16 @@ export function TaskNoteView({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Popover
-          open={finding}
-          onOpenChange={(open) => {
-            setFinding(open);
-            setFindStep(0);
-          }}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("tasks.findInNote")}
-            >
-              <Search />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-64 p-2">
-            <form
-              className="flex items-center gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setFindStep((step) => step + 1);
-              }}
-            >
-              <Input
-                type="search"
-                aria-label={t("tasks.findInNote")}
-                placeholder={t("tasks.findInNote")}
-                value={find}
-                onChange={(event) => {
-                  setFind(event.target.value);
-                  setFindStep(0);
-                }}
-              />
-              {find && (
-                <output className="text-xs text-muted-foreground">
-                  {matches.length}
-                </output>
-              )}
-            </form>
-          </PopoverContent>
-        </Popover>
-        <ShareNote note={note}/>
+        <NoteFindControl
+          editor={editor}
+          request={findRequest}
+          search={search}
+          searchStep={searchStep}
+        />
+        <NoteImport onOpen={onOpenNote} />
+        <ShareNote note={note} />
         {toolbarAction ?? (
-          <DropdownMenu>
+          <DropdownMenu open={insertOpen} onOpenChange={setInsertOpen}>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -661,51 +648,44 @@ export function TaskNoteView({
                 editor?.commands.focus();
               }}
             >
-              {noteBlockItems.map(({ type, label, icon: Icon }) => (
-                <DropdownMenuItem
-                  key={type}
-                  onSelect={() => {
-                    if (!editor || editor.view.composing) return;
-                    const {
-                      doc,
-                      selection: { $from, empty },
-                    } = editor.state;
-                    const depth =
-                      type !== "table" &&
-                      type !== "columns" &&
-                      $from.parent.isTextblock &&
-                      noteTableDepth($from) !== undefined
-                        ? $from.depth
-                        : 1;
-                    const chain = editor.chain().focus();
-                    if (
-                      !(
-                        empty &&
-                        $from.parent.type.name === "paragraph" &&
-                        !$from.parent.content.size &&
-                        !$from.parent.attrs.taskId &&
-                        $from.depth === depth
-                      )
-                    ) {
-                      const pos = $from.depth
-                        ? $from.after(depth)
-                        : doc.content.size;
-                      chain
-                        .insertContentAt(pos, { type: "paragraph" })
-                        .setTextSelection(pos + 1);
-                    }
-                    returnToEditor.current = chain.setNoteBlock(type).run();
-                  }}
-                >
-                  <Icon />
-                  {t(label, { level: type })}
-                </DropdownMenuItem>
-              ))}
+              {noteBlockItems.map(({ type, label, icon: Icon }) =>
+                type === "table" ? (
+                  <DropdownMenuSub key={type}>
+                    <DropdownMenuSubTrigger>
+                      <Icon />
+                      {t(label)}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <NoteTableSize
+                        onChoose={(size) => {
+                          insertBlock(type, size);
+                          setInsertOpen(false);
+                        }}
+                      />
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                ) : (
+                  <DropdownMenuItem
+                    key={type}
+                    onSelect={() => insertBlock(type)}
+                  >
+                    <Icon />
+                    {t(label, { level: type })}
+                  </DropdownMenuItem>
+                ),
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </header>
       <div className="task-note-layout">
+        {outlineOpen && editor && (
+          <NoteOutline
+            editor={editor}
+            compact={narrow}
+            onClose={() => setOutlineOpen(false)}
+          />
+        )}
         <div className="task-note-scroll">
           <article className="task-note-article">
             {editingProject && (
@@ -755,15 +735,16 @@ export function TaskNoteView({
             <TaskNoteEditor
               note={note}
               agents={agents}
+              library={library}
+              onOpenNote={onOpenNote}
               onEditor={setEditor}
               onStateChange={refreshSelection}
-              onFindText={(text) => {
-                setFind(text);
-                setFindStep(0);
-                setFinding(true);
-              }}
+              onFindText={(text, replace = false) =>
+                setFindRequest({ text, replace })
+              }
               assetInput={assetInput}
             />
+            <NoteBacklinks id={note.id} library={library} onOpen={onOpenNote} />
             {agentPickers}
             {narrow &&
               slots.detailSlot &&

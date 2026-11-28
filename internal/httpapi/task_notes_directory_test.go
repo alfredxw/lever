@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,7 +82,7 @@ func TestTaskNotesDirectoryCopiesLibraryAndOpensItOnAnotherDevice(t *testing.T) 
 	var before, after []model.TaskNoteSummary
 	f.request("GET", "/tasks/notes", nil, 200, &before)
 	other.request("GET", "/tasks/notes", nil, 200, &after)
-	if !slices.Equal(before, after) {
+	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("the second device changed the shared library: %+v, %+v", before, after)
 	}
 	file, _, err := other.a.OpenNoteAsset(strings.TrimPrefix(asset.Path, ".assets/"))
@@ -185,4 +185,54 @@ func TestTaskNoteConflictIsLimitedToItsCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.request("GET", "/tasks/notes/"+first.ID, nil, 200, &first)
+}
+
+func TestMarkdownSourceSaveRetainsFileIdentityAndRejectsStaleDraft(t *testing.T) {
+	f := newFixture(t)
+	dir := f.a.TaskNotesDirectory().Path
+	file := filepath.Join(dir, "existing.md")
+	const original = "\ufeff---\r\ntag: keep\r\n---\r\n\r\n# One\r\n"
+	if err := os.WriteFile(file, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var found []model.TaskNoteSummary
+	f.request("GET", "/tasks/notes", nil, 200, &found)
+	var id string
+	for _, item := range found {
+		if item.Markdown && item.Title == "existing.md" {
+			id = item.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("Markdown file was missing from Notes")
+	}
+	var note model.TaskNote
+	route := "/tasks/notes/" + id
+	f.request("GET", route, nil, 200, &note)
+	body := func(text string) json.RawMessage {
+		raw, err := json.Marshal(map[string]any{"type": "doc", "content": []any{map[string]any{"type": "codeBlock", "content": []any{map[string]string{"type": "text", "text": text}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	stale := note
+	note.Content = body(original + "second line\r\n")
+	f.request("PUT", route, note, 200, &note)
+	bytes, err := os.ReadFile(file)
+	if err != nil || string(bytes) != original+"second line\r\n" || note.ID != id {
+		t.Fatalf("incorrect source save %q, %v", bytes, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "existing.xml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("source save created a copy")
+	}
+	if err := os.WriteFile(file, []byte("external"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stale.Content = body("local")
+	f.request("PUT", route, stale, 409, nil)
+	f.request("GET", route, nil, 200, &note)
+	if !strings.Contains(string(note.Content), "external") {
+		t.Fatalf("cached old source: %s", note.Content)
+	}
 }

@@ -77,6 +77,7 @@ export default function WorkspaceNotes(
           aria-hidden={compact && showList}
         >
           <TaskNotePane
+            onOpenNote={selectNote}
             {...props}
             id={id}
             notes={notes}

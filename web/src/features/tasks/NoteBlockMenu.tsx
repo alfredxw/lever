@@ -1,13 +1,14 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { Editor } from "@tiptap/react";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import type { Selection } from "@tiptap/pm/state";
+import { TextSelection, type Selection } from "@tiptap/pm/state";
 import {
   Braces,
   ChevronDown,
   Columns2,
   GripVertical,
+  Presentation,
   Heading1,
   Heading2,
   Heading3,
@@ -23,6 +24,9 @@ import {
   Table2,
   Type,
 } from "lucide-react";
+import { toast } from "sonner";
+import { movableBlock, moveBlock, copyBlock } from "./noteBlockMove";
+import { noteTones } from "./noteFormatting";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -42,6 +46,7 @@ import {
   isMac,
 } from "@/features/settings/shortcuts";
 import {
+  isolateNoteEdit,
   noteBlockType,
   noteHeadingLevels,
   type NoteBlockType,
@@ -90,6 +95,11 @@ export const noteBlockItems = [
     key: "alt+c",
   },
   { type: "columns", label: "tasks.block.columns", icon: Columns2 },
+  {
+    type: "noteWhiteboard",
+    label: "tasks.block.whiteboard",
+    icon: Presentation,
+  },
   { type: "table", label: "tasks.block.table", icon: Table2 },
   { type: "callout", label: "tasks.block.callout", icon: Info },
   { type: "horizontalRule", label: "tasks.block.horizontalRule", icon: Minus },
@@ -177,6 +187,59 @@ export function NoteBlockMenu({
   const { doc, selection } = editor.state;
   const { position, lineCenter, type: currentType } = target;
   const BlockIcon = blockItemsByType.get(currentType)!.icon;
+
+  const drag = useRef<{
+    startY: number;
+    startX: number;
+    doc: ProseMirrorNode;
+    pos: number;
+    el: HTMLElement;
+    target?: number;
+    marker?: HTMLElement;
+    moved: boolean;
+  }>(undefined);
+  const suppressClick = useRef(false);
+  function clearDrag() {
+    const d = drag.current;
+    if (!d) return;
+    d.el.style.removeProperty("transform");
+    d.el.classList.remove("note-moving-block");
+    d.marker?.removeAttribute("data-note-drop");
+    drag.current = undefined;
+  }
+  useEffect(() => clearDrag, []);
+  function action(name: string) {
+    const block = movableBlock(editor.state.doc, position);
+    if (!block || editor.view.composing) return;
+    preserveSelection.current = true;
+    original.current = undefined;
+    if (name === "copy" || name === "cut") {
+      void copyBlock(editor.view, position, name === "cut").catch((e) =>
+        toast.error(String(e)),
+      );
+      return;
+    }
+    if (name === "indent" || name === "outdent") {
+      editor
+        .chain()
+        .focus()
+        [name === "indent" ? "sinkListItem" : "liftListItem"]("listItem")
+        .run();
+      return;
+    }
+    const tr = editor.state.tr;
+    if (name === "delete")
+      tr.deleteRange(block.pos, block.pos + block.node.nodeSize);
+    else {
+      const $pos = tr.doc.resolve(position),
+        at = $pos.after();
+      tr.insert(at, tr.doc.type.schema.nodes.paragraph.create());
+      tr.setSelection(TextSelection.create(tr.doc, at + 1));
+    }
+    isolateNoteEdit(tr);
+    editor.view.dispatch(tr);
+    editor.commands.focus();
+  }
 
   function changeOpen(next: boolean) {
     if (next) {
@@ -293,6 +356,75 @@ export function NoteBlockMenu({
           className="task-note-block-trigger"
           aria-label={t("tasks.changeBlock")}
           style={{ top: lineCenter }}
+          onPointerDown={(event) => {
+            if (event.button !== 0 || editor.view.composing) return;
+            event.preventDefault();
+            const block = movableBlock(editor.state.doc, position);
+            const el = block && editor.view.nodeDOM(block.pos);
+            if (!block || !(el instanceof HTMLElement)) return;
+            drag.current = {
+              startY: event.clientY,
+              startX: event.clientX,
+              doc: editor.state.doc,
+              pos: block.pos,
+              el,
+              moved: false,
+            };
+            suppressClick.current = false;
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const d = drag.current;
+            if (!d || d.doc !== editor.state.doc) return;
+            const dy = event.clientY - d.startY;
+            if (!d.moved && Math.hypot(event.clientX - d.startX, dy) < 5)
+              return;
+            d.moved = true;
+            d.el.classList.add("note-moving-block");
+            d.el.style.transform = "translateY(" + dy + "px)";
+            const scroll = editor.view.dom.closest(".task-note-scroll");
+            if (scroll) {
+              const r = scroll.getBoundingClientRect();
+              if (event.clientY < r.top + 32) scroll.scrollTop -= 16;
+              else if (event.clientY > r.bottom - 32) scroll.scrollTop += 16;
+            }
+            d.marker?.removeAttribute("data-note-drop");
+            d.target = undefined;
+            const hit = editor.view.posAtCoords({
+              left: event.clientX,
+              top: event.clientY,
+            });
+            if (!hit) return;
+            const block = movableBlock(d.doc, hit.pos);
+            if (!block || block.pos === d.pos) return;
+            const el = editor.view.nodeDOM(block.pos);
+            if (!(el instanceof HTMLElement)) return;
+            const r = el.getBoundingClientRect(),
+              after = event.clientY > r.top + r.height / 2;
+            d.marker = el;
+            d.target = block.pos + (after ? block.node.nodeSize : 0);
+            el.dataset.noteDrop = after ? "after" : "before";
+          }}
+          onPointerUp={(event) => {
+            const d = drag.current;
+            if (!d) return;
+            if (d.moved) {
+              suppressClick.current = true;
+              if (d.target !== undefined && d.doc === editor.state.doc)
+                moveBlock(editor.view, d.pos, d.target);
+            }
+            clearDrag();
+            if (event.currentTarget.hasPointerCapture(event.pointerId))
+              event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          onPointerCancel={() => {
+            suppressClick.current = true;
+            clearDrag();
+          }}
+          onLostPointerCapture={clearDrag}
+          onClick={() => {
+            if (!suppressClick.current) changeOpen(true);
+          }}
           tabIndex={-1}
         >
           <BlockIcon className="size-3.5" aria-hidden="true" />
@@ -339,6 +471,65 @@ export function NoteBlockMenu({
             onEscapeKeyDown={restoreOnClose}
           >
             {moreHeadings.map((type) => blockChoice(type))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        {["addBelow", "copy", "cut", "indent", "outdent", "delete"].map(
+          (key) => (
+            <DropdownMenuItem
+              key={key}
+              disabled={
+                key === "indent"
+                  ? !editor.can().sinkListItem("listItem")
+                  : key === "outdent"
+                    ? !editor.can().liftListItem("listItem")
+                    : false
+              }
+              onSelect={() => action(key)}
+            >
+              {t("tasks.blockAction." + key)}
+            </DropdownMenuItem>
+          ),
+        )}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            {t("tasks.format.alignment")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {(["left", "center", "right"] as const).map((align) => (
+              <DropdownMenuItem
+                key={align}
+                onSelect={() =>
+                  editor.chain().focus().setNoteAlignment(align).run()
+                }
+              >
+                {t("tasks.format.align." + align)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            {t("tasks.block.fill")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {["none", ...noteTones].map((tone) => (
+              <DropdownMenuItem
+                key={tone}
+                onSelect={() => {
+                  const $at = editor.state.doc.resolve(position);
+                  editor.view.dispatch(
+                    editor.state.tr.setNodeAttribute(
+                      $at.before(),
+                      "tone",
+                      tone === "none" ? undefined : tone,
+                    ),
+                  );
+                }}
+              >
+                {t("tasks.tone." + tone)}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       </DropdownMenuContent>

@@ -55,10 +55,14 @@ func Text(blocks []Node, taskID string) string {
 						out.WriteString(" (" + link.Href + ")")
 					}
 				}
-			case "agentMention", "noteAsset":
+			case "noteWhiteboard":
+				var attrs struct{ Title string }
+				_ = json.Unmarshal(node.Attrs, &attrs)
+				out.WriteString("[Whiteboard: " + attrs.Title + "]\n")
+			case "agentMention", "noteAsset", "noteLink":
 				var attrs struct{ Label, Name string }
 				_ = json.Unmarshal(node.Attrs, &attrs)
-				if node.Type == "agentMention" {
+				if node.Type == "agentMention" || node.Type == "noteLink" {
 					out.WriteString("@" + attrs.Label)
 				} else {
 					out.WriteString("[" + attrs.Name + "]")
@@ -76,4 +80,24 @@ func Text(blocks []Node, taskID string) string {
 	}
 	write(blocks)
 	return strings.TrimRight(out.String(), "\n")
+}
+
+func Links(blocks []Node) []string {
+	seen := map[string]bool{}
+	var links []string
+	var visit func([]Node)
+	visit = func(nodes []Node) {
+		for _, node := range nodes {
+			if node.Type == "noteLink" {
+				var attrs struct{ ID string }
+				if json.Unmarshal(node.Attrs, &attrs) == nil && IDPattern.MatchString(attrs.ID) && !seen[attrs.ID] {
+					links = append(links, attrs.ID)
+					seen[attrs.ID] = true
+				}
+			}
+			visit(node.Content)
+		}
+	}
+	visit(blocks)
+	return links
 }

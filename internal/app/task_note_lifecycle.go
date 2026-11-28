@@ -54,6 +54,9 @@ func (a *App) SetTaskNoteState(ctx context.Context, id string, state model.TaskN
 	if err != nil {
 		return model.TaskNote{}, err
 	}
+	if markdownPath(note.Path) {
+		return model.TaskNote{}, invalid("Manage the Markdown file in its folder")
+	}
 	if note.State == state {
 		return note, nil
 	}
