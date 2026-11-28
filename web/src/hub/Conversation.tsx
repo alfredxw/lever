@@ -32,6 +32,10 @@ import { label, submit, type Workspace } from "./HubApp";
 import { readLocal, saveLocal } from "./client";
 import { createTaskFromChat } from "./Tasks";
 import { formatChatTime, HubAgentAvatar } from "./ui";
+import {
+  formatQuestionCountdown,
+  remainingQuestionTimeoutSeconds,
+} from "@/features/chat/questionState";
 
 export type Command = Omit<Intent, "id">;
 
@@ -53,6 +57,20 @@ function Card({
     ),
   );
   const isPending = q.status === "pending";
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(() =>
+    isPending ? remainingQuestionTimeoutSeconds(q.expiresAt) : null,
+  );
+  useEffect(() => {
+    if (!isPending || !q.expiresAt) {
+      setRemainingSeconds(null);
+      return;
+    }
+    const sync = () =>
+      setRemainingSeconds(remainingQuestionTimeoutSeconds(q.expiresAt));
+    sync();
+    const timer = window.setInterval(sync, 1000);
+    return () => window.clearInterval(timer);
+  }, [isPending, q.expiresAt]);
   const resolvedAnswers = (): Record<string, string[]> | null => {
     const out: Record<string, string[]> = {};
     for (const v of q.questions ?? []) {
@@ -90,8 +108,14 @@ function Card({
           )}
           <span>{q.title || (q.type === "question" ? "需要回答" : "请求审批")}</span>
         </div>
-        <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
-          {label(q.status)}
+        <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+          {isPending && remainingSeconds !== null && (
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Clock className="size-3 shrink-0" />
+              {formatQuestionCountdown(remainingSeconds)}
+            </span>
+          )}
+          <span>{label(q.status)}</span>
         </span>
       </div>
       {q.text && (
@@ -101,7 +125,9 @@ function Card({
       )}
       {!isPending ? (
         <div className="mt-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{label(q.status)}</span>
+          <span className="font-medium text-foreground">
+            {q.autoAnswered ? "已超时按推荐继续" : label(q.status)}
+          </span>
           {q.answeredByUserId && <span> · {q.answeredByUserId}</span>}
           {" · "}
           {q.type === "question" && q.answer?.answers

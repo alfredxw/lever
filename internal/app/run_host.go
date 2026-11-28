@@ -78,6 +78,19 @@ func (a *App) restoreRunHosts() error {
 		}
 		a.trackLocked(e, e.followHost)
 	}
+	pendingQuestions, err := store.List[model.Request](a.ctx, a.Store.DB,
+		"SELECT data FROM requests WHERE status='pending' AND json_extract(data,'$.kind')='question'")
+	if err != nil {
+		return err
+	}
+	for _, r := range pendingQuestions {
+		if r.ExpiresAt == "" || a.active[r.RunID] == nil {
+			continue
+		}
+		if deadline, parseErr := time.Parse(time.RFC3339Nano, r.ExpiresAt); parseErr == nil {
+			a.scheduleQuestionTimeoutLocked(r.ID, deadline)
+		}
+	}
 	return nil
 }
 
@@ -336,8 +349,9 @@ func (e *execution) applyHostEvent(v hostEvent) error {
 
 func (e *execution) openHostRequest(r model.Request) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	next := e.run
+	var deadline time.Time
+	var hasDeadline bool
 	err := e.app.Store.Write(e.ctx, func(tx *sql.Tx) error {
 		var exists bool
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM requests WHERE id=?)", r.ID).Scan(&exists); err != nil || exists {
@@ -352,6 +366,13 @@ func (e *execution) openHostRequest(r model.Request) error {
 		} else if next.Status != "cancelling" {
 			next.Status = "waiting_user"
 		}
+		if r.Status == "pending" {
+			var err error
+			deadline, hasDeadline, err = prepareQuestionDeadline(e.ctx, tx, &r)
+			if err != nil {
+				return err
+			}
+		}
 		if err := store.SaveRequest(tx, r); err != nil {
 			return err
 		}
@@ -360,11 +381,14 @@ func (e *execution) openHostRequest(r model.Request) error {
 	if err == nil {
 		e.run.Status = next.Status
 	}
+	e.mu.Unlock()
+	if err == nil && hasDeadline {
+		e.app.scheduleQuestionTimeout(r.ID, deadline)
+	}
 	return err
 }
 func (e *execution) closeHostRequest(id string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	next := e.run
 	err := e.app.Store.Write(e.ctx, func(tx *sql.Tx) error {
 		r, err := store.Get[model.Request](e.ctx, tx, "SELECT data FROM requests WHERE id=?", id)
@@ -393,6 +417,8 @@ func (e *execution) closeHostRequest(id string) error {
 		}
 		e.run.Status = next.Status
 	}
+	e.mu.Unlock()
+	e.app.cancelQuestionTimeout(id)
 	return err
 }
 

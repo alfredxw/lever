@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Clock,
   LoaderCircle,
   X,
 } from "lucide-react";
@@ -25,7 +26,9 @@ import {
   allowsCustomAnswer,
   buildQuestionAnswers,
   deriveQuestionProgress,
+  formatQuestionCountdown,
   isQuestionRequired,
+  remainingQuestionTimeoutSeconds,
 } from "./questionState";
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -141,7 +144,11 @@ export function QuestionPrompt({
   const reduceMotion = useReducedMotion();
   const panelRef = useRef<HTMLElement>(null);
   const autoAdvanceRef = useRef<number | null>(null);
+  const timeoutPausedRef = useRef(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(() =>
+    remainingQuestionTimeoutSeconds(request.expiresAt),
+  );
 
   const { draft, toggleOption, setCustomAnswer, setQuestionIndex } =
     useQuestionDraft(request.id);
@@ -168,7 +175,47 @@ export function QuestionPrompt({
     },
   });
 
+  const cancelTimeoutMutation = useMutation({
+    mutationFn: () => api(`/requests/${request.id}/cancel-timeout`, {}),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+    onError: () => {
+      timeoutPausedRef.current = false;
+      setRemainingSeconds(remainingQuestionTimeoutSeconds(request.expiresAt));
+    },
+  });
+
   const isPending = answerMutation.isPending;
+
+  useEffect(() => {
+    timeoutPausedRef.current = false;
+  }, [request.id]);
+
+  useEffect(() => {
+    const sync = () => {
+      setRemainingSeconds(remainingQuestionTimeoutSeconds(request.expiresAt));
+    };
+    sync();
+    if (!request.expiresAt) return;
+    const timer = window.setInterval(sync, 500);
+    return () => window.clearInterval(timer);
+  }, [request.expiresAt]);
+
+  const pauseTimeout = () => {
+    if (
+      !request.expiresAt ||
+      onSubmit ||
+      timeoutPausedRef.current ||
+      isPending ||
+      cancelTimeoutMutation.isPending
+    ) {
+      return;
+    }
+    timeoutPausedRef.current = true;
+    setRemainingSeconds(null);
+    cancelTimeoutMutation.mutate();
+  };
 
   const clearAutoAdvance = () => {
     if (autoAdvanceRef.current !== null) {
@@ -218,6 +265,7 @@ export function QuestionPrompt({
   const handleSelectOption = (optionId: string) => {
     if (isPending || !activeQuestion) return;
     keepOpen?.();
+    pauseTimeout();
     toggleOption(activeQuestion, optionId);
     if (!activeQuestion.multiple && !progress.isLastQuestion) {
       clearAutoAdvance();
@@ -364,6 +412,43 @@ export function QuestionPrompt({
         )}
 
         <div className="flex shrink-0 items-center gap-0.5">
+          {remainingSeconds !== null && (
+            onSubmit ? (
+              <span
+                data-question-countdown=""
+                title={t("chat.questionCountdownReadonlyTooltip")}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-medium tabular-nums",
+                  remainingSeconds <= 30
+                    ? "text-(--status-attention)"
+                    : "text-muted-foreground",
+                )}
+              >
+                <Clock className="size-3 shrink-0" aria-hidden="true" />
+                <span>{formatQuestionCountdown(remainingSeconds)}</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                data-question-countdown=""
+                disabled={isPending || cancelTimeoutMutation.isPending}
+                aria-label={t("chat.questionCountdownPauseAria", {
+                  time: formatQuestionCountdown(remainingSeconds),
+                })}
+                title={t("chat.questionCountdownTooltip")}
+                onClick={pauseTimeout}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-medium tabular-nums transition-colors duration-150 outline-none hover:bg-control-hover focus-visible:bg-control-focus disabled:pointer-events-none disabled:opacity-50",
+                  remainingSeconds <= 30
+                    ? "text-(--status-attention)"
+                    : "text-muted-foreground",
+                )}
+              >
+                <Clock className="size-3 shrink-0" aria-hidden="true" />
+                <span>{formatQuestionCountdown(remainingSeconds)}</span>
+              </button>
+            )
+          )}
           {queueCount > 1 && (
             <span className="px-1.5 text-xs text-muted-foreground tabular-nums">
               {t("chat.questionMorePending", { count: queueCount - 1 })}
@@ -521,6 +606,7 @@ export function QuestionPrompt({
                       onCompositionStart={keepOpen}
                       onChange={(event) => {
                         keepOpen?.();
+                        pauseTimeout();
                         setCustomAnswer(activeQuestion, event.target.value);
                       }}
                       onKeyDown={(event) => {
@@ -539,6 +625,13 @@ export function QuestionPrompt({
                       aria-label={t("chat.answerLabel", {
                         question: activeQuestion.text,
                       })}
+                      inputMode={
+                        activeQuestion.inputType === "integer"
+                          ? "numeric"
+                          : activeQuestion.inputType === "number"
+                            ? "decimal"
+                            : undefined
+                      }
                       placeholder={customPlaceholder}
                       rows={isFreeTextOnly ? 2 : 1}
                       disabled={isPending}
@@ -550,6 +643,7 @@ export function QuestionPrompt({
                       onCompositionStart={keepOpen}
                       onChange={(event) => {
                         keepOpen?.();
+                        pauseTimeout();
                         setCustomAnswer(activeQuestion, event.target.value);
                       }}
                       onKeyDown={(event) => {

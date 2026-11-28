@@ -45,6 +45,9 @@ func TestParseElicitationFormPreservesOrderAndTypes(t *testing.T) {
 	if form.questions[4].IsRequired() || form.questions[5].IsRequired() {
 		t.Fatal("optional fields should have IsRequired() == false")
 	}
+	if form.questions[3].InputType != "integer" || form.questions[4].InputType != "number" {
+		t.Fatalf("unexpected numeric input types: %q %q", form.questions[3].InputType, form.questions[4].InputType)
+	}
 	if form.questions[5].InitialAnswer != "hi" {
 		t.Fatalf("expected default initial answer, got %q", form.questions[5].InitialAnswer)
 	}
@@ -167,5 +170,30 @@ func TestParseElicitationFormAllowOtherAndEmptyConfirmation(t *testing.T) {
 	emptyForm, ok := parseElicitationForm(json.RawMessage(`{"type":"object","properties":{}}`), "Continue?", elicitationOptions{})
 	if !ok || !emptyForm.empty || len(emptyForm.questions) != 0 {
 		t.Fatalf("expected empty confirmation form, got %v %+v", ok, emptyForm)
+	}
+}
+
+func TestParseElicitationFormMarksSchemaDefaultsAsRecommended(t *testing.T) {
+	schema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"region": {"type": "string", "title": "Region", "enum": ["us", "eu"], "default": "eu"},
+			"dryRun": {"type": "boolean", "title": "Dry run", "default": false},
+			"scopes": {"type": "array", "title": "Scopes", "default": ["write"], "items": {"type": "string", "enum": ["read", "write"]}}
+		},
+		"required": ["region", "dryRun"]
+	}`)
+	form, ok := parseElicitationForm(schema, "Configure defaults", elicitationOptions{})
+	if !ok || len(form.questions) != 3 {
+		t.Fatalf("unexpected form: %v %+v", ok, form)
+	}
+	if form.questions[0].Options[0].Recommended || !form.questions[0].Options[1].Recommended {
+		t.Fatalf("expected eu option recommended: %+v", form.questions[0].Options)
+	}
+	if form.questions[1].Options[0].Recommended || !form.questions[1].Options[1].Recommended {
+		t.Fatalf("expected boolean false option recommended: %+v", form.questions[1].Options)
+	}
+	if form.questions[2].Options[0].Recommended || !form.questions[2].Options[1].Recommended {
+		t.Fatalf("expected array default option recommended: %+v", form.questions[2].Options)
 	}
 }

@@ -2495,6 +2495,12 @@ export const enUS = {
     "Choose the default permission preset applied to new Agents, runtime switches, and automations. Individual Agents and conversations can still override it.",
   "settings.defaultPermissionMode.auto": "Auto",
   "settings.defaultPermissionMode.yolo": "YOLO",
+  "settings.questionTimeout": "Question auto-proceed",
+  "settings.questionTimeoutDescription":
+    "When an Agent asks a question and receives no reply in time, automatically proceed with its recommended option so unattended tasks do not stall.",
+  "settings.questionTimeoutOff": "Off",
+  "settings.questionTimeoutSeconds": "{{seconds}}s",
+  "settings.questionTimeoutMinutes": "{{minutes}}m",
   "permissionSetup.title": "Choose default permission mode",
   "permissionSetup.description":
     "Pick your default permission preference on first launch. Lever maps it to the equivalent permission level for each runtime across configuration points.",
@@ -2756,6 +2762,12 @@ export const enUS = {
   "chat.questionCustomPlaceholder": "Or type your own answer...",
   "chat.questionFreeTextPlaceholder": "Type your answer...",
   "chat.questionMorePending": "+{{count}} more",
+  "chat.questionCountdownTooltip":
+    "Auto-proceeds with the Agent’s recommendation when the timer ends. Click to keep waiting.",
+  "chat.questionCountdownReadonlyTooltip":
+    "Auto-proceeds with the Agent’s recommendation when the timer ends.",
+  "chat.questionCountdownPauseAria":
+    "Auto-proceed in {{time}}, click to keep waiting",
   "chat.deny": "Deny",
   "chat.allow": "Allow this action only",
   "chat.answer": "Submit answer",

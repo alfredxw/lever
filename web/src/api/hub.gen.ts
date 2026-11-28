@@ -138,6 +138,7 @@ export interface Option {
   name: string;
   description?: string;
   preview?: string;
+  recommended?: boolean;
   allow?: boolean;
 }
 export interface Question {
@@ -149,6 +150,7 @@ export interface Question {
   required?: boolean;
   initialAnswer?: string;
   placeholder?: string;
+  inputType?: string;
   secret?: boolean;
   options?: Option[];
 }
@@ -224,6 +226,8 @@ export interface Record {
   options?: Option[];
   answer?: Answer;
   allowOnce?: Answer;
+  expiresAt?: string;
+  autoAnswered?: boolean;
 }
 export interface Change extends Record {
   deleted?: boolean;

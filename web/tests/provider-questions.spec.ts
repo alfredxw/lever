@@ -280,3 +280,94 @@ test("docked provider question component works across Antigravity/ACP, Claude, C
   );
   expect(runText(piEditorDone)).toContain('"cancelled":true');
 });
+
+test("question timeout setting persists and auto-proceeds with recommendation on expiry", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { url, scope } = testFixture();
+  await page.goto(url);
+  await page.waitForURL((address) => !address.hash);
+
+  // 1. Open Settings -> verify default 3m timeout and adjust in UI.
+  await page.getByRole("button", { name: "设置" }).click();
+  const timeoutGroup = page.getByRole("radiogroup", { name: "提问超时自动继续" });
+  await expect(timeoutGroup).toBeVisible();
+  await expect(
+    timeoutGroup.getByRole("radio", { name: "3 分钟", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+
+  await timeoutGroup.getByRole("radio", { name: "5 分钟", exact: true }).click();
+  await expect(
+    timeoutGroup.getByRole("radio", { name: "5 分钟", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+
+  // Reload and verify persisted setting.
+  await page.reload();
+  await page.getByRole("button", { name: "设置" }).click();
+  await expect(
+    page
+      .getByRole("radiogroup", { name: "提问超时自动继续" })
+      .getByRole("radio", { name: "5 分钟", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+
+  // 2. Verify clicking countdown pauses timeout on a pending question.
+  const agAgent = await createAgent(
+    page.request,
+    "Timeout Pause Agent",
+    "antigravity",
+    scope,
+  );
+  const pauseRun = await sendMain(
+    page.request,
+    agAgent.id,
+    "[agy-interaction]",
+  );
+  await waitRunStatus(page.request, pauseRun.id, "waiting_user");
+
+  await page.getByRole("button", { name: "Agents" }).click();
+  await page
+    .getByRole("button", { name: agAgent.name, exact: true })
+    .first()
+    .click();
+
+  const panel = page.locator('[data-question-panel="docked"]:visible');
+  await expect(panel).toBeVisible();
+  const countdown = panel.locator("[data-question-countdown]");
+  await expect(countdown).toBeVisible();
+  await countdown.click();
+  await expect(countdown).toHaveCount(0);
+
+  // Answer manually after pausing.
+  await panel.getByRole("radio", { name: /Staging/ }).click();
+  await panel.getByRole("button", { name: "提交回答", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await waitRunStatus(page.request, pauseRun.id, "completed");
+
+  // 3. Configure a short 2s timeout via API and verify auto-proceed resolves the question and completes the run.
+  const putShort = await page.request.put("/api/settings/questions", {
+    data: { timeoutSeconds: 2 },
+  });
+  expect(putShort.ok()).toBeTruthy();
+
+  try {
+    const autoRun = await sendMain(
+      page.request,
+      agAgent.id,
+      "[agy-interaction]",
+      pauseRun.chatId,
+    );
+    await waitRunStatus(page.request, autoRun.id, "waiting_user");
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("[data-question-countdown]")).toBeVisible();
+
+    // Do not interact; wait for auto-proceed to resolve and complete the run.
+    await expect(panel).toHaveCount(0, { timeout: 10_000 });
+    const autoDone = await waitRunStatus(page.request, autoRun.id, "completed");
+    expect(runText(autoDone)).toContain('"optionId":"target:staging"');
+  } finally {
+    await page.request.put("/api/settings/questions", {
+      data: { timeoutSeconds: 180 },
+    });
+  }
+});

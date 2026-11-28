@@ -306,7 +306,14 @@ func (e *execution) Ask(ctx context.Context, r model.Request) (model.Answer, err
 	e.requests[r.ID] = ch
 	previous := e.run.Status
 	e.run.Status = "waiting_user"
+	var deadline time.Time
+	var hasDeadline bool
 	err := e.app.Store.Write(ctx, func(tx *sql.Tx) error {
+		var err error
+		deadline, hasDeadline, err = prepareQuestionDeadline(ctx, tx, &r)
+		if err != nil {
+			return err
+		}
 		if err := store.SaveRequest(tx, r); err != nil {
 			return err
 		}
@@ -320,6 +327,9 @@ func (e *execution) Ask(ctx context.Context, r model.Request) (model.Answer, err
 	if err != nil {
 		return model.Answer{}, err
 	}
+	if hasDeadline {
+		e.app.scheduleQuestionTimeout(r.ID, deadline)
+	}
 	defer func() {
 		e.mu.Lock()
 		delete(e.requests, r.ID)
@@ -329,6 +339,7 @@ func (e *execution) Ask(ctx context.Context, r model.Request) (model.Answer, err
 			e.wakeSteer()
 		}
 		e.mu.Unlock()
+		e.app.cancelQuestionTimeout(r.ID)
 	}()
 	select {
 	case answer := <-ch:

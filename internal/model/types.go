@@ -127,6 +127,15 @@ type PermissionSettings struct {
 	NeedsSetup  bool                  `json:"needsSetup,omitempty"`
 }
 
+const (
+	DefaultQuestionTimeoutSeconds = 180
+	MaxQuestionTimeoutSeconds     = 3600
+)
+
+type QuestionSettings struct {
+	TimeoutSeconds int `json:"timeoutSeconds"`
+}
+
 type DelegationRule struct {
 	DeviceID string `json:"deviceId,omitempty"`
 	AgentID  string `json:"agentId"`
@@ -743,6 +752,7 @@ type QuestionOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
 	Preview     string `json:"preview,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 type Question struct {
@@ -755,6 +765,7 @@ type Question struct {
 	Required      *bool            `json:"required,omitempty"`
 	InitialAnswer string           `json:"initialAnswer,omitempty"`
 	Placeholder   string           `json:"placeholder,omitempty"`
+	InputType     string           `json:"inputType,omitempty"`
 	Secret        bool             `json:"secret,omitempty"`
 }
 
@@ -780,6 +791,8 @@ type Request struct {
 	Questions         []Question      `json:"questions"`
 	Options           []RequestOption `json:"options,omitempty"`
 	AllowOnce         *Answer         `json:"allowOnce,omitempty"`
+	ExpiresAt         string          `json:"expiresAt,omitempty"`
+	AutoAnswered      bool            `json:"autoAnswered,omitempty"`
 	Status            string          `json:"status"`
 	Answer            *Answer         `json:"answer,omitempty"`
 }
@@ -1033,6 +1046,7 @@ type Overview struct {
 	Requests           []Request          `json:"requests"`
 	DelegationSettings DelegationSettings `json:"delegationSettings"`
 	PermissionSettings PermissionSettings `json:"permissionSettings"`
+	QuestionSettings   QuestionSettings   `json:"questionSettings"`
 	LastSelection      *Selection         `json:"lastSelection,omitempty"`
 	DataDir            string             `json:"dataDir"`
 	HomeDir            string             `json:"homeDir"`

@@ -93,6 +93,7 @@ type App struct {
 	typingUntil              map[string]time.Time
 	typingDeferSince         map[string]time.Time
 	receiptTimers            map[string]*time.Timer
+	questionTimers           map[string]*questionTimer
 	delegationCoalesceWindow time.Duration
 	presenceMu               sync.Mutex
 	desktopActive            bool
@@ -121,6 +122,7 @@ func open(dir string, independent bool) (*App, error) {
 		typingUntil:              make(map[string]time.Time),
 		typingDeferSince:         make(map[string]time.Time),
 		receiptTimers:            make(map[string]*time.Timer),
+		questionTimers:           make(map[string]*questionTimer),
 		delegationCoalesceWindow: 1500 * time.Millisecond,
 	}
 	if err = a.migrateWorkingCopies(ctx); err != nil {
@@ -194,6 +196,12 @@ func (a *App) Shutdown() {
 	for id, timer := range a.receiptTimers {
 		timer.Stop()
 		delete(a.receiptTimers, id)
+	}
+	for id, entry := range a.questionTimers {
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		delete(a.questionTimers, id)
 	}
 	lease := a.hostLease
 	a.hostLease = nil
@@ -305,6 +313,10 @@ ORDER BY r.sequence`)
 		return o, err
 	}
 	o.PermissionSettings, err = permissionSettings(ctx, tx)
+	if err != nil {
+		return o, err
+	}
+	o.QuestionSettings, err = questionSettings(ctx, tx)
 	if err != nil {
 		return o, err
 	}
@@ -1776,6 +1788,7 @@ func (a *App) answer(ctx context.Context, id string, answer model.Answer, origin
 	}); err != nil {
 		return err
 	}
+	a.cancelQuestionTimeoutLocked(id)
 	if ch != nil {
 		ch <- answer
 		delete(e.requests, id)

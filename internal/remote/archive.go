@@ -308,6 +308,8 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		r.Text, r.Truncated = clipped(q.Detail, 48<<10)
 		r.Status = q.Status
 		r.AnsweredByUserID = q.AnsweredByUserID
+		r.ExpiresAt = q.ExpiresAt
+		r.AutoAnswered = q.AutoAnswered
 		r.Type = q.Kind
 		for idx, v := range q.Options {
 			if idx >= 64 {
@@ -335,6 +337,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 				Required:      v.Required,
 				InitialAnswer: v.InitialAnswer,
 				Placeholder:   v.Placeholder,
+				InputType:     v.InputType,
 				Secret:        v.Secret,
 			}
 			for idx, opt := range v.Options {
@@ -345,7 +348,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 				opt.Label, _ = clipped(opt.Label, 256)
 				opt.Description, _ = clipped(opt.Description, 512)
 				opt.Preview, _ = clipped(opt.Preview, 2048)
-				question.Options = append(question.Options, p.Option{ID: opt.ID, Name: opt.Label, Description: opt.Description, Preview: opt.Preview})
+				question.Options = append(question.Options, p.Option{ID: opt.ID, Name: opt.Label, Description: opt.Description, Preview: opt.Preview, Recommended: opt.Recommended})
 			}
 			r.Questions = append(r.Questions, question)
 		}

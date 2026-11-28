@@ -5,8 +5,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"lever/internal/app"
 	"lever/internal/model"
+	"lever/internal/store"
 )
 
 func runTextOutput(run model.Run) string {
@@ -269,4 +272,168 @@ func TestProviderQuestionsCodexClaudeAndPi(t *testing.T) {
 	if err := json.Unmarshal([]byte(runTextOutput(peDone)), &piResp); err != nil || piResp["value"] != "" || piResp["cancelled"] != nil {
 		t.Fatalf("pi editor empty submit should send empty string, got: %s (%v)", runTextOutput(peDone), err)
 	}
+}
+
+func TestQuestionTimeoutSettingsAndAutoProceedAcrossProviders(t *testing.T) {
+	f := newFixture(t)
+
+	// 1. Default question settings exposed in Overview and GET /settings/questions.
+	var ov model.Overview
+	f.request("GET", "/overview", nil, 200, &ov)
+	if ov.QuestionSettings.TimeoutSeconds != model.DefaultQuestionTimeoutSeconds {
+		t.Fatalf("unexpected default overview questionSettings: %+v", ov.QuestionSettings)
+	}
+	var current model.QuestionSettings
+	f.request("GET", "/settings/questions", nil, 200, &current)
+	if current.TimeoutSeconds != model.DefaultQuestionTimeoutSeconds {
+		t.Fatalf("unexpected GET /settings/questions: %+v", current)
+	}
+	f.request("PUT", "/settings/questions", map[string]int{"timeoutSeconds": -5}, 400, nil)
+	f.request("PUT", "/settings/questions", map[string]int{"timeoutSeconds": model.MaxQuestionTimeoutSeconds + 1}, 400, nil)
+
+	// Configure a short 1s timeout for automated verification.
+	var saved model.QuestionSettings
+	f.request("PUT", "/settings/questions", model.QuestionSettings{TimeoutSeconds: 1}, 200, &saved)
+	if saved.TimeoutSeconds != 1 {
+		t.Fatalf("unexpected saved questionSettings: %+v", saved)
+	}
+	f.request("GET", "/overview", nil, 200, &ov)
+	if ov.QuestionSettings.TimeoutSeconds != 1 {
+		t.Fatalf("overview did not reflect saved questionSettings: %+v", ov.QuestionSettings)
+	}
+
+	assertAutoAnswered := func(requestID string) model.Request {
+		t.Helper()
+		stored, err := store.Get[model.Request](t.Context(), f.a.Store.DB, "SELECT data FROM requests WHERE id=?", requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != "answered" || !stored.AutoAnswered || stored.Answer == nil {
+			t.Fatalf("expected auto-answered request %s, got: %+v", requestID, stored)
+		}
+		return stored
+	}
+
+	// 2. ACP elicitation: picks "(Recommended)" option, first option for required multi-select, and default note.
+	acpCfg := f.acpProvider("elicitation-timeout")
+	acpChat := f.chat(f.acpAgent(acpCfg))
+	acpRun := f.send(acpChat.ID, "main", "", "[elicitation]")
+	f.wait(acpRun.ID, "waiting_user")
+	acpReq := f.pendingRequestForRun(acpRun.ID)
+	if acpReq.ExpiresAt == "" {
+		t.Fatalf("expected expiresAt on pending ACP question: %+v", acpReq)
+	}
+	acpReceiptData := acpReceipt(t, f.wait(acpRun.ID, "completed"))
+	assertAutoAnswered(acpReq.ID)
+	elicitResp := acpReceiptData["elicitation"].(map[string]any)
+	if elicitResp["action"] != "accept" {
+		t.Fatalf("ACP elicitation auto-answer failed: %#v", elicitResp)
+	}
+	content := elicitResp["content"].(map[string]any)
+	if content["mode"] != "Strict (Recommended)" || !reflect.DeepEqual(content["areas"], []any{"schemas"}) || content["note"] != "default note" {
+		t.Fatalf("unexpected ACP elicitation auto-answer content: %#v", content)
+	}
+
+	// 3. Antigravity interaction_* (choice-only): picks first option cleanly.
+	agChat := f.chat(f.agent("antigravity"))
+	interRun := f.send(agChat.ID, "main", "", "[agy-interaction]")
+	f.wait(interRun.ID, "waiting_user")
+	interReq := f.pendingRequestForRun(interRun.ID)
+	interReceipt := acpReceipt(t, f.wait(interRun.ID, "completed"))
+	assertAutoAnswered(interReq.ID)
+	if interReceipt["permission"].(map[string]any)["optionId"] != "target:staging" {
+		t.Fatalf("unexpected antigravity interaction auto-answer: %#v", interReceipt["permission"])
+	}
+
+	// 4. Codex requestUserInput (options without Recommended marker, custom allowed): sends recommendation fallback instruction.
+	codexChat := f.chat(f.agent("codex"))
+	codexRun := f.send(codexChat.ID, "main", "", "[question]")
+	f.wait(codexRun.ID, "waiting_user")
+	codexReq := f.pendingRequestForRun(codexRun.ID)
+	codexDone := f.wait(codexRun.ID, "completed")
+	assertAutoAnswered(codexReq.ID)
+	if out := runTextOutput(codexDone); !strings.Contains(out, app.QuestionTimeoutFallbackAnswer) {
+		t.Fatalf("codex auto-answer did not send fallback instruction: %s", out)
+	}
+
+	// 5. Codex MCP elicitation (strict enum + optional integer): selects first enum option and omits optional integer.
+	codexElicit := f.send(codexChat.ID, "main", "", "[codex-elicitation]")
+	f.wait(codexElicit.ID, "waiting_user")
+	ceReq := f.pendingRequestForRun(codexElicit.ID)
+	ceDone := f.wait(codexElicit.ID, "completed")
+	assertAutoAnswered(ceReq.ID)
+	if out := runTextOutput(ceDone); !strings.Contains(out, "accept") || !strings.Contains(out, "staging") {
+		t.Fatalf("codex elicitation auto-answer failed: %s", out)
+	}
+
+	// 6. Claude AskUserQuestion (no explicit Recommended label): sends recommendation fallback so Claude proceeds.
+	claudeChat := f.chat(f.agent("claude"))
+	claudeRun := f.send(claudeChat.ID, "main", "", "[claude-question]")
+	f.wait(claudeRun.ID, "waiting_user")
+	claudeReq := f.pendingRequestForRun(claudeRun.ID)
+	claudeDone := f.wait(claudeRun.ID, "completed")
+	assertAutoAnswered(claudeReq.ID)
+	if out := runTextOutput(claudeDone); !strings.Contains(out, app.QuestionTimeoutFallbackAnswer) {
+		t.Fatalf("claude AskUserQuestion auto-answer missing fallback instruction: %s", out)
+	}
+
+	// 7. Pi select (choice-only) + editor (prefill): auto-selects first option and uses prefill.
+	piChat := f.chat(f.agent("pi"))
+	piSelect := f.send(piChat.ID, "main", "", "[pi-select]")
+	f.wait(piSelect.ID, "waiting_user")
+	psReq := f.pendingRequestForRun(piSelect.ID)
+	psDone := f.wait(piSelect.ID, "completed")
+	assertAutoAnswered(psReq.ID)
+	var piResp map[string]any
+	if err := json.Unmarshal([]byte(runTextOutput(psDone)), &piResp); err != nil || piResp["value"] != "Alpha" {
+		t.Fatalf("unexpected pi select auto-answer: %s (%v)", runTextOutput(psDone), err)
+	}
+
+	piEditor := f.send(piChat.ID, "main", "", "[pi-editor]")
+	f.wait(piEditor.ID, "waiting_user")
+	peReq := f.pendingRequestForRun(piEditor.ID)
+	peDone := f.wait(piEditor.ID, "completed")
+	assertAutoAnswered(peReq.ID)
+	piResp = nil
+	if err := json.Unmarshal([]byte(runTextOutput(peDone)), &piResp); err != nil || piResp["value"] != "Initial notes" {
+		t.Fatalf("unexpected pi editor auto-answer: %s (%v)", runTextOutput(peDone), err)
+	}
+
+	// 8. Cancel-timeout pauses auto-proceed for a specific pending question.
+	f.request("PUT", "/settings/questions", model.QuestionSettings{TimeoutSeconds: 1}, 200, &saved)
+	holdRun := f.send(codexChat.ID, "main", "", "[question]")
+	f.wait(holdRun.ID, "waiting_user")
+	holdReq := f.pendingRequestForRun(holdRun.ID)
+	f.request("POST", "/requests/"+holdReq.ID+"/cancel-timeout", map[string]any{}, 200, nil)
+	holdReqAfter := f.pendingRequestForRun(holdRun.ID)
+	if holdReqAfter.ExpiresAt != "" {
+		t.Fatalf("expected expiresAt cleared after cancel-timeout: %+v", holdReqAfter)
+	}
+	time.Sleep(1300 * time.Millisecond)
+	stillPending := f.pendingRequestForRun(holdRun.ID)
+	if stillPending.Status != "pending" {
+		t.Fatalf("cancelled-timeout question should remain pending: %+v", stillPending)
+	}
+	f.request("POST", "/requests/"+holdReq.ID+"/answer", model.Answer{
+		Allow:   true,
+		Answers: map[string][]string{"choice": {"Blue"}},
+	}, 200, nil)
+	holdDone := f.wait(holdRun.ID, "completed")
+	if out := runTextOutput(holdDone); !strings.Contains(out, "Blue") {
+		t.Fatalf("manual answer after cancel-timeout failed: %s", out)
+	}
+
+	// 9. Timeout disabled (0) omits expiresAt and never auto-answers.
+	f.request("PUT", "/settings/questions", model.QuestionSettings{TimeoutSeconds: 0}, 200, &saved)
+	offRun := f.send(codexChat.ID, "main", "", "[question]")
+	f.wait(offRun.ID, "waiting_user")
+	offReq := f.pendingRequestForRun(offRun.ID)
+	if offReq.ExpiresAt != "" {
+		t.Fatalf("expected empty expiresAt when timeout is disabled: %+v", offReq)
+	}
+	f.request("POST", "/requests/"+offReq.ID+"/answer", model.Answer{
+		Allow:   true,
+		Answers: map[string][]string{"choice": {"Green"}},
+	}, 200, nil)
+	f.wait(offRun.ID, "completed")
 }

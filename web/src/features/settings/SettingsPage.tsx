@@ -94,6 +94,12 @@ import {
   usePermissionSettings,
   useSavePermissionSettings,
 } from "@/features/runtime/permissionSettings";
+import {
+  defaultQuestionSettings,
+  questionTimeoutPresets,
+  useQuestionSettings,
+  useSaveQuestionSettings,
+} from "@/features/runtime/questionSettings";
 import { RemoteDevices } from "./RemoteDevices";
 import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
@@ -164,6 +170,8 @@ const sectionGroups = [
           "permissionsDescription",
           "defaultPermissionMode.auto",
           "defaultPermissionMode.yolo",
+          "questionTimeout",
+          "questionTimeoutDescription",
         ],
       },
       { id: "providers", icon: Plug, fields: [] },
@@ -323,7 +331,10 @@ export function SettingsPage({
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   overview: UseQueryResult<
-    Pick<Overview, "dataDir" | "agents" | "chats" | "permissionSettings">,
+    Pick<
+      Overview,
+      "dataDir" | "agents" | "chats" | "permissionSettings" | "questionSettings"
+    >,
     Error
   >;
   providerTarget?: { id?: string; pluginId?: string };
@@ -417,6 +428,19 @@ export function SettingsPage({
     permissionSettingsQuery.data ??
     overview.data?.permissionSettings ??
     defaultPermissionSettings;
+  const questionSettingsQuery = useQuestionSettings(visible);
+  const saveQuestionSettings = useSaveQuestionSettings();
+  const questionSettings =
+    questionSettingsQuery.data ??
+    overview.data?.questionSettings ??
+    defaultQuestionSettings;
+  const questionTimeoutChoices = questionTimeoutPresets.includes(
+    questionSettings.timeoutSeconds as (typeof questionTimeoutPresets)[number],
+  )
+    ? [...questionTimeoutPresets]
+    : [...questionTimeoutPresets, questionSettings.timeoutSeconds].sort(
+        (a, b) => a - b,
+      );
   const defaultReminderValue =
     taskReminders.defaultRemindOffsets.length > 0
       ? String(taskReminders.defaultRemindOffsets[0])
@@ -842,6 +866,49 @@ export function SettingsPage({
                   >
                     {t("settings.defaultPermissionMode.yolo")}
                   </ToggleGroupItem>
+                </ToggleGroup>
+              </SettingsRow>
+              <SettingsRow
+                title={t("settings.questionTimeout")}
+                description={t("settings.questionTimeoutDescription")}
+              >
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  spacing={0}
+                  value={String(questionSettings.timeoutSeconds)}
+                  aria-label={t("settings.questionTimeout")}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    const timeoutSeconds = Number(value);
+                    if (
+                      !Number.isInteger(timeoutSeconds) ||
+                      timeoutSeconds === questionSettings.timeoutSeconds
+                    ) {
+                      return;
+                    }
+                    saveQuestionSettings.mutate(
+                      { timeoutSeconds },
+                      { onError: (error) => toast.error(error.message) },
+                    );
+                  }}
+                >
+                  {questionTimeoutChoices.map((seconds) => (
+                    <ToggleGroupItem
+                      key={seconds}
+                      value={String(seconds)}
+                      disabled={saveQuestionSettings.isPending}
+                      className="tabular-nums"
+                    >
+                      {seconds === 0
+                        ? t("settings.questionTimeoutOff")
+                        : seconds % 60 === 0
+                          ? t("settings.questionTimeoutMinutes", {
+                              minutes: seconds / 60,
+                            })
+                          : t("settings.questionTimeoutSeconds", { seconds })}
+                    </ToggleGroupItem>
+                  ))}
                 </ToggleGroup>
               </SettingsRow>
             </SettingsGroup>

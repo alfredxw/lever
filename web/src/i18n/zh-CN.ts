@@ -2396,6 +2396,12 @@ export const zhCN: Record<keyof typeof enUS, string> = {
     "在新建 Agent、切换运行时和自动化任务等配置点，默认按此模式选择各运行时的等价权限级别。各 Agent 与对话仍可单独调整。",
   "settings.defaultPermissionMode.auto": "Auto",
   "settings.defaultPermissionMode.yolo": "YOLO",
+  "settings.questionTimeout": "提问超时自动继续",
+  "settings.questionTimeoutDescription":
+    "当 Agent 发起提问且在设定时间内未收到回复时，自动按其推荐方案继续执行，避免无人值守时阻塞任务。",
+  "settings.questionTimeoutOff": "关闭",
+  "settings.questionTimeoutSeconds": "{{seconds}} 秒",
+  "settings.questionTimeoutMinutes": "{{minutes}} 分钟",
   "permissionSetup.title": "选择默认权限模式",
   "permissionSetup.description":
     "首次启动时选择全局默认权限偏好，Lever 会在各个配置点自动对应到各运行时的等价权限级别。",
@@ -2629,6 +2635,12 @@ export const zhCN: Record<keyof typeof enUS, string> = {
   "chat.questionCustomPlaceholder": "或输入其他回答…",
   "chat.questionFreeTextPlaceholder": "输入你的回答…",
   "chat.questionMorePending": "+{{count}} 待回答",
+  "chat.questionCountdownTooltip":
+    "倒计时结束后将按 Agent 推荐自动继续；点击可暂停本次超时。",
+  "chat.questionCountdownReadonlyTooltip":
+    "倒计时结束后将按 Agent 推荐自动继续。",
+  "chat.questionCountdownPauseAria":
+    "{{time}} 后按推荐自动继续，点击暂停本次超时",
   "chat.deny": "拒绝",
   "chat.allow": "仅允许此操作",
   "chat.answer": "提交回答",

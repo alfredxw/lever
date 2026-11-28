@@ -276,6 +276,57 @@ func parseElicitationField(property object) (elicitationField, []model.QuestionO
 	}
 }
 
+func applyElicitationOptionDefaults(property object, kind elicitationFieldKind, options []model.QuestionOption) {
+	raw, ok := property["default"]
+	if !ok || raw == nil || len(options) == 0 {
+		return
+	}
+	switch kind {
+	case elicitationFieldChoice:
+		def, ok := raw.(string)
+		if !ok {
+			return
+		}
+		for i := range options {
+			if options[i].ID == def {
+				options[i].Recommended = true
+				return
+			}
+		}
+	case elicitationFieldBoolean:
+		def, ok := raw.(bool)
+		if !ok {
+			return
+		}
+		target := "false"
+		if def {
+			target = "true"
+		}
+		for i := range options {
+			if options[i].ID == target {
+				options[i].Recommended = true
+				return
+			}
+		}
+	case elicitationFieldMultiChoice:
+		entries, ok := raw.([]any)
+		if !ok {
+			return
+		}
+		wanted := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			if s, ok := entry.(string); ok {
+				wanted[s] = true
+			}
+		}
+		for i := range options {
+			if wanted[options[i].ID] {
+				options[i].Recommended = true
+			}
+		}
+	}
+}
+
 func elicitationDefaultAnswer(property object, kind elicitationFieldKind) string {
 	raw, ok := property["default"]
 	if !ok || raw == nil {
@@ -401,6 +452,7 @@ func parseElicitationForm(rawSchema json.RawMessage, message string, opts elicit
 			}
 		}
 
+		applyElicitationOptionDefaults(entry.property, field.kind, entry.options)
 		q := model.Question{
 			ID:            entry.id,
 			Header:        header,
@@ -424,8 +476,10 @@ func parseElicitationForm(rawSchema json.RawMessage, message string, opts elicit
 		}
 		if field.kind == elicitationFieldNumber {
 			if field.integer {
+				q.InputType = "integer"
 				q.Placeholder = "Enter an integer"
 			} else {
+				q.InputType = "number"
 				q.Placeholder = "Enter a number"
 			}
 		}

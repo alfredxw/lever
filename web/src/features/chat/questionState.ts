@@ -33,6 +33,28 @@ export function isQuestionRequired(question: Question): boolean {
   return question.required !== false;
 }
 
+export function remainingQuestionTimeoutSeconds(
+  expiresAt: string | undefined,
+  nowMs = Date.now(),
+): number | null {
+  if (!expiresAt) return null;
+  const deadlineMs = Date.parse(expiresAt);
+  if (!Number.isFinite(deadlineMs)) return null;
+  return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
+}
+
+export function formatQuestionCountdown(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const secs = clamped % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (hours > 0) {
+    return `${hours}:${pad(minutes)}:${pad(secs)}`;
+  }
+  return `${minutes}:${pad(secs)}`;
+}
+
 export function normalizeSelectedOptionIds(
   question: Question,
   values: readonly string[] | undefined,

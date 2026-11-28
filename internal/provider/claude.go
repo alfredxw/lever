@@ -822,7 +822,7 @@ func claudeApproval(ctx context.Context, p *device.Process, sink Sink, frame obj
 		if r["dialog_kind"] == "resume_return" {
 			answer, err := sink.Ask(ctx, model.Request{Kind: "question", Title: "Claude Code", Questions: []model.Question{{
 				ID: "resume", Header: "Claude Code", Text: "Compact this idle conversation before continuing?", AllowCustom: boolPtr(false), Options: []model.QuestionOption{
-					{ID: "continue", Label: "Continue"}, {ID: "compact", Label: "Compact and continue"},
+					{ID: "continue", Label: "Continue", Recommended: true}, {ID: "compact", Label: "Compact and continue"},
 				},
 			}}})
 			if err != nil {

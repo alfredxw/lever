@@ -1090,6 +1090,11 @@ export interface PermissionSettings {
   defaultMode: 'auto' | 'yolo';
   needsSetup?: boolean;
 }
+export const DefaultQuestionTimeoutSeconds = 180;
+export const MaxQuestionTimeoutSeconds = 3600;
+export interface QuestionSettings {
+  timeoutSeconds: number /* int */;
+}
 export interface DelegationRule {
   deviceId?: string;
   agentId: string;
@@ -1615,6 +1620,7 @@ export interface QuestionOption {
   label: string;
   description?: string;
   preview?: string;
+  recommended?: boolean;
 }
 export interface Question {
   id: string;
@@ -1626,6 +1632,7 @@ export interface Question {
   required?: boolean;
   initialAnswer?: string;
   placeholder?: string;
+  inputType?: string;
   secret?: boolean;
 }
 export interface Request {
@@ -1642,6 +1649,8 @@ export interface Request {
   questions: Question[];
   options?: RequestOption[];
   allowOnce?: Answer;
+  expiresAt?: string;
+  autoAnswered?: boolean;
   status: string;
   answer?: Answer;
 }
@@ -1871,6 +1880,7 @@ export interface Overview {
   requests: Request[];
   delegationSettings: DelegationSettings;
   permissionSettings: PermissionSettings;
+  questionSettings: QuestionSettings;
   lastSelection?: Selection;
   dataDir: string;
   homeDir: string;

@@ -4,6 +4,8 @@ import type { Question } from "../src/api/types.gen.ts";
 import {
   buildQuestionAnswers,
   deriveQuestionProgress,
+  formatQuestionCountdown,
+  remainingQuestionTimeoutSeconds,
   resolveQuestionAnswer,
   setQuestionCustomAnswer,
   toggleQuestionOption,
@@ -139,4 +141,21 @@ test("deriveQuestionProgress clamps index and computes advance/completion flags"
   assert.equal(clamped.questionIndex, 1);
   assert.equal(clamped.isLastQuestion, true);
   assert.equal(clamped.canAdvance, true);
+});
+
+test("question countdown helpers compute and format remaining time", () => {
+  assert.equal(remainingQuestionTimeoutSeconds(undefined, 1000), null);
+  assert.equal(remainingQuestionTimeoutSeconds("invalid", 1000), null);
+  assert.equal(
+    remainingQuestionTimeoutSeconds("2026-11-28T00:01:00.000Z", Date.parse("2026-11-28T00:00:00.200Z")),
+    60,
+  );
+  assert.equal(
+    remainingQuestionTimeoutSeconds("2026-11-28T00:00:00.000Z", Date.parse("2026-11-28T00:00:05.000Z")),
+    0,
+  );
+  assert.equal(formatQuestionCountdown(0), "0:00");
+  assert.equal(formatQuestionCountdown(7), "0:07");
+  assert.equal(formatQuestionCountdown(180), "3:00");
+  assert.equal(formatQuestionCountdown(3661), "1:01:01");
 });

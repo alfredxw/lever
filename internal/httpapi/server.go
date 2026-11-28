@@ -563,6 +563,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 		v, err := a.SavePermissionSettings(r.Context(), in)
 		respond(w, v, err)
 	})
+	mux.HandleFunc("GET /api/settings/questions", func(w http.ResponseWriter, r *http.Request) {
+		v, err := a.QuestionSettings(r.Context())
+		respond(w, v, err)
+	})
+	mux.HandleFunc("PUT /api/settings/questions", func(w http.ResponseWriter, r *http.Request) {
+		var in model.QuestionSettings
+		if err := read(w, r, &in); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		v, err := a.SaveQuestionSettings(r.Context(), in)
+		respond(w, v, err)
+	})
 	mux.HandleFunc("GET /api/settings/starred-models", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string][]string{}
 		var raw string
@@ -825,6 +838,9 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 			return
 		}
 		respond(w, map[string]bool{"accepted": true}, a.Answer(r.Context(), r.PathValue("id"), v))
+	})
+	mux.HandleFunc("POST /api/requests/{id}/cancel-timeout", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, map[string]bool{"cancelled": true}, a.CancelQuestionTimeout(r.Context(), r.PathValue("id")))
 	})
 	s.workingCopyRoutes(mux, a)
 	s.projectRoutes(mux, a)

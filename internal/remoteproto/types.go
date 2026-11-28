@@ -145,6 +145,7 @@ type Option struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Preview     string `json:"preview,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 	Allow       bool   `json:"allow,omitempty"`
 }
 type Question struct {
@@ -156,6 +157,7 @@ type Question struct {
 	Required      *bool    `json:"required,omitempty"`
 	InitialAnswer string   `json:"initialAnswer,omitempty"`
 	Placeholder   string   `json:"placeholder,omitempty"`
+	InputType     string   `json:"inputType,omitempty"`
 	Secret        bool     `json:"secret,omitempty"`
 	Options       []Option `json:"options,omitempty"`
 }
@@ -230,6 +232,8 @@ type Record struct {
 	Options           []Option        `json:"options,omitempty"`
 	Answer            *Answer         `json:"answer,omitempty"`
 	AllowOnce         *Answer         `json:"allowOnce,omitempty"`
+	ExpiresAt         string          `json:"expiresAt,omitempty"`
+	AutoAnswered      bool            `json:"autoAnswered,omitempty"`
 }
 type Change struct {
 	Record  `tstype:",extends"`
