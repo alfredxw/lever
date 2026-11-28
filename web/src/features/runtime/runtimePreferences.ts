@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import { api } from "@/api/client";
+import { api } from "../../api/client.ts";
 import type { Agent, Selection } from "@/api/types.gen";
 import {
   isMeaningfulEffortSource,
