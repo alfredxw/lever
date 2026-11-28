@@ -32,6 +32,17 @@ const genericToolNames = new Set([
   "client_view_file",
   "view_file_outline",
   "view_code_item",
+  "view_image",
+  "view image",
+  "generate_image",
+  "generate image",
+  "image_generation",
+  "image generation",
+  "image_gen",
+  "imagegen",
+  "create_image",
+  "edit_image",
+  "experimental_image_generate",
   "find",
   "find_by_name",
   "glob",
@@ -49,6 +60,7 @@ export function toolAction(item: Pick<Item, "toolAction" | "title">): Action {
   switch (item.toolAction) {
     case "command":
     case "edit":
+    case "image":
     case "list":
     case "read":
     case "search":
@@ -64,9 +76,21 @@ export function toolAction(item: Pick<Item, "toolAction" | "title">): Action {
     case "write":
     case "file changes":
       return "edit";
+    case "generate_image":
+    case "generate image":
+    case "image_generation":
+    case "image generation":
+    case "image_gen":
+    case "imagegen":
+    case "create_image":
+    case "edit_image":
+    case "experimental_image_generate":
+      return "image";
     case "ls":
       return "list";
     case "read":
+    case "view_image":
+    case "view image":
       return "read";
     case "find":
     case "glob":

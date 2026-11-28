@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/png"
 	"io"
@@ -280,4 +281,114 @@ func TestAntigravityHTMLPreview(t *testing.T) {
 	if err := os.Symlink(filepath.Join(brain, "another-session"), nativeDir); err == nil {
 		denied(report)
 	}
+}
+
+func TestGeneratedImagePreview(t *testing.T) {
+	codexHome := t.TempDir()
+	shadowHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	f := newFixture(t)
+
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := f.agent("codex")
+	if _, err := f.a.Store.DB.Exec(`UPDATE providers SET data=json_set(data,'$.shadowHome',?) WHERE id='codex'`, shadowHome); err != nil {
+		t.Fatal(err)
+	}
+	chat := f.chat(agent)
+	run1 := f.send(chat.ID, "main", "", "First image run")
+	f.wait(run1.ID, "completed")
+	run2 := f.send(chat.ID, "main", "", "Second image run")
+	f.wait(run2.ID, "completed")
+
+	// 1. Run-scoped materialized image inside Store.Dir/sessions/<sid>/generated-images/<runID>/.
+	genDir := filepath.Join(f.a.Store.Dir, "sessions", run1.SessionID, "generated-images", run1.ID)
+	if err := os.MkdirAll(genDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	materialized := filepath.Join(genDir, "tool-1.png")
+	if err := os.WriteFile(materialized, pngData.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Secret session relay file must stay blocked even though generated-images is allowed.
+	mcpSecret := filepath.Join(f.a.Store.Dir, "sessions", run1.SessionID, ".pi-mcp-1", "token.png")
+	if err := os.MkdirAll(filepath.Dir(mcpSecret), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpSecret, pngData.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Codex ShadowHome generated_images directory.
+	shadowGen := filepath.Join(shadowHome, "generated_images", "shadow.png")
+	if err := os.MkdirAll(filepath.Dir(shadowGen), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadowGen, pngData.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Host image referenced only via Item.ImageFiles (e.g. tool/subagent card without Markdown link in text).
+	hostDir := t.TempDir()
+	itemOnlyImage := filepath.Join(hostDir, "child-out.png")
+	unreferencedImage := filepath.Join(hostDir, "sibling.png")
+	for _, p := range []string{itemOnlyImage, unreferencedImage} {
+		if err := os.WriteFile(p, pngData.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	itemsJSON, err := json.Marshal([]model.Item{
+		{
+			ID:         "sub-img",
+			Kind:       "subagent",
+			Title:      "Image generator",
+			Status:     "completed",
+			ImageFiles: []model.ImageFile{{Path: itemOnlyImage, Name: "child-out.png"}},
+		},
+		{
+			ID:     "txt-1",
+			Kind:   "text",
+			Text:   "Done.",
+			Status: "completed",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.a.Store.DB.Exec(`UPDATE runs SET data=json_set(data,'$.items',json(?)) WHERE id=?`, string(itemsJSON), run1.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(runID, path string, want int) {
+		t.Helper()
+		query := url.Values{"kind": {"image"}, "path": {path}}
+		req, err := http.NewRequest(http.MethodGet, f.s.URL+"/api/runs/"+runID+"/preview?"+query.Encode(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+f.s.Token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != want {
+			t.Fatalf("run=%s path=%s: status %d, want %d (body=%q)", runID, path, res.StatusCode, want, string(body))
+		}
+		if want == http.StatusOK && !bytes.Equal(body, pngData.Bytes()) {
+			t.Fatalf("run=%s path=%s: unexpected image body", runID, path)
+		}
+	}
+
+	check(run1.ID, materialized, http.StatusOK)
+	check(run2.ID, materialized, http.StatusNotFound)
+	check(run1.ID, mcpSecret, http.StatusNotFound)
+	check(run1.ID, shadowGen, http.StatusOK)
+	check(run1.ID, itemOnlyImage, http.StatusOK)
+	check(run1.ID, unreferencedImage, http.StatusNotFound)
 }

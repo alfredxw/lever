@@ -1,10 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import { CirclePause, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client";
 import type { SharedActivity, SharedMessage } from "@/api/types.gen";
-import { ErrorNotice, Loading } from "@/components/common";
 import { AttachmentGroup } from "@/components/ui/attachment";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent } from "@/components/ui/message";
@@ -12,11 +9,7 @@ import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import { cn } from "@/lib/utils";
 import { ImageAttachment } from "./Attachments";
 import { MessageInput } from "./References";
-import {
-  activityDisplayStatus,
-  RunActivityItem,
-  RunActivityText,
-} from "./RunActivity";
+import { RunActivityItem } from "./RunActivity";
 import { formatDuration, RunWorkDetails } from "./RunWork";
 import { ChatMarkdown, type ChatFiles } from "./ChatResponse";
 
@@ -193,19 +186,9 @@ export const SharedTurn = memo(function SharedTurn({
                         <RunActivityItem
                           key={message.id}
                           item={message}
+                          detailPath={path}
                           runStatus={runStatus}
                         >
-                          {message.detailIds?.length ? (
-                            <SharedActivityDetail
-                              path={path}
-                              ids={message.detailIds}
-                              message={message}
-                              running={
-                                runStatus === "running" &&
-                                message.status === "running"
-                              }
-                            />
-                          ) : null}
                           {images(message)}
                         </RunActivityItem>
                       ) : (
@@ -270,53 +253,4 @@ function SharedWorkingLabel({
       )}
     </span>
   );
-}
-
-function SharedActivityDetail({
-  path,
-  ids,
-  message,
-  running,
-}: {
-  path: string;
-  ids: string[];
-  message: SharedMessage;
-  running: boolean;
-}) {
-  const { kind, status } = message;
-  const detail = useQuery({
-    queryKey: ["shared-detail", path, ids, status],
-    queryFn: async ({ signal }) => {
-      const parts = await Promise.all(
-        ids.map((id) =>
-          api<string>(
-            `${path}/details/${encodeURIComponent(id)}`,
-            undefined,
-            "GET",
-            signal,
-          ),
-        ),
-      );
-      return parts.filter(Boolean).join("\n\n");
-    },
-    staleTime: running ? 0 : 60_000,
-    refetchInterval: running ? 2000 : false,
-    retry: false,
-  });
-  if (detail.error)
-    return (
-      <ErrorNotice error={detail.error} retry={() => void detail.refetch()} />
-    );
-  if (detail.data === undefined) return <Loading />;
-  return detail.data ? (
-    <RunActivityText
-      text={detail.data}
-      kind={kind}
-      status={
-        status === "running" && !running
-          ? "unknown"
-          : activityDisplayStatus(message)
-      }
-    />
-  ) : null;
 }

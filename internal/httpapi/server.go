@@ -531,6 +531,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 		before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		v, err := a.Store.ChatPage(r.Context(), r.PathValue("id"), before, limit)
+		if q.Get("toolOutput") == "lazy" {
+			deferHistoryToolOutput(v.Runs)
+		}
 		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/chats/{id}/delegations", func(w http.ResponseWriter, r *http.Request) {
@@ -671,6 +674,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents/{agentId}/suggestions", suggestions)
 	mux.HandleFunc("GET /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Store.SessionView(r.Context(), r.PathValue("id"))
+		if v.Root != nil && r.URL.Query().Get("toolOutput") == "lazy" {
+			deferRunToolOutput(v.Root)
+		}
 		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/runs", func(w http.ResponseWriter, r *http.Request) {
@@ -678,6 +684,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 		before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		v, err := a.Store.SessionRunPage(r.Context(), r.PathValue("id"), before, limit)
+		if q.Get("toolOutput") == "lazy" {
+			deferHistoryToolOutput(v.Runs)
+		}
 		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /api/sessions/read", func(w http.ResponseWriter, r *http.Request) {
@@ -731,12 +740,25 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/comparisons/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Store.ComparisonResults(r.Context(), r.PathValue("id"))
+		if r.URL.Query().Get("toolOutput") == "lazy" {
+			for i := range v {
+				deferRunToolOutput(&v[i].Run)
+			}
+		}
 		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		run, err := store.Get[model.Run](r.Context(), a.Store.DB, `SELECT `+store.RunWithWaitingOn+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?`, r.PathValue("id"))
 		respond(w, run, err)
+	})
+	mux.HandleFunc("GET /api/runs/{id}/details/{entry}", func(w http.ResponseWriter, r *http.Request) {
+		var text string
+		err := a.Store.DB.QueryRowContext(r.Context(), `SELECT coalesce(item.value->>'$.text','')
+FROM runs r, json_each(r.data,'$.items') item
+WHERE r.id=? AND item.value->>'$.id'=? AND item.value->>'$.kind'='tool' LIMIT 1`,
+			r.PathValue("id"), r.PathValue("entry")).Scan(&text)
+		respond(w, text, err)
 	})
 	mux.HandleFunc("POST /api/runs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]bool{"accepted": true}, a.Stop(r.Context(), r.PathValue("id")))

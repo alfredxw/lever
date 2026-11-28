@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type PointerEvent } from "react";
 import {
   infiniteQueryOptions,
   queryOptions,
@@ -16,7 +16,8 @@ import type {
 } from "@/api/types.gen";
 import type { WorkspaceTab } from "@/components/workbench/useWorkspaces";
 
-const initialChatPageSize = 12;
+const initialHistoryPageSize = 12;
+const historyPageSize = 40;
 
 export function useChatActivity(chatId: string, enabled: boolean) {
   return useQuery({
@@ -53,7 +54,12 @@ export function comparisonQuery(id: string) {
   return queryOptions({
     queryKey: ["comparison", id],
     queryFn: ({ signal }) =>
-      api<ComparisonResult[]>(`/comparisons/${id}`, undefined, "GET", signal),
+      api<ComparisonResult[]>(
+        `/comparisons/${id}?toolOutput=lazy`,
+        undefined,
+        "GET",
+        signal,
+      ),
   });
 }
 
@@ -63,7 +69,7 @@ export function chatQuery(chatId: string) {
     initialPageParam: 0,
     queryFn: ({ pageParam, signal }) =>
       api<ChatView>(
-        `/chats/${chatId}?before=${pageParam}${pageParam === 0 ? `&limit=${initialChatPageSize}` : ""}`,
+        `/chats/${chatId}?before=${pageParam}&limit=${pageParam ? historyPageSize : initialHistoryPageSize}&toolOutput=lazy`,
         undefined,
         "GET",
         signal,
@@ -92,32 +98,42 @@ export function sessionQuery(sessionId: string) {
   return queryOptions({
     queryKey: ["session", sessionId, "info"],
     queryFn: ({ signal }) =>
-      api<SessionView>(`/sessions/${sessionId}`, undefined, "GET", signal),
-  });
-}
-
-export function sessionRunsQuery(sessionId: string) {
-  return infiniteQueryOptions({
-    queryKey: ["session", sessionId],
-    initialPageParam: 0,
-    queryFn: ({ pageParam, signal }) =>
-      api<SessionRuns>(
-        `/sessions/${sessionId}/runs?before=${pageParam}`,
+      api<SessionView>(
+        `/sessions/${sessionId}?toolOutput=lazy`,
         undefined,
         "GET",
         signal,
       ),
-    getNextPageParam: (page) =>
-      page.runs.length === 40 ? page.runs.at(-1)?.sequence : undefined,
   });
 }
+
+export function sessionRunsQuery(
+  sessionId: string,
+  firstPageSize = historyPageSize,
+) {
+  return infiniteQueryOptions({
+    queryKey: ["session", sessionId, "runs", firstPageSize],
+    initialPageParam: 0,
+    queryFn: ({ pageParam, signal }) =>
+      api<SessionRuns>(
+        `/sessions/${sessionId}/runs?before=${pageParam}&limit=${pageParam ? historyPageSize : firstPageSize}&toolOutput=lazy`,
+        undefined,
+        "GET",
+        signal,
+      ),
+    getNextPageParam: (page) => page.nextBefore,
+  });
+}
+
+export const topicHistoryQuery = (id: string) =>
+  sessionRunsQuery(id, initialHistoryPageSize);
 
 export function topicPreviewQuery(sessionId: string) {
   return queryOptions({
     queryKey: ["session", sessionId, "preview"],
     queryFn: ({ signal }) =>
       api<SessionRuns>(
-        `/sessions/${sessionId}/runs?before=0&limit=3`,
+        `/sessions/${sessionId}/runs?before=0&limit=3&toolOutput=lazy`,
         undefined,
         "GET",
         signal,
@@ -127,19 +143,40 @@ export function topicPreviewQuery(sessionId: string) {
 
 export function prefetchConversation(tab: WorkspaceTab) {
   if (tab.kind === "chat") {
-    const query = chatQuery(tab.id);
-    if (!queryClient.getQueryData(query.queryKey))
-      void queryClient.prefetchInfiniteQuery(query);
+    prefetchChat(tab.id);
+    if (tab.expandedTopicId) prefetchTopic(tab.expandedTopicId);
   } else if (tab.kind === "topic") {
-    const info = sessionQuery(tab.topic.sessionId);
-    if (!queryClient.getQueryData(info.queryKey))
-      void queryClient.prefetchQuery(info);
-    prefetchTopicHistory(tab.topic.sessionId);
+    prefetchTopic(tab.topic.sessionId);
   }
 }
 
-export function prefetchTopicHistory(sessionId: string) {
-  const query = sessionRunsQuery(sessionId);
+function prefetchChat(chatId: string) {
+  const query = chatQuery(chatId);
   if (!queryClient.getQueryData(query.queryKey))
     void queryClient.prefetchInfiniteQuery(query);
+}
+
+export function prefetchTopic(sessionId: string) {
+  const info = sessionQuery(sessionId);
+  if (!queryClient.getQueryData(info.queryKey))
+    void queryClient.prefetchQuery(info);
+  const query = topicHistoryQuery(sessionId);
+  if (!queryClient.getQueryData(query.queryKey))
+    void queryClient.prefetchInfiniteQuery(query);
+}
+
+export function conversationIntent(chatId: string, topicId?: string) {
+  const prefetch = () =>
+    topicId ? prefetchTopic(topicId) : prefetchChat(chatId);
+  return {
+    onFocus: prefetch,
+    onPointerEnter(event: PointerEvent<HTMLElement>) {
+      if (event.pointerType === "touch") return;
+      const row = event.currentTarget;
+      // Skimming many rows should only warm the one the pointer settles on.
+      window.setTimeout(() => {
+        if (row.matches(":hover")) prefetch();
+      }, 100);
+    },
+  };
 }

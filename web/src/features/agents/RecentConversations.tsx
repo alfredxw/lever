@@ -50,6 +50,7 @@ import {
   type MenuAnchor,
 } from "@/components/ui/action-context-menu";
 import { displayChatTitle } from "@/features/chat/conversationTitle";
+import { conversationIntent } from "@/features/chat/queries";
 import { PressStableList } from "./PressStableList";
 
 type RecentDraftSource = {
@@ -596,6 +597,13 @@ const RecentConversationRow = memo(function RecentConversationRow({
           .filter(Boolean)
           .join("\n")}
         {...rowMenuHandlers((anchor) => onMenu(anchor, target))}
+        {...(target.kind === "conversation" &&
+          conversationIntent(
+            target.conversation.chatId,
+            target.conversation.kind === "topic"
+              ? target.conversation.id
+              : undefined,
+          ))}
         onClick={() => onOpen(target)}
       >
         {detailed ? (

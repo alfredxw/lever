@@ -75,15 +75,19 @@ export function useRunResponse({
     : run.continued
       ? parts.filter((part) => !Array.isArray(part))
       : parts.slice(-1);
+  const runPath = `/runs/${encodeURIComponent(run.id)}`;
+  const previewEndpoint = `/api${runPath}/preview`;
   const renderPart = (part: Item | Item[]) =>
     Array.isArray(part) ? (
       <RunActivity
         key={part[0].id}
         items={part}
+        detailPath={runPath}
         runStatus={activityStatus}
         live={part === lastPart && runActive}
         autoExpandThinking={autoExpandThinking}
         runningSubagents={runningSubagents}
+        previewEndpoint={previewEndpoint}
       />
     ) : part.kind === "user" && part.message ? (
       <div key={part.id}>
@@ -126,6 +130,7 @@ export function useRunResponse({
       subagents={subagents}
       requests={pendingRequests}
       runtime={runtimeName}
+      previewEndpoint={previewEndpoint}
     >
       {workParts.length ? workParts.map(renderPart) : undefined}
     </RunWork>

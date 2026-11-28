@@ -3527,11 +3527,14 @@ test("a slow Topic cannot take selection back from a sidebar Chat", async ({
   const topic: Run = await response.json();
   const requested = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  await page.route(`**/api/sessions/${topic.sessionId}`, async (route) => {
-    requested.resolve();
-    await release.promise;
-    await route.continue();
-  });
+  await page.route(
+    (url) => url.pathname === `/api/sessions/${topic.sessionId}`,
+    async (route) => {
+      requested.resolve();
+      await release.promise;
+      await route.continue();
+    },
+  );
   const list = page.locator("#agent-sidebar").getByRole("tabpanel");
   const row = (id: string) => list.locator(`button[data-session-id="${id}"]`);
   try {

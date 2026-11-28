@@ -655,6 +655,11 @@ function NodeChat({
                       autoExpandThinking={
                         run.selection?.provider === "antigravity"
                       }
+                      previewEndpoint={
+                        previewFiles
+                          ? `${apiBase}/runs/${encodeURIComponent(run.id)}/preview`
+                          : undefined
+                      }
                     />
                   ) : part.kind === "user" ? (
                     part.message && (

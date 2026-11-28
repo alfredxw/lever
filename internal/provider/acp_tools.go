@@ -105,20 +105,42 @@ func isAntigravitySubagentCall(state *acpToolState) bool {
 	return true
 }
 
-func antigravitySubagentTask(state *acpToolState) (title, prompt string) {
+func isAntigravityImageGeneratorType(raw string) bool {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	return s == "image-generator" || s == "image_generator" || s == "imagegenerator"
+}
+
+func antigravitySubagentTask(state *acpToolState) (title, prompt string, imageGenerator bool) {
 	input := obj(state.RawInput)
 	type launch struct{ role, prompt string }
 	var launches []launch
 	if batch := arr(input["Subagents"]); len(batch) > 0 {
 		for _, entry := range batch {
 			spec := obj(entry)
-			role, p := strings.TrimSpace(str(spec["Role"])), strings.TrimSpace(str(spec["Prompt"]))
+			typeName := cmp.Or(str(spec["TypeName"]), str(spec["typeName"]), str(spec["type_name"]))
+			isImg := isAntigravityImageGeneratorType(typeName)
+			if isImg {
+				imageGenerator = true
+			}
+			role := strings.TrimSpace(cmp.Or(str(spec["Role"]), str(spec["role"])))
+			if role == "" && isImg {
+				role = "Image generator"
+			}
+			p := strings.TrimSpace(cmp.Or(str(spec["Prompt"]), str(spec["prompt"])))
 			if role != "" || p != "" {
 				launches = append(launches, launch{role: role, prompt: p})
 			}
 		}
 	} else {
+		typeName := cmp.Or(str(input["TypeName"]), str(input["typeName"]), str(input["type_name"]))
+		isImg := isAntigravityImageGeneratorType(typeName)
+		if isImg {
+			imageGenerator = true
+		}
 		role := strings.TrimSpace(cmp.Or(str(input["Role"]), str(input["role"])))
+		if role == "" && isImg {
+			role = "Image generator"
+		}
 		p := strings.TrimSpace(cmp.Or(str(input["Prompt"]), str(input["prompt"])))
 		if role != "" || p != "" {
 			launches = append(launches, launch{role: role, prompt: p})
@@ -126,9 +148,9 @@ func antigravitySubagentTask(state *acpToolState) (title, prompt string) {
 	}
 	switch len(launches) {
 	case 0:
-		return "", ""
+		return "", "", imageGenerator
 	case 1:
-		return launches[0].role, launches[0].prompt
+		return launches[0].role, launches[0].prompt, imageGenerator
 	default:
 		roles := make([]string, 0, len(launches))
 		prompts := make([]string, 0, len(launches))
@@ -142,7 +164,7 @@ func antigravitySubagentTask(state *acpToolState) (title, prompt string) {
 				prompts = append(prompts, text)
 			}
 		}
-		return strings.Join(roles, ", "), strings.Join(prompts, "\n\n")
+		return strings.Join(roles, ", "), strings.Join(prompts, "\n\n"), imageGenerator
 	}
 }
 
@@ -152,9 +174,15 @@ func (c *acpRuntime) emitAntigravitySubagent(state *acpToolState) error {
 		agent = newSubagent(state.ID)
 		c.subagents[state.ID] = agent
 	}
-	title, prompt := antigravitySubagentTask(state)
+	title, prompt, imageGenerator := antigravitySubagentTask(state)
+	if imageGenerator {
+		agent.imageGenerator = true
+	}
 	agent.task(title, prompt)
-	output := acpToolOutputText(state)
+	output, imgs := acpToolOutput(c, state, c.cwd)
+	if len(imgs) > 0 {
+		agent.addImages(imgs)
+	}
 	switch state.Status {
 	case acp.ToolCallStatusCompleted, acp.ToolCallStatusFailed:
 		if state.Status == acp.ToolCallStatusCompleted && c.background != nil && c.background.childProbe != nil && acpNormalizedToolName(state.Title) == "invoke_subagent" &&
@@ -167,6 +195,14 @@ func (c *acpRuntime) emitAntigravitySubagent(state *acpToolState) error {
 		if c.background != nil {
 			delete(c.background.childCalls, state.ID)
 			delete(c.background.childStates, state.ID)
+		}
+		if state.Status == acp.ToolCallStatusCompleted {
+			if reportImgs := extractExistingImagePaths(output, c.cwd); len(reportImgs) > 0 {
+				agent.addImages(reportImgs)
+			}
+			if agent.imageGenerator && len(agent.item.ImageFiles) > 0 {
+				c.recordGeneratedImages(state.ID, agent.item.ImageFiles)
+			}
 		}
 		agent.finish(acpToolStatus(state.Status), output)
 	default:
@@ -183,7 +219,19 @@ func antigravityLaunchReceipt(tool *acpToolState, output string) bool {
 	return output == "" || str(obj(tool.RawOutput)["conversationId"]) != "" || strings.Contains(output, "Created the following subagent:\n{")
 }
 
+func (c *acpRuntime) normalizeToolItem(state *acpToolState) model.Item {
+	item := normalizeACPToolItemWith(c, state, c.cwd)
+	if item.ToolAction == model.ToolActionImage && item.Status == "completed" && len(item.ImageFiles) > 0 {
+		c.recordGeneratedImages(state.ID, item.ImageFiles)
+	}
+	return item
+}
+
 func normalizeACPToolItem(state *acpToolState, cwd string) model.Item {
+	return normalizeACPToolItemWith(nil, state, cwd)
+}
+
+func normalizeACPToolItemWith(c *acpRuntime, state *acpToolState, cwd string) model.Item {
 	input := obj(state.RawInput)
 	output := obj(state.RawOutput)
 	command := strings.TrimSpace(cmp.Or(
@@ -199,7 +247,14 @@ func normalizeACPToolItem(state *acpToolState, cwd string) model.Item {
 		action = inferACPToolAction(state.Title, command)
 	}
 	title := acpToolTitle(state, action, command, input, cwd)
-	text := acpToolDetailText(state, command)
+	text, images := acpToolDetail(c, state, command, cwd)
+	if action == model.ToolActionRead && state.Status == acp.ToolCallStatusCompleted {
+		if rawPath := acpToolRawPath(state, input); rawPath != "" {
+			if imgPath := normalizeLocalImagePath(rawPath, cwd); imgPath != "" {
+				images = appendUniqueImageFile(images, model.ImageFile{Path: imgPath, Name: filepath.Base(imgPath)})
+			}
+		}
+	}
 	item := model.Item{
 		ID:         "tool-" + state.ID,
 		Kind:       "tool",
@@ -207,6 +262,7 @@ func normalizeACPToolItem(state *acpToolState, cwd string) model.Item {
 		ToolAction: action,
 		Status:     acpToolStatus(state.Status),
 		Text:       clip(text),
+		ImageFiles: images,
 	}
 	if code, ok := acpToolExitCode(output); ok {
 		item.ExitCode = &code
@@ -222,7 +278,7 @@ func inferACPToolAction(title, command string) model.ToolAction {
 	switch name {
 	case "run_command", "bash", "shell", "execute_command", "command_status":
 		return model.ToolActionCommand
-	case "view_file", "client_view_file", "read_file", "view_file_outline", "view_code_item":
+	case "view_file", "client_view_file", "read_file", "view_file_outline", "view_code_item", "view_image":
 		return model.ToolActionRead
 	case "list_dir", "ls":
 		return model.ToolActionList
@@ -230,6 +286,8 @@ func inferACPToolAction(title, command string) model.ToolAction {
 		return model.ToolActionSearch
 	case "replace_file_content", "multi_replace_file_content", "write_to_file", "edit_file", "client_edit_file", "write_file":
 		return model.ToolActionEdit
+	case "generate_image", "generate image", "image_generation", "image generation", "image_gen", "imagegen", "create_image", "edit_image", "experimental_image_generate":
+		return model.ToolActionImage
 	default:
 		return ""
 	}
@@ -255,10 +313,11 @@ func isGenericACPToolTitle(title string, action model.ToolAction) bool {
 	name := acpNormalizedToolName(s)
 	switch name {
 	case "run_command", "bash", "shell", "execute_command", "command", "command_status",
-		"view_file", "client_view_file", "read_file", "read", "read file", "view_file_outline", "view_code_item",
+		"view_file", "client_view_file", "read_file", "read", "read file", "view_file_outline", "view_code_item", "view_image",
 		"list_dir", "ls", "list files", "list directory",
 		"grep_search", "find_by_name", "search_web", "web_search", "search", "web search", "grep", "glob", "find", "read_url_content",
 		"replace_file_content", "multi_replace_file_content", "write_to_file", "edit_file", "client_edit_file", "write_file", "edit", "write", "file changes",
+		"generate_image", "generate image", "image_generation", "image generation", "image_gen", "imagegen", "create_image", "edit_image", "experimental_image_generate",
 		"tool call":
 		return true
 	}
@@ -276,6 +335,8 @@ func acpToolTitle(state *acpToolState, action model.ToolAction, command string, 
 		return strings.TrimSpace(state.Title)
 	}
 	switch action {
+	case model.ToolActionImage:
+		return "Generate image"
 	case model.ToolActionRead:
 		if target := acpToolPath(state, input, cwd); target != "" {
 			return target
@@ -337,13 +398,13 @@ func acpToolDiffPath(state *acpToolState, cwd string) string {
 	}
 }
 
-func acpToolPath(state *acpToolState, input object, cwd string) string {
+func acpToolRawPath(state *acpToolState, input object) string {
 	for _, loc := range state.Locations {
 		if loc.Path != "" {
-			return acpDisplayPath(loc.Path, cwd)
+			return loc.Path
 		}
 	}
-	return acpDisplayPath(cmp.Or(
+	return cmp.Or(
 		str(input["AbsolutePath"]),
 		str(input["absolute_path"]),
 		str(input["TargetFile"]),
@@ -354,7 +415,11 @@ func acpToolPath(state *acpToolState, input object, cwd string) string {
 		str(input["path"]),
 		str(input["SearchPath"]),
 		str(input["DirectoryPath"]),
-	), cwd)
+	)
+}
+
+func acpToolPath(state *acpToolState, input object, cwd string) string {
+	return acpDisplayPath(acpToolRawPath(state, input), cwd)
 }
 
 func acpDisplayPath(raw, cwd string) string {
@@ -370,13 +435,46 @@ func acpDisplayPath(raw, cwd string) string {
 	return filepath.ToSlash(p)
 }
 
-func acpToolOutputText(state *acpToolState) string {
+func extractACPRawOutputImagePaths(raw any, cwd string) []model.ImageFile {
+	m := obj(raw)
+	if len(m) == 0 {
+		return nil
+	}
+	var out []model.ImageFile
+	addPath := func(candidate string) {
+		if path := normalizeLocalImagePath(candidate, cwd); path != "" {
+			out = appendUniqueImageFile(out, model.ImageFile{Path: path, Name: filepath.Base(path)})
+		}
+	}
+	for _, key := range []string{"imagePath", "image_path", "savedPath", "saved_path", "outputPath", "output_path", "filePath", "file_path", "path"} {
+		if s := str(m[key]); s != "" {
+			addPath(s)
+		}
+	}
+	for _, key := range []string{"imagePaths", "image_paths", "savedPaths", "saved_paths", "paths", "images"} {
+		for _, entry := range arr(m[key]) {
+			if s, ok := entry.(string); ok {
+				addPath(s)
+			} else if item := obj(entry); len(item) > 0 {
+				addPath(cmp.Or(str(item["path"]), str(item["savedPath"]), str(item["imagePath"]), str(item["uri"])))
+			}
+		}
+	}
+	return out
+}
+
+func acpToolOutput(c *acpRuntime, state *acpToolState, cwd string) (string, []model.ImageFile) {
 	var parts []string
+	var images []model.ImageFile
 	for _, entry := range state.Content {
 		switch {
 		case entry.Content != nil:
-			if text := strings.TrimSpace(acpText(entry.Content.Content)); text != "" {
-				parts = append(parts, text)
+			text, img := resolveACPContentBlock(c, entry.Content.Content, "acp-tool-"+state.ID)
+			if img != nil {
+				images = appendUniqueImageFile(images, *img)
+			}
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				parts = append(parts, trimmed)
 			}
 		case entry.Diff != nil:
 			parts = append(parts, formatACPDiff(entry.Diff))
@@ -384,31 +482,44 @@ func acpToolOutputText(state *acpToolState) string {
 			parts = append(parts, "terminal: "+entry.Terminal.TerminalId)
 		}
 	}
+	for _, img := range extractACPRawOutputImagePaths(state.RawOutput, cwd) {
+		images = appendUniqueImageFile(images, img)
+	}
+	assets, runID := "", ""
+	var budget *turnImageBudget
+	if c != nil {
+		assets, runID, budget = c.assets, c.runID, c.imageBudget
+	}
+	rawImages, sanitizedRaw := extractToolOutputImages(assets, runID, "acp-raw-"+state.ID, cwd, state.RawOutput, budget)
+	for _, img := range rawImages {
+		images = appendUniqueImageFile(images, img)
+	}
 	if len(parts) > 0 {
-		return strings.Join(parts, "\n\n")
+		return strings.Join(parts, "\n\n"), images
 	}
-	if text := extractACPRawOutput(state.RawOutput); text != "" {
-		return text
+	if text := extractACPRawOutput(sanitizedRaw); text != "" {
+		return text, images
 	}
-	return ""
+	return "", images
 }
 
-func acpToolDetailText(state *acpToolState, command string) string {
-	if out := acpToolOutputText(state); out != "" {
-		return out
+func acpToolDetail(c *acpRuntime, state *acpToolState, command, cwd string) (string, []model.ImageFile) {
+	out, images := acpToolOutput(c, state, cwd)
+	if out != "" {
+		return out, images
 	}
 	if state.RawInput != nil {
 		if input := obj(state.RawInput); len(input) > 0 {
 			if command != "" && len(input) == 1 {
-				return ""
+				return "", images
 			}
-			return pretty(input)
+			return pretty(input), images
 		}
 		if s, ok := state.RawInput.(string); ok {
-			return strings.TrimSpace(s)
+			return strings.TrimSpace(s), images
 		}
 	}
-	return ""
+	return "", images
 }
 
 func extractACPRawOutput(raw any) string {

@@ -57,3 +57,29 @@ func TestPeerFileBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestPeerHostImageAllowed(t *testing.T) {
+	allowed := []string{
+		"/var/lib/lever/sessions/s1/generated-images/r1/out.png",
+		"/opt/codex/generated_images/poster.png",
+		"/opt/antigravity/brain/child-1/diagram.png",
+	}
+	for _, p := range allowed {
+		if !PeerHostImageAllowed(p) {
+			t.Errorf("expected allowed path %q", p)
+		}
+	}
+	blocked := []string{
+		"/opt/example/.ssh/preview.png",
+		"/opt/example/.aws/credentials.png",
+		"/opt/example/repo/.git/logo.png",
+		"/opt/example/.lever/generated.png",
+		"/opt/example/keys/secret.key",
+		"/opt/example/keys/cert.pem",
+	}
+	for _, p := range blocked {
+		if PeerHostImageAllowed(p) {
+			t.Errorf("expected blocked path %q", p)
+		}
+	}
+}

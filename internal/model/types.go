@@ -554,6 +554,14 @@ type Item struct {
 	Message    *Message          `json:"message,omitempty"`
 	Subagent   *SubagentActivity `json:"subagent,omitempty"`
 	Citations  []Citation        `json:"citations,omitempty"`
+	ImageFiles []ImageFile       `json:"imageFiles,omitempty"`
+	DetailIDs  []string          `json:"detailIds,omitempty"` // Text available on demand in a history response.
+}
+
+// ImageFile identifies a local image generated, returned, or inspected by an item.
+type ImageFile struct {
+	Path string `json:"path"`
+	Name string `json:"name,omitempty"`
 }
 
 // Citation anchors one or more web sources at a UTF-16 offset in Item.Text.
@@ -572,6 +580,7 @@ type ToolAction string
 const (
 	ToolActionCommand ToolAction = "command"
 	ToolActionEdit    ToolAction = "edit"
+	ToolActionImage   ToolAction = "image"
 	ToolActionList    ToolAction = "list"
 	ToolActionRead    ToolAction = "read"
 	ToolActionSearch  ToolAction = "search"
@@ -893,8 +902,9 @@ type MessageMatchPart struct {
 }
 
 type SessionRuns struct {
-	Runs   []Run `json:"runs"`
-	Cursor int64 `json:"cursor"`
+	Runs       []Run `json:"runs"`
+	Cursor     int64 `json:"cursor"`
+	NextBefore int64 `json:"nextBefore,omitempty"`
 }
 
 type ProviderInfo struct {

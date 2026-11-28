@@ -902,11 +902,23 @@ func (s *Store) SessionRunPage(ctx context.Context, id string, before int64, lim
 	if before == 0 {
 		before = 1 << 62
 	}
+	const pageFilter = `r.session_id=? AND r.position<? AND r.status NOT IN ('queued','steering','steered','cancelled')`
 	v.Runs, err = List[model.Run](ctx, tx, `SELECT `+RunWithWaitingOn+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
-WHERE r.session_id=? AND r.position<? AND r.status NOT IN ('queued','steering','steered','cancelled') ORDER BY r.position DESC LIMIT ?`, id, before, limit)
+WHERE `+pageFilter+` ORDER BY r.position DESC LIMIT ?`, id, before, limit)
 	if err != nil {
 		return v, err
+	}
+	if len(v.Runs) == limit {
+		// Probe the position index without loading another potentially large run.
+		oldest := v.Runs[len(v.Runs)-1].Sequence
+		var more bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM runs r WHERE "+pageFilter+")", id, oldest).Scan(&more); err != nil {
+			return v, err
+		}
+		if more {
+			v.NextBefore = oldest
+		}
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&v.Cursor); err != nil {
 		return v, err

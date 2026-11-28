@@ -63,6 +63,13 @@ func peerDirectory(root, relative, dataDir string, write bool) (*os.Root, error)
 
 var shortNameAlias = regexp.MustCompile(`~[0-9]+(?:\.|$)`)
 
+// PeerHostImageAllowed applies the peer sensitive-path blocklist to an already
+// run-authorized image path outside the workspace (such as generated images or
+// Antigravity artifacts).
+func PeerHostImageAllowed(path string) bool {
+	return peerPathAllowed(path, "", false)
+}
+
 func peerPathAllowed(path, dataDir string, write bool) bool {
 	path = strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 	if dataDir != "" && Contains(strings.ToLower(filepath.ToSlash(dataDir)), path) {

@@ -64,10 +64,33 @@ func codexPreviewRoots(home string, image bool) []string {
 	return roots
 }
 
+func codexProviderPreviewRoots(config model.Provider, image bool) []string {
+	shared := provider.SharedStore(config)
+	roots := codexPreviewRoots(shared, image)
+	if dir := provider.ConfigurationDirectory(config); dir != "" && dir != shared {
+		roots = append(roots, codexPreviewRoots(dir, image)...)
+	}
+	return roots
+}
+
 // Render raw HTML for link extraction only. The renderer's output is never served.
 var previewMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM), goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()))
 
-func hasPreviewImageLink(markdown, path, origin string) bool {
+func (a *App) matchesHostImagePath(candidate, path, canonical string) bool {
+	if candidate == "" {
+		return false
+	}
+	if candidate == path || filepath.ToSlash(candidate) == filepath.ToSlash(path) {
+		return true
+	}
+	if canonical == "" {
+		return false
+	}
+	resolved, err := a.ResolveHostFile(candidate)
+	return err == nil && resolved == canonical
+}
+
+func (a *App) hasPreviewImageLink(markdown, path, canonical string) bool {
 	var rendered bytes.Buffer
 	if err := previewMarkdown.Convert([]byte(markdown), &rendered); err != nil {
 		return false
@@ -90,7 +113,7 @@ func hasPreviewImageLink(markdown, path, origin string) bool {
 			continue
 		}
 		for _, attr := range token.Attr {
-			if attr.Key == key && previewLinkPath(attr.Val, origin) == path {
+			if attr.Key == key && a.matchesHostImagePath(previewLinkPath(attr.Val, a.URL), path, canonical) {
 				return true
 			}
 		}
@@ -156,12 +179,18 @@ func (a *App) RunPreviewPath(ctx context.Context, runID, path string, image bool
 	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
 		return "", "", os.ErrNotExist
 	}
+	if image && a.Store != nil && a.Store.Dir != "" {
+		generatedDir := filepath.Join(a.Store.Dir, "sessions", sessionID, "generated-images", runID)
+		if root, relative, err := previewPath(path, "", []string{generatedDir}); err == nil {
+			return root, relative, nil
+		}
+	}
 	config, err := store.Get[model.Provider](ctx, a.Store.DB, `SELECT providers.data FROM providers
 		JOIN runs ON providers.id=json_extract(runs.data,'$.selection.provider') WHERE runs.id=?`, runID)
 	if err == nil {
 		switch config.Type {
 		case "codex":
-			if root, relative, err := previewPath(path, "", codexPreviewRoots(provider.SharedStore(config), image)); err == nil {
+			if root, relative, err := previewPath(path, "", codexProviderPreviewRoots(config, image)); err == nil {
 				return root, relative, nil
 			}
 		case "antigravity":
@@ -183,13 +212,18 @@ func (a *App) RunPreviewPath(ctx context.Context, runID, path string, image bool
 	if err != nil {
 		return "", "", err
 	}
-	// A host image outside the workspace is available only when the assistant linked it in this run.
+	// A host image outside the workspace is available only when this run linked or emitted it.
 	items, err := store.Get[[]model.Item](ctx, a.Store.DB, `SELECT json_extract(data,'$.items') FROM runs WHERE id=?`, runID)
 	if err != nil {
 		return "", "", err
 	}
 	for _, item := range items {
-		if item.Kind == "text" && hasPreviewImageLink(item.Text, path, a.URL) {
+		for _, img := range item.ImageFiles {
+			if a.matchesHostImagePath(img.Path, path, canonical) {
+				return filepath.Dir(canonical), filepath.Base(canonical), nil
+			}
+		}
+		if item.Kind == "text" && a.hasPreviewImageLink(item.Text, path, canonical) {
 			return filepath.Dir(canonical), filepath.Base(canonical), nil
 		}
 	}
@@ -227,7 +261,7 @@ func (a *App) SharedPreviewPath(ctx context.Context, providerID, id, path string
 	roots := []string{cwd}
 	switch config.Type {
 	case "codex":
-		roots = append(roots, codexPreviewRoots(provider.SharedStore(config), image)...)
+		roots = append(roots, codexProviderPreviewRoots(config, image)...)
 	case "antigravity":
 		if dir := provider.AntigravityArtifactDir(provider.WithStateDir(ctx, a.Store.Dir), config, id); dir != "" {
 			roots = append(roots, dir)
@@ -249,7 +283,7 @@ func (a *App) SharedPreviewPath(ctx context.Context, providerID, id, path string
 	}
 	for _, message := range history.Messages {
 		if message.Role == "assistant" && message.Kind != "reasoning" && message.Kind != "tool" &&
-			hasPreviewImageLink(message.Text, path, a.URL) {
+			a.hasPreviewImageLink(message.Text, path, canonical) {
 			return filepath.Dir(canonical), filepath.Base(canonical), nil
 		}
 	}

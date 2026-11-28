@@ -342,14 +342,18 @@ export function MessageTimeline<Item>({
 
   const totalSize = list.getTotalSize();
   const rows = list.getVirtualItems();
-  const nearStart = rows[0]?.index === 0;
+  // Overscan can include the first row while the reader is still at the end.
+  const nearStart = list.range?.startIndex === 0;
   React.useEffect(() => {
     const node = viewport.current;
     if (!active || inert || !node?.clientHeight || !items.length) return;
     if (!nearStart) requestedAtStart.current = false;
     else if (
       onLoadEarlier &&
-      (totalSize <= node.clientHeight || (!atEnd && !requestedAtStart.current))
+      (totalSize <= node.clientHeight ||
+        (!atEnd &&
+          node.scrollHeight - node.clientHeight - node.scrollTop > 2 &&
+          !requestedAtStart.current))
     ) {
       requestedAtStart.current = true;
       onLoadEarlier();

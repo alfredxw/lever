@@ -157,14 +157,44 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
         });
       return;
     }
-    if (
-      event.type === "comparison" ||
-      event.type === "topic-created" ||
-      event.type === "conversation-read"
-    ) {
+    if (event.type === "comparison" || event.type === "topic-created") {
       if (event.chatId)
-        void queryClient.invalidateQueries({ queryKey: ["chat", event.chatId] });
+        void queryClient.invalidateQueries({
+          queryKey: ["chat", event.chatId],
+        });
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      return;
+    }
+    if (event.type === "conversation-read") {
+      const state = queryClient.getQueryState<Overview>(["overview"]);
+      const sequence = event.readSequence;
+      const conversation = state?.data?.conversations.find(
+        (item) =>
+          item.id === event.sessionId &&
+          (!event.nodeId || event.nodeId === item.nodeId),
+      );
+      if (
+        !conversation ||
+        !sequence ||
+        state?.fetchStatus !== "idle" ||
+        state.isInvalidated
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["overview"] });
+      } else if ((conversation.readSequence ?? 0) < sequence) {
+        queryClient.setQueryData<Overview>(
+          ["overview"],
+          (old) =>
+            old && {
+              ...old,
+              conversations: old.conversations.map((item) =>
+                item === conversation
+                  ? { ...item, readSequence: sequence }
+                  : item,
+              ),
+            },
+          { updatedAt: state.dataUpdatedAt },
+        );
+      }
       return;
     }
     if (event.type === "channel-delivery") {
@@ -346,6 +376,9 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
       // An older snapshot must not hide a pending request or a final outcome.
       const needsRefresh = !active(run.status) || run.status === "waiting_user";
       if (needsRefresh) {
+        void queryClient.invalidateQueries({
+          queryKey: ["activity-detail", `/runs/${encodeURIComponent(run.id)}`],
+        });
         for (const queryKey of [
           ["overview"],
           ["chat", run.chatId],
@@ -373,7 +406,7 @@ export function connectEvents(after: number, onEvent?: (event: Event) => void) {
         (old) => updateHistoryRun(old, run),
       );
       queryClient.setQueriesData<InfiniteData<SessionRuns>>(
-        { queryKey: ["session", run.sessionId], exact: true },
+        { queryKey: ["session", run.sessionId, "runs"] },
         (old) => updateHistoryRun(old, run),
       );
       if (needsRefresh) {

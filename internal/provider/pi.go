@@ -379,7 +379,7 @@ func runPi(ctx context.Context, in Input, sink Sink) error {
 			prompt["customInstructions"] = argument
 		}
 	}
-	turn, err := runPiPrompt(ctx, p, prompt, sink, in.Steers, piModelImages(obj(state["model"])), modelWindow)
+	turn, err := runPiPrompt(ctx, p, prompt, sink, in.Steers, piModelImages(obj(state["model"])), modelWindow, in.Assets, in.RunID, cwd)
 	if err != nil {
 		return err
 	}
@@ -431,8 +431,8 @@ func piPrompt(in Input) (object, error) {
 	return prompt, nil
 }
 
-func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink, steers <-chan struct{}, images bool, contextWindow int64) (piTranscript, error) {
-	turn := piTranscript{sink: sink, items: map[string]model.Item{}, contextWindow: contextWindow}
+func runPiPrompt(ctx context.Context, p *device.Process, prompt object, sink Sink, steers <-chan struct{}, images bool, contextWindow int64, assets, runID, cwd string) (piTranscript, error) {
+	turn := piTranscript{sink: sink, items: map[string]model.Item{}, contextWindow: contextWindow, assets: assets, runID: runID, cwd: cwd, imageBudget: newTurnImageBudget()}
 	if err := ctx.Err(); err != nil {
 		return turn, err
 	}

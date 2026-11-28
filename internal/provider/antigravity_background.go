@@ -115,7 +115,7 @@ func (background *antigravityBackground) observe(update acp.SessionUpdate, tools
 	case update.ToolCallUpdate != nil:
 		background.observeTool(tools[string(update.ToolCallUpdate.ToolCallId)], false)
 	case update.AgentMessageChunk != nil:
-		if strings.TrimSpace(acpText(update.AgentMessageChunk.Content)) != "" {
+		if hasACPMessageContent(update.AgentMessageChunk.Content) {
 			if background.waiting {
 				background.settling = false
 				background.replyPending = true
@@ -498,8 +498,16 @@ func (c *acpRuntime) checkAntigravityChildrenLocked() (bool, error) {
 			if prev == "running" && !bg.settling {
 				bg.replyPending = true
 			}
+			imgs := extractExistingImagePaths(outcome.report, c.cwd)
+			prevImgCount := len(agent.item.ImageFiles)
+			if len(imgs) > 0 {
+				agent.addImages(imgs)
+				if agent.imageGenerator {
+					c.recordGeneratedImages(id, imgs)
+				}
+			}
 			report := clip(outcome.report)
-			if agent.item.Status != "completed" || (report != "" && agent.item.Text != report) {
+			if agent.item.Status != "completed" || (report != "" && agent.item.Text != report) || len(agent.item.ImageFiles) != prevImgCount {
 				agent.finish("completed", outcome.report)
 				if err := agent.publish(c.sink); err != nil {
 					return false, err

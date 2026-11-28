@@ -88,12 +88,23 @@ func codexSharedEntry(item object, turn, id, at string) (sharedEntry, bool) {
 		entry.Title, entry.Text = "Plan", str(item["text"])
 	case "imageview":
 		entry.Title = "View image"
+		entry.ToolAction = model.ToolActionRead
 		entry.addImage(sharedImage{path: str(item["path"])})
 	case "imagegeneration":
-		entry.Title = "Image generation"
+		entry.Title = "Generate image"
+		entry.ToolAction = model.ToolActionImage
+		if item["failure"] != nil {
+			entry.Status = "failed"
+		}
 		entry.addImage(sharedImage{path: str(item["savedPath"]), data: str(item["result"])})
 		if len(entry.Images) > 0 {
 			entry.Kind = "image"
+		} else {
+			var transparent *bool
+			if flag, ok := item["transparentBackground"].(bool); ok {
+				transparent = &flag
+			}
+			entry.Text = formatCodexImageGenDetail(strings.TrimSpace(str(item["revisedPrompt"])), transparent, strings.TrimSpace(str(item["savedPath"])), item["failure"])
 		}
 	default:
 		return entry, false

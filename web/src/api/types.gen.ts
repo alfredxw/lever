@@ -574,7 +574,6 @@ export interface SharedMessage extends Item {
   turnId?: string;
   createdAt: string;
   images?: SharedImage[];
-  detailIds?: string[];
 }
 export interface SharedImage {
   id: string;
@@ -1429,6 +1428,15 @@ export interface Item {
   message?: Message;
   subagent?: SubagentActivity;
   citations?: Citation[];
+  imageFiles?: ImageFile[];
+  detailIds?: string[]; // Text available on demand in a history response.
+}
+/**
+ * ImageFile identifies a local image generated, returned, or inspected by an item.
+ */
+export interface ImageFile {
+  path: string;
+  name?: string;
 }
 /**
  * Citation anchors one or more web sources at a UTF-16 offset in Item.Text.
@@ -1443,10 +1451,11 @@ export interface CitationSource {
 }
 export const ToolActionCommand = "command";
 export const ToolActionEdit = "edit";
+export const ToolActionImage = "image";
 export const ToolActionList = "list";
 export const ToolActionRead = "read";
 export const ToolActionSearch = "search";
-export type ToolAction = typeof ToolActionCommand | typeof ToolActionEdit | typeof ToolActionList | typeof ToolActionRead | typeof ToolActionSearch;
+export type ToolAction = typeof ToolActionCommand | typeof ToolActionEdit | typeof ToolActionImage | typeof ToolActionList | typeof ToolActionRead | typeof ToolActionSearch;
 export interface SubagentActivity {
   prompt?: string;
   progress?: string;
@@ -1743,6 +1752,7 @@ export interface MessageMatchPart {
 export interface SessionRuns {
   runs: Run[];
   cursor: number /* int64 */;
+  nextBefore?: number /* int64 */;
 }
 export interface ProviderInfo extends Provider {
   contributionName?: string;

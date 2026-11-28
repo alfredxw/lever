@@ -1,4 +1,5 @@
 import type { WorkbenchOverview } from "@/components/workbench/workbenchOverview";
+import { conversationIntent } from "@/features/chat/queries";
 import {
   memo,
   useCallback,
@@ -1119,6 +1120,10 @@ const AgentClearedRow = memo(function AgentClearedRow({
           .filter(Boolean)
           .join("\n")}
         onClick={() => onConversation(conversation)}
+        {...conversationIntent(
+          conversation.chatId,
+          conversation.kind === "topic" ? conversation.id : undefined,
+        )}
         {...rowMenuHandlers((anchor) =>
           openMenu(anchor, {
             kind: "conversation",
@@ -1289,6 +1294,10 @@ const AgentActivityRow = memo(function AgentActivityRow({
         data-draft-key={draftKey}
         aria-current={selected ? "true" : undefined}
         aria-label={label}
+        {...conversationIntent(
+          conversation.chatId,
+          conversation.kind === "topic" ? conversation.id : undefined,
+        )}
         title={[
           label,
           conversation.kind === "topic" ? chatTitle : "",

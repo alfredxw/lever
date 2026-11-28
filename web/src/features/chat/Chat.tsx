@@ -1,4 +1,3 @@
-import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import {
   memo,
@@ -173,11 +172,6 @@ function ChatContent(props: ChatProps) {
   const [returnToTopic, setReturnToTopic] = useState<string>();
   const [writingChat, setWritingChat] = useState(false);
   const onReturned = useCallback(() => setReturnToTopic(undefined), []);
-  const reduceMotion = useReducedMotion();
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-  }, []);
   const onExpand = (id: string) => {
     setWritingChat(false);
     onSelectTopic(agent.id, chatId, id);
@@ -425,17 +419,7 @@ function ChatContent(props: ChatProps) {
       ref={panel}
     >
       {latestPage.chat.sharedScope && <span className="self-start px-3 text-xs text-muted-foreground">Hub 共享</span>}
-      <motion.div
-        key={inlineTopic ? "topic" : "list"}
-        className="chat-view-content"
-        initial={
-          reduceMotion || !mounted.current
-            ? false
-            : { opacity: 0.55, scale: inlineTopic ? 0.992 : 1.008 }
-        }
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: reduceMotion ? 0 : 0.14, ease: "easeOut" }}
-      >
+      <div key={inlineTopic ? "topic" : "list"} className="chat-view-content">
         {inlineTopic ? (
           <ChatTopicView
             {...props}
@@ -671,7 +655,7 @@ function ChatContent(props: ChatProps) {
             </MessageTimeline>
           </>
         )}
-      </motion.div>
+      </div>
       {botChat ? (
         <div className="chat-composer-wrap">
           <ActiveDelegationsBar

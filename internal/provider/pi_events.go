@@ -15,6 +15,10 @@ import (
 type piTranscript struct {
 	sink                  Sink
 	items                 map[string]model.Item
+	assets                string
+	runID                 string
+	cwd                   string
+	imageBudget           *turnImageBudget
 	message               int
 	failure               error
 	contextWindow         int64
@@ -149,6 +153,10 @@ func (t *piTranscript) update(frame object) error {
 				if frame["isError"] == true {
 					item.Status = "failed"
 				}
+			}
+			imgs, _ := extractToolOutputImages(t.assets, t.runID, id, t.cwd, result["content"], t.imageBudget)
+			for _, img := range imgs {
+				item.ImageFiles = appendUniqueImageFile(item.ImageFiles, img)
 			}
 			var lines []string
 			for _, value := range arr(result["content"]) {

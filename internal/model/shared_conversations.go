@@ -25,7 +25,6 @@ type SharedMessage struct {
 	TurnID    string        `json:"turnId,omitempty"`
 	CreatedAt string        `json:"createdAt"`
 	Images    []SharedImage `json:"images,omitempty"`
-	DetailIDs []string      `json:"detailIds,omitempty"`
 }
 
 type SharedImage struct {

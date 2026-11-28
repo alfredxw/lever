@@ -75,6 +75,23 @@ export function ChatImageLink({
   );
 }
 
+function imagePreviewName(src: string, alt?: string, title?: string): string {
+  const label = alt?.trim() || title?.trim();
+  if (label) return label;
+  try {
+    const url = new URL(
+      src,
+      typeof location !== "undefined" ? location.origin : "http://localhost",
+    );
+    const path = url.searchParams.get("path") ?? url.pathname;
+    const base = path.split(/[\\/]/).filter(Boolean).at(-1);
+    if (base) return base;
+  } catch {
+    // Fall back to localized generic preview label.
+  }
+  return "";
+}
+
 export function ChatImage({
   src,
   alt,
@@ -92,6 +109,7 @@ export function ChatImage({
       </span>
     );
   }
+  const name = imagePreviewName(src, alt, title) || t("attachments.preview");
   const image = (
     <img
       src={src}
@@ -108,11 +126,7 @@ export function ChatImage({
   );
   if (linked) return image;
   return (
-    <ChatImageLink
-      src={src}
-      name={alt || title || t("attachments.preview")}
-      displayedImage
-    >
+    <ChatImageLink src={src} name={name} displayedImage>
       {image}
     </ChatImageLink>
   );

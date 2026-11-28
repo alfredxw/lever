@@ -166,7 +166,7 @@ test("a completion keeps its sidebar result when an older overview fetch is canc
 
 test("a streamed run updates its loaded page and leaves unseen history invalidated", async () => {
   const stream = mockRunStream();
-  const key = ["session", run.sessionId];
+  const key = ["session", run.sessionId, "runs", 12];
   const older = { runs: [{ ...run, id: "older" }], cursor: 1 };
   const history = {
     pages: [{ runs: [run], cursor: 2 }, older],
@@ -194,6 +194,52 @@ test("a streamed run updates its loaded page and leaves unseen history invalidat
     stream.send({ type: "run", sequence: 4, run: { ...run, id: "new" } });
     assert.equal(queryClient.getQueryData(key), updated);
     assert.equal(queryClient.getQueryState(key)?.isInvalidated, true);
+  } finally {
+    stream.close();
+  }
+});
+
+test("a read receipt advances only its session without refetching message pages", () => {
+  const stream = mockRunStream();
+  const conversation = {
+    nodeId: "local",
+    id: run.sessionId,
+    chatId: run.chatId,
+    agentId: run.agentId,
+    kind: "topic",
+    title: "",
+    messageAt: "",
+    unreadSequence: 7,
+    readSequence: 1,
+  };
+  const key = ["overview"];
+  const historyKey = ["chat", run.chatId];
+  queryClient.setQueryData(
+    key,
+    { conversations: [conversation] },
+    { updatedAt: 10 },
+  );
+  queryClient.setQueryData(historyKey, { pages: [], pageParams: [] });
+  try {
+    const receipt = {
+      type: "conversation-read",
+      sessionId: run.sessionId,
+      chatId: run.chatId,
+      nodeId: "local",
+      sequence: 10,
+      readSequence: 7,
+    };
+    stream.send(receipt);
+    stream.send({ ...receipt, readSequence: 3 });
+    assert.equal(
+      queryClient.getQueryData<Overview>(key)?.conversations[0].readSequence,
+      7,
+    );
+    assert.equal(queryClient.getQueryState(key)?.dataUpdatedAt, 10);
+    assert.equal(queryClient.getQueryState(key)?.isInvalidated, false);
+    stream.send({ ...receipt, nodeId: "other" });
+    assert.equal(queryClient.getQueryState(key)?.isInvalidated, true);
+    assert.equal(queryClient.getQueryState(historyKey)?.isInvalidated, false);
   } finally {
     stream.close();
   }

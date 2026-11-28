@@ -8,8 +8,9 @@ import (
 )
 
 type subagent struct {
-	item   model.Item
-	detail model.SubagentActivity
+	item           model.Item
+	detail         model.SubagentActivity
+	imageGenerator bool
 }
 
 func newSubagent(id string) *subagent {
@@ -31,6 +32,12 @@ func (s *subagent) task(title, prompt string) {
 	}
 	if prompt != "" {
 		s.detail.Prompt = clip(prompt)
+	}
+}
+
+func (s *subagent) addImages(images []model.ImageFile) {
+	for _, img := range images {
+		s.item.ImageFiles = appendUniqueImageFile(s.item.ImageFiles, img)
 	}
 }
 

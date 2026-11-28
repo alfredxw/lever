@@ -241,7 +241,7 @@ async function seedMultiSourceWorkbench(
     platform: process.platform,
   };
 
-  await page.route("**/api/overview", (route) =>
+  await page.route((url) => url.pathname === "/api/overview", (route) =>
     route.fulfill({ json: overview }),
   );
   await page.route(/\/api\/chats\/[^/?]+(\?|$)/, (route) => {

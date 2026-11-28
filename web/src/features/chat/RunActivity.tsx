@@ -5,16 +5,21 @@ import {
   FilePenLine,
   Files,
   FileText,
+  Image as ImageIcon,
   ListTodo,
   Search,
   Terminal,
   Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import { ErrorNotice, Loading } from "@/components/common";
 import type { TFunction } from "i18next";
 import type { Item } from "@/api/types.gen";
 import { CodeSnippet } from "@/components/ai-elements/code-block";
 import { MessageResponse } from "@/components/ai-elements/message-response";
+import { AttachmentGroup } from "@/components/ui/attachment";
 import {
   Trace,
   TraceCollapsible,
@@ -25,6 +30,8 @@ import {
   TraceLine,
   TraceTitle,
 } from "@/components/ui/trace";
+import { ImageAttachment } from "./Attachments";
+import { chatPreviewURL } from "./chatFileLinks";
 import { isWorking } from "./RunStatus";
 import {
   activityDisplayStatus,
@@ -41,11 +48,37 @@ export { activityDisplayStatus };
 const actionIcons: Record<Action, typeof Wrench> = {
   command: Terminal,
   edit: FilePenLine,
+  image: ImageIcon,
   list: Files,
   read: FileText,
   search: Search,
   other: Wrench,
 };
+
+export function ItemImages({
+  item,
+  previewEndpoint,
+}: {
+  item: Pick<Item, "id" | "imageFiles">;
+  previewEndpoint?: string;
+}) {
+  const { t } = useTranslation();
+  if (!previewEndpoint || !item.imageFiles?.length) return null;
+  return (
+    <AttachmentGroup className="attachment-strip mt-1.5 max-w-full items-center first:mt-0">
+      {item.imageFiles.map((file, index) => (
+        <ImageAttachment
+          key={`${item.id}:${file.path}`}
+          image={{
+            id: `${item.id}:${file.path}`,
+            name: file.name || t("attachments.image", { index: index + 1 }),
+            src: chatPreviewURL(previewEndpoint, "image", file.path),
+          }}
+        />
+      ))}
+    </AttachmentGroup>
+  );
+}
 
 function liveToolLabel(
   item: Item,
@@ -94,6 +127,8 @@ export function RunActivity({
   autoExpandThinking = false,
   runningSubagents = 0,
   thinking = false,
+  detailPath,
+  previewEndpoint,
 }: {
   items: Item[];
   runStatus: string;
@@ -101,6 +136,8 @@ export function RunActivity({
   autoExpandThinking?: boolean;
   runningSubagents?: number;
   thinking?: boolean;
+  detailPath?: string;
+  previewEndpoint?: string;
 }) {
   const { t } = useTranslation();
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
@@ -179,6 +216,8 @@ export function RunActivity({
               runStatus={runStatus}
               activeReasoningId={state.activeReasoning?.id}
               followLive={state.running}
+              detailPath={detailPath}
+              previewEndpoint={previewEndpoint}
             />
           </TraceCollapsibleContent>
         </TraceCollapsible>
@@ -194,15 +233,19 @@ function ActivityList({
   runStatus,
   activeReasoningId,
   followLive,
+  detailPath,
+  previewEndpoint,
 }: {
   items: Item[];
   runStatus: string;
   activeReasoningId?: string;
   followLive: boolean;
+  detailPath?: string;
+  previewEndpoint?: string;
 }) {
   const { t } = useTranslation();
   const last = items.at(-1);
-  const signature = `${items.length}:${last?.id ?? ""}:${last?.text.length ?? 0}:${last?.status ?? ""}`;
+  const signature = `${items.length}:${last?.id ?? ""}:${last?.text.length ?? 0}:${last?.imageFiles?.length ?? 0}:${last?.status ?? ""}`;
   const scroll = useFollowLiveScroll(followLive, signature);
   const reasoningOnly = items.every((item) => item.kind === "reasoning");
 
@@ -256,7 +299,13 @@ function ActivityList({
             />
           </div>
         ) : (
-          <RunActivityItem key={item.id} item={item} runStatus={runStatus} />
+          <RunActivityItem
+            key={item.id}
+            item={item}
+            detailPath={detailPath}
+            runStatus={runStatus}
+            previewEndpoint={previewEndpoint}
+          />
         ),
       )}
     </div>
@@ -266,10 +315,14 @@ function ActivityList({
 export function RunActivityItem({
   item,
   runStatus,
+  detailPath,
+  previewEndpoint,
   children,
 }: {
   item: Item;
   runStatus: string;
+  detailPath?: string;
+  previewEndpoint?: string;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -282,6 +335,16 @@ export function RunActivityItem({
   const running = status === "running";
   const failed = status === "failed";
   const showExitCode = item.exitCode !== undefined && item.exitCode !== 0;
+  const hasImages = Boolean(previewEndpoint && item.imageFiles?.length);
+  const details =
+    detailPath && item.detailIds?.length ? (
+      <ActivityDetail
+        path={detailPath}
+        ids={item.detailIds}
+        item={item}
+        running={running}
+      />
+    ) : null;
   const reasoning = item.kind === "reasoning";
   const live = running && (item.kind === "tool" || reasoning);
   const title = reasoning
@@ -312,7 +375,7 @@ export function RunActivityItem({
       className={item.kind === "tool" ? "tool-item" : undefined}
       data-kind={item.kind}
     >
-      {item.text || children || showExitCode ? (
+      {item.text || hasImages || details || children || showExitCode ? (
         <>
           <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
           <TraceCollapsibleContent>
@@ -323,6 +386,8 @@ export function RunActivityItem({
                 status={status}
               />
             )}
+            {details}
+            <ItemImages item={item} previewEndpoint={previewEndpoint} />
             {children}
             {showExitCode && (
               <p className="mt-1.5 font-mono text-xs text-muted-foreground first:mt-0">
@@ -353,4 +418,50 @@ export function RunActivityText({
       failed={status === "failed"}
     />
   );
+}
+
+function ActivityDetail({
+  path,
+  ids,
+  item,
+  running,
+}: {
+  path: string;
+  ids: string[];
+  item: Item;
+  running: boolean;
+}) {
+  const { kind, status } = item;
+  const detail = useQuery({
+    queryKey: ["activity-detail", path, ids, status],
+    // A virtual row can remount while opening its details. Let an explicit
+    // request finish so the next observer can reuse it.
+    queryFn: async () => {
+      const parts = await Promise.all(
+        ids.map((id) =>
+          api<string>(`${path}/details/${encodeURIComponent(id)}`),
+        ),
+      );
+      return parts.filter(Boolean).join("\n\n");
+    },
+    staleTime: running ? 0 : 60_000,
+    refetchInterval: running ? 2000 : false,
+    retry: false,
+  });
+  if (detail.error)
+    return (
+      <ErrorNotice error={detail.error} retry={() => void detail.refetch()} />
+    );
+  if (detail.data === undefined) return <Loading />;
+  return detail.data ? (
+    <RunActivityText
+      text={detail.data}
+      kind={kind}
+      status={
+        status === "running" && !running
+          ? "unknown"
+          : activityDisplayStatus(item)
+      }
+    />
+  ) : null;
 }

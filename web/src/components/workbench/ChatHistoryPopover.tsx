@@ -377,7 +377,8 @@ export function ChatHistoryPopover({
               )}
             </div>
           ) : (
-            visibleEntries.map((entry, index) => {
+            // PopoverContent mounts lazily, but its JSX children are evaluated here.
+            (open ? visibleEntries : []).map((entry, index) => {
               const isCurrent = entry.tabState === "active";
               const isActive = index === boundedIndex;
               const formattedTime = formatHistoryTime(

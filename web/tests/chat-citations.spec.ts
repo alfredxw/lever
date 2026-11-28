@@ -222,7 +222,7 @@ async function seedCitationChat(page: Page, theme: "light" | "dark" = "light") {
     cursor: 2,
   };
 
-  await page.route("**/api/overview", (route) =>
+  await page.route((url) => url.pathname === "/api/overview", (route) =>
     route.fulfill({ json: overview }),
   );
   await page.route(/\/api\/chats\/chat-cite(\?|$)/, (route) =>

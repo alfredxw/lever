@@ -240,6 +240,11 @@ test("opening unread Chats and Topics lands at the start of the first unread mes
     "话题第二轮未读追问",
     topicRoot.sessionId,
   );
+  // The pinned, already-read root is outside the newest page. The first
+  // unread reply must be located in the earlier page, even across that gap.
+  for (let i = 0; i < 12; i++) {
+    await postAndWait(chatA.id, "reply", `后续未读追问 ${i + 1}`, topicRoot.sessionId);
+  }
   await nav.getByRole("button", { name: "Agents", exact: true }).click();
   // Returning to Agents with the Topic already visible in the side pane opens
   // it while unread and jumps directly to the start of the follow-up turn.

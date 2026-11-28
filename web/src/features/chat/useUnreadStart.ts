@@ -20,6 +20,7 @@ export function useUnreadStart({
   readCursor,
   unreadSequence,
   latestCursor,
+  oldestPagedRunId,
   runs,
   view,
 }: {
@@ -29,6 +30,7 @@ export function useUnreadStart({
   readCursor: number;
   unreadSequence: number;
   latestCursor: number | undefined;
+  oldestPagedRunId?: string;
   runs: readonly Run[];
   view: UseInfiniteQueryResult;
 }) {
@@ -92,7 +94,8 @@ export function useUnreadStart({
       hasNextPage &&
       pending.pagesFetched < maxUnreadPages &&
       !isFetchNextPageError &&
-      ((matched && target === runs[0]) || runs.length === 0);
+      ((matched && target?.id === (oldestPagedRunId ?? runs[0]?.id)) ||
+        runs.length === 0);
     if (needsEarlierPage) {
       if (!isFetching) {
         pending.pagesFetched += 1;
@@ -119,6 +122,7 @@ export function useUnreadStart({
     readCursor,
     unreadSequence,
     latestCursor,
+    oldestPagedRunId,
     runs,
     data,
     error,

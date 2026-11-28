@@ -1,5 +1,10 @@
 import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
+} from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
@@ -15,6 +20,7 @@ import type {
   Overview,
   Run,
   Session,
+  SessionRuns,
   SessionView,
   TopicSource,
   MessageQuote,
@@ -66,10 +72,10 @@ import { WaitingDependencies } from "./WaitingDependencies";
 import { formatChannelOrigin } from "./conversationTitle";
 import {
   chatDelegationsQuery,
-  prefetchTopicHistory,
+  conversationIntent,
   sessionQuery,
   topicPreviewQuery,
-  sessionRunsQuery,
+  topicHistoryQuery,
   useChatActivity,
 } from "./queries";
 
@@ -155,7 +161,7 @@ export function Topic({
     () => mergeTopicRuns(session.id, root, query.data?.runs ?? [], activeRuns),
     [session.id, root, query.data?.runs, activeRuns],
   );
-  const prefetchReplies = () => prefetchTopicHistory(session.id);
+  const intent = conversationIntent(session.chatId, session.id);
   const latest = runs.at(-1) ?? root;
   const preview = runs
     .flatMap((run) => {
@@ -259,8 +265,7 @@ export function Topic({
                 : undefined
             }
             onClick={onOpen}
-            onPointerEnter={prefetchReplies}
-            onFocus={prefetchReplies}
+            {...intent}
           >
             <ItemGroup className="topic-previews gap-1">
               {preview.map((message) => (
@@ -308,8 +313,7 @@ export function Topic({
             size="sm"
             className="topic-reply-button"
             onClick={onOpen}
-            onPointerEnter={prefetchReplies}
-            onFocus={prefetchReplies}
+            {...intent}
           >
             <MessageCircle data-icon="inline-start" />
             {t("chat.replyAction")}
@@ -358,8 +362,7 @@ export function Topic({
               aria-label={t("chat.expandTopic")}
               title={t("chat.expandTopic")}
               onClick={onExpand}
-              onFocus={prefetchReplies}
-              onPointerEnter={prefetchReplies}
+              {...intent}
             >
               <Maximize2 />
             </Button>
@@ -401,6 +404,11 @@ export function TopicConversation(props: TopicConversationProps) {
     enabled: props.enabled,
     subscribed: props.enabled,
   });
+  const history = useInfiniteQuery({
+    ...topicHistoryQuery(props.sessionId),
+    enabled: props.enabled,
+    subscribed: props.enabled,
+  });
   if (!view.data)
     return view.error ? (
       <ErrorNotice error={view.error} retry={() => void view.refetch()} />
@@ -415,7 +423,7 @@ export function TopicConversation(props: TopicConversationProps) {
       positions={props.positions}
     >
       <ImagePreviewProvider>
-        <TopicConversationContent {...props} {...view.data} />
+        <TopicConversationContent {...props} {...view.data} query={history} />
       </ImagePreviewProvider>
     </MessageScrollerProvider>
   );
@@ -425,6 +433,7 @@ const topicRowKey = (row: Run | TopicSource) =>
   "message" in row ? row.message.id : row.id;
 
 function TopicConversationContent({
+  query,
   onForward,
   onOpenFile,
   onOpenTool,
@@ -444,7 +453,10 @@ function TopicConversationContent({
   unreadSequence = 0,
   onRead,
   ...props
-}: TopicConversationProps & SessionView) {
+}: TopicConversationProps &
+  SessionView & {
+    query: UseInfiniteQueryResult<InfiniteData<SessionRuns>>;
+  }) {
   const { t } = useTranslation();
   const composer = useContext(ComposerContext);
   const preview = useImagePreview();
@@ -469,11 +481,6 @@ function TopicConversationContent({
   });
   const { data: delegations } = useQuery({
     ...chatDelegationsQuery(session.chatId),
-    enabled,
-    subscribed: enabled,
-  });
-  const query = useInfiniteQuery({
-    ...sessionRunsQuery(session.id),
     enabled,
     subscribed: enabled,
   });
@@ -543,6 +550,7 @@ function TopicConversationContent({
     readCursor: lastReadCursor,
     unreadSequence,
     latestCursor: readCursor,
+    oldestPagedRunId: query.data?.pages.at(-1)?.runs.at(-1)?.id,
     runs,
     view: query,
   });

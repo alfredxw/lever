@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ImagePreview, useImagePreview } from "./ImagePreview";
-import { chatTopicPagesQuery, sessionQuery } from "./queries";
+import { chatTopicPagesQuery, conversationIntent, sessionQuery } from "./queries";
 import { RunStatus } from "./RunStatus";
 import {
   TopicConversation,
@@ -105,6 +105,7 @@ export function ChatTopicView({
                     <DropdownMenuRadioItem
                       key={item.id}
                       value={item.id}
+                      {...conversationIntent(chatId, item.id)}
                       textValue={item.title}
                       title={item.title || t("chat.topic")}
                     >

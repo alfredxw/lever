@@ -100,7 +100,7 @@ async function seedChats(
     deviceName: "fixture",
     platform: process.platform,
   };
-  await page.route("**/api/overview", (route) =>
+  await page.route((url) => url.pathname === "/api/overview", (route) =>
     route.fulfill({ json: overview }),
   );
   await page.route(/\/api\/chats\/benchmark-chat-\d+(\?|$)/, (route) => {
@@ -186,6 +186,10 @@ async function seedChats(
   await page.addInitScript(
     ({ agentId, chats, sidebar }) => {
       localStorage.setItem("lever:agent", agentId);
+      localStorage.setItem(
+        "lever:preferences",
+        JSON.stringify({ maxWorkspaceTabs: null }),
+      );
       if (sidebar) {
         localStorage.setItem("lever:agent-view", sidebar);
         return;

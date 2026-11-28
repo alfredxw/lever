@@ -7,6 +7,7 @@ import {
   liveThoughtLine,
   shouldAutoExpandThinking,
   thoughtSummary,
+  toolAction,
 } from "../src/features/chat/runActivityLogic.ts";
 
 function item(overrides: Partial<Item> & Pick<Item, "id" | "kind">): Item {
@@ -259,4 +260,34 @@ test("deriveLiveActivity tracks single-line tool, post-tool gap, thinking, and s
   assert.equal(settled.mode, "settled");
   assert.equal(settled.running, false);
   assert.equal(settled.thoughtLine, "");
+});
+
+test("image generation and image view tools map to dedicated actions and clean targets", () => {
+  assert.equal(
+    toolAction({ title: "Generate image", toolAction: "image" }),
+    "image",
+  );
+  assert.equal(toolAction({ title: "generate_image" }), "image");
+  assert.equal(toolAction({ title: "Image generation" }), "image");
+  assert.equal(toolAction({ title: "view_image" }), "read");
+  assert.equal(formatToolTarget({ title: "Generate image" }, "image"), "");
+  assert.equal(
+    formatToolTarget({ title: "Running generate_image" }, "image"),
+    "",
+  );
+  assert.equal(formatToolTarget({ title: "View image" }, "read"), "");
+
+  const live = deriveLiveActivity(
+    [
+      item({
+        id: "img-1",
+        kind: "tool",
+        title: "Generate image",
+        toolAction: "image",
+        status: "completed",
+      }),
+    ],
+    { live: false, runStatus: "completed" },
+  );
+  assert.equal(live.counts.get("image"), 1);
 });

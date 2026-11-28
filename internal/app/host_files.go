@@ -108,6 +108,8 @@ func isAllowedStoreArtifactPath(rel string) bool {
 		return true
 	case len(parts) >= 5 && parts[0] == "providers" && parts[1] == "codex" && parts[2] != "" && (parts[3] == "visualizations" || parts[3] == "generated_images"):
 		return true
+	case len(parts) == 5 && parts[0] == "sessions" && parts[1] != "" && parts[2] == "generated-images" && parts[3] != "" && parts[4] != "":
+		return true
 	default:
 		return false
 	}

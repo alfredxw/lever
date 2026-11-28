@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -399,5 +401,185 @@ func TestACPSessionInfoUpdateTitlesDisabled(t *testing.T) {
 	}
 	if len(rt.titles) != 0 || len(sink.titles) != 0 {
 		t.Fatalf("disabled native titles published live title: titles=%+v sink=%v", rt.titles, sink.titles)
+	}
+}
+
+func TestACPImageContentBlocksAndTools(t *testing.T) {
+	cwd := t.TempDir()
+	assets := t.TempDir()
+	raw := testPNGBytes(t)
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	rt, sink := newTestACPRuntime(cwd, true)
+	rt.assets = assets
+	rt.runID = "run-acp-img"
+	rt.imageBudget = newTurnImageBudget()
+
+	// 1. AgentMessageChunk with ContentBlock.Image materializes raster image & embeds cleanly without dumping raw base64.
+	if err := rt.update(acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content: acp.ContentBlock{
+				Image: &acp.ContentBlockImage{
+					Data:     encoded,
+					MimeType: "image/png",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Non-image binary resource produces clean placeholder, never raw base64.
+	nonImageBlob := base64.StdEncoding.EncodeToString([]byte("PK\x03\x04binary-archive-payload"))
+	if err := rt.update(acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content: acp.ContentBlock{
+				Resource: &acp.ContentBlockResource{
+					Resource: acp.EmbeddedResourceResource{
+						BlobResourceContents: &acp.BlobResourceContents{
+							Uri:  "file:///tmp/archive.bin",
+							Blob: nonImageBlob,
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var textItem model.Item
+	for _, it := range sink.items {
+		if it.Kind == "text" {
+			textItem = it
+		}
+	}
+	if len(textItem.ImageFiles) != 1 {
+		t.Fatalf("expected 1 materialized image on text item, got %+v", textItem)
+	}
+	if strings.Contains(textItem.Text, encoded) || strings.Contains(textItem.Text, nonImageBlob) {
+		t.Fatalf("text item dumped raw base64: %q", textItem.Text)
+	}
+	if !strings.Contains(textItem.Text, "![](<"+textItem.ImageFiles[0].Path+">)") {
+		t.Fatalf("text item missing embedded image markdown: %q", textItem.Text)
+	}
+	if !strings.Contains(textItem.Text, "\n\n[ACP binary resource: file:///tmp/archive.bin]") {
+		t.Fatalf("text item missing clean binary resource placeholder: %q", textItem.Text)
+	}
+
+	// 2. generate_image tool with RawOutput imagePath gets ToolActionImage, populates ImageFiles, and projects into final reply.
+	genPath := filepath.Join(t.TempDir(), "generated.png")
+	if err := os.WriteFile(genPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.update(acp.SessionUpdate{
+		ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "gen-1",
+			Title:      "Running generate_image",
+			Kind:       acp.ToolKindOther,
+			Status:     acp.ToolCallStatusCompleted,
+			RawOutput:  map[string]any{"imagePath": genPath},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	genItem := sink.byID["tool-gen-1"]
+	if genItem.ToolAction != model.ToolActionImage || genItem.Title != "Generate image" || len(genItem.ImageFiles) != 1 || genItem.ImageFiles[0].Path != genPath {
+		t.Fatalf("unexpected generate_image tool item: %+v", genItem)
+	}
+
+	// 3. view_image tool gets ToolActionRead + ImageFiles, and must NOT be projected into assistant prose.
+	viewedPath := filepath.Join(cwd, "diagram.png")
+	if err := os.WriteFile(viewedPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.update(acp.SessionUpdate{
+		ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "view-1",
+			Title:      "Running view_image",
+			Kind:       acp.ToolKindRead,
+			Status:     acp.ToolCallStatusCompleted,
+			Locations:  []acp.ToolCallLocation{{Path: viewedPath}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	viewItem := sink.byID["tool-view-1"]
+	if viewItem.ToolAction != model.ToolActionRead || len(viewItem.ImageFiles) != 1 || viewItem.ImageFiles[0].Path != viewedPath {
+		t.Fatalf("unexpected view_image tool item: %+v", viewItem)
+	}
+
+	// End-of-turn projection appends genPath onto the assistant reply, but NOT viewedPath.
+	if err := rt.projectGeneratedImages(); err != nil {
+		t.Fatal(err)
+	}
+	final := sink.byID[textItem.ID]
+	if !strings.Contains(final.Text, "![](<"+genPath+">)") {
+		t.Fatalf("final reply missing projected generated image: %q", final.Text)
+	}
+	if strings.Contains(final.Text, viewedPath) {
+		t.Fatalf("final reply unexpectedly projected viewed image: %q", final.Text)
+	}
+}
+
+func TestACPAntigravityImageGeneratorSubagent(t *testing.T) {
+	cwd := t.TempDir()
+	childOut := filepath.Join(t.TempDir(), "brain", "child-1", "cover.png")
+	if err := os.MkdirAll(filepath.Dir(childOut), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childOut, testPNGBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rt, sink := newTestACPRuntime(cwd, true)
+	rt.assets = t.TempDir()
+	rt.runID = "run-agy-sub"
+	rt.imageBudget = newTurnImageBudget()
+
+	// Launching invoke_subagent with TypeName="image-generator" and no Role defaults to "Image generator".
+	if err := rt.update(acp.SessionUpdate{
+		ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "imgsub-1",
+			Title:      "Run invoke_subagent",
+			Kind:       acp.ToolKindOther,
+			Status:     acp.ToolCallStatusInProgress,
+			RawInput:   map[string]any{"TypeName": "image-generator", "Prompt": "Draw a cozy cabin"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sub := sink.byID["subagent:imgsub-1"]
+	if sub.Kind != "subagent" || sub.Title != "Image generator" {
+		t.Fatalf("unexpected image-generator subagent: %+v", sub)
+	}
+
+	done := acp.ToolCallStatusCompleted
+	if err := rt.update(acp.SessionUpdate{
+		ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "imgsub-1",
+			Status:     &done,
+			RawOutput:  "Generated image saved at `" + childOut + "`.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sub = sink.byID["subagent:imgsub-1"]
+	if len(sub.ImageFiles) != 1 || sub.ImageFiles[0].Path != childOut {
+		t.Fatalf("expected subagent ImageFiles to contain %q, got %+v", childOut, sub.ImageFiles)
+	}
+
+	// Parent sends text without embedding the image -> end-of-turn projection appends it.
+	if err := rt.update(acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content: acp.TextBlock("All set, your cabin illustration is ready."),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.projectGeneratedImages(); err != nil {
+		t.Fatal(err)
+	}
+	final := sink.byID[rt.lastTextID]
+	if !strings.Contains(final.Text, "![](<"+childOut+">)") {
+		t.Fatalf("parent reply missing projected subagent image: %q", final.Text)
 	}
 }

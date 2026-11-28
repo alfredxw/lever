@@ -241,6 +241,7 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 	}
 	items := map[string]model.Item{}
 	toolItems := map[string]string{}
+	imageBudget := newTurnImageBudget()
 	subagents := claudeSubagents{calls: map[string]*subagent{}, tasks: map[string]*subagent{}, tools: map[string]*subagent{}}
 	nextAssistantBlock := map[string]int{}
 	currentMessage := ""
@@ -713,7 +714,11 @@ func claude(ctx context.Context, in Input, sink Sink) (outcome error) {
 					}
 					output := str(block["content"])
 					if output == "" {
-						output = pretty(block["content"])
+						imgs, sanitized := extractToolOutputImages(in.Assets, in.RunID, id, cwd, block["content"], imageBudget)
+						for _, img := range imgs {
+							item.ImageFiles = appendUniqueImageFile(item.ImageFiles, img)
+						}
+						output = pretty(sanitized)
 					}
 					item.Text += "\n" + clip(output)
 					if err = emit(item); err != nil {

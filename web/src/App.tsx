@@ -2360,7 +2360,6 @@ export default function App() {
                         />
                       ) : null}
                       {panels.map(({ owner, agent, tab: t, inTabStrip }) => {
-                        const Panel = t.kind === "topic" ? motion.div : "div";
                         const current = owner === selected;
                         const shown = current && isVisible(t.id);
                         const active = shown && page === "agents";
@@ -2383,19 +2382,11 @@ export default function App() {
                           !workspaceSearch &&
                           !overview.data?.permissionSettings?.needsSetup;
                         const panel = (
-                          <Panel
+                          <div
                             key={`${owner}:${t.id}`}
                             className="tab-panel"
                             data-visible={active}
                             data-conversation={conversation || undefined}
-                            {...(t.kind === "topic" && {
-                              initial: { opacity: 0, x: reduceMotion ? 0 : 8 },
-                              animate: {
-                                opacity: active ? 1 : 0,
-                                x: reduceMotion || active ? 0 : 8,
-                              },
-                              transition: { duration: reduceMotion ? 0 : 0.16 },
-                            })}
                             data-pane={paneOf(t)}
                             onPointerDownCapture={() => {
                               rememberConversation(t.id);
@@ -2691,7 +2682,7 @@ export default function App() {
                                 ) : null}
                               </MountOnVisit>
                             </KeepConversationOpen>
-                          </Panel>
+                          </div>
                         );
                         const source = conversation || t.kind === "shared";
                         if (!source && !(t.kind === "browser" && t.htmlPreview))

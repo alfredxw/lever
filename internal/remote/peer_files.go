@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"mime"
@@ -74,19 +75,48 @@ func (q *peerRequest) runPreview(w http.ResponseWriter, r *http.Request) (any, e
 	if err != nil {
 		return nil, err
 	}
-	root, path, err := app.WorkspacePreviewPath(r.URL.Query().Get("path"), agent.Profile.Scope)
-	if err != nil {
-		return nil, err
+	kind := r.URL.Query().Get("kind")
+	if kind != "image" && kind != "html" && kind != "visualization" {
+		return nil, os.ErrNotExist
 	}
 	dataDir, err := workspace.Canonical(a.Store.Dir)
 	if err != nil {
 		return nil, err
 	}
-	kind := r.URL.Query().Get("kind")
-	if kind != "image" && kind != "html" && kind != "visualization" {
+	rawPath := r.URL.Query().Get("path")
+	if root, path, err := app.WorkspacePreviewPath(rawPath, agent.Profile.Scope); err == nil {
+		return nil, servePeerAsset(w, r, root, path, dataDir, kind)
+	}
+	if kind != "image" {
 		return nil, os.ErrNotExist
 	}
-	return nil, servePeerAsset(w, r, root, path, dataDir, kind)
+	root, path, err := a.RunPreviewPath(r.Context(), r.PathValue("id"), rawPath, true)
+	if err != nil {
+		return nil, err
+	}
+	full := filepath.Join(root, filepath.FromSlash(path))
+	if !workspace.PeerHostImageAllowed(full) {
+		return nil, os.ErrNotExist
+	}
+	data, mediaType, err := workspace.ReadImage(root, path)
+	if err != nil {
+		return nil, err
+	}
+	if r.URL.Query().Get("info") == "true" {
+		w.Header().Set("Content-Type", "application/json")
+		writeLANJSON(w, r, map[string]string{"path": full})
+		return nil, nil
+	}
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.URL.Query().Get("download") == "true" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(path)}))
+	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+	return nil, nil
 }
 
 func servePeerAsset(w http.ResponseWriter, r *http.Request, root, path, dataDir, kind string) error {

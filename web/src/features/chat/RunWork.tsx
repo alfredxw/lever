@@ -17,6 +17,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { isWorking } from "./RunStatus";
+import { ItemImages } from "./RunActivity";
 import {
   Trace,
   TraceCollapsible,
@@ -50,12 +51,14 @@ export function RunWork({
   subagents,
   requests,
   runtime,
+  previewEndpoint,
   children,
 }: {
   run: Run;
   subagents: Item[];
   requests: Request[];
   runtime: string;
+  previewEndpoint?: string;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -112,6 +115,7 @@ export function RunWork({
               item={item}
               status={statusFor(item)}
               now={now}
+              previewEndpoint={previewEndpoint}
             />
           ))}
         </Trace>
@@ -176,15 +180,23 @@ function SubagentRow({
   item,
   status,
   now,
+  previewEndpoint,
 }: {
   item: Item;
   status: string;
   now: number;
+  previewEndpoint?: string;
 }) {
   const { t } = useTranslation();
   const activity = item.subagent;
   const result = item.text;
-  const hasDetails = !!(activity?.prompt || activity?.progress || result);
+  const hasImages = Boolean(previewEndpoint && item.imageFiles?.length);
+  const hasDetails = !!(
+    activity?.prompt ||
+    activity?.progress ||
+    result ||
+    hasImages
+  );
   const end = activity?.finishedAt
     ? Date.parse(activity.finishedAt)
     : status === "running" || status === "waiting_user"
@@ -265,6 +277,7 @@ function SubagentRow({
             </p>
           )
         )}
+        <ItemImages item={item} previewEndpoint={previewEndpoint} />
       </TraceCollapsibleContent>
     </TraceCollapsible>
   ) : (

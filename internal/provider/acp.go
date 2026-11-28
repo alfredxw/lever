@@ -51,17 +51,25 @@ type acpRuntime struct {
 	commandUpdate  chan struct{}
 	background    *antigravityBackground
 	interruptDone <-chan struct{}
-	items         map[string]model.Item
-	tools         map[string]*acpToolState
-	subagents     map[string]*subagent
-	textID        string
-	textMessageID string
-	nextMsg       int
-	err           error
-	output        *antigravityOutput
-	preset        *antigravityPreset
-	cleanup       func()
-	dshFlash      bool
+	items            map[string]model.Item
+	tools            map[string]*acpToolState
+	subagents        map[string]*subagent
+	assets           string
+	runID            string
+	imageBudget      *turnImageBudget
+	imageSeq         int
+	generatedImages  []string
+	firstGeneratedID string
+	lastTextID         string
+	textEndedWithEmbed bool
+	textID             string
+	textMessageID    string
+	nextMsg          int
+	err              error
+	output           *antigravityOutput
+	preset           *antigravityPreset
+	cleanup          func()
+	dshFlash         bool
 }
 
 // Models is the v1 model-selection shape still emitted by existing ACP agents.
@@ -112,6 +120,7 @@ func openACPOptions(ctx context.Context, config model.Provider, cwd string, sink
 		items:         map[string]model.Item{},
 		tools:         map[string]*acpToolState{},
 		subagents:     map[string]*subagent{},
+		imageBudget:   newTurnImageBudget(),
 		commands:      make(map[acp.SessionId][]model.NativeCommand),
 		titles:        make(map[acp.SessionId]string),
 		contextUsage:  make(map[acp.SessionId]model.ContextUsage),
@@ -560,6 +569,7 @@ func runACP(ctx context.Context, in Input, sink Sink) error {
 		return err
 	}
 	defer c.close()
+	c.assets, c.runID = in.Assets, in.RunID
 	caps := c.capabilities()
 	if in.Steers != nil {
 		state := SteerUnavailable
@@ -742,6 +752,9 @@ func (c *acpRuntime) prompt(ctx context.Context, prompt []acp.ContentBlock, outc
 	c.mu.Lock()
 	if c.err == nil && err == nil {
 		c.err = c.finishMessage()
+	}
+	if c.err == nil && err == nil && result.StopReason == acp.StopReasonEndTurn {
+		c.err = c.projectGeneratedImages()
 	}
 	outputErr := c.err
 	c.active = false
@@ -1255,11 +1268,156 @@ func (c *acpRuntime) initialCommands(ctx context.Context, id acp.SessionId) []mo
 	}
 }
 
-func acpText(content acp.ContentBlock) string {
+func hasACPMessageContent(content acp.ContentBlock) bool {
 	if content.Text != nil {
-		return content.Text.Text
+		return strings.TrimSpace(content.Text.Text) != ""
 	}
-	return "[ACP content]\n" + clip(pretty(content))
+	return content.Image != nil || content.Resource != nil || content.ResourceLink != nil || content.Audio != nil
+}
+
+func acpText(content acp.ContentBlock) string {
+	text, _ := resolveACPContentBlock(nil, content, "")
+	return text
+}
+
+func resolveACPContentBlock(c *acpRuntime, content acp.ContentBlock, keyPrefix string) (string, *model.ImageFile) {
+	cwd, assets, runID := "", "", ""
+	var budget *turnImageBudget
+	if c != nil {
+		cwd, assets, runID, budget = c.cwd, c.assets, c.runID, c.imageBudget
+	}
+	nextKey := func() string {
+		if c != nil {
+			c.imageSeq++
+			return fmt.Sprintf("%s-%d", safeAssetSegment(keyPrefix, "acp"), c.imageSeq)
+		}
+		return safeAssetSegment(keyPrefix, "acp")
+	}
+	switch {
+	case content.Text != nil:
+		return content.Text.Text, nil
+	case content.Image != nil:
+		if content.Image.Data != "" {
+			if img, ok := materializeBase64Image(assets, runID, nextKey(), content.Image.Data, budget); ok {
+				return "", &img
+			}
+		}
+		if content.Image.Uri != nil && *content.Image.Uri != "" {
+			if path := normalizeLocalImagePath(*content.Image.Uri, cwd); path != "" {
+				return "", &model.ImageFile{Path: path, Name: filepath.Base(path)}
+			}
+		}
+		mimeType := strings.TrimSpace(content.Image.MimeType)
+		if mimeType == "" {
+			mimeType = "unknown type"
+		}
+		if content.Image.Uri != nil && strings.TrimSpace(*content.Image.Uri) != "" {
+			return fmt.Sprintf("[ACP image (%s): %s]", mimeType, strings.TrimSpace(*content.Image.Uri)), nil
+		}
+		return fmt.Sprintf("[ACP image (%s)]", mimeType), nil
+	case content.Resource != nil:
+		if textRes := content.Resource.Resource.TextResourceContents; textRes != nil {
+			return textRes.Text, nil
+		}
+		if blobRes := content.Resource.Resource.BlobResourceContents; blobRes != nil {
+			mimeType := ""
+			if blobRes.MimeType != nil {
+				mimeType = strings.TrimSpace(*blobRes.MimeType)
+			}
+			if blobRes.Blob != "" && (mimeType == "" || strings.HasPrefix(strings.ToLower(mimeType), "image/")) {
+				if img, ok := materializeBase64Image(assets, runID, nextKey(), blobRes.Blob, budget); ok {
+					return "", &img
+				}
+			}
+			if blobRes.Uri != "" {
+				if path := normalizeLocalImagePath(blobRes.Uri, cwd); path != "" {
+					return "", &model.ImageFile{Path: path, Name: filepath.Base(path)}
+				}
+			}
+			label := "[ACP binary resource"
+			if mimeType != "" {
+				label += " (" + mimeType + ")"
+			}
+			if uri := strings.TrimSpace(blobRes.Uri); uri != "" {
+				label += ": " + uri
+			}
+			return label + "]", nil
+		}
+		return "[ACP resource]", nil
+	case content.ResourceLink != nil:
+		uri := strings.TrimSpace(content.ResourceLink.Uri)
+		if path := normalizeLocalImagePath(uri, cwd); path != "" {
+			name := strings.TrimSpace(content.ResourceLink.Name)
+			if name == "" {
+				name = filepath.Base(path)
+			}
+			return "", &model.ImageFile{Path: path, Name: name}
+		}
+		label := strings.TrimSpace(content.ResourceLink.Name)
+		if content.ResourceLink.Title != nil && strings.TrimSpace(*content.ResourceLink.Title) != "" {
+			label = strings.TrimSpace(*content.ResourceLink.Title)
+		}
+		if label == "" {
+			label = "resource"
+		}
+		if content.ResourceLink.Description != nil && strings.TrimSpace(*content.ResourceLink.Description) != "" {
+			label += ": " + strings.TrimSpace(*content.ResourceLink.Description)
+		}
+		if uri != "" {
+			return label + "\n" + uri, nil
+		}
+		return label, nil
+	case content.Audio != nil:
+		mimeType := strings.TrimSpace(content.Audio.MimeType)
+		if mimeType == "" {
+			mimeType = "unknown type"
+		}
+		return fmt.Sprintf("[ACP audio (%s)]", mimeType), nil
+	default:
+		return "[ACP content]", nil
+	}
+}
+
+func (c *acpRuntime) recordGeneratedImages(sourceID string, images []model.ImageFile) {
+	for _, img := range images {
+		if strings.TrimSpace(img.Path) == "" {
+			continue
+		}
+		c.generatedImages = append(c.generatedImages, img.Path)
+		if c.firstGeneratedID == "" {
+			c.firstGeneratedID = sourceID
+		}
+	}
+}
+
+func (c *acpRuntime) projectGeneratedImages() error {
+	if len(c.generatedImages) == 0 {
+		return nil
+	}
+	saved := c.generatedImages
+	c.generatedImages = nil
+	if c.lastTextID != "" {
+		if item, ok := c.items[c.lastTextID]; ok && item.Kind == "text" {
+			updated := appendGeneratedImageEmbeds(item.Text, saved)
+			if updated == item.Text {
+				return nil
+			}
+			item.Text = updated
+			return c.emit(item)
+		}
+	}
+	text := appendGeneratedImageEmbeds("", saved)
+	if text == "" {
+		return nil
+	}
+	msgID := "generated-image-message:" + safeAssetSegment(c.firstGeneratedID, "acp")
+	c.lastTextID = msgID
+	return c.emit(model.Item{
+		ID:     msgID,
+		Kind:   "text",
+		Text:   text,
+		Status: "completed",
+	})
 }
 
 // publishContextUsageLocked forwards distinct context usage updates.
@@ -1316,8 +1474,11 @@ func (c *acpRuntime) update(update acp.SessionUpdate) error {
 				messageID = *update.AgentThoughtChunk.MessageId
 			}
 		}
-		text := acpText(content)
+		text, img := resolveACPContentBlock(c, content, "acp-msg")
 		if kind == "reasoning" && text == "" {
+			return nil
+		}
+		if kind == "text" && text == "" && img == nil {
 			return nil
 		}
 		item = c.items[c.textID]
@@ -1333,7 +1494,21 @@ func (c *acpRuntime) update(update acp.SessionUpdate) error {
 		} else if c.textMessageID == "" && messageID != "" {
 			c.textMessageID = messageID
 		}
-		item.Text += text
+		if kind == "text" {
+			c.lastTextID = item.ID
+		}
+		if text != "" {
+			if (c.textEndedWithEmbed || content.Text == nil) && item.Text != "" && !strings.HasSuffix(item.Text, "\n") && !strings.HasPrefix(text, "\n") && !strings.HasPrefix(text, "\r") {
+				item.Text += "\n\n"
+			}
+			item.Text += text
+			c.textEndedWithEmbed = false
+		}
+		if img != nil && kind == "text" {
+			item.ImageFiles = appendUniqueImageFile(item.ImageFiles, *img)
+			item.Text = appendGeneratedImageEmbeds(item.Text, []string{img.Path})
+			c.textEndedWithEmbed = true
+		}
 	case update.ToolCall != nil:
 		if err := c.finishMessage(); err != nil {
 			return err
@@ -1342,7 +1517,7 @@ func (c *acpRuntime) update(update acp.SessionUpdate) error {
 		if c.antigravity && isAntigravitySubagentCall(state) {
 			return c.emitAntigravitySubagent(state)
 		}
-		item = normalizeACPToolItem(state, c.cwd)
+		item = c.normalizeToolItem(state)
 	case update.ToolCallUpdate != nil:
 		if err := c.finishMessage(); err != nil {
 			return err
@@ -1351,7 +1526,7 @@ func (c *acpRuntime) update(update acp.SessionUpdate) error {
 		if c.antigravity && isAntigravitySubagentCall(state) {
 			return c.emitAntigravitySubagent(state)
 		}
-		item = normalizeACPToolItem(state, c.cwd)
+		item = c.normalizeToolItem(state)
 	case update.Plan != nil:
 		if err := c.finishMessage(); err != nil {
 			return err
@@ -1390,6 +1565,7 @@ func (c *acpRuntime) finishMessage() error {
 	item := c.items[c.textID]
 	c.textID = ""
 	c.textMessageID = ""
+	c.textEndedWithEmbed = false
 	item.Status = "completed"
 	return c.emit(item)
 }

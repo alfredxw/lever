@@ -89,6 +89,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 	items := map[string]model.Item{}
 	rawText := map[string]string{}
 	citations := codexCitationIndex{}
+	images := newCodexImageTracker(in.Assets, in.RunID, cmd.Dir)
 	reasoning := map[string]codexReasoning{}
 	subagents := codexSubagents{}
 	emit := func(item model.Item) error {
@@ -265,6 +266,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 						stateMu.Unlock()
 						terminal = false
 						citations = codexCitationIndex{}
+						images.reset()
 						return sink.BindTurn(next)
 					}
 				}
@@ -299,6 +301,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			return sink.TurnDiff(patch)
 		case "item/agentMessage/delta":
 			id := str(q["itemId"])
+			images.noteAnswer(id)
 			item := items[id]
 			item.ID = id
 			item.Kind = "text"
@@ -350,6 +353,7 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			case "subAgentActivity", "collabAgentToolCall":
 				return subagents.lifecycle(v, tid, sink)
 			case "agentMessage":
+				images.noteAnswer(id)
 				item.Kind = "text"
 				if text, ok := v["text"].(string); ok {
 					rawText[id] = text
@@ -373,18 +377,19 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 				item.ToolAction = model.ToolActionEdit
 				item.Title = "File changes"
 				item.Text = clip(pretty(v["changes"]))
-			case "mcpToolCall":
-				item.Kind = "tool"
-				item.Title = str(v["server"]) + " / " + str(v["tool"])
-				item.Text = clip(pretty(v["arguments"]))
-				if v["result"] != nil {
-					citations.addMCPResult(v["result"])
-					item.Text += "\n" + clip(pretty(v["result"]))
+			case "mcpToolCall", "dynamicToolCall":
+				applyCodexToolCall(&item, kind, v, in.Assets, in.RunID, cmd.Dir, images.budget, citations)
+			case "imageGeneration":
+				item = images.imageGenerationItem(v, method == "item/completed")
+				if err := emit(item); err != nil {
+					return err
 				}
-				if v["error"] != nil {
-					item.Status = "failed"
-					item.Text += "\n" + pretty(v["error"])
+				if terminal && outcome == nil && method == "item/completed" {
+					return images.project(items, emit)
 				}
+				return nil
+			case "imageView":
+				item = codexImageViewItem(v, cmd.Dir, item.Status)
 			case "webSearch":
 				item.Kind = "tool"
 				item.ToolAction = model.ToolActionSearch
@@ -416,9 +421,21 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			terminal = true
 			switch str(v["status"]) {
 			case "completed":
+				if err := images.finishRunning("failed", emit); err != nil {
+					return err
+				}
+				if err := images.project(items, emit); err != nil {
+					return err
+				}
 			case "interrupted":
+				if err := images.finishRunning("interrupted", emit); err != nil {
+					return err
+				}
 				outcome = context.Canceled
 			default:
+				if err := images.finishRunning("failed", emit); err != nil {
+					return err
+				}
 				outcome = fail(v["error"])
 			}
 		}
@@ -535,12 +552,16 @@ func codex(ctx context.Context, in Input, sink Sink) (err error) {
 			}
 			for _, value := range arr(previous["items"]) {
 				item := obj(value)
-				if item["type"] == "agentMessage" {
+				if item["type"] == "agentMessage" || item["type"] == "imageGeneration" {
 					if err := handle(object{"method": "item/completed", "params": object{"threadId": threadID, "item": item}}); err != nil {
 						return err
 					}
 				}
 			}
+			if err := images.project(items, emit); err != nil {
+				return err
+			}
+			images.reset()
 		}
 		switch previous["status"] {
 		case "completed":
