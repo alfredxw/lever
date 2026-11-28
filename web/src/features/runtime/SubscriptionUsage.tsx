@@ -1,23 +1,31 @@
-import { useEffect, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
-import { Tooltip } from "radix-ui";
-import { Gauge } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Gauge } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
-import { api } from "@/api/client";
-import type { ProviderInfo, UsageWindow } from "@/api/types.gen";
+import type { ProviderInfo } from "@/api/types.gen";
 import {
-  resolveSubscriptions,
-  usageSources,
-  type Subscription,
-  type UsageResponse,
-} from "./subscriptionUsageModel";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  browserTimeZone,
+  computeWindowPace,
+  fmtPct,
+  fmtTokens,
+  fmtUsd,
+  providerAccent,
+  resetCountdown,
+  windowLabel,
+} from "@/features/usage/format";
+import {
+  useLocalStatsSummary,
+  useSubscriptionUsage,
+} from "@/features/usage/queries";
+import "@/features/usage/usage-stats.css";
+import type { Subscription } from "./subscriptionUsageModel";
 
 const minuteMs = 60_000;
-const usageStaleMs = 30_000;
-const minutesPerHour = 60;
-const hoursPerDay = 24;
-const minutesPerDay = hoursPerDay * minutesPerHour;
 const summaryColors = [
   "var(--subscription-usage-blue)",
   "var(--subscription-usage-clay)",
@@ -25,7 +33,7 @@ const summaryColors = [
 ];
 
 function UsageIndicator({ subscriptions }: { subscriptions: Subscription[] }) {
-  if (!subscriptions.length) return <Gauge aria-hidden="true" />;
+  if (!subscriptions.length) return <Gauge size={18} strokeWidth={1.6} aria-hidden="true" />;
   const used = (subscription: Subscription) =>
     Math.max(...subscription.windows.map((window) => window.usedPercent));
   const remaining =
@@ -57,9 +65,13 @@ function UsageIndicator({ subscriptions }: { subscriptions: Subscription[] }) {
       ) : (
         subscriptions.map((subscription, index) => {
           const y = 10.5 + (index - (subscriptions.length - 1) / 2) * 8;
+          const color = providerAccent(
+            subscription.provider.type || subscription.provider.id,
+            index,
+          );
           return (
-            <g key={subscription.provider.id} fill={summaryColors[index]}>
-              <rect y={y} width={24} height={3} rx={1.5} fillOpacity={0.13} />
+            <g key={subscription.provider.id} fill={color}>
+              <rect y={y} width={24} height={3} rx={1.5} fillOpacity={0.14} />
               <rect
                 y={y}
                 width={(24 * used(subscription)) / 100}
@@ -74,79 +86,31 @@ function UsageIndicator({ subscriptions }: { subscriptions: Subscription[] }) {
   );
 }
 
-function windowLabel(window: UsageWindow, t: TFunction) {
-  if (window.id === "individual") return t("usage.monthlyCredits");
-  const minutes = window.minutes;
-  if (!minutes)
-    return t(
-      window.group
-        ? "usage.quota"
-        : window.id === "primary"
-          ? "usage.primary"
-          : "usage.secondary",
-    );
-  if (minutes % minutesPerDay === 0) return `${minutes / minutesPerDay}d`;
-  if (minutes % minutesPerHour === 0) return `${minutes / minutesPerHour}h`;
-  return `${minutes}m`;
-}
-
-function resetCountdown(remainingMs: number) {
-  const minutes = Math.floor(remainingMs / minuteMs);
-  const days = Math.floor(minutes / minutesPerDay);
-  const hours = Math.floor(minutes / minutesPerHour) % hoursPerDay;
-  if (days) return hours ? `${days}d ${hours}h` : `${days}d`;
-  const remainingMinutes = minutes % minutesPerHour;
-  if (hours)
-    return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-  return minutes ? `${minutes}m` : "<1m";
-}
-
 export function SubscriptionUsage({
   providers,
+  onOpenUsageStats,
 }: {
   providers: ProviderInfo[];
+  onOpenUsageStats?: () => void;
 }) {
-  const sources = usageSources(providers);
-  const samples = useQueries({
-    queries: sources.map(({ id, reportsUsage }) => ({
-      queryKey: ["provider-usage", id],
-      enabled: !!reportsUsage,
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api<UsageResponse>(
-          `/providers/${encodeURIComponent(id)}/usage`,
-          undefined,
-          "GET",
-          signal,
-        ),
-      staleTime: usageStaleMs,
-      refetchInterval: minuteMs,
-      refetchOnWindowFocus: true,
-      retry: false,
-    })),
-  });
-  const subscriptions = resolveSubscriptions(sources, samples);
-  return subscriptions.length ? (
-    <UsageDetails subscriptions={subscriptions} />
-  ) : null;
-}
-
-function UsageDetails({ subscriptions }: { subscriptions: Subscription[] }) {
   const { t, i18n } = useTranslation();
+  const { subscriptions } = useSubscriptionUsage(providers);
   const measured = subscriptions.filter(({ windows }) => windows.length);
   const summary = measured.slice(0, summaryColors.length);
   const overflow = measured.length - summary.length;
+
   const [open, setOpen] = useState(false);
+  const [popRange, setPopRange] = useState<"today" | "7d">("today");
   const [now, setNow] = useState(Date.now);
+  const timeZone = useMemo(browserTimeZone, []);
+  const localSummary = useLocalStatsSummary(timeZone, open);
+
   useEffect(() => {
     if (!open) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), minuteMs);
     return () => clearInterval(timer);
   }, [open]);
-
-  function changeOpen(next: boolean) {
-    if (next) setNow(Date.now());
-    setOpen(next);
-  }
 
   const resetFormat = new Intl.DateTimeFormat(i18n.language, {
     month: "short",
@@ -158,146 +122,278 @@ function UsageDetails({ subscriptions }: { subscriptions: Subscription[] }) {
     style: "percent",
     maximumFractionDigits: 1,
   });
+
+  const hasAnyPaceTick = subscriptions.some((s) =>
+    s.windows.some((w) => computeWindowPace(w, now).elapsedPercent !== null),
+  );
+
+  const activeLocal =
+    popRange === "today" ? localSummary.data?.today : localSummary.data?.last7d;
+
   return (
-    <Tooltip.Provider delayDuration={180}>
-      <Tooltip.Root open={open} onOpenChange={changeOpen}>
-        <Tooltip.Trigger asChild>
-          <button
-            type="button"
-            className="navigation-item data-[state=delayed-open]:bg-control-hover data-[state=instant-open]:bg-control-hover"
-            aria-label={t("usage.title")}
-            onClick={(event) => {
-              // Also reveal the details for touch and keyboard activation.
-              event.preventDefault();
-              changeOpen(true);
-            }}
-          >
-            <UsageIndicator subscriptions={summary} />
-            <span>{t("usage.navigation")}</span>
-            {overflow > 0 && (
-              <span
-                aria-hidden="true"
-                className="subscription-usage-overflow ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
-              >
-                +{overflow}
-              </span>
-            )}
-          </button>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            side="right"
-            align="end"
-            sideOffset={8}
-            collisionPadding={8}
-            className="floating-surface z-50 max-h-(--radix-tooltip-content-available-height) w-64 max-w-(--radix-tooltip-content-available-width) overflow-y-auto p-3 text-popover-foreground"
-          >
-            <div className="mb-2 text-[11px] font-medium text-muted-foreground">
-              {t("usage.title")}
-            </div>
-            <div className="divide-y divide-border/70">
-              {subscriptions.map((subscription) => {
-                const { provider, windows, sampledAt, notice } = subscription;
-                const sampled = sampledAt ? Date.parse(sampledAt) : NaN;
-                const sampledTitle = Number.isFinite(sampled)
-                  ? resetFormat.format(sampled)
-                  : undefined;
-                const color =
-                  summary.length > 1
-                    ? summaryColors[summary.indexOf(subscription)]
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="navigation-item data-[state=open]:bg-control-hover data-[state=open]:text-foreground"
+          aria-label={t("usage.title")}
+          title={t("usage.navigation")}
+        >
+          <UsageIndicator subscriptions={summary} />
+          <span>{t("usage.navigation")}</span>
+          {overflow > 0 && (
+            <span
+              aria-hidden="true"
+              className="subscription-usage-overflow ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
+            >
+              +{overflow}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent
+        side="right"
+        align="end"
+        sideOffset={8}
+        className="usage-popover-content"
+      >
+        <div className="usage-pop-body">
+          {subscriptions.length > 0 && (
+            <>
+              <div className="usage-pop-head">
+                <span className="usage-pop-label">{t("usage.title")}</span>
+                {hasAnyPaceTick && (
+                  <span className="usage-pop-label tabular-nums">
+                    {t("usage.paceLegend")}
+                  </span>
+                )}
+              </div>
+
+              <div className="usage-pop-sub-list">
+                {subscriptions.map((subscription, idx) => {
+                  const { provider, windows, sampledAt, notice } = subscription;
+                  const sampled = sampledAt ? Date.parse(sampledAt) : NaN;
+                  const sampledTitle = Number.isFinite(sampled)
+                    ? resetFormat.format(sampled)
                     : undefined;
-                return (
-                  <section
-                    key={provider.id}
-                    className="py-2 first:pt-0 last:pb-0"
-                  >
-                    <div className="mb-1.5 wrap-anywhere text-[13px] font-medium">
-                      {provider.name}
-                    </div>
-                    {notice && (
-                      <p
-                        title={
-                          notice === "usage.lastReading"
-                            ? sampledTitle
-                            : undefined
-                        }
-                        className={
-                          windows.length
-                            ? "mb-1.5 text-xs text-muted-foreground"
-                            : "text-xs text-muted-foreground"
-                        }
-                      >
-                        {t(notice)}
-                      </p>
-                    )}
-                    <ul className="space-y-2 text-xs">
+                  const color = providerAccent(
+                    provider.type || provider.id,
+                    idx,
+                  );
+
+                  const leadWindow = windows[0];
+                  const leadPace = leadWindow
+                    ? computeWindowPace(leadWindow, now)
+                    : null;
+                  let paceBadgeText = "";
+                  let paceBadgeClass = "usage-pop-provider-pace";
+                  if (leadPace) {
+                    if (leadPace.usedPercent >= 90) {
+                      paceBadgeText = t("usage.paceNearLimit");
+                      paceBadgeClass += " usage-pace-fast";
+                    } else if (leadPace.delta !== null && leadPace.delta >= 6) {
+                      paceBadgeText = t("usage.paceFastDelta", {
+                        delta: leadPace.delta,
+                      });
+                      paceBadgeClass += " usage-pace-fast";
+                    } else if (
+                      leadPace.delta !== null &&
+                      leadPace.delta <= -6
+                    ) {
+                      paceBadgeText = t("usage.paceAmple");
+                      paceBadgeClass += " usage-pace-ok";
+                    } else if (leadPace.delta !== null) {
+                      paceBadgeText = t("usage.paceSteady");
+                    }
+                  }
+
+                  return (
+                    <section key={provider.id} className="usage-pop-provider">
+                      <div className="usage-pop-provider-name">
+                        <span className="truncate">{provider.name}</span>
+                        {paceBadgeText && (
+                          <span className={paceBadgeClass}>
+                            {paceBadgeText}
+                          </span>
+                        )}
+                      </div>
+
+                      {notice && (
+                        <p
+                          title={
+                            notice === "usage.lastReading"
+                              ? sampledTitle
+                              : undefined
+                          }
+                          className={
+                            windows.length
+                              ? "mb-1.5 text-xs text-muted-foreground"
+                              : "text-xs text-muted-foreground"
+                          }
+                        >
+                          {t(notice)}
+                        </p>
+                      )}
+
                       {windows.map((window, windowIndex) => {
                         const reset = Date.parse(window.resetsAt ?? "");
-                        const remainingPercent = 100 - window.usedPercent;
+                        const pace = computeWindowPace(window, now);
+                        const showGroup =
+                          window.group &&
+                          window.group !== windows[windowIndex - 1]?.group;
                         return (
-                          <li key={window.id}>
-                            {window.group &&
-                              window.group !==
-                                windows[windowIndex - 1]?.group && (
-                                <div className="mb-1.5 pt-1 font-medium wrap-anywhere text-muted-foreground">
-                                  {window.group}
-                                </div>
-                              )}
-                            <div className="flex items-baseline justify-between gap-x-2 tabular-nums">
-                              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted-foreground">
-                                <span className="wrap-anywhere">
-                                  {windowLabel(window, t)}
-                                </span>
-                                {reset > now && (
+                          <div key={window.id} className="usage-pop-win">
+                            {showGroup && (
+                              <div className="mb-1 pt-0.5 text-[11px] font-medium text-muted-foreground">
+                                {window.group}
+                              </div>
+                            )}
+                            <div className="usage-pop-win-top tabular-nums">
+                              <span className="usage-pop-win-left">
+                                <span>{windowLabel(window, t)}</span>
+                                {Number.isFinite(reset) && reset > now && (
                                   <time
                                     dateTime={window.resetsAt}
                                     title={resetFormat.format(reset)}
-                                    className="text-[11px]"
                                   >
                                     {t("usage.reset", {
                                       when: resetCountdown(reset - now),
                                     })}
                                   </time>
                                 )}
-                              </div>
-                              <span className="shrink-0 font-medium">
+                              </span>
+                              <span className="usage-pop-win-right">
                                 {t("usage.remaining", {
                                   percent: percentFormat.format(
-                                    remainingPercent / 100,
+                                    pace.remainingPercent / 100,
                                   ),
                                 })}
                               </span>
                             </div>
                             <div
                               aria-hidden="true"
-                              className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted"
-                              style={
-                                color
-                                  ? {
-                                      backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`,
-                                    }
-                                  : undefined
-                              }
+                              className="usage-pace-bar"
+                              style={{
+                                backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`,
+                              }}
                             >
                               <div
-                                className="h-full rounded-full bg-primary"
+                                className="usage-pace-bar-fill"
                                 style={{
-                                  width: `${window.usedPercent}%`,
+                                  width: `${pace.usedPercent}%`,
                                   backgroundColor: color,
                                 }}
                               />
+                              {pace.elapsedPercent !== null && (
+                                <div
+                                  className="usage-pace-tick"
+                                  style={{ left: `${pace.elapsedPercent}%` }}
+                                  title={t("usage.paceElapsedTitle", {
+                                    percent: pace.elapsedPercent,
+                                  })}
+                                />
+                              )}
                             </div>
-                          </li>
+                          </div>
                         );
                       })}
-                    </ul>
-                  </section>
-                );
-              })}
+                    </section>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Local Usage Quick Summary */}
+          <div
+            className={
+              subscriptions.length > 0
+                ? "usage-pop-stats"
+                : "usage-pop-stats usage-pop-stats--standalone"
+            }
+          >
+            <div className="usage-pop-stats-head">
+              <span className="usage-pop-label">
+                {t("usage.popoverLocalTitle")}
+              </span>
+              <div className="usage-mini-seg" role="group">
+                <button
+                  type="button"
+                  aria-pressed={popRange === "today"}
+                  onClick={() => setPopRange("today")}
+                >
+                  {t("usage.popoverToday")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={popRange === "7d"}
+                  onClick={() => setPopRange("7d")}
+                >
+                  {t("usage.popover7d")}
+                </button>
+              </div>
             </div>
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
+
+            {localSummary.isPending && !activeLocal ? (
+              <div className="usage-pop-stats-grid">
+                <div className="flex flex-col gap-1.5">
+                  <Skeleton className="h-3 w-14" />
+                  <Skeleton className="h-5 w-16" />
+                  <Skeleton className="h-3 w-20" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Skeleton className="h-3 w-14" />
+                  <Skeleton className="h-5 w-16" />
+                  <Skeleton className="h-3 w-20" />
+                </div>
+              </div>
+            ) : (
+              <div className="usage-pop-stats-grid tabular-nums">
+                <div className="usage-pop-stat-item">
+                  <div className="k">{t("usage.popoverTokens")}</div>
+                  <div className="v">
+                    {fmtTokens(activeLocal?.tokens ?? 0)}
+                  </div>
+                  <div className="s">
+                    {t("usage.popoverCacheHit", {
+                      rate: fmtPct(activeLocal?.cacheHitRate ?? 0),
+                    })}
+                  </div>
+                </div>
+                <div className="usage-pop-stat-item">
+                  <div className="k">{t("usage.popoverCost")}</div>
+                  <div className="v">
+                    {fmtUsd(activeLocal?.costUsd ?? 0)}
+                  </div>
+                  <div className="s">
+                    {t("usage.popoverSessionsRuns", {
+                      sessions: activeLocal?.sessions ?? 0,
+                      runs: (activeLocal?.runs ?? 0).toLocaleString(),
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {onOpenUsageStats && (
+          <div className="usage-pop-footer">
+            <button
+              type="button"
+              className="usage-pop-footer-btn"
+              onClick={() => {
+                setOpen(false);
+                onOpenUsageStats();
+              }}
+            >
+              <span>{t("usage.popoverViewFull")}</span>
+              <ArrowRight size={14} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

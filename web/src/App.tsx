@@ -316,9 +316,15 @@ export default function App() {
     pluginId?: string;
   }>();
   const [updatesTarget, setUpdatesTarget] = useState(0);
+  const [usageStatsTarget, setUsageStatsTarget] = useState(0);
   const openUpdatesSettings = useCallback(() => {
     setProviderTarget(undefined);
     setUpdatesTarget((count) => count + 1);
+    setPage("settings");
+  }, []);
+  const openUsageStats = useCallback(() => {
+    setProviderTarget(undefined);
+    setUsageStatsTarget((count) => count + 1);
     setPage("settings");
   }, []);
   const desktopUpdates = useDesktopUpdates({
@@ -2010,6 +2016,7 @@ export default function App() {
             prefetchPrimaryPage("skills");
             setPage("skills");
           }}
+          onUsageStats={openUsageStats}
           onSettings={openSettings}
         >
           <MotionConfig
@@ -2925,8 +2932,13 @@ export default function App() {
               overview={overview}
               providerTarget={providerTarget}
               updatesTarget={updatesTarget}
+              usageStatsTarget={usageStatsTarget}
               desktopUpdates={desktopUpdates}
               onOpenPlugin={showPlugin}
+              onOpenChat={(chatId, agentId, title) => {
+                openChat(chatId, agentId, title);
+                setPage("agents");
+              }}
               onOpenArchivedAgent={(target) => {
                 openAgentChat(target);
                 setPage("agents");

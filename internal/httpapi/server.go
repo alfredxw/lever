@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"lever/internal/app"
+	"lever/internal/localstats"
 	"lever/internal/model"
 	"lever/internal/plugin"
 	"lever/internal/provider"
@@ -308,6 +309,20 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/providers/{id}/terminal/{terminal}", s.closeProviderTerminal)
 	mux.HandleFunc("GET /api/providers/{id}/usage", func(w http.ResponseWriter, r *http.Request) {
 		value, err := a.ProviderUsage(r.Context(), r.PathValue("id"), r.URL.Query().Get("refresh") == "true")
+		respond(w, value, err)
+	})
+	mux.HandleFunc("GET /api/stats/local", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		value, err := a.LocalStats(r.Context(), localstats.Query{
+			Period:   q.Get("period"),
+			Scope:    q.Get("scope"),
+			TimeZone: q.Get("tz"),
+			Refresh:  q.Get("refresh") == "true",
+		})
+		respond(w, value, err)
+	})
+	mux.HandleFunc("GET /api/stats/local/summary", func(w http.ResponseWriter, r *http.Request) {
+		value, err := a.LocalStatsSummary(r.Context(), r.URL.Query().Get("tz"))
 		respond(w, value, err)
 	})
 	mux.HandleFunc("PUT /api/providers/{id}/api-key", func(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"lever/internal/localstats"
 	"lever/internal/model"
 	"lever/internal/plugin"
 	"lever/internal/plugin/builtin"
@@ -66,6 +67,7 @@ type App struct {
 	catalogs             map[catalogKey]*catalogEntry
 	usages               map[usageKey]*usageEntry
 	usageVersions        map[string]string
+	localStats           *localstats.Service
 	setups               map[string]*providerSetup
 	agyLogin             terminal.Key
 	sharedSending        sync.Map
@@ -111,6 +113,7 @@ func open(dir string, independent bool) (*App, error) {
 	ctx = provider.WithStateDir(ctx, dir)
 	a := &App{
 		Store: s, ctx: ctx, cancel: cancel, independentProviders: independent, active: map[string]*execution{},
+		localStats:   localstats.NewService(s.DB, dir),
 		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1), taskReminderWake: make(chan struct{}, 1),
 		eventAdapters: builtin.EventSourceAdapters(), personal: make(map[string]*personalWorker), pluginPreviews: make(map[string]*packagePreview),
 		remoteDelegationWake: make(chan struct{}, 1),

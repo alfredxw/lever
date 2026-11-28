@@ -21,6 +21,7 @@ import {
   Search,
   Settings2,
   Sun,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -98,6 +99,7 @@ import { NotesDirectorySetting } from "./NotesDirectorySetting";
 import { SettingsProviders } from "./SettingsProviders";
 import { UpdatesSettings } from "./UpdatesSettings";
 import type { DesktopUpdatesController } from "./useDesktopUpdates";
+import { UsageStatsPage } from "@/features/usage/UsageStatsPage";
 
 const sectionGroups = [
   {
@@ -183,6 +185,11 @@ const sectionGroups = [
   {
     id: "system",
     sections: [
+      {
+        id: "usageStats" as const,
+        icon: TrendingUp,
+        fields: ["usageStatsDescription"],
+      },
       ...(isMyGo()
         ? [
             {
@@ -306,9 +313,11 @@ export function SettingsPage({
   overview,
   providerTarget,
   updatesTarget,
+  usageStatsTarget,
   desktopUpdates,
   onOpenPlugin,
   onOpenArchivedAgent,
+  onOpenChat,
 }: {
   visible: boolean;
   theme: Theme;
@@ -319,9 +328,11 @@ export function SettingsPage({
   >;
   providerTarget?: { id?: string; pluginId?: string };
   updatesTarget?: number;
+  usageStatsTarget?: number;
   desktopUpdates?: DesktopUpdatesController;
   onOpenPlugin: (id?: string) => void;
   onOpenArchivedAgent?: (agent: Agent) => void;
+  onOpenChat?: (chatId: string, agentId: string, title: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const providers = useProviders();
@@ -331,9 +342,11 @@ export function SettingsPage({
   const [section, setSection] = useState<Section>(
     providerTarget
       ? "providers"
-      : updatesTarget && isMyGo()
-        ? "updates"
-        : "general",
+      : usageStatsTarget
+        ? "usageStats"
+        : updatesTarget && isMyGo()
+          ? "updates"
+          : "general",
   );
   const [providerId, setProviderId] = useState(providerTarget?.id);
   const [providerPlugin, setProviderPlugin] = useState(
@@ -357,6 +370,13 @@ export function SettingsPage({
       if (innerWidth < 760) setSidebar(false);
     }
   }, [updatesTarget]);
+  useEffect(() => {
+    if (usageStatsTarget) {
+      setSection("usageStats");
+      setSearch("");
+      if (innerWidth < 760) setSidebar(false);
+    }
+  }, [usageStatsTarget]);
   const language = useMutation({ mutationFn: changeLanguage });
   const preference = useMutation({
     mutationFn: async (patch: Parameters<typeof updatePreferences>[0]) =>
@@ -883,6 +903,14 @@ export function SettingsPage({
             chats={overview.data?.chats ?? []}
           />
         );
+      case "usageStats":
+        return (
+          <UsageStatsPage
+            visible={visible && (!!query || section === "usageStats")}
+            providers={providers.data ?? []}
+            onOpenChat={onOpenChat}
+          />
+        );
       case "updates":
         return desktopUpdates ? (
           <UpdatesSettings controller={desktopUpdates} />
@@ -1159,7 +1187,7 @@ export function SettingsPage({
                   className="settings-category"
                   aria-labelledby={`settings-section-${id}`}
                 >
-                  {id !== "remoteDevices" && (
+                  {id !== "remoteDevices" && id !== "usageStats" && (
                     <h2 id={`settings-section-${id}`}>{t(`settings.${id}`)}</h2>
                   )}
                   {content(id)}

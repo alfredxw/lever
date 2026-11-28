@@ -363,6 +363,182 @@ export interface ComparisonResult {
 }
 
 //////////
+// source: local_stats.go
+
+/**
+ * TokenTotals tracks disjoint input/cache buckets and total output tokens.
+ * Reasoning tokens are already included in Output and surfaced separately for reference.
+ */
+export interface TokenTotals {
+  uncachedInput: number /* int64 */;
+  cachedInput: number /* int64 */;
+  cacheWrite: number /* int64 */;
+  output: number /* int64 */;
+  reasoning: number /* int64 */;
+  total: number /* int64 */;
+}
+export interface LocalStatsCategoryCost {
+  input: number /* float64 */;
+  cacheRead: number /* float64 */;
+  cacheWrite: number /* float64 */;
+  output: number /* float64 */;
+}
+export interface LocalStatsQuickPeriod {
+  tokens: number /* int64 */;
+  costUsd: number /* float64 */;
+  cacheHitRate: number /* float64 */;
+  sessions: number /* int */;
+  runs: number /* int */;
+}
+export interface LocalStatsQuickSummary {
+  today: LocalStatsQuickPeriod;
+  last7d: LocalStatsQuickPeriod;
+  readAt: string;
+}
+export interface LocalStatsSeries {
+  id: string;
+  name: string;
+  tokens: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheSavingsUsd: number /* float64 */;
+  categoryCost: LocalStatsCategoryCost;
+  leverTokens: number /* int64 */;
+  leverCostUsd: number /* float64 */;
+  sessions: number /* int */;
+  runs: number /* int */;
+  seriesTokens: number /* int64 */[];
+  seriesCost: number /* float64 */[];
+}
+export interface LocalStatsModel {
+  id: string;
+  model: string;
+  provider: string;
+  providerName: string;
+  tokens: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheSavingsUsd: number /* float64 */;
+  categoryCost: LocalStatsCategoryCost;
+  leverTokens: number /* int64 */;
+  leverCostUsd: number /* float64 */;
+  priced: boolean;
+  priceInput?: number /* float64 */; // USD per million input tokens
+  priceOutput?: number /* float64 */; // USD per million output tokens
+  cacheHitRate: number /* float64 */;
+  sessions: number /* int */;
+  runs: number /* int */;
+  seriesTokens: number /* int64 */[];
+  seriesCost: number /* float64 */[];
+}
+export interface LocalStatsAgent {
+  id: string;
+  name: string;
+  avatar?: Avatar;
+  provider: string;
+  model: string;
+  project?: string;
+  sessions: number /* int */;
+  runs: number /* int */;
+  additions: number /* int */;
+  deletions: number /* int */;
+  tokens: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheHitRate: number /* float64 */;
+}
+export interface LocalStatsProject {
+  id: string;
+  name: string;
+  path?: string;
+  kind: 'git' | 'folder' | 'chat';
+  topAgent?: string;
+  topModel?: string;
+  sessions: number /* int */;
+  runs: number /* int */;
+  additions: number /* int */;
+  deletions: number /* int */;
+  tokens: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheHitRate: number /* float64 */;
+}
+export interface LocalStatsSession {
+  id: string;
+  chatId?: string;
+  sessionId?: string;
+  agentId?: string;
+  title: string;
+  source: 'lever' | 'cli';
+  agentName?: string;
+  agentAvatar?: Avatar;
+  project?: string;
+  provider: string;
+  providerName: string;
+  model: string;
+  runs: number /* int */;
+  additions: number /* int */;
+  deletions: number /* int */;
+  tokens: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheHitRate: number /* float64 */;
+  updatedAt: string;
+}
+export interface LocalStatsHourCell {
+  day: string;
+  hour: number /* int */;
+  future?: boolean;
+  tokens: number /* int64 */;
+  costUsd: number /* float64 */;
+  topModel?: string;
+  topProvider?: string;
+  byProvider?: { [key: string]: number /* int64 */};
+  byProviderCost?: { [key: string]: number /* float64 */};
+  byModel?: { [key: string]: number /* int64 */};
+  byModelCost?: { [key: string]: number /* float64 */};
+}
+export interface LocalStatsSource {
+  id: string;
+  name: string;
+  path?: string;
+  status: 'ok' | 'missing' | 'partial';
+  files: number /* int */;
+  sessions: number /* int */;
+  records: number /* int */;
+  message?: string;
+}
+export interface LocalStats {
+  period: '24h' | '7d' | '30d' | '90d';
+  scope: 'all' | 'lever';
+  timeZone: string;
+  since: string;
+  until: string;
+  resolution: 'hour' | 'day';
+  readAt: string;
+  scanMs: number /* int64 */;
+  totals: TokenTotals;
+  costUsd: number /* float64 */;
+  cacheSavingsUsd: number /* float64 */;
+  categoryCost: LocalStatsCategoryCost;
+  cacheHitRate: number /* float64 */;
+  sessionsCount: number /* int */;
+  runsCount: number /* int */;
+  leverTokens: number /* int64 */;
+  leverCostUsd: number /* float64 */;
+  externalTokens: number /* int64 */;
+  externalCostUsd: number /* float64 */;
+  timeSlots: string[];
+  providers: LocalStatsSeries[];
+  models: LocalStatsModel[];
+  agents: LocalStatsAgent[];
+  projects: LocalStatsProject[];
+  sessions: LocalStatsSession[];
+  hourly: LocalStatsHourCell[];
+  sources: LocalStatsSource[];
+}
+
+//////////
 // source: shared_conversations.go
 
 /**

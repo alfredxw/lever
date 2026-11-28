@@ -242,6 +242,7 @@ type NavigationProps = {
   onTasks: () => void;
   onAutomations: () => void;
   onSkills: () => void;
+  onUsageStats: () => void;
   onSettings: () => void;
   onPlugins: () => void;
 };
@@ -298,6 +299,7 @@ function PrimaryNavigation({
   onTasks,
   onAutomations,
   onSkills,
+  onUsageStats,
   onSettings,
   onPlugins,
   navigation,
@@ -385,7 +387,10 @@ function PrimaryNavigation({
         <span>{t("nav.plugins")}</span>
       </button>
       <div className="flex-1" />
-      <SubscriptionUsage providers={providers} />
+      <SubscriptionUsage
+        providers={providers}
+        onOpenUsageStats={onUsageStats}
+      />
       <button
         className={cn("navigation-item", page === "settings" && "active")}
         aria-label={t("nav.settings")}
