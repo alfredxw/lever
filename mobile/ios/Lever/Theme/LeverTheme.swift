@@ -381,6 +381,7 @@ struct AgentAvatarView: View {
                 .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5)
         )
         .task(id: imageTaskKey) {
+            loadedImage = nil
             guard let spec = effectiveSpec,
                   spec.kind == "image",
                   let imageId = spec.value,
@@ -389,11 +390,9 @@ struct AgentAvatarView: View {
                   let store else {
                 return
             }
-            if let cached = store.cachedAvatarImage(imageId) {
-                loadedImage = cached
-                return
-            }
-            loadedImage = await store.fetchAvatarImage(deviceId: deviceId, imageId: imageId)
+            guard let reference = LeverMedia(space: store.activeSpace?.id, device: deviceId, kind: .avatar, id: imageId) else { return }
+            let image = try? await store.media.pipeline.image(for: reference.request(maxPixels: size * 3))
+            if !Task.isCancelled { loadedImage = image }
         }
     }
 

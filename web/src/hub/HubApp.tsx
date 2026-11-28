@@ -350,6 +350,7 @@ interface AgentRowItem {
   agentId: string;
   name: string;
   avatar?: string;
+  avatarSpec?: Shared["avatarSpec"];
   model?: string;
   provider?: string;
   latestChat?: Shared;
@@ -790,6 +791,7 @@ function Workbench({
           agentId: aid,
           name,
           avatar: a?.avatar,
+          avatarSpec: a?.avatarSpec,
           model: a?.model,
           provider: a?.provider,
           latestChat,
@@ -1254,6 +1256,7 @@ function Workbench({
                                 id={row.agentId}
                                 name={row.name}
                                 avatar={row.avatar}
+                                avatarSpec={row.avatarSpec}
                                 size="md"
                               />
                               {row.unreadCount > 0 && (

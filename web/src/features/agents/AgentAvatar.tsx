@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, type CSSProperties } from "react";
 import { StarterAvatarPreset, type Agent, type Avatar } from "@/api/types.gen";
 import { initials } from "@/components/common";
-import leverIcon from "../../../../cmd/lever-desktop/icon.png";
+import leverIcon from "../../../../mobile/icon.png";
 import { avatarColors } from "./avatarPalette";
 
 const AvatarIcon = lazy(() =>
@@ -30,10 +30,6 @@ export function AgentAvatar({
   const imageSrc = avatarImageSrc(avatar);
   const [failedSrc, setFailedSrc] = useState<string>();
   const showImage = !!imageSrc && failedSrc !== imageSrc;
-  const isLeverLogo =
-    showImage &&
-    avatar?.kind === "preset" &&
-    avatar.value === StarterAvatarPreset;
   const color = avatar?.color;
   const preset =
     !showImage && color && Object.hasOwn(avatarColors, color)
@@ -61,11 +57,7 @@ export function AgentAvatar({
           src={imageSrc}
           alt=""
           draggable={false}
-          className={
-            isLeverLogo
-              ? "agent-avatar-image agent-avatar-logo"
-              : "agent-avatar-image"
-          }
+          className="agent-avatar-image"
           onError={() => setFailedSrc(imageSrc)}
         />
       ) : avatar?.kind === "lucide" ? (

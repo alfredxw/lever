@@ -1224,10 +1224,6 @@ button:focus-visible,
   object-fit: cover;
   object-position: center;
 }
-.agent-avatar-logo {
-  object-position: 50% 50.7%;
-  transform: scale(1.22);
-}
 .agent-avatar:where([data-size="sm"]) {
   --avatar-size: 22px;
   --avatar-text-size: 9px;

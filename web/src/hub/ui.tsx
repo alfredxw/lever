@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
 import { Laptop, Server, Smartphone } from "lucide-react";
+import type { AvatarSpec } from "@/api/hub.gen";
+import { StarterAvatarPreset } from "@/api/types.gen";
 import { avatarPalette } from "@/features/agents/avatarPalette";
 import leverAppIcon from "../../../mobile/icon.png";
 
@@ -31,11 +33,13 @@ export function HubAgentAvatar({
   id,
   name,
   avatar,
+  avatarSpec,
   size = "md",
 }: {
   id: string;
   name?: string;
   avatar?: string;
+  avatarSpec?: AvatarSpec;
   size?: "xs" | "sm" | "md" | "lg";
 }) {
   const key = GRADIENT_KEYS[hashString(id || name || "lever") % GRADIENT_KEYS.length];
@@ -48,14 +52,24 @@ export function HubAgentAvatar({
         : size === "lg"
           ? "size-12 rounded-[11px] text-[17px]"
           : "size-11 rounded-[10px] text-[15px]";
-  const display = avatar?.trim() || agentInitials(name);
+  const isLeverPreset =
+    avatarSpec?.kind === "preset" && avatarSpec.value === StarterAvatarPreset;
   return (
     <span
       className={`inline-flex shrink-0 items-center justify-center font-semibold tracking-tight text-[#141418] select-none ${dims}`}
-      style={paletteStyle}
+      style={isLeverPreset ? undefined : paletteStyle}
       aria-hidden="true"
     >
-      {display}
+      {isLeverPreset ? (
+        <img
+          src={leverAppIcon}
+          alt=""
+          draggable={false}
+          className="size-full rounded-[inherit] object-cover"
+        />
+      ) : (
+        avatar?.trim() || agentInitials(name)
+      )}
     </span>
   );
 }
