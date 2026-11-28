@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var store: LeverStore
     @State private var confirmUnpair = false
+    @State private var pairAnother = false
+    @State private var unpairTarget: String?
 
     var body: some View {
         NavigationStack {
@@ -25,7 +27,7 @@ struct SettingsView: View {
                                     .foregroundStyle(LeverTheme.inkTertiary)
                             }
                         }
-                        .tint(LeverTheme.inkPrimary)
+                        .tint(LeverTheme.switchTint)
                         .disabled(!store.pushSettings.available && store.coreStatus.pushEnabled != true)
                     } else {
                         HStack {
@@ -60,7 +62,7 @@ struct SettingsView: View {
                                 .foregroundStyle(LeverTheme.inkTertiary)
                         }
                     }
-                    .tint(LeverTheme.inkPrimary)
+                    .tint(LeverTheme.switchTint)
 
                     HStack {
                         Text("当前桌面状态")
@@ -116,6 +118,14 @@ struct SettingsView: View {
                                 }
                             }
                             .padding(.vertical, 2)
+                            .swipeActions {
+                                if store.coreStatus.directPeerIds?.contains(host.id) == true {
+                                    Button("解除直连", role: .destructive) {
+                                        unpairTarget = host.id
+                                        confirmUnpair = true
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -171,7 +181,7 @@ struct SettingsView: View {
                     }
 
                     Toggle("首页默认展开话题", isOn: $store.homeTopicsExpanded)
-                        .tint(LeverTheme.inkPrimary)
+                        .tint(LeverTheme.switchTint)
                 }
 
                 Section {
@@ -186,6 +196,12 @@ struct SettingsView: View {
                                 ProgressView().scaleEffect(0.78)
                             }
                         }
+                    }
+
+                    Button {
+                        pairAnother = true
+                    } label: {
+                        Label("配对另一台设备", systemImage: "qrcode.viewfinder")
                     }
 
                     Button(role: .destructive) {
@@ -204,13 +220,18 @@ struct SettingsView: View {
                     await store.refreshPushSettings()
                 }
             }
+            .sheet(isPresented: $pairAnother) {
+                PairingView(store: store)
+            }
             .alert("解除设备配对？", isPresented: $confirmUnpair) {
-                Button("取消", role: .cancel) {}
+                Button("取消", role: .cancel) { unpairTarget = nil }
                 Button("解除配对", role: .destructive) {
-                    Task { await store.unpair() }
+                    let id = unpairTarget
+                    unpairTarget = nil
+                    Task { await store.unpair(peer: id) }
                 }
             } message: {
-                Text("将清除本地加密密钥与离线缓存，之后可随时重新扫码连接电脑或 Hub。")
+                Text("将移除当前连接。其他独立配对的电脑仍可使用。")
             }
         }
     }

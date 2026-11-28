@@ -48,10 +48,27 @@ final class LocalCache: @unchecked Sendable {
         }
     }
 
+    func remove(_ name: String) {
+        queue.sync { try? fm.removeItem(at: fileURL(for: name)) }
+    }
+
+    func retainDeviceFiles(_ ids: Set<String>) {
+        queue.sync {
+            guard let files = try? fm.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil) else { return }
+            for url in files where url.pathExtension == "json" {
+                let name = url.deletingPathExtension().lastPathComponent
+                let keep = ids.contains { id in
+                    name == "index_\(id)" || name == "priv_\(id)" || name.hasPrefix("chat_\(id)_")
+                }
+                if !keep { try? fm.removeItem(at: url) }
+            }
+        }
+    }
+
     func clearAll() {
         queue.sync {
             if let files = try? fm.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil) {
-                for url in files {
+                for url in files where url.pathExtension == "json" {
                     try? fm.removeItem(at: url)
                 }
             }

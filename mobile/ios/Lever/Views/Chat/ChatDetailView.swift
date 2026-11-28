@@ -1,3 +1,4 @@
+import SafariServices
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,6 +14,7 @@ struct ChatDetailView: View {
     let onOpenTopic: (TopicRoute) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var workspace: WorkspaceDestination?
     @State private var currentChatId: String?
     @State private var currentIsPrivate: Bool = false
 
@@ -41,6 +43,7 @@ struct ChatDetailView: View {
     @State private var isSending = false
     @State private var inlineError: String?
     @State private var didInitialScroll = false
+    @State private var initialLoadFinished = false
     @FocusState private var inputFocused: Bool
 
     private var agentRecord: ArchiveRecord? {
@@ -185,8 +188,8 @@ struct ChatDetailView: View {
                             if let cid = currentChatId {
                                 let entries = visibleEntries
                                 if entries.isEmpty {
-                                    if isLoadingCurrentChat {
-                                        loadingChatPlaceholder
+                                    if isLoadingCurrentChat || !initialLoadFinished {
+                                        ConversationLoadingSkeleton(message: "正在从电脑同步消息…")
                                     } else if let loadErr = currentChatLoadError {
                                         errorChatPlaceholder(loadErr, chatId: cid)
                                     } else {
@@ -210,6 +213,15 @@ struct ChatDetailView: View {
                                                 store: store,
                                                 agentSeed: agentSeed,
                                                 isBusy: isSending,
+                                                isSessionCleared: snapshot.mainSession.map { store.isSessionCleared(deviceId: route.deviceId, session: $0) } ?? false,
+                                                lazySteps: store.runSteps(deviceId: route.deviceId, runId: run.id),
+                                                isLoadingSteps: store.isLoadingRunSteps(deviceId: route.deviceId, runId: run.id),
+                                                onLoadSteps: { runId in
+                                                    let expected = run.stepCount ?? 0
+                                                    Task {
+                                                        await store.loadRunSteps(deviceId: route.deviceId, runId: runId, expectedCount: expected)
+                                                    }
+                                                },
                                                 onAnswer: { req, ans, allowRun in
                                                     handleAnswer(chatId: cid, request: req, answer: ans, allowRun: allowRun)
                                                 },
@@ -217,6 +229,7 @@ struct ChatDetailView: View {
                                                     handleStop(chatId: cid, runId: runId)
                                                 }
                                             )
+                                            .equatable()
                                             .id(entry.id)
 
                                         case .topicCard(let topic):
@@ -286,6 +299,7 @@ struct ChatDetailView: View {
                         .padding(.horizontal, 15)
                         .padding(.vertical, 12)
                     }
+                    .defaultScrollAnchor(.bottom)
                     .scrollDismissesKeyboard(.interactively)
                     .background(LeverTheme.canvas)
                     .onChange(of: snapshot.entries.last?.id) { _, _ in
@@ -313,11 +327,13 @@ struct ChatDetailView: View {
                 }
 
                 // Match Desktop QueuedMessages.tsx: ONLY show paused-queue banner when queued runs exist
-                if snapshot.mainSession?.queuePaused == true,
+                // and the session is not already cleared.
+                if let mainSess = snapshot.mainSession,
+                   mainSess.queuePaused == true,
+                   !store.isSessionCleared(deviceId: route.deviceId, session: mainSess),
                    snapshot.mainHasQueuedRuns,
-                   let mainId = snapshot.mainSession?.id,
                    let cid = currentChatId {
-                    pausedQueueBanner(chatId: cid, mainSessionId: mainId)
+                    pausedQueueBanner(chatId: cid, mainSessionId: mainSess.id)
                 }
 
                 desktopAlignedComposer
@@ -360,6 +376,7 @@ struct ChatDetailView: View {
                     currentIsPrivate = item.isPrivate
                     visibleEntryLimit = 24
                     didInitialScroll = false
+                    initialLoadFinished = false
                     selectedProviderId = nil
                     selectedModelId = nil
                     selectedEffort = nil
@@ -368,6 +385,7 @@ struct ChatDetailView: View {
                     draftReferences = []
                     Task {
                         await store.loadChat(deviceId: route.deviceId, chatId: item.id, isPrivate: item.isPrivate)
+                        initialLoadFinished = true
                         await store.loadComposerMeta(deviceId: route.deviceId, agentId: route.agentId, chatId: item.id)
                         markMainSessionRead()
                     }
@@ -389,6 +407,9 @@ struct ChatDetailView: View {
             )
         }
         .background(InteractivePopEnabler())
+        .sheet(item: $workspace, onDismiss: { Task { try? await LeverBridge.shared.requestVoid("POST", path: "/native/workspace/close") } }) { destination in
+            PeerWorkspaceBrowser(url: destination.url).ignoresSafeArea()
+        }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .task {
@@ -403,6 +424,7 @@ struct ChatDetailView: View {
                 await store.loadChat(deviceId: route.deviceId, chatId: cid, isPrivate: route.isPrivate)
                 markMainSessionRead()
             }
+            initialLoadFinished = true
             _ = await metaTask
         }
         .onDisappear {
@@ -514,10 +536,10 @@ struct ChatDetailView: View {
                             .font(.system(size: 15.5, weight: .semibold))
                             .foregroundStyle(LeverTheme.inkPrimary)
                             .lineLimit(1)
-                        Text("\(currentChatTitle) · \(snapshot.topics.count) 个话题")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(LeverTheme.inkTertiary)
-                            .lineLimit(1)
+                        NavSyncSubtitleView(
+                            isSyncing: currentChatId != nil && (isLoadingCurrentChat || !initialLoadFinished),
+                            text: "\(currentChatTitle) · \(snapshot.topics.count) 个话题"
+                        )
                     }
                 }
                 .contentShape(Rectangle())
@@ -525,13 +547,6 @@ struct ChatDetailView: View {
             .buttonStyle(.plain)
 
             Spacer(minLength: 4)
-
-            if isLoadingCurrentChat && !visibleEntries.isEmpty {
-                ProgressView()
-                    .scaleEffect(0.68)
-                    .tint(LeverTheme.inkTertiary)
-                    .padding(.trailing, 2)
-            }
 
             // Right Drawer Trigger Button (also accessible by swiping left from right edge!)
             Button {
@@ -569,6 +584,18 @@ struct ChatDetailView: View {
     private func loadOlderButton(chatId: String) -> some View {
         HStack {
             Spacer()
+            if store.hasNativeOwner(route.deviceId) {
+                Button {
+                    Task {
+                        do {
+                            let location: String = try await LeverBridge.shared.request("POST", path: "/native/workspace",
+                                body: ["node": route.deviceId, "agent": route.agentId, "chat": currentChatId ?? ""])
+                            if let url = URL(string: location) { workspace = WorkspaceDestination(url: url) }
+                        } catch { inlineError = error.localizedDescription }
+                    }
+                } label: { Image(systemName: "folder").frame(width: 34, height: 34) }
+                .accessibilityLabel("打开设备工作区")
+            }
             Button {
                 Haptics.light()
                 let prevRemaining = remainingOlderCount
@@ -1274,4 +1301,14 @@ private struct RightEdgeDrawerOverlay: View {
             dragOffset = 0
         }
     }
+}
+
+private struct WorkspaceDestination: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+private struct PeerWorkspaceBrowser: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }

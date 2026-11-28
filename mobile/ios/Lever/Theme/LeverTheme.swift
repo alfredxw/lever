@@ -77,6 +77,9 @@ enum LeverTheme {
             : UIColor.white
     })
 
+    // Crisp iOS calibrated switch ON track so white thumb always stays clearly readable
+    static let switchTint = Color(UIColor.systemGreen)
+
     // Restrained semantic cues
     static let unreadRed = Color(UIColor { tc in
         tc.userInterfaceStyle == .dark

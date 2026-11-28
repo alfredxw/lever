@@ -13,6 +13,7 @@ struct CoreStatus: Codable, Sendable, Equatable {
     let deviceId: String?
     let userId: String?
     let pushEnabled: Bool?
+    var directPeerIds: [String]? = nil
 }
 
 struct RemoteIdentity: Codable, Sendable, Equatable {
@@ -35,6 +36,7 @@ struct AccountInfo: Codable, Sendable, Equatable {
 }
 
 struct DeviceInfo: Codable, Sendable, Equatable, Identifiable {
+    var node: PeerNodeInfo? = nil
     let id: String
     let spaceId: String
     let name: String
@@ -175,10 +177,26 @@ struct FileStat: Codable, Sendable, Equatable, Hashable {
     let deletions: Int
 }
 
+struct DiffSummary: Codable, Sendable, Equatable, Hashable {
+    let files: Int?
+    let additions: Int?
+    let deletions: Int?
+}
+
 struct RequestOption: Codable, Sendable, Equatable, Identifiable {
     let id: String
     let name: String
     let allow: Bool?
+}
+
+extension RequestOption {
+    private enum WireKey: String, CodingKey { case id, name, label, allow }
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: WireKey.self)
+        id = try fields.decode(String.self, forKey: .id)
+        name = try fields.decodeIfPresent(String.self, forKey: .name) ?? fields.decode(String.self, forKey: .label)
+        allow = try fields.decodeIfPresent(Bool.self, forKey: .allow)
+    }
 }
 
 struct RequestQuestion: Codable, Sendable, Equatable, Identifiable {
@@ -197,59 +215,61 @@ struct RequestAnswer: Codable, Sendable, Equatable {
 struct ArchiveRecord: Codable, Sendable, Equatable, Identifiable {
     let kind: String
     let id: String
-    let privateFlag: Bool?
-    let agentId: String?
-    let chatId: String?
-    let sessionId: String?
-    let runId: String?
-    let taskId: String?
-    let dispatchId: String?
-    let title: String?
-    let status: String?
-    let type: String?
-    let model: String?
-    let effort: String?
-    let fast: Bool?
-    let provider: String?
-    let models: [ModelOption]?
-    let avatar: String?
-    let avatarSpec: AvatarSpec?
-    let description: String?
-    let permission: String?
-    let groups: [DirectoryGroup]?
-    let attachments: [AttachmentRef]?
-    let text: String?
-    let items: [RunItem]?
-    let files: [FileStat]?
-    let error: String?
-    let truncated: Bool?
-    let superseded: Bool?
-    let canSteer: Bool?
-    let queuePaused: Bool?
-    let workingCopyId: String?
-    let workingCopyName: String?
-    let answeredByUserId: String?
-    let unreadSequence: Int64?
-    let readSequence: Int64?
-    let clearedSequence: Int64?
-    let preview: String?
-    let messageAt: String?
-    let activeStatus: String?
-    let pendingCount: Int?
-    let replyCount: Int?
-    let sourceRunId: String?
-    let sequence: Int64?
-    let createdAt: String?
-    let updatedAt: String?
-    let questions: [RequestQuestion]?
-    let options: [RequestOption]?
-    let answer: RequestAnswer?
-    let allowOnce: RequestAnswer?
+    var privateFlag: Bool?
+    var agentId: String?
+    var chatId: String?
+    var sessionId: String?
+    var runId: String?
+    var taskId: String?
+    var dispatchId: String?
+    var title: String?
+    var status: String?
+    var type: String?
+    var model: String?
+    var effort: String?
+    var fast: Bool?
+    var provider: String?
+    var models: [ModelOption]?
+    var avatar: String?
+    var avatarSpec: AvatarSpec?
+    var description: String?
+    var permission: String?
+    var groups: [DirectoryGroup]?
+    var attachments: [AttachmentRef]?
+    var text: String?
+    var items: [RunItem]?
+    var stepCount: Int?
+    var files: [FileStat]?
+    var diff: DiffSummary?
+    var error: String?
+    var truncated: Bool?
+    var superseded: Bool?
+    var canSteer: Bool?
+    var queuePaused: Bool?
+    var workingCopyId: String?
+    var workingCopyName: String?
+    var answeredByUserId: String?
+    var unreadSequence: Int64?
+    var readSequence: Int64?
+    var clearedSequence: Int64?
+    var preview: String?
+    var messageAt: String?
+    var activeStatus: String?
+    var pendingCount: Int?
+    var replyCount: Int?
+    var sourceRunId: String?
+    var sequence: Int64?
+    var createdAt: String?
+    var updatedAt: String?
+    var questions: [RequestQuestion]?
+    var options: [RequestOption]?
+    var answer: RequestAnswer?
+    var allowOnce: RequestAnswer?
 
     enum CodingKeys: String, CodingKey {
         case kind, id, agentId, chatId, sessionId, runId, taskId, dispatchId
         case title, status, type, model, effort, fast, provider, models, avatar, avatarSpec, description, permission
-        case groups, attachments, text, items, files, error, truncated, superseded, canSteer
+        case groups, attachments, text, items, stepCount, files, diff, error, truncated, superseded, canSteer
         case queuePaused, workingCopyId, workingCopyName, answeredByUserId
         case unreadSequence, readSequence, clearedSequence, preview, messageAt, activeStatus
         case pendingCount, replyCount, sourceRunId, sequence, createdAt, updatedAt
@@ -258,6 +278,31 @@ struct ArchiveRecord: Codable, Sendable, Equatable, Identifiable {
     }
 
     var isPrivate: Bool { privateFlag == true }
+
+    /// Simplified aggregate file diff (+additions / -deletions), preferring backend `diff`
+    /// and seamlessly falling back to aggregating legacy per-file `files`.
+    var resolvedDiff: (files: Int, additions: Int, deletions: Int)? {
+        if let d = diff {
+            let f = d.files ?? 0
+            let a = d.additions ?? 0
+            let del = d.deletions ?? 0
+            if f > 0 || a > 0 || del > 0 {
+                return (f, a, del)
+            }
+        }
+        if let list = files, !list.isEmpty {
+            var a = 0
+            var del = 0
+            for item in list {
+                a += item.additions
+                del += item.deletions
+            }
+            if a > 0 || del > 0 || !list.isEmpty {
+                return (list.count, a, del)
+            }
+        }
+        return nil
+    }
 }
 
 struct ArchiveChange: Codable, Sendable, Equatable {
@@ -588,7 +633,6 @@ struct TopicSummary: Identifiable, Equatable {
     let canClear: Bool
     let anchorTimestamp: TimeInterval
     let updatedTimestamp: TimeInterval
-    let fileStats: [FileStat]
     let runs: [ArchiveRecord]
     let requestsByRun: [String: [ArchiveRecord]]
     let oldestRunSequence: Int64?
@@ -728,7 +772,7 @@ func stripMarkdownPreview(_ raw: String) -> String {
 
 func isActiveRunStatus(_ status: String?) -> Bool {
     switch status {
-    case "starting", "running", "waiting_user", "cancelling", "queued", "paused", "unknown":
+    case "starting", "running", "waiting_user", "cancelling", "unknown":
         return true
     default:
         return false
@@ -750,5 +794,108 @@ func runStatusLabel(_ status: String?) -> String {
     case "pending": return "等待确认"
     case "answered": return "已处理"
     default: return status ?? ""
+    }
+}
+
+// Native Owner responses are decoded directly. Older paired devices keep their
+// archive decoder. Both feed the same SwiftUI presentation types.
+struct PeerNodeInfo: Codable, Sendable, Equatable {
+    let protocolVersion: Int
+    let minCompatibleProtocol: Int
+    let features: [String]
+    let accessLevel: String
+    let cacheEpoch: String?
+    var supportsChat: Bool { minCompatibleProtocol <= 1 && protocolVersion >= 1 && features.contains("peer_v1") }
+}
+
+struct PeerIndex: Decodable {
+    struct Agent: Decodable {
+        struct Profile: Decodable { let description, provider, model, permission: String? }
+        let id, name: String
+        let avatar: AvatarSpec?
+        let profile: Profile
+        var record: ArchiveRecord {
+            var r = ArchiveRecord(kind: "agent", id: id)
+            r.title = name; r.avatarSpec = avatar; r.description = profile.description
+            r.provider = profile.provider; r.model = profile.model; r.permission = profile.permission
+            return r
+        }
+    }
+    struct Chat: Decodable {
+        let id, agentId, title: String
+        let createdAt, updatedAt: String?
+        var record: ArchiveRecord {
+            ArchiveRecord(kind: "chat", id: id, agentId: agentId, title: title, createdAt: createdAt, updatedAt: updatedAt)
+        }
+    }
+    struct Session: Decodable {
+        let id, chatId, agentId, kind: String
+        let title, preview, messageAt, sourceRunId, workingCopyId, workingCopyName: String?
+        let unreadSequence, readSequence, clearedSequence: Int64?
+        var record: ArchiveRecord {
+            var r = ArchiveRecord(kind: "session", id: id, agentId: agentId, chatId: chatId, title: title, type: kind)
+            r.preview = preview; r.messageAt = messageAt; r.sourceRunId = sourceRunId
+            r.workingCopyId = workingCopyId; r.workingCopyName = workingCopyName
+            r.unreadSequence = unreadSequence; r.readSequence = readSequence; r.clearedSequence = clearedSequence
+            return r
+        }
+    }
+    let agents: [Agent]?
+    let chats: [Chat]?
+    let conversations: [Session]?
+    var records: [ArchiveRecord] {
+        (agents ?? []).map(\.record) + (chats ?? []).map(\.record) + (conversations ?? []).map(\.record)
+    }
+}
+
+struct PeerHistory: Decodable {
+    struct Run: Decodable {
+        let id, sessionId, chatId, input, status: String
+        let error, createdAt, updatedAt: String?
+        let sequence, unreadSequence: Int64?
+        let attachments: [AttachmentRef]?
+        let items: [RunItem]?
+        let stepCount: Int?
+        let selection: ModelSelection?
+        var record: ArchiveRecord {
+            var r = ArchiveRecord(kind: "run", id: id, chatId: chatId, sessionId: sessionId, status: status)
+            r.text = input; r.items = items; r.stepCount = stepCount; r.sequence = sequence; r.unreadSequence = unreadSequence
+            r.attachments = attachments; r.error = error; r.createdAt = createdAt; r.updatedAt = updatedAt
+            r.provider = selection?.provider; r.model = selection?.model; r.effort = selection?.effort; r.fast = selection?.fast
+            return r
+        }
+    }
+    struct RunEnvelope: Decodable {
+        let run: Run
+    }
+    struct Request: Decodable {
+        let id, sessionId, chatId, runId, kind, status, title: String
+        let detail: String?
+        let options: [RequestOption]?
+        let questions: [RequestQuestion]?
+        let answer, allowOnce: RequestAnswer?
+        var record: ArchiveRecord {
+            ArchiveRecord(kind: "request", id: id, chatId: chatId, sessionId: sessionId, runId: runId, title: title,
+                          status: status, type: kind, text: detail, questions: questions, options: options, answer: answer, allowOnce: allowOnce)
+        }
+    }
+    let chat: PeerIndex.Chat?
+    let sessions: [PeerIndex.Session]?
+    let runs: [Run]?
+    let requests: [Request]?
+    var records: [ArchiveRecord] {
+        let turns = (runs ?? []).map(\.record)
+        let prompts = (requests ?? []).map(\.record)
+        return [chat?.record].compactMap { $0 } + (sessions ?? []).map(\.record) + turns + prompts
+    }
+}
+
+struct PeerCommandBody: Encodable {
+    var intent: CommandIntent
+    enum Keys: String, CodingKey { case commandId }
+    func encode(to encoder: Encoder) throws {
+        if intent.kind == "send" { try intent.encode(to: encoder) } else { try intent.answer?.encode(to: encoder) }
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encode(intent.id, forKey: .commandId)
     }
 }

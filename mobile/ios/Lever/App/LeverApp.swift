@@ -122,6 +122,9 @@ private struct RootContainerView: View {
                 nativeTabView
             }
         }
+        .sheet(isPresented: Binding(get: { store.isPaired && store.pendingPairLink != nil }, set: { if !$0 { store.pendingPairLink = nil } })) {
+            PairingView(store: store)
+        }
         .onChange(of: store.pendingNavigationRoute, initial: true) { _, route in
             if route != nil {
                 selectedTab = .chats

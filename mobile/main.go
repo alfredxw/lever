@@ -5,9 +5,9 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"lever/internal/multinode"
 	"log"
 	"net/url"
 	"runtime"
@@ -23,6 +23,8 @@ import (
 )
 
 type Mobile struct {
+	directory multinode.MobileDirectory
+	workspace multinode.MobileWorkspace
 	lan       lanclient.Client
 	mu        sync.Mutex
 	link      string
@@ -42,20 +44,21 @@ func (m *Mobile) PairingLink() string {
 	m.link = ""
 	return s
 }
-func paired() (p.ClientState, error) {
-	var st p.ClientState
+func accounts() (multinode.Accounts, error) {
+	var a multinode.Accounts
 	raw, err := mygo.Secrets.Get(accountKey)
 	if err != nil {
-		return st, err
+		return a, err
 	}
-	if err = json.Unmarshal(raw, &st); err != nil {
-		return st, err
+	if err = json.Unmarshal(raw, &a); err != nil {
+		return a, err
 	}
-	if len(st.Key) != ed25519.PrivateKeySize || st.Membership.Role != p.Controller {
-		return st, errors.New("invalid controller credential")
+	if len(a.Key) != ed25519.PrivateKeySize || a.Membership.Role != p.Controller {
+		return a, errors.New("invalid controller credential")
 	}
-	return st, nil
+	return a, nil
 }
+func paired() (p.ClientState, error) { a, err := accounts(); return a.ClientState, err }
 func validPairLink(link string) bool {
 	if _, isDirect, err := p.ParseDirectPairLink(link); isDirect {
 		return err == nil
@@ -81,58 +84,29 @@ func parsePair(link string) (string, string, error) {
 func (m *Mobile) Pair(link string) error {
 	m.accountMu.Lock()
 	defer m.accountMu.Unlock()
-	if _, err := paired(); err == nil {
-		return errors.New("请先解除原设备配对")
-	} else if !errors.Is(err, mygo.ErrSecretNotFound) {
-		return err
-	}
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
+	a, err := accounts()
+	if err != nil && !errors.Is(err, mygo.ErrSecretNotFound) {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if directParams, isDirect, err := p.ParseDirectPairLink(link); isDirect {
-		if err != nil {
-			return err
-		}
-		st, receipt, err := p.PairDirect(ctx, directParams, p.PairInput{
-			Code:     directParams.Code,
-			Identity: p.Identity{ID: p.NewID(), PublicKey: pub},
-			Platform: runtime.GOOS,
-			Name:     "Lever",
-			Role:     p.Controller,
-		}, key)
-		if err != nil {
-			return err
-		}
-		b, err := json.Marshal(st)
-		if err != nil {
-			return err
-		}
-		if err := mygo.Secrets.Set(accountKey, b); err != nil {
-			return err
-		}
-		grantKey := st.Membership.Hub.ID + "/" + st.Membership.SpaceID + "/" + st.Membership.DeviceID + "/" + directParams.HostID
-		grants := savedGrants()
-		grants[grantKey] = receipt.Grant
-		rawGrants, _ := json.Marshal(grants)
-		_ = mygo.Secrets.Set(grantsKey, rawGrants)
-		return nil
+	if err = a.Pair(ctx, link, "Lever", runtime.GOOS); err != nil {
+		return err
 	}
-	base, code, err := parsePair(link)
+	raw, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
-	st, err := p.Pair(ctx, base, p.PairInput{Code: code, Identity: p.Identity{ID: p.NewID(), PublicKey: pub}, Platform: runtime.GOOS, Name: "Lever", Role: p.Controller}, key)
-	if err != nil {
+	if err = mygo.Secrets.Set(accountKey, raw); err != nil {
 		return err
 	}
-	b, err := json.Marshal(st)
-	if err != nil {
-		return err
+	m.mu.Lock()
+	if m.stopWatch != nil {
+		m.stopWatch()
+		m.stopWatch = nil
 	}
-	return mygo.Secrets.Set(accountKey, b)
+	m.mu.Unlock()
+	return nil
 }
 func (m *Mobile) requestDirect(ctx context.Context, st p.ClientState, method, path, body string) (string, error) {
 	if out, ok, err := m.lan.Local(ctx, st, method, path, []byte(body)); ok {
@@ -202,12 +176,21 @@ func (m *Mobile) requestDirect(ctx context.Context, st p.ClientState, method, pa
 	return "", errors.New("该功能需要连接 Lever Hub（当前为局域网直连模式）")
 }
 func (m *Mobile) Request(method, path, body string) (string, error) {
-	st, err := paired()
+	accounts, err := accounts()
 	if err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if raw, ok, e := m.directory.Request(ctx, accounts.SpacePath(), method, path, body); ok {
+		return string(raw), e
+	}
+	st, path, _ := accounts.Resolve(method, path, body)
+	if method == "GET" && path == accounts.SpacePath()+"/devices" && accounts.IsDirect() {
+		base := []p.Device{{Identity: p.Identity{ID: accounts.Membership.DeviceID}, Name: "Lever", Role: p.Controller, Online: true}}
+		raw, err := json.Marshal(m.directory.Refresh(ctx, accounts, &m.lan, base))
+		return string(raw), err
+	}
 	if st.IsDirect() {
 		return m.requestDirect(ctx, st, method, path, body)
 	}
@@ -239,7 +222,7 @@ func (m *Mobile) Request(method, path, body string) (string, error) {
 				m.accountMu.Lock()
 				current, readErr := paired()
 				if readErr == nil && current.Membership.Token == st.Membership.Token {
-					_ = m.forget()
+					_ = m.forget(st)
 					m.signal("unpaired")
 				}
 				m.accountMu.Unlock()
@@ -247,6 +230,10 @@ func (m *Mobile) Request(method, path, body string) (string, error) {
 			return "", err
 		}
 		// Remember which space owns cached reads when both transports go away.
+		if directory && len(accounts.Peers) > 0 {
+			raw, err := json.Marshal(m.directory.Refresh(ctx, accounts, &m.lan, nil))
+			return string(raw), err
+		}
 		if method == "GET" && path == "/api/me" {
 			m := st.Membership
 			raw, _ := json.Marshal(map[string]any{"hub": m.Hub, "userId": m.UserID, "spaces": []p.Space{{ID: m.SpaceID, Kind: "personal", Name: "Hub"}}, "deviceId": m.DeviceID, "origin": st.Origin})
@@ -280,35 +267,72 @@ func (m *Mobile) Request(method, path, body string) (string, error) {
 			}
 			devices = append(devices, d.Device)
 		}
-		out, _ = json.Marshal(devices)
+		out, _ = json.Marshal(m.directory.Refresh(ctx, accounts, &m.lan, devices))
 	}
 	return string(out), nil
 }
-func (m *Mobile) Unpair() error {
+
+type nodeReply struct {
+	Data   json.RawMessage `json:"data,omitempty"`
+	Status int             `json:"status,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+func (m *Mobile) RequestNode(method, path, body string) (nodeReply, error) {
+	if !strings.HasPrefix(path, "/api/nodes/") {
+		return nodeReply{}, errors.New("invalid node resource")
+	}
+	raw, err := m.Request(method, path, body)
+	if err == nil {
+		return nodeReply{Data: json.RawMessage(raw)}, nil
+	}
+	var he *p.HTTPError
+	if errors.As(err, &he) {
+		return nodeReply{Status: he.Status, Error: he.Message}, nil
+	}
+	return nodeReply{}, err
+}
+
+func (m *Mobile) Unpair() error { return m.unpair("") }
+func (m *Mobile) UnpairPeer(id string) error {
+	if id == "" {
+		return errors.New("missing node id")
+	}
+	return m.unpair(id)
+}
+func (m *Mobile) DirectPeers() ([]string, error) { a, err := accounts(); return a.DirectIDs(), err }
+func (m *Mobile) unpair(id string) error {
 	m.accountMu.Lock()
-	st, err := paired()
+	a, err := accounts()
 	m.accountMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if st.IsDirect() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = m.lan.UnpairDirect(ctx, st, st.Membership.Hub.ID)
-		cancel()
-	} else {
-		err = st.Do(context.Background(), "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
-		var e *p.HTTPError
-		if err != nil && !(errors.As(err, &e) && e.Status == 401) {
-			return err
-		}
+	st, err := a.SelectForRemoval(id)
+	if err != nil {
+		return err
+	}
+	if err = multinode.Revoke(context.Background(), &m.lan, st); err != nil {
+		return err
 	}
 	m.accountMu.Lock()
 	defer m.accountMu.Unlock()
-	return m.forget()
+	return m.forget(st)
 }
 
 // Called under accountMu so an old HTTP response cannot erase a new pairing.
-func (m *Mobile) forget() error {
+func (m *Mobile) forget(st p.ClientState) error {
+	a, err := accounts()
+	if err != nil {
+		return err
+	}
+	removed, remaining := a.Remove(st)
+	if !removed {
+		return nil
+	}
+	m.lan.Forget(st)
+	m.workspace.Close()
+	m.directory.Clear()
 	m.mu.Lock()
 	if m.stopWatch != nil {
 		m.stopWatch()
@@ -316,14 +340,51 @@ func (m *Mobile) forget() error {
 	}
 	m.opened = ""
 	m.mu.Unlock()
+	if remaining {
+		raw, err := json.Marshal(a)
+		if err != nil {
+			return err
+		}
+		if err = mygo.Secrets.Set(accountKey, raw); err != nil {
+			return err
+		}
+		if !st.IsDirect() {
+			_ = mygo.Secrets.Delete(pushKey)
+			_ = mygo.Secrets.Delete(grantsKey)
+		}
+		return nil
+	}
 	_ = mygo.Secrets.Delete(grantsKey)
 	_ = mygo.Secrets.Delete(pushKey)
 	return mygo.Secrets.Delete(accountKey)
 }
 
+func (m *Mobile) OpenWorkspace(node, agent, chat string) error {
+	address, err := m.workspace.Open(&m.directory, hubassets.Assets(), node, agent, chat)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS == "android" {
+		if err = mygo.Native("leverMobile").Call(context.Background(), "workspace", map[string]string{"url": address}, nil); err != nil {
+			if link, parseErr := url.Parse(address); parseErr == nil {
+				m.workspace.CloseHost(link.Host)
+			}
+		}
+		return err
+	}
+	// Other shells can use their system browser for the isolated workbench.
+	return mygo.Shell.OpenExternal(address)
+}
+
 func main() {
 	m := &Mobile{}
 	if runtime.GOOS == "android" {
+		mygo.Native("leverMobile").On("workspaceClosed", func(raw []byte) {
+			var host string
+			if json.Unmarshal(raw, &host) == nil {
+				m.workspace.CloseHost(host)
+			}
+		})
 		m.lan.Discover = func(ctx context.Context, host string) (string, error) {
 			_ = mygo.Native("leverMobile").Call(ctx, "allowDiscovery", nil, nil)
 			return bonjour.Discover(ctx, host)

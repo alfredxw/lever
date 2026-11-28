@@ -1,24 +1,140 @@
 import SwiftUI
 import Textual
+import UIKit
 
-/// Production SwiftUI streaming Markdown renderer powered by `Textual` (`gonzalezreal/textual`):
-/// - Full GFM headings, lists, blockquotes, links, strikethrough, inline code, and LaTeX math
-/// - Built-in Prism syntax highlighting with language header & one-tap copy button
-/// - Two-pass measured `TableLayout` with uniform full-row header fill (zero jagged seam) & smart wrapping
-/// - Native cross-block text selection and smooth streaming updates
-struct MarkdownContentView: View {
+// MARK: - Off-Main-Thread Pre-Parsed Markdown Cache (Eliminates Scroll Frame Drops)
+
+private final class AttributedStringBox: NSObject {
+    let value: AttributedString
+    init(_ value: AttributedString) { self.value = value }
+}
+
+/// Thread-safe `NSCache`-backed wrapper around `Textual`'s `AttributedStringMarkdownParser`.
+/// Pre-warming on background threads makes scroll-time `StructuredText` layout an O(1) cache hit
+/// instead of synchronous main-thread Markdown + LaTeX math parsing during touch deceleration.
+final class CachedMarkdownParser: MarkupParser, @unchecked Sendable {
+    static let shared = CachedMarkdownParser()
+
+    private let cache: NSCache<NSString, AttributedStringBox> = {
+        let c = NSCache<NSString, AttributedStringBox>()
+        c.countLimit = 400
+        return c
+    }()
+
+    private init() {}
+
+    func attributedString(for input: String) throws -> AttributedString {
+        let key = input as NSString
+        if let hit = cache.object(forKey: key) {
+            return hit.value
+        }
+        let parsed = try AttributedStringMarkdownParser.markdown(syntaxExtensions: [.math]).attributedString(for: input)
+        cache.setObject(AttributedStringBox(parsed), forKey: key)
+        return parsed
+    }
+
+    func prewarm(_ inputs: [String]) {
+        let trimmedList = inputs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !trimmedList.isEmpty else { return }
+        Task(priority: .utility) { [weak self] in
+            for text in trimmedList {
+                guard let self else { return }
+                let key = text as NSString
+                if self.cache.object(forKey: key) != nil { continue }
+                // Yield between items so pre-warming never competes with 120Hz touch frames.
+                await Task.yield()
+                if let parsed = try? await AttributedStringMarkdownParser.markdown(syntaxExtensions: [.math]).attributedString(for: text) {
+                    self.cache.setObject(AttributedStringBox(parsed), forKey: key)
+                }
+            }
+        }
+    }
+}
+
+/// Production 120fps SwiftUI streaming Markdown renderer powered by `Textual` (`gonzalezreal/textual`):
+/// - Pre-parsed `AttributedString` caching (`CachedMarkdownParser`) so scrolling never parses Markdown on the main thread
+/// - Equatable isolation so unchanged replies skip SwiftUI diffing during streaming / background sync
+/// - Zero inline `UITextInteraction` overlay drag competition during vertical scroll; long-press provides
+///   one-tap Copy or a dedicated full-selection sheet (same 120fps pattern as WeChat / ChatGPT / Claude iOS)
+struct MarkdownContentView: View, Equatable {
     let text: String
     let foreground: Color
     var isUserBubble: Bool = false
 
+    @State private var showSelectSheet = false
+
+    static func == (lhs: MarkdownContentView, rhs: MarkdownContentView) -> Bool {
+        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble
+    }
+
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            StructuredText(markdown: trimmed, syntaxExtensions: [.math])
+            StructuredText(trimmed, parser: CachedMarkdownParser.shared)
                 .font(.system(size: 15))
                 .foregroundStyle(foreground)
                 .textual.structuredTextStyle(LeverStructuredTextStyle(isUserBubble: isUserBubble))
-                .textual.textSelection(.enabled)
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = trimmed
+                        Haptics.light()
+                    } label: {
+                        Label("复制全文", systemImage: "doc.on.doc")
+                    }
+                    if !isUserBubble {
+                        Button {
+                            Haptics.light()
+                            showSelectSheet = true
+                        } label: {
+                            Label("自由选择文本", systemImage: "text.cursor")
+                        }
+                    }
+                }
+                .sheet(isPresented: $showSelectSheet) {
+                    SelectableMarkdownSheet(markdown: trimmed)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                }
+        }
+    }
+}
+
+/// Dedicated sheet enabling full cross-block native iOS text selection without attaching heavy
+/// `UITextInteraction` gesture overlays to every cell inside the main scrolling timeline.
+private struct SelectableMarkdownSheet: View {
+    let markdown: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                StructuredText(markdown, parser: CachedMarkdownParser.shared)
+                    .font(.system(size: 15))
+                    .foregroundStyle(LeverTheme.inkPrimary)
+                    .textual.structuredTextStyle(LeverStructuredTextStyle(isUserBubble: false))
+                    .textual.textSelection(.enabled)
+                    .padding(16)
+            }
+            .background(LeverTheme.canvas)
+            .navigationTitle("选择文本")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(copied ? "已复制" : "复制全文") {
+                        UIPasteboard.general.string = markdown
+                        Haptics.light()
+                        copied = true
+                    }
+                    .foregroundStyle(copied ? LeverTheme.runningEmerald : LeverTheme.inkPrimary)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                        .foregroundStyle(LeverTheme.inkPrimary)
+                }
+            }
         }
     }
 }

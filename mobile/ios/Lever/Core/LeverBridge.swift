@@ -3,11 +3,12 @@ import LeverCore
 
 enum LeverCoreError: LocalizedError {
     case message(String)
+    case http(Int, String)
     case invalidResponse
 
     var errorDescription: String? {
         switch self {
-        case .message(let msg): return msg
+        case .http(_, let msg), .message(let msg): return msg
         case .invalidResponse: return "无效的内部响应格式"
         }
     }
@@ -22,11 +23,13 @@ private struct Envelope<T: Decodable>: Decodable {
     let ok: Bool
     let data: T?
     let error: String?
+    let status: Int?
 }
 
 private struct RawEnvelope: Decodable {
     let ok: Bool
     let error: String?
+    let status: Int?
 }
 
 /// Async Swift bridge around LeverCore.xcframework (Go transport, signing, LAN/Hub routing).
@@ -228,6 +231,7 @@ final class LeverBridge: @unchecked Sendable {
         guard let data = raw.data(using: .utf8) else { throw LeverCoreError.invalidResponse }
         let env = try JSONDecoder().decode(Envelope<T>.self, from: data)
         if !env.ok {
+            if let status = env.status { throw LeverCoreError.http(status, env.error ?? "操作失败") }
             throw LeverCoreError.message(env.error ?? "操作失败")
         }
         guard let value = env.data else {
@@ -243,6 +247,7 @@ final class LeverBridge: @unchecked Sendable {
         guard let data = raw.data(using: .utf8) else { throw LeverCoreError.invalidResponse }
         let env = try JSONDecoder().decode(RawEnvelope.self, from: data)
         if !env.ok {
+            if let status = env.status { throw LeverCoreError.http(status, env.error ?? "操作失败") }
             throw LeverCoreError.message(env.error ?? "操作失败")
         }
     }

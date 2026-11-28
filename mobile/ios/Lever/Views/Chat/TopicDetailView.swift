@@ -21,6 +21,7 @@ struct TopicDetailView: View {
     @State private var isSending = false
     @State private var inlineError: String?
     @State private var didInitialScroll = false
+    @State private var initialLoadFinished = false
 
     // Attachments, `@` Mentions & `/` Skills
     @State private var draftAttachments: [DraftAttachmentItem] = []
@@ -149,16 +150,8 @@ struct TopicDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if let topic {
                             if topic.runs.isEmpty {
-                                if isLoadingTopic {
-                                    VStack(spacing: 10) {
-                                        ProgressView()
-                                            .tint(LeverTheme.inkSecondary)
-                                        Text("正在加载话题消息…")
-                                            .font(.system(size: 13))
-                                            .foregroundStyle(LeverTheme.inkTertiary)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 56)
+                                if isLoadingTopic || !initialLoadFinished {
+                                    ConversationLoadingSkeleton(message: "正在从电脑同步话题消息…")
                                 } else if let loadErr = topicLoadError {
                                     VStack(spacing: 12) {
                                         Text("加载话题失败")
@@ -170,6 +163,7 @@ struct TopicDetailView: View {
                                             .multilineTextAlignment(.center)
                                         Button {
                                             Haptics.light()
+                                            initialLoadFinished = false
                                             Task {
                                                 await store.loadTopic(
                                                     deviceId: route.deviceId,
@@ -177,6 +171,7 @@ struct TopicDetailView: View {
                                                     isPrivate: route.isPrivate,
                                                     topicId: route.topicId
                                                 )
+                                                initialLoadFinished = true
                                             }
                                         } label: {
                                             Text("重试")
@@ -191,6 +186,20 @@ struct TopicDetailView: View {
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 56)
+                                } else {
+                                    VStack(spacing: 8) {
+                                        Image(systemName: "bubble.left.and.text.bubble.right")
+                                            .font(.system(size: 28, weight: .light))
+                                            .foregroundStyle(LeverTheme.inkTertiary)
+                                        Text("暂无话题消息")
+                                            .font(.system(size: 14.5, weight: .medium))
+                                            .foregroundStyle(LeverTheme.inkSecondary)
+                                        Text("在下方输入内容即可继续此话题")
+                                            .font(.system(size: 12.5))
+                                            .foregroundStyle(LeverTheme.inkTertiary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 64)
                                 }
                             } else {
                                 if remainingOlderCount > 0 || hasMoreRemote {
@@ -250,6 +259,15 @@ struct TopicDetailView: View {
                                         store: store,
                                         agentSeed: agentSeed,
                                         isBusy: isSending,
+                                        isSessionCleared: topic.isCleared,
+                                        lazySteps: store.runSteps(deviceId: route.deviceId, runId: run.id),
+                                        isLoadingSteps: store.isLoadingRunSteps(deviceId: route.deviceId, runId: run.id),
+                                        onLoadSteps: { runId in
+                                            let expected = run.stepCount ?? 0
+                                            Task {
+                                                await store.loadRunSteps(deviceId: route.deviceId, runId: runId, expectedCount: expected)
+                                            }
+                                        },
                                         onAnswer: { req, ans, allowRun in
                                             handleAnswer(request: req, answer: ans, allowRun: allowRun)
                                         },
@@ -257,23 +275,19 @@ struct TopicDetailView: View {
                                             handleStop(runId: runId)
                                         }
                                     )
+                                    .equatable()
                                     .id(run.id)
                                 }
                             }
                             Color.clear.frame(height: 6).id("topic-bottom")
                         } else {
-                            HStack {
-                                Spacer()
-                                ProgressView()
-                                    .tint(LeverTheme.inkTertiary)
-                                    .padding(.vertical, 48)
-                                Spacer()
-                            }
+                            ConversationLoadingSkeleton(message: "正在从电脑同步话题消息…")
                         }
                     }
                     .padding(.horizontal, 15)
                     .padding(.vertical, 12)
                 }
+                .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .background(LeverTheme.canvas)
                 .onChange(of: topic?.runs.last?.id) { _, _ in
@@ -327,6 +341,7 @@ struct TopicDetailView: View {
                 isPrivate: route.isPrivate,
                 topicId: route.topicId
             )
+            initialLoadFinished = true
             markTopicRead()
             await store.loadComposerMeta(
                 deviceId: route.deviceId,
@@ -437,10 +452,10 @@ struct TopicDetailView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(LeverTheme.inkPrimary)
                     .lineLimit(1)
-                Text("\(agentName) · 独立话题")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(LeverTheme.inkTertiary)
-                    .lineLimit(1)
+                NavSyncSubtitleView(
+                    isSyncing: isLoadingTopic || !initialLoadFinished,
+                    text: "\(agentName) · 独立话题"
+                )
             }
 
             Spacer(minLength: 4)

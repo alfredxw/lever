@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */; };
 		D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = EF3D370F9E7072622532FDC7 /* libresolv.tbd */; };
+		24FC8D054EF66297A0F6F1BA /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */; };
 		D283F090D7867C61E3BF9414 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 98B0BFB62A1777F5271D13FD /* Textual */; };
 		BCDEA934D2501353B4C4CE9F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */; };
 		68F22B0A38A8B50DCCF1EFD6 /* LeverApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BDA077271B0671437109A1 /* LeverApp.swift */; };
 		BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF458FF520B178EFFCC596A9 /* KeychainStore.swift */; };
 		3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */; };
 		266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B671069DAB71F1479E38E4C /* LocalCache.swift */; };
+		7750BF612CED2D127DFFCAFD /* SQLiteCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */; };
 		FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700092EB08D52553B063B7AD /* LeverModels.swift */; };
 		189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */; };
 		5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */; };
@@ -35,6 +37,7 @@
 		E2C2A2171291AF99E44DA06F /* Lever.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lever.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LeverCore.xcframework; path = Frameworks/LeverCore.xcframework; sourceTree = "<group>"; };
 		EF3D370F9E7072622532FDC7 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
+		2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		CFDBAC21689581B04CB7ABB5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Lever/Resources/Assets.xcassets; sourceTree = "<group>"; };
 		3FB6BD64A997C517BC11CC6E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Lever/Resources/Info.plist; sourceTree = "<group>"; };
 		6568386E81175B9AF27FE35A /* Lever.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Lever/Resources/Lever.entitlements; sourceTree = "<group>"; };
@@ -42,6 +45,7 @@
 		DF458FF520B178EFFCC596A9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainStore.swift; path = Lever/Core/KeychainStore.swift; sourceTree = "<group>"; };
 		2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverBridge.swift; path = Lever/Core/LeverBridge.swift; sourceTree = "<group>"; };
 		4B671069DAB71F1479E38E4C /* LocalCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalCache.swift; path = Lever/Core/LocalCache.swift; sourceTree = "<group>"; };
+		DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SQLiteCache.swift; path = Lever/Core/SQLiteCache.swift; sourceTree = "<group>"; };
 		700092EB08D52553B063B7AD /* LeverModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverModels.swift; path = Lever/Models/LeverModels.swift; sourceTree = "<group>"; };
 		DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverStore.swift; path = Lever/Store/LeverStore.swift; sourceTree = "<group>"; };
 		AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeverTheme.swift; path = Lever/Theme/LeverTheme.swift; sourceTree = "<group>"; };
@@ -65,6 +69,7 @@
 			files = (
 				892BC9F485512D02670CAB13 /* LeverCore.xcframework in Frameworks */,
 				D2B408A62F257C759F04D1C5 /* libresolv.tbd in Frameworks */,
+				24FC8D054EF66297A0F6F1BA /* libsqlite3.tbd in Frameworks */,
 				D283F090D7867C61E3BF9414 /* Textual in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -91,6 +96,7 @@
 				DF458FF520B178EFFCC596A9 /* KeychainStore.swift */,
 				2CCF74EAAAC914B9E6DDC7A6 /* LeverBridge.swift */,
 				4B671069DAB71F1479E38E4C /* LocalCache.swift */,
+				DFF02F6A2811D86D386FA07E /* SQLiteCache.swift */,
 				700092EB08D52553B063B7AD /* LeverModels.swift */,
 				DEC2D4DA7386A2F9724FCD42 /* LeverStore.swift */,
 				AFDB5BF3E01D09B5032BD822 /* LeverTheme.swift */,
@@ -114,6 +120,7 @@
 			children = (
 				FC457AF7157B83CE8E80B61B /* LeverCore.xcframework */,
 				EF3D370F9E7072622532FDC7 /* libresolv.tbd */,
+				2BE08EABA740F2AFB2B86607 /* libsqlite3.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -201,6 +208,7 @@
 				BC74B2F561EA4038AF403413 /* KeychainStore.swift in Sources */,
 				3572D053902C47A5F2114AFA /* LeverBridge.swift in Sources */,
 				266CB6DED5E6FCF2EAF416FD /* LocalCache.swift in Sources */,
+				7750BF612CED2D127DFFCAFD /* SQLiteCache.swift in Sources */,
 				FA2208ED8D13BFEF09447BB4 /* LeverModels.swift in Sources */,
 				189E166EF50633E4CDE8B112 /* LeverStore.swift in Sources */,
 				5A74D4D030646D5C3AFF156E /* LeverTheme.swift in Sources */,

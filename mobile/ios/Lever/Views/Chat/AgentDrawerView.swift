@@ -192,7 +192,7 @@ struct AgentDrawerView: View {
                 }
             ))
             .labelsHidden()
-            .tint(LeverTheme.inkPrimary)
+            .tint(LeverTheme.switchTint)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

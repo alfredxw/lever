@@ -51,6 +51,10 @@ final class LeverStore {
     var hasMoreMainByKey: [String: Bool] = [:]
     var hasMoreTopicByKey: [String: Bool] = [:]
 
+    // Two-stage lazy tool steps hydration (keyed by "\(deviceId):\(runId)")
+    var runStepsByKey: [String: [RunItem]] = [:]
+    var loadingRunStepsKeys: Set<String> = []
+
     // Pre-computed O(1) feed projections & reactive revision tokens
     private(set) var cachedFeedRows: [AgentFeedRow] = []
     private(set) var cachedTotalUnread: Int = 0
@@ -91,15 +95,19 @@ final class LeverStore {
         didSet { UserDefaults.standard.set(themePreference.rawValue, forKey: "lever.theme") }
     }
 
-    @ObservationIgnored private let pageSize = 25
+    @ObservationIgnored private let pageSize = 15
     @ObservationIgnored private let bridge = LeverBridge.shared
+    @ObservationIgnored private let db = SQLiteCache.shared
     @ObservationIgnored private let cache = LocalCache.shared
     @ObservationIgnored private let avatarMemoryCache = NSCache<NSString, UIImage>()
     @ObservationIgnored private var inFlightAvatars = Set<String>()
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var bannerTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var inFlightRefresh = false
+    @ObservationIgnored private var loadedTailKeys = Set<String>()
+    @ObservationIgnored private var prefetchedTopicKeys = Set<String>()
 
     // Internal memoization caches invalidated only on actual data mutation
     @ObservationIgnored private var mergedIndexCache: [String: [ArchiveRecord]] = [:]
@@ -119,10 +127,10 @@ final class LeverStore {
             homeTopicsExpanded = UserDefaults.standard.bool(forKey: "lever.homeTopicsExpanded")
         }
         pinnedAgentKeys = UserDefaults.standard.stringArray(forKey: "lever.pinnedAgents") ?? []
-        localReadCursors = cache.load("read_cursors", as: [String: Int64].self) ?? [:]
-        localClearedCursors = cache.load("cleared_cursors", as: [String: Int64].self) ?? [:]
-        starredModelsByDevice = cache.load("starred_models", as: [String: [String: [String]]].self) ?? [:]
-        providersByDevice = cache.load("providers_by_device", as: [String: [ProviderCatalog]].self) ?? [:]
+        localReadCursors = loadKVWithLegacy("read_cursors", as: [String: Int64].self) ?? [:]
+        localClearedCursors = loadKVWithLegacy("cleared_cursors", as: [String: Int64].self) ?? [:]
+        starredModelsByDevice = loadKVWithLegacy("starred_models", as: [String: [String: [String]]].self) ?? [:]
+        providersByDevice = loadKVWithLegacy("providers_by_device", as: [String: [ProviderCatalog]].self) ?? [:]
     }
 
     var isPaired: Bool { coreStatus.paired }
@@ -261,7 +269,7 @@ final class LeverStore {
             pendingPairLink = raw
             Task { await pair(link: raw) }
         } else {
-            showBanner("已配对设备，如需切换请先在设置中解除配对")
+            pendingPairLink = raw
         }
     }
 
@@ -339,22 +347,50 @@ final class LeverStore {
         }
     }
 
-    func unpair() async {
+    func unpair(peer: String? = nil) async {
         errorMessage = nil
         pollTask?.cancel()
         pollTask = nil
         await bridge.watch(false)
         do {
-            try await bridge.unpair()
+            if let peer {
+                try await bridge.requestVoid("DELETE", path: "/native/direct-peers/\(peer)")
+            } else {
+                try await bridge.unpair()
+            }
         } catch {
             errorMessage = error.localizedDescription
+            await bridge.watch(true)
+            startPollingLoop()
             return
         }
-        resetWorkspaceState()
+        await reloadAfterUnpair(removed: peer)
     }
 
-    private func resetWorkspaceState() {
-        cache.clearAll()
+    private func reloadAfterUnpair(removed: String? = nil) async {
+        guard let remaining = try? await bridge.status(), remaining.paired else {
+            resetWorkspaceState()
+            return
+        }
+        var retained = Set(remaining.directPeerIds ?? [])
+        if let removed, remaining.direct != true {
+            retained.formUnion(devices.map(\.id))
+            retained.remove(removed)
+        }
+        db.retainDeviceScopes(retained)
+        cache.retainDeviceFiles(retained)
+        resetWorkspaceState(clearDisk: false)
+        coreStatus = remaining
+        await bridge.watch(true)
+        await refreshAll(silent: false)
+        startPollingLoop()
+    }
+
+    private func resetWorkspaceState(clearDisk: Bool = true) {
+        if clearDisk {
+            db.clearAll()
+            cache.clearAll()
+        }
         avatarMemoryCache.removeAllObjects()
         coreStatus = CoreStatus(
             paired: false, direct: nil, hostName: nil, hostPlatform: nil,
@@ -375,6 +411,8 @@ final class LeverStore {
         chatLoadErrorByKey = [:]
         hasMoreMainByKey = [:]
         hasMoreTopicByKey = [:]
+        runStepsByKey = [:]
+        loadingRunStepsKeys = []
         hubReadCursors = [:]
         localReadCursors = [:]
         hubClearedCursors = [:]
@@ -386,6 +424,8 @@ final class LeverStore {
         activeTopicId = nil
         pendingNavigationRoute = nil
         chatVersionByKey = [:]
+        loadedTailKeys.removeAll()
+        prefetchedTopicKeys.removeAll()
         invalidateAllProjections()
     }
 
@@ -404,7 +444,7 @@ final class LeverStore {
             let me: AccountInfo = try await bridge.request("GET", path: "/api/me")
             if account != me {
                 account = me
-                cache.save(me, as: "account")
+                db.saveKV(me, forKey: "account")
             }
 
             guard let sPath = spacePath else { return }
@@ -414,7 +454,7 @@ final class LeverStore {
             let fetchedDevices: [DeviceInfo] = try await bridge.request("GET", path: "\(sPath)/devices")
             if devices != fetchedDevices {
                 devices = fetchedDevices
-                cache.save(fetchedDevices, as: "devices")
+                db.saveKV(fetchedDevices, forKey: "devices")
                 projectionsDirty = true
             }
 
@@ -422,13 +462,13 @@ final class LeverStore {
                 if let cursors: [String: [String: Int64]] = try? await bridge.request("GET", path: "\(sPath)/read"),
                    hubReadCursors != cursors {
                     hubReadCursors = cursors
-                    cache.save(cursors, as: "hub_read_cursors")
+                    db.saveKV(cursors, forKey: "hub_read_cursors")
                     projectionsDirty = true
                 }
                 if let cleared: [String: [String: Int64]] = try? await bridge.request("GET", path: "\(sPath)/cleared"),
                    hubClearedCursors != cleared {
                     hubClearedCursors = cleared
-                    cache.save(cleared, as: "hub_cleared_cursors")
+                    db.saveKV(cleared, forKey: "hub_cleared_cursors")
                     projectionsDirty = true
                 }
                 if let fetchedTasks: [SharedTask] = try? await bridge.request("GET", path: "\(sPath)/tasks"),
@@ -460,10 +500,16 @@ final class LeverStore {
                 } else {
                     await refreshChatByKey(key, spacePath: sPath, showLoading: false)
                 }
+            } else if projectionsDirty || prefetchedTopicKeys.isEmpty {
+                scheduleHotTopicPrefetch(spacePath: sPath)
             }
 
-            lastSyncAt = Date()
-            errorMessage = nil
+            if !silent || projectionsDirty || lastSyncAt == nil {
+                lastSyncAt = Date()
+            }
+            if errorMessage != nil {
+                errorMessage = nil
+            }
         } catch {
             if !silent {
                 errorMessage = error.localizedDescription
@@ -471,7 +517,95 @@ final class LeverStore {
         }
     }
 
+    func hasNativeOwner(_ deviceId: String) -> Bool {
+        devices.first { $0.id == deviceId }?.node?.supportsChat == true
+    }
+
+    private func ownerHistory(device: String, space: String, chat: String, topic: String? = nil, before: Int64? = nil, after: Int64 = 0, legacy: String) async throws -> [ArchiveRecord] {
+        guard hasNativeOwner(device) else { return try await bridge.request("GET", path: legacy) }
+        let resource = topic.map { "sessions/\($0)/runs" } ?? "chats/\(chat)"
+        var path = "\(space)/nodes/\(device)/\(resource)?limit=\(pageSize)&before=\(before ?? 0)&steps=lazy"
+        if after > 0 {
+            path += "&after=\(after)"
+        }
+        do {
+            let page: PeerHistory = try await bridge.request("GET", path: path)
+            return page.records
+        } catch {
+            if case LeverCoreError.http(let code, _) = error, [401,403,404].contains(code) {
+                forgetHistory(device: device, chat: chat)
+            }
+            throw error
+        }
+    }
+
+    private func submit(_ intent: CommandIntent, space: String) async throws -> InboxItem {
+        guard hasNativeOwner(intent.deviceId) else { return try await bridge.request("POST", path: "\(space)/commands", body: intent) }
+        var path: String
+        switch intent.kind {
+        case "send": path = "messages"
+        case "answer": path = "requests/\(intent.requestId ?? "")/answer"
+        case "allow_run": path = "runs/\(intent.runId ?? "")/approvals"
+        case "stop": path = "runs/\(intent.runId ?? "")/stop"
+        case "resume_queue": path = "sessions/\(intent.sessionId ?? "")/queue/resume"
+        default: throw LeverCoreError.message("此设备不支持该操作")
+        }
+        let base = "\(space)/nodes/\(intent.deviceId)"
+        do {
+            let receipt: CommandReceipt = try await bridge.request("POST", path: "\(base)/\(path)", body: PeerCommandBody(intent: intent))
+            return InboxItem(intent: intent, receipt: receipt)
+        } catch {
+            if let receipt: CommandReceipt = try? await bridge.request("GET", path: "\(base)/commands/\(intent.id)") {
+                return InboxItem(intent: intent, receipt: receipt)
+            }
+            throw error
+        }
+    }
+
+    private func forgetHistory(device: String, chat: String) {
+        for isPrivate in [false, true] {
+            let key = chatKey(deviceId: device, chatId: chat, isPrivate: isPrivate)
+            chatRecordsByKey.removeValue(forKey: key)
+            chatCursorsByKey.removeValue(forKey: key)
+            loadedTailKeys.remove(key)
+            db.deleteScope("chat:\(key)")
+            db.deleteKV("chat_cursor:\(key)")
+            cache.remove("chat_\(key)")
+            invalidateChatCache(forKey: key)
+        }
+    }
+
     private func syncDeviceIndex(deviceId: String, spacePath: String) async -> Bool {
+        if hasNativeOwner(deviceId) {
+            do {
+                let index: PeerIndex = try await bridge.request("GET", path: "\(spacePath)/nodes/\(deviceId)/overview")
+                let rows = sortRecords(index.records)
+                let changed = indexByDevice[deviceId] != rows || !(privateIndexByDevice[deviceId] ?? []).isEmpty
+                if changed {
+                    let visible = Set(rows.filter { $0.kind == "chat" }.map(\.id))
+                    for old in indexByDevice[deviceId] ?? [] where old.kind == "chat" && !visible.contains(old.id) {
+                        forgetHistory(device: deviceId, chat: old.id)
+                    }
+                    indexByDevice[deviceId] = rows
+                    privateIndexByDevice[deviceId] = []
+                    db.replaceScopeRecords(scope: "index:\(deviceId)", records: rows)
+                    db.replaceScopeRecords(scope: "priv:\(deviceId)", records: [])
+                    db.deleteKV("index_cursor:\(deviceId)")
+                }
+                return changed
+            } catch {
+                if case LeverCoreError.http(let code, _) = error, [401,403,404].contains(code) {
+                    for old in indexByDevice[deviceId] ?? [] where old.kind == "chat" { forgetHistory(device: deviceId, chat: old.id) }
+                    let changed = !(indexByDevice[deviceId] ?? []).isEmpty || !(privateIndexByDevice[deviceId] ?? []).isEmpty
+                    indexByDevice[deviceId] = []; privateIndexByDevice[deviceId] = []
+                    db.deleteScope("index:\(deviceId)"); db.deleteScope("priv:\(deviceId)")
+                    db.deleteKV("index_cursor:\(deviceId)")
+                    cache.remove("index_\(deviceId)"); cache.remove("priv_\(deviceId)")
+                    return changed
+                }
+                return false
+            }
+        }
         var didChange = false
         let prev = indexCursors[deviceId]
         var path = "\(spacePath)/archive/\(deviceId)?sync=1"
@@ -483,12 +617,24 @@ final class LeverStore {
                 let merged = applyArchivePage(existing: indexByDevice[deviceId] ?? [], page: page)
                 if indexByDevice[deviceId] != merged {
                     indexByDevice[deviceId] = merged
-                    cache.save(CachedArchiveState(cursor: page.cursor, records: merged), as: "index_\(deviceId)")
+                    if page.full {
+                        db.replaceScopeRecords(scope: "index:\(deviceId)", records: merged)
+                    } else {
+                        let upserts = page.changes.filter { !$0.deleted }.map(\.record)
+                        let deletes = page.changes.filter(\.deleted).map { (kind: $0.record.kind, id: $0.record.id) }
+                        if !upserts.isEmpty {
+                            db.upsertRecords(scope: "index:\(deviceId)", records: upserts)
+                        }
+                        if !deletes.isEmpty {
+                            db.deleteRecords(scope: "index:\(deviceId)", keys: deletes)
+                        }
+                    }
                     didChange = true
                 }
             }
             if indexCursors[deviceId] != page.cursor {
                 indexCursors[deviceId] = page.cursor
+                db.saveKV(page.cursor, forKey: "index_cursor:\(deviceId)")
             }
         }
 
@@ -496,7 +642,7 @@ final class LeverStore {
             let sortedPriv = sortRecords(priv)
             if privateIndexByDevice[deviceId] != sortedPriv {
                 privateIndexByDevice[deviceId] = sortedPriv
-                cache.save(sortedPriv, as: "priv_\(deviceId)")
+                db.replaceScopeRecords(scope: "priv:\(deviceId)", records: sortedPriv)
                 didChange = true
             }
         }
@@ -556,22 +702,57 @@ final class LeverStore {
     }
 
     func loadChat(deviceId: String, chatId: String, isPrivate: Bool) async {
-        guard let sPath = spacePath else { return }
         let key = chatKey(deviceId: deviceId, chatId: chatId, isPrivate: isPrivate)
         activeChatKey = key
         chatLoadErrorByKey.removeValue(forKey: key)
 
-        // Hydrate cached records off the main thread so navigation transition never hitches
-        if chatRecordsByKey[key] == nil,
-           let cached = await cache.loadAsync("chat_\(key)", as: CachedArchiveState.self) {
-            if chatRecordsByKey[key] == nil {
-                chatRecordsByKey[key] = cached.records
-                if let c = cached.cursor { chatCursorsByKey[key] = c }
+        // Indexed SQLite WAL tail hydration off the main thread (falls back once to legacy JSON)
+        if chatRecordsByKey[key] == nil {
+            let scope = "chat:\(key)"
+            var cachedRecords = await db.loadChatTailRecordsAsync(scope: scope, topicId: nil, runLimit: pageSize * 2)
+            if cachedRecords.isEmpty,
+               let legacy = await cache.loadAsync("chat_\(key)", as: CachedArchiveState.self) {
+                cachedRecords = legacy.records
+                if let c = legacy.cursor {
+                    chatCursorsByKey[key] = c
+                    db.saveKV(c, forKey: "chat_cursor:\(key)")
+                }
+                if !cachedRecords.isEmpty {
+                    db.upsertRecords(scope: scope, records: cachedRecords)
+                }
+            }
+            if chatRecordsByKey[key] == nil && !cachedRecords.isEmpty {
+                chatRecordsByKey[key] = sortRecords(cachedRecords)
                 invalidateChatCache(forKey: key)
+                prewarmMarkdown(from: cachedRecords)
             }
         }
 
+        guard let sPath = spacePath else { return }
         await refreshChatByKey(key, spacePath: sPath, showLoading: true)
+    }
+
+    private func deltaAfterSequence(for runs: [ArchiveRecord]) -> Int64 {
+        guard !runs.isEmpty else { return 0 }
+        let activeSeqs = runs
+            .filter { isActiveRunStatus($0.status) || $0.status == "queued" }
+            .compactMap(\.sequence)
+        if let oldestActive = activeSeqs.min() {
+            return max(0, oldestActive - 1)
+        }
+        return runs.compactMap(\.sequence).max() ?? 0
+    }
+
+    private func prewarmMarkdown(from records: [ArchiveRecord]) {
+        var texts: [String] = []
+        texts.reserveCapacity(records.count * 2)
+        for r in records where r.kind == "run" {
+            if let t = r.text, !t.isEmpty { texts.append(t) }
+            for item in r.items ?? [] where item.kind == "text" {
+                if let t = item.text, !t.isEmpty { texts.append(t) }
+            }
+        }
+        CachedMarkdownParser.shared.prewarm(texts)
     }
 
     func refreshChatByKey(_ key: String, spacePath overridePath: String? = nil, showLoading: Bool = false) async {
@@ -587,21 +768,39 @@ final class LeverStore {
             }
         }
 
+        var afterSeq: Int64 = 0
+        if loadedTailKeys.contains(key), let existing = chatRecordsByKey[key] {
+            let mainSessId = existing.first(where: { $0.kind == "session" && $0.type == "main" })?.id
+            let mainRuns = existing.filter { $0.kind == "run" && $0.sessionId == mainSessId && $0.superseded != true }
+            afterSeq = deltaAfterSequence(for: mainRuns)
+        }
+
         let endpoint = parsed.isPrivate ? "private-archive" : "archive"
-        let path = "\(sPath)/\(endpoint)/\(parsed.deviceId)?chat=\(urlEncode(parsed.chatId))&limit=\(pageSize)"
+        var path = "\(sPath)/\(endpoint)/\(parsed.deviceId)?chat=\(urlEncode(parsed.chatId))&limit=\(pageSize)&steps=lazy"
+        if afterSeq > 0 {
+            path += "&after=\(afterSeq)"
+        }
 
         do {
-            let incoming: [ArchiveRecord] = try await bridge.request("GET", path: path)
+            let incoming = try await ownerHistory(device: parsed.deviceId, space: sPath, chat: parsed.chatId, after: afterSeq, legacy: path)
+            prewarmMarkdown(from: incoming)
             let merged = mergeRecords(existing: chatRecordsByKey[key] ?? [], incoming: incoming)
             if chatRecordsByKey[key] != merged {
                 chatRecordsByKey[key] = merged
                 invalidateChatCache(forKey: key)
-                cache.save(CachedArchiveState(cursor: chatCursorsByKey[key], records: merged), as: "chat_\(key)")
+                db.upsertRecords(scope: "chat:\(key)", records: incoming)
             }
-            chatLoadErrorByKey.removeValue(forKey: key)
-            chatRouteStreamByKey[key] = parsed.isPrivate ? "lan" : (indexCursors[parsed.deviceId]?.stream ?? "hub")
+            if chatLoadErrorByKey[key] != nil {
+                chatLoadErrorByKey.removeValue(forKey: key)
+            }
+            let nextStream = parsed.isPrivate ? "lan" : (indexCursors[parsed.deviceId]?.stream ?? "hub")
+            if chatRouteStreamByKey[key] != nextStream {
+                chatRouteStreamByKey[key] = nextStream
+            }
+            let wasInitialTail = !loadedTailKeys.contains(key)
+            loadedTailKeys.insert(key)
 
-            if hasMoreMainByKey[key] == nil {
+            if wasInitialTail || hasMoreMainByKey[key] == nil {
                 let mainSessId = incoming.first(where: { $0.kind == "session" && $0.type == "main" })?.id
                     ?? merged.first(where: { $0.kind == "session" && $0.type == "main" })?.id
                 if let mainSessId {
@@ -634,9 +833,10 @@ final class LeverStore {
         defer { loadingOlderKeys.remove(key) }
 
         let endpoint = isPrivate ? "private-archive" : "archive"
-        let path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&before=\(oldestSeq)&limit=\(pageSize)"
+        let path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&before=\(oldestSeq)&limit=\(pageSize)&steps=lazy"
         do {
-            let incoming: [ArchiveRecord] = try await bridge.request("GET", path: path)
+            let incoming = try await ownerHistory(device: deviceId, space: sPath, chat: chatId, before: oldestSeq, legacy: path)
+            prewarmMarkdown(from: incoming)
             let mainId = snapshot.mainSession?.id
             let olderMainRuns = incoming.filter {
                 $0.kind == "run" && $0.sessionId == mainId && $0.superseded != true && ($0.sequence ?? Int64.max) < oldestSeq
@@ -645,7 +845,7 @@ final class LeverStore {
             if chatRecordsByKey[key] != merged {
                 chatRecordsByKey[key] = merged
                 invalidateChatCache(forKey: key)
-                cache.save(CachedArchiveState(cursor: chatCursorsByKey[key], records: merged), as: "chat_\(key)")
+                db.upsertRecords(scope: "chat:\(key)", records: incoming)
             }
             let minReturned = olderMainRuns.compactMap(\.sequence).min() ?? 0
             if olderMainRuns.count < pageSize || minReturned <= 1 {
@@ -657,22 +857,38 @@ final class LeverStore {
     }
 
     func loadTopic(deviceId: String, chatId: String, isPrivate: Bool, topicId: String) async {
-        guard let sPath = spacePath else { return }
         let key = chatKey(deviceId: deviceId, chatId: chatId, isPrivate: isPrivate)
         let tKey = topicPageKey(chatKey: key, topicId: topicId)
         activeChatKey = key
         activeTopicId = topicId
         chatLoadErrorByKey.removeValue(forKey: tKey)
 
-        if chatRecordsByKey[key] == nil,
-           let cached = await cache.loadAsync("chat_\(key)", as: CachedArchiveState.self) {
-            if chatRecordsByKey[key] == nil {
-                chatRecordsByKey[key] = cached.records
-                if let c = cached.cursor { chatCursorsByKey[key] = c }
-                invalidateChatCache(forKey: key)
+        // Hydrate focused topic tail from SQLite WAL even if main chat already hydrated a preview slice
+        if !loadedTailKeys.contains(tKey) {
+            let scope = "chat:\(key)"
+            var cachedRecords = await db.loadChatTailRecordsAsync(scope: scope, topicId: topicId, runLimit: pageSize * 2)
+            if cachedRecords.isEmpty && chatRecordsByKey[key] == nil,
+               let legacy = await cache.loadAsync("chat_\(key)", as: CachedArchiveState.self) {
+                cachedRecords = legacy.records
+                if let c = legacy.cursor {
+                    chatCursorsByKey[key] = c
+                    db.saveKV(c, forKey: "chat_cursor:\(key)")
+                }
+                if !cachedRecords.isEmpty {
+                    db.upsertRecords(scope: scope, records: cachedRecords)
+                }
+            }
+            if !cachedRecords.isEmpty {
+                let merged = mergeRecords(existing: chatRecordsByKey[key] ?? [], incoming: cachedRecords)
+                if chatRecordsByKey[key] != merged {
+                    chatRecordsByKey[key] = merged
+                    invalidateChatCache(forKey: key)
+                    prewarmMarkdown(from: cachedRecords)
+                }
             }
         }
 
+        guard let sPath = spacePath else { return }
         await refreshTopic(
             deviceId: deviceId,
             chatId: chatId,
@@ -704,20 +920,34 @@ final class LeverStore {
             }
         }
 
+        var afterSeq: Int64 = 0
+        if loadedTailKeys.contains(tKey), let existing = chatRecordsByKey[key] {
+            let topicRuns = existing.filter { $0.kind == "run" && $0.sessionId == topicId && $0.superseded != true }
+            afterSeq = deltaAfterSequence(for: topicRuns)
+        }
+
         let endpoint = isPrivate ? "private-archive" : "archive"
-        let path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&session=\(urlEncode(topicId))&limit=\(pageSize)"
+        var path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&session=\(urlEncode(topicId))&limit=\(pageSize)&steps=lazy"
+        if afterSeq > 0 {
+            path += "&after=\(afterSeq)"
+        }
 
         do {
-            let incoming: [ArchiveRecord] = try await bridge.request("GET", path: path)
+            let incoming = try await ownerHistory(device: deviceId, space: sPath, chat: chatId, topic: topicId, after: afterSeq, legacy: path)
+            prewarmMarkdown(from: incoming)
             let merged = mergeRecords(existing: chatRecordsByKey[key] ?? [], incoming: incoming)
             if chatRecordsByKey[key] != merged {
                 chatRecordsByKey[key] = merged
                 invalidateChatCache(forKey: key)
-                cache.save(CachedArchiveState(cursor: chatCursorsByKey[key], records: merged), as: "chat_\(key)")
+                db.upsertRecords(scope: "chat:\(key)", records: incoming)
             }
-            chatLoadErrorByKey.removeValue(forKey: tKey)
+            if chatLoadErrorByKey[tKey] != nil {
+                chatLoadErrorByKey.removeValue(forKey: tKey)
+            }
+            let wasInitialTail = !loadedTailKeys.contains(tKey)
+            loadedTailKeys.insert(tKey)
 
-            if hasMoreTopicByKey[tKey] == nil {
+            if wasInitialTail || hasMoreTopicByKey[tKey] == nil {
                 let topicRuns = incoming.filter { $0.kind == "run" && $0.sessionId == topicId && $0.superseded != true }
                 let minSeq = topicRuns.compactMap(\.sequence).min() ?? 0
                 hasMoreTopicByKey[tKey] = topicRuns.count >= pageSize && minSeq > 1
@@ -725,6 +955,94 @@ final class LeverStore {
         } catch {
             if showLoading {
                 chatLoadErrorByKey[tKey] = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Two-Stage Lazy Tool Steps Hydration
+
+    func runStepsKey(deviceId: String, runId: String) -> String {
+        "\(deviceId):\(runId)"
+    }
+
+    func runSteps(deviceId: String, runId: String) -> [RunItem]? {
+        runStepsByKey[runStepsKey(deviceId: deviceId, runId: runId)]
+    }
+
+    func isLoadingRunSteps(deviceId: String, runId: String) -> Bool {
+        loadingRunStepsKeys.contains(runStepsKey(deviceId: deviceId, runId: runId))
+    }
+
+    /// Lazily fetches intermediate tool/reasoning steps for a single run when the user taps
+    /// `> N 个执行步骤`, caching the result in memory and SQLite WAL for 0ms re-expansion.
+    func loadRunSteps(deviceId: String, runId: String, expectedCount: Int = 0) async {
+        let key = runStepsKey(deviceId: deviceId, runId: runId)
+        let target = max(1, expectedCount)
+        if let existing = runStepsByKey[key], existing.count >= target {
+            return
+        }
+        if let cached = await db.loadKVAsync("run_steps:\(key)", as: [RunItem].self), !cached.isEmpty {
+            runStepsByKey[key] = cached
+            if cached.count >= target {
+                return
+            }
+        }
+        guard !loadingRunStepsKeys.contains(key), let sPath = spacePath else { return }
+        loadingRunStepsKeys.insert(key)
+        defer { loadingRunStepsKeys.remove(key) }
+
+        var fetched: [RunItem]?
+        if hasNativeOwner(deviceId) {
+            if let envelope: PeerHistory.RunEnvelope = try? await bridge.request(
+                "GET",
+                path: "\(sPath)/nodes/\(deviceId)/runs/\(urlEncode(runId))"
+            ) {
+                fetched = (envelope.run.items ?? []).filter { $0.kind != "text" && $0.kind != "user" }
+            }
+        }
+        if fetched == nil {
+            fetched = try? await bridge.request(
+                "GET",
+                path: "\(sPath)/runs/\(deviceId)/\(urlEncode(runId))/steps"
+            )
+        }
+        if let steps = fetched {
+            runStepsByKey[key] = steps
+            if !steps.isEmpty {
+                db.saveKV(steps, forKey: "run_steps:\(key)")
+            }
+        }
+    }
+
+    /// Quietly prefetches the top 3 unread/most-recent topics' latest tail page while on Home Feed
+    /// so tapping into hot topics opens instantaneously (0ms wait) with pre-parsed Markdown.
+    private func scheduleHotTopicPrefetch(spacePath: String) {
+        var candidates: [(deviceId: String, chatId: String, isPrivate: Bool, topicId: String, tKey: String)] = []
+        for row in cachedFeedRows {
+            for cue in row.activeTopics {
+                let cKey = chatKey(deviceId: row.device.id, chatId: cue.chatId, isPrivate: row.isPrivate)
+                let tKey = topicPageKey(chatKey: cKey, topicId: cue.id)
+                guard !prefetchedTopicKeys.contains(tKey), !loadedTailKeys.contains(tKey) else { continue }
+                candidates.append((row.device.id, cue.chatId, row.isPrivate, cue.id, tKey))
+                if candidates.count >= 3 { break }
+            }
+            if candidates.count >= 3 { break }
+        }
+        guard !candidates.isEmpty else { return }
+        for item in candidates {
+            prefetchedTopicKeys.insert(item.tKey)
+        }
+        Task(priority: .utility) { [weak self] in
+            for item in candidates {
+                guard let self, self.isPaired, self.activeChatKey == nil else { break }
+                await self.refreshTopic(
+                    deviceId: item.deviceId,
+                    chatId: item.chatId,
+                    isPrivate: item.isPrivate,
+                    topicId: item.topicId,
+                    spacePath: spacePath,
+                    showLoading: false
+                )
             }
         }
     }
@@ -747,9 +1065,10 @@ final class LeverStore {
         defer { loadingOlderKeys.remove(tKey) }
 
         let endpoint = isPrivate ? "private-archive" : "archive"
-        let path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&session=\(urlEncode(topicId))&before=\(oldestSeq)&limit=\(pageSize)"
+        let path = "\(sPath)/\(endpoint)/\(deviceId)?chat=\(urlEncode(chatId))&session=\(urlEncode(topicId))&before=\(oldestSeq)&limit=\(pageSize)&steps=lazy"
         do {
-            let incoming: [ArchiveRecord] = try await bridge.request("GET", path: path)
+            let incoming = try await ownerHistory(device: deviceId, space: sPath, chat: chatId, topic: topicId, before: oldestSeq, legacy: path)
+            prewarmMarkdown(from: incoming)
             let olderTopicRuns = incoming.filter {
                 $0.kind == "run" && $0.sessionId == topicId && $0.superseded != true && ($0.sequence ?? Int64.max) < oldestSeq
             }
@@ -757,7 +1076,7 @@ final class LeverStore {
             if chatRecordsByKey[key] != merged {
                 chatRecordsByKey[key] = merged
                 invalidateChatCache(forKey: key)
-                cache.save(CachedArchiveState(cursor: chatCursorsByKey[key], records: merged), as: "chat_\(key)")
+                db.upsertRecords(scope: "chat:\(key)", records: incoming)
             }
             let minReturned = olderTopicRuns.compactMap(\.sequence).min() ?? 0
             if olderTopicRuns.count < pageSize || minReturned <= 1 {
@@ -810,8 +1129,14 @@ final class LeverStore {
         if let hit = avatarMemoryCache.object(forKey: imageId as NSString) {
             return hit
         }
+        if let data = db.loadRawKV("avatar:\(imageId)"),
+           let img = UIImage(data: data) {
+            avatarMemoryCache.setObject(img, forKey: imageId as NSString)
+            return img
+        }
         if let data = cache.load("avatar_\(imageId)", as: Data.self),
            let img = UIImage(data: data) {
+            db.saveRawKV(data, forKey: "avatar:\(imageId)")
             avatarMemoryCache.setObject(img, forKey: imageId as NSString)
             return img
         }
@@ -829,7 +1154,7 @@ final class LeverStore {
             return nil
         }
         avatarMemoryCache.setObject(img, forKey: imageId as NSString)
-        cache.save(data, as: "avatar_\(imageId)")
+        db.saveRawKV(data, forKey: "avatar:\(imageId)")
         return img
     }
 
@@ -898,14 +1223,14 @@ final class LeverStore {
                 let key = "\(deviceId):\(mark.sessionId)"
                 localReadCursors[key] = max(localReadCursors[key] ?? 0, mark.sequence)
             }
-            cache.save(localReadCursors, as: "read_cursors")
+            db.saveKV(localReadCursors, forKey: "read_cursors")
         }
 
         for m in normalized {
             let key = "\(deviceId):\(m.sessionId)"
             localClearedCursors[key] = max(localClearedCursors[key] ?? 0, m.sequence)
         }
-        cache.save(localClearedCursors, as: "cleared_cursors")
+        db.saveKV(localClearedCursors, forKey: "cleared_cursors")
         invalidateAllProjections()
         if let banner { showBanner(banner) }
         guard let sPath = spacePath else { return }
@@ -913,7 +1238,7 @@ final class LeverStore {
         let readPayload = filteredReadMarks.isEmpty ? nil : ReadSyncRequest(deviceId: deviceId, items: filteredReadMarks)
         Task {
             if let readPayload {
-                try? await bridge.requestVoid("POST", path: "\(sPath)/read", body: readPayload)
+                try? await bridge.requestVoid("POST", path: hasNativeOwner(deviceId) ? "\(sPath)/nodes/\(deviceId)/read" : "\(sPath)/read", body: readPayload)
             }
             try? await bridge.requestVoid("POST", path: "\(sPath)/cleared", body: clearPayload)
         }
@@ -937,7 +1262,7 @@ final class LeverStore {
         for id in ids {
             localClearedCursors["\(deviceId):\(id)"] = 0
         }
-        cache.save(localClearedCursors, as: "cleared_cursors")
+        db.saveKV(localClearedCursors, forKey: "cleared_cursors")
         invalidateAllProjections()
         if let banner { showBanner(banner) }
         guard let sPath = spacePath else { return }
@@ -963,7 +1288,7 @@ final class LeverStore {
             let key = "\(deviceId):\(mark.sessionId)"
             localReadCursors[key] = max(localReadCursors[key] ?? 0, mark.sequence)
         }
-        cache.save(localReadCursors, as: "read_cursors")
+        db.saveKV(localReadCursors, forKey: "read_cursors")
         invalidateAllProjections()
 
         if let banner {
@@ -973,7 +1298,7 @@ final class LeverStore {
         guard let sPath = spacePath else { return }
         let payload = ReadSyncRequest(deviceId: deviceId, items: filtered)
         Task {
-            try? await bridge.requestVoid("POST", path: "\(sPath)/read", body: payload)
+            try? await bridge.requestVoid("POST", path: hasNativeOwner(deviceId) ? "\(sPath)/nodes/\(deviceId)/read" : "\(sPath)/read", body: payload)
         }
     }
 
@@ -1072,7 +1397,7 @@ final class LeverStore {
             deviceMap[providerId] = list
         }
         starredModelsByDevice[deviceId] = deviceMap
-        cache.save(starredModelsByDevice, as: "starred_models")
+        db.saveKV(starredModelsByDevice, forKey: "starred_models")
 
         guard let sPath = spacePath else { return }
         let payload = deviceMap
@@ -1080,7 +1405,7 @@ final class LeverStore {
             if let saved: [String: [String]] = try? await bridge.request("PUT", path: "\(sPath)/starred-models/\(deviceId)", body: payload) {
                 if self.starredModelsByDevice[deviceId] != saved {
                     self.starredModelsByDevice[deviceId] = saved
-                    self.cache.save(self.starredModelsByDevice, as: "starred_models")
+                    self.db.saveKV(self.starredModelsByDevice, forKey: "starred_models")
                 }
             }
         }
@@ -1105,13 +1430,13 @@ final class LeverStore {
         }
         if !meta.providers.isEmpty && providersByDevice[deviceId] != meta.providers {
             providersByDevice[deviceId] = meta.providers
-            cache.save(providersByDevice, as: "providers_by_device")
+            db.saveKV(providersByDevice, forKey: "providers_by_device")
         }
         // Merge remote starred models with local cache (remote authoritative when non-empty)
         if !meta.starredModels.isEmpty || starredModelsByDevice[deviceId] == nil {
             if starredModelsByDevice[deviceId] != meta.starredModels {
                 starredModelsByDevice[deviceId] = meta.starredModels
-                cache.save(starredModelsByDevice, as: "starred_models")
+                db.saveKV(starredModelsByDevice, forKey: "starred_models")
             }
         }
         let exactKey = composerScopeKey(deviceId: deviceId, agentId: agentId, providerId: providerId)
@@ -1257,7 +1582,7 @@ final class LeverStore {
             answer: nil
         )
 
-        let item: InboxItem = try await bridge.request("POST", path: "\(sPath)/commands", body: intent)
+        let item: InboxItem = try await submit(intent, space: sPath)
         Haptics.light()
         if let targetChat = item.receipt.chatId ?? chatId {
             let key = chatKey(deviceId: deviceId, chatId: targetChat, isPrivate: isPrivate)
@@ -1297,7 +1622,7 @@ final class LeverStore {
             selection: nil,
             answer: allowRun ? nil : answer
         )
-        let _: InboxItem = try await bridge.request("POST", path: "\(sPath)/commands", body: intent)
+        let _: InboxItem = try await submit(intent, space: sPath)
         Haptics.success()
         if let tid = activeTopicId, tid == request.sessionId {
             await refreshTopic(deviceId: deviceId, chatId: chatId, isPrivate: isPrivate, topicId: tid)
@@ -1326,7 +1651,7 @@ final class LeverStore {
             selection: nil,
             answer: nil
         )
-        let _: InboxItem = try await bridge.request("POST", path: "\(sPath)/commands", body: intent)
+        let _: InboxItem = try await submit(intent, space: sPath)
         Haptics.medium()
         if let tid = activeTopicId {
             await refreshTopic(deviceId: deviceId, chatId: chatId, isPrivate: isPrivate, topicId: tid)
@@ -1354,7 +1679,7 @@ final class LeverStore {
             selection: nil,
             answer: nil
         )
-        let _: InboxItem = try await bridge.request("POST", path: "\(sPath)/commands", body: intent)
+        let _: InboxItem = try await submit(intent, space: sPath)
         await refreshChatByKey(chatKey(deviceId: deviceId, chatId: chatId, isPrivate: isPrivate))
     }
 
@@ -1998,8 +2323,6 @@ final class LeverStore {
             let tRuns = runsBySession[sess.id] ?? []
             var tReqsByRun: [String: [ArchiveRecord]] = [:]
             var pendingReq: ArchiveRecord?
-            var files: [FileStat] = []
-            var seenFiles = Set<String>()
             var previewLines: [TopicPreviewLine] = []
 
             for (idx, run) in tRuns.enumerated() {
@@ -2007,10 +2330,6 @@ final class LeverStore {
                 tReqsByRun[run.id] = reqs
                 if pendingReq == nil, let p = reqs.first(where: { $0.status == "pending" }) {
                     pendingReq = p
-                }
-                for f in run.files ?? [] where !seenFiles.contains(f.name) {
-                    seenFiles.insert(f.name)
-                    files.append(f)
                 }
                 if idx > 0, let inp = run.text?.trimmingCharacters(in: .whitespacesAndNewlines), !inp.isEmpty {
                     previewLines.append(TopicPreviewLine(id: "u:\(run.id)", isUser: true, text: inp))
@@ -2104,7 +2423,6 @@ final class LeverStore {
                 canClear: !cleared && !isActive,
                 anchorTimestamp: anchorTime,
                 updatedTimestamp: updatedTime,
-                fileStats: files,
                 runs: tRuns,
                 requestsByRun: tReqsByRun,
                 oldestRunSequence: oldestTopicSeq
@@ -2130,18 +2448,59 @@ final class LeverStore {
 
     // MARK: - Helpers
 
+    private func loadKVWithLegacy<T: Codable & Sendable>(_ key: String, as type: T.Type = T.self) -> T? {
+        if let hit = db.loadKV(key, as: type) { return hit }
+        if let legacy = cache.load(key, as: type) {
+            db.saveKV(legacy, forKey: key)
+            return legacy
+        }
+        return nil
+    }
+
+    private func loadKVAsyncWithLegacy<T: Codable & Sendable>(_ key: String, as type: T.Type = T.self) async -> T? {
+        if let hit = await db.loadKVAsync(key, as: type) { return hit }
+        if let legacy = await cache.loadAsync(key, as: type) {
+            db.saveKV(legacy, forKey: key)
+            return legacy
+        }
+        return nil
+    }
+
     private func restoreCachedWorkspace() async {
-        account = await cache.loadAsync("account", as: AccountInfo.self)
-        devices = await cache.loadAsync("devices", as: [DeviceInfo].self) ?? []
-        hubReadCursors = await cache.loadAsync("hub_read_cursors", as: [String: [String: Int64]].self) ?? [:]
-        hubClearedCursors = await cache.loadAsync("hub_cleared_cursors", as: [String: [String: Int64]].self) ?? [:]
+        account = await loadKVAsyncWithLegacy("account", as: AccountInfo.self)
+        devices = await loadKVAsyncWithLegacy("devices", as: [DeviceInfo].self) ?? []
+        hubReadCursors = await loadKVAsyncWithLegacy("hub_read_cursors", as: [String: [String: Int64]].self) ?? [:]
+        hubClearedCursors = await loadKVAsyncWithLegacy("hub_cleared_cursors", as: [String: [String: Int64]].self) ?? [:]
         for dev in hostDevices {
-            if let cached = await cache.loadAsync("index_\(dev.id)", as: CachedArchiveState.self) {
-                indexByDevice[dev.id] = cached.records
-                if let c = cached.cursor { indexCursors[dev.id] = c }
+            var idxRecords = await db.loadAllRecordsAsync(scope: "index:\(dev.id)")
+            var idxCursor = await db.loadKVAsync("index_cursor:\(dev.id)", as: ArchiveCursor.self)
+            if idxRecords.isEmpty,
+               let legacy = await cache.loadAsync("index_\(dev.id)", as: CachedArchiveState.self) {
+                idxRecords = legacy.records
+                idxCursor = legacy.cursor
+                if !idxRecords.isEmpty {
+                    db.replaceScopeRecords(scope: "index:\(dev.id)", records: idxRecords)
+                }
+                if let c = idxCursor {
+                    db.saveKV(c, forKey: "index_cursor:\(dev.id)")
+                }
             }
-            if let priv = await cache.loadAsync("priv_\(dev.id)", as: [ArchiveRecord].self) {
-                privateIndexByDevice[dev.id] = priv
+            if !idxRecords.isEmpty {
+                indexByDevice[dev.id] = idxRecords
+            }
+            if let c = idxCursor {
+                indexCursors[dev.id] = c
+            }
+
+            var privRecords = await db.loadAllRecordsAsync(scope: "priv:\(dev.id)")
+            if privRecords.isEmpty,
+               let legacyPriv = await cache.loadAsync("priv_\(dev.id)", as: [ArchiveRecord].self),
+               !legacyPriv.isEmpty {
+                privRecords = legacyPriv
+                db.replaceScopeRecords(scope: "priv:\(dev.id)", records: privRecords)
+            }
+            if !privRecords.isEmpty {
+                privateIndexByDevice[dev.id] = privRecords
             }
         }
         invalidateAllProjections()
@@ -2155,13 +2514,23 @@ final class LeverStore {
                 if Task.isCancelled { break }
                 switch ev.kind {
                 case "refresh":
-                    await self.refreshAll(silent: true)
+                    self.scheduleCoalescedRefresh()
                 case "unpaired":
-                    self.resetWorkspaceState()
+                    await self.reloadAfterUnpair()
                 default:
                     break
                 }
             }
+        }
+    }
+
+    /// Coalesces rapid SSE refresh signals (e.g. token bursts during live streaming) into smooth ~4Hz updates.
+    private func scheduleCoalescedRefresh() {
+        refreshDebounceTask?.cancel()
+        refreshDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshAll(silent: true)
         }
     }
 
@@ -2171,10 +2540,12 @@ final class LeverStore {
             while !Task.isCancelled {
                 guard let self, self.isPaired else { break }
                 let intervalNs: UInt64
-                if self.activeChatKey != nil || self.cachedTotalRunning > 0 || self.cachedTotalPending > 0 {
-                    intervalNs = 2_500_000_000
+                if self.cachedTotalRunning > 0 || self.cachedTotalPending > 0 {
+                    intervalNs = 2_000_000_000
+                } else if self.activeChatKey != nil {
+                    intervalNs = 5_000_000_000
                 } else {
-                    intervalNs = self.isDirectMode ? 6_000_000_000 : 12_000_000_000
+                    intervalNs = self.isDirectMode ? 8_000_000_000 : 12_000_000_000
                 }
                 try? await Task.sleep(nanoseconds: intervalNs)
                 if Task.isCancelled { break }

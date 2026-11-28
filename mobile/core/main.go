@@ -47,7 +47,9 @@ import (
 	"unsafe"
 
 	"lever/internal/lanclient"
+	"lever/internal/multinode"
 	p "lever/internal/remoteproto"
+	"lever/web/hubassets"
 )
 
 const (
@@ -68,6 +70,8 @@ type core struct {
 	mu        sync.Mutex
 	accountMu sync.Mutex
 	pushMu    sync.Mutex
+	directory multinode.MobileDirectory
+	workspace multinode.MobileWorkspace
 	lan       lanclient.Client
 	stopWatch context.CancelFunc
 
@@ -169,20 +173,21 @@ func (c *core) emit(kind, payload string) {
 	C.lever_call_event(fn, ck, cp)
 }
 
-func (c *core) paired() (p.ClientState, error) {
-	var st p.ClientState
+func (c *core) accounts() (multinode.Accounts, error) {
+	var a multinode.Accounts
 	raw, err := c.secretGet(accountKey)
 	if err != nil {
-		return st, err
+		return a, err
 	}
-	if err = json.Unmarshal(raw, &st); err != nil {
-		return st, err
+	if err = json.Unmarshal(raw, &a); err != nil {
+		return a, err
 	}
-	if len(st.Key) != ed25519.PrivateKeySize || st.Membership.Role != p.Controller {
-		return st, errors.New("invalid controller credential")
+	if len(a.Key) != ed25519.PrivateKeySize || a.Membership.Role != p.Controller {
+		return a, errors.New("invalid controller credential")
 	}
-	return st, nil
+	return a, nil
 }
+func (c *core) paired() (p.ClientState, error) { a, err := c.accounts(); return a.ClientState, err }
 
 func (c *core) savedGrants() map[string]string {
 	out := map[string]string{}
@@ -236,14 +241,38 @@ func isValidPairLink(link string) bool {
 	return err == nil
 }
 
-func (c *core) forget() error {
+func (c *core) forget(st p.ClientState) error {
+	a, err := c.accounts()
+	if err != nil {
+		return err
+	}
+	removed, remaining := a.Remove(st)
+	if !removed {
+		return nil
+	}
+	c.lan.Forget(st)
+	c.workspace.Close()
+	c.directory.Clear()
 	c.mu.Lock()
 	if c.stopWatch != nil {
 		c.stopWatch()
 		c.stopWatch = nil
 	}
 	c.mu.Unlock()
-	c.lan.NetworkChanged()
+	if remaining {
+		raw, err := json.Marshal(a)
+		if err != nil {
+			return err
+		}
+		if err = c.secretSet(accountKey, raw); err != nil {
+			return err
+		}
+		if !st.IsDirect() {
+			_ = c.secretDelete(pushKey)
+			_ = c.secretDelete(grantsKey)
+		}
+		return nil
+	}
 	_ = c.secretDelete(grantsKey)
 	_ = c.secretDelete(pushKey)
 	return c.secretDelete(accountKey)
@@ -252,76 +281,38 @@ func (c *core) forget() error {
 func (c *core) pair(link, deviceName string) error {
 	c.accountMu.Lock()
 	defer c.accountMu.Unlock()
-	if _, err := c.paired(); err == nil {
-		return errors.New("请先解除原设备配对")
-	} else if !errors.Is(err, errSecretNotFound) {
+	a, err := c.accounts()
+	if err != nil && !errors.Is(err, errSecretNotFound) {
 		return err
 	}
 	name := strings.TrimSpace(deviceName)
 	if name == "" {
-		name = "iPhone"
-	}
-	if len(name) > 80 {
-		name = name[:80]
-	}
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
+		name = "Lever"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if directParams, isDirect, err := p.ParseDirectPairLink(link); isDirect {
-		if err != nil {
-			return err
-		}
-		st, receipt, err := p.PairDirect(ctx, directParams, p.PairInput{
-			Code:     directParams.Code,
-			Identity: p.Identity{ID: p.NewID(), PublicKey: pub},
-			Platform: "ios",
-			Name:     name,
-			Role:     p.Controller,
-		}, key)
-		if err != nil {
-			return err
-		}
-		b, err := json.Marshal(st)
-		if err != nil {
-			return err
-		}
-		if err := c.secretSet(accountKey, b); err != nil {
-			return err
-		}
-		grantKey := st.Membership.Hub.ID + "/" + st.Membership.SpaceID + "/" + st.Membership.DeviceID + "/" + directParams.HostID
-		grants := c.savedGrants()
-		grants[grantKey] = receipt.Grant
-		rawGrants, _ := json.Marshal(grants)
-		_ = c.secretSet(grantsKey, rawGrants)
-		return nil
+	if err = a.Pair(ctx, link, name, "ios"); err != nil {
+		return err
 	}
-	base, code, err := parseHubPairLink(link)
+	raw, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
-	st, err := p.Pair(ctx, base, p.PairInput{
-		Code:     code,
-		Identity: p.Identity{ID: p.NewID(), PublicKey: pub},
-		Platform: "ios",
-		Name:     name,
-		Role:     p.Controller,
-	}, key)
-	if err != nil {
+	if err = c.secretSet(accountKey, raw); err != nil {
 		return err
 	}
-	b, err := json.Marshal(st)
-	if err != nil {
-		return err
+	c.mu.Lock()
+	if c.stopWatch != nil {
+		c.stopWatch()
+		c.stopWatch = nil
 	}
-	return c.secretSet(accountKey, b)
+	c.mu.Unlock()
+	return nil
 }
 
-func (c *core) unpair() error {
+func (c *core) unpair(id string) error {
 	c.accountMu.Lock()
-	st, err := c.paired()
+	a, err := c.accounts()
 	c.accountMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errSecretNotFound) {
@@ -329,22 +320,16 @@ func (c *core) unpair() error {
 		}
 		return err
 	}
-	if st.IsDirect() {
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-		_ = c.lan.UnpairDirect(ctx, st, st.Membership.Hub.ID)
-		cancel()
-	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err = st.Do(ctx, "DELETE", st.SpacePath()+"/devices/"+url.PathEscape(st.Membership.DeviceID), nil, nil)
-		cancel()
-		var e *p.HTTPError
-		if err != nil && !(errors.As(err, &e) && e.Status == 401) {
-			return err
-		}
+	st, err := a.SelectForRemoval(id)
+	if err != nil {
+		return err
+	}
+	if err = multinode.Revoke(context.Background(), &c.lan, st); err != nil {
+		return err
 	}
 	c.accountMu.Lock()
 	defer c.accountMu.Unlock()
-	return c.forget()
+	return c.forget(st)
 }
 
 func (c *core) requestDirect(ctx context.Context, st p.ClientState, method, path, body string) (json.RawMessage, error) {
@@ -419,12 +404,43 @@ func (c *core) requestDirect(ctx context.Context, st p.ClientState, method, path
 }
 
 func (c *core) request(method, path, body string) (json.RawMessage, error) {
-	st, err := c.paired()
+	accounts, err := c.accounts()
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if method == "DELETE" && strings.HasPrefix(path, "/native/direct-peers/") {
+		id := strings.TrimPrefix(path, "/native/direct-peers/")
+		if id == "" {
+			return nil, errors.New("missing node id")
+		}
+		return json.RawMessage("true"), c.unpair(id)
+	}
+	if path == "/native/workspace/close" && method == "POST" {
+		c.workspace.Close()
+		return json.RawMessage("true"), nil
+	}
+	if path == "/native/workspace" && method == "POST" {
+		var args struct{ Node, Agent, Chat string }
+		if err := json.Unmarshal([]byte(body), &args); err != nil {
+			return nil, err
+		}
+		location, err := c.workspace.Open(&c.directory, hubassets.Assets(), args.Node, args.Agent, args.Chat)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(location)
+	}
+	if raw, ok, e := c.directory.Request(ctx, accounts.SpacePath(), method, path, body); ok {
+		return raw, e
+	}
+	st, path, _ := accounts.Resolve(method, path, body)
+	if method == "GET" && path == accounts.SpacePath()+"/devices" && accounts.IsDirect() {
+		base := []p.Device{{Identity: p.Identity{ID: accounts.Membership.DeviceID}, Name: "Lever", Role: p.Controller, Online: true}}
+		raw, err := json.Marshal(c.directory.Refresh(ctx, accounts, &c.lan, base))
+		return raw, err
+	}
 	if st.IsDirect() {
 		return c.requestDirect(ctx, st, method, path, body)
 	}
@@ -454,12 +470,16 @@ func (c *core) request(method, path, body string) (json.RawMessage, error) {
 				c.accountMu.Lock()
 				current, readErr := c.paired()
 				if readErr == nil && current.Membership.Token == st.Membership.Token {
-					_ = c.forget()
+					_ = c.forget(st)
 					c.emit("unpaired", "")
 				}
 				c.accountMu.Unlock()
 			}
 			return nil, err
+		}
+		if directory && len(accounts.Peers) > 0 {
+			raw, err := json.Marshal(c.directory.Refresh(ctx, accounts, &c.lan, nil))
+			return raw, err
 		}
 		if method == "GET" && path == "/api/me" {
 			mb := st.Membership
@@ -500,16 +520,16 @@ func (c *core) request(method, path, body string) (json.RawMessage, error) {
 			}
 			devices = append(devices, d.Device)
 		}
-		out, _ = json.Marshal(devices)
+		out, _ = json.Marshal(c.directory.Refresh(ctx, accounts, &c.lan, devices))
 	}
 	return out, nil
 }
 
 func (c *core) watch(active bool) error {
-	var st p.ClientState
+	var slots multinode.Accounts
 	if active {
 		var err error
-		st, err = c.paired()
+		slots, err = c.accounts()
 		if err != nil {
 			return err
 		}
@@ -523,12 +543,15 @@ func (c *core) watch(active bool) error {
 		}
 		return nil
 	}
-	if c.stopWatch != nil || st.IsDirect() {
+	if c.stopWatch != nil {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c.stopWatch = cancel
-	go c.watchEvents(ctx, st)
+	go slots.WatchNodes(ctx, &c.lan, func() { c.emit("refresh", "") })
+	if !slots.IsDirect() {
+		go c.watchEvents(ctx, slots.ClientState)
+	}
 	return nil
 }
 
@@ -656,7 +679,12 @@ func errJSON(err error) *C.char {
 	if err != nil {
 		msg = err.Error()
 	}
-	b, _ := json.Marshal(map[string]any{"ok": false, "error": msg})
+	payload := map[string]any{"ok": false, "error": msg}
+	var httpErr *p.HTTPError
+	if errors.As(err, &httpErr) {
+		payload["status"] = httpErr.Status
+	}
+	b, _ := json.Marshal(payload)
 	return C.CString(string(b))
 }
 
@@ -686,22 +714,23 @@ func LeverCore_Free(ptr *C.char) {
 
 //export LeverCore_Status
 func LeverCore_Status() *C.char {
-	st, err := instance.paired()
+	st, err := instance.accounts()
 	if err != nil {
 		return okJSON(map[string]any{"paired": false})
 	}
 	pref := instance.pushPreference()
 	return okJSON(map[string]any{
-		"paired":       true,
-		"direct":       st.IsDirect(),
-		"hostName":     st.HostName,
-		"hostPlatform": st.HostPlatform,
-		"origin":       st.Origin,
-		"hubId":        st.Membership.Hub.ID,
-		"spaceId":      st.Membership.SpaceID,
-		"deviceId":     st.Membership.DeviceID,
-		"userId":       st.Membership.UserID,
-		"pushEnabled":  pref.DeviceID == st.Membership.DeviceID && pref.Token != "",
+		"paired":        true,
+		"directPeerIds": st.DirectIDs(),
+		"direct":        st.IsDirect(),
+		"hostName":      st.HostName,
+		"hostPlatform":  st.HostPlatform,
+		"origin":        st.Origin,
+		"hubId":         st.Membership.Hub.ID,
+		"spaceId":       st.Membership.SpaceID,
+		"deviceId":      st.Membership.DeviceID,
+		"userId":        st.Membership.UserID,
+		"pushEnabled":   pref.DeviceID == st.Membership.DeviceID && pref.Token != "",
 	})
 }
 
@@ -723,7 +752,7 @@ func LeverCore_Pair(link *C.char, deviceName *C.char) *C.char {
 
 //export LeverCore_Unpair
 func LeverCore_Unpair() *C.char {
-	if err := instance.unpair(); err != nil {
+	if err := instance.unpair(""); err != nil {
 		return errJSON(err)
 	}
 	return okJSON(true)

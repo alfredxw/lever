@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"lever/internal/multinode"
 	p "lever/internal/remoteproto"
 )
 
@@ -50,10 +51,10 @@ func (m *Mobile) saveGrant(key, token string) {
 	_ = mygo.Secrets.Set(grantsKey, raw)
 }
 func (m *Mobile) Watch(active bool) error {
-	var st p.ClientState
+	var slots multinode.Accounts
 	if active {
 		var err error
-		st, err = paired()
+		slots, err = accounts()
 		if err != nil {
 			return err
 		}
@@ -70,13 +71,13 @@ func (m *Mobile) Watch(active bool) error {
 	if m.stopWatch != nil {
 		return nil
 	}
-	if st.IsDirect() {
-		return nil
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stopWatch = cancel
-	go m.watch(ctx, st)
-	go m.restorePush(ctx, st)
+	go slots.WatchNodes(ctx, &m.lan, func() { m.signal("refresh") })
+	if !slots.IsDirect() {
+		go m.watch(ctx, slots.ClientState)
+		go m.restorePush(ctx, slots.ClientState)
+	}
 	return nil
 }
 

@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Renders a single Run (user bubble + quiet Desktop-style continuous Agent prose +
-/// collapsible tool steps + diff chips + interactive approval/question cards).
-struct RunTurnView: View {
+/// collapsible tool steps + compact aggregate diff badge + interactive approval/question cards).
+/// Conforms to `Equatable` so unchanged completed turns never re-evaluate during live streaming or scroll.
+struct RunTurnView: View, Equatable {
     let run: ArchiveRecord
     let requests: [ArchiveRecord]
     let agentName: String
@@ -12,25 +13,67 @@ struct RunTurnView: View {
     var store: LeverStore? = nil
     let agentSeed: String
     let isBusy: Bool
+    var isSessionCleared: Bool = false
+    var lazySteps: [RunItem]? = nil
+    var isLoadingSteps: Bool = false
+    var onLoadSteps: ((String) -> Void)? = nil
     let onAnswer: (ArchiveRecord, RequestAnswer?, Bool) -> Void
     let onStop: (String) -> Void
 
     @State private var showTools = false
 
+    static func == (lhs: RunTurnView, rhs: RunTurnView) -> Bool {
+        lhs.run == rhs.run
+            && lhs.requests == rhs.requests
+            && lhs.agentName == rhs.agentName
+            && lhs.agentAvatar == rhs.agentAvatar
+            && lhs.agentAvatarSpec == rhs.agentAvatarSpec
+            && lhs.isBusy == rhs.isBusy
+            && lhs.isSessionCleared == rhs.isSessionCleared
+            && lhs.lazySteps == rhs.lazySteps
+            && lhs.isLoadingSteps == rhs.isLoadingSteps
+    }
+
     private var userText: String {
         run.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private var textItems: [RunItem] {
-        (run.items ?? []).filter { $0.kind == "text" && !($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var contentItems: [RunItem] {
+        (run.items ?? []).filter {
+            ($0.kind == "text" || $0.kind == "user")
+                && !($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
-    private var toolItems: [RunItem] {
+    private var embeddedToolItems: [RunItem] {
         (run.items ?? []).filter { $0.kind != "text" && $0.kind != "user" }
     }
 
+    private var effectiveToolItems: [RunItem] {
+        !embeddedToolItems.isEmpty ? embeddedToolItems : (lazySteps ?? [])
+    }
+
+    private var displayedStepCount: Int {
+        max(effectiveToolItems.count, run.stepCount ?? 0)
+    }
+
+    private var effectiveStatus: String? {
+        if isSessionCleared && run.status == "paused" {
+            return "interrupted"
+        }
+        return run.status
+    }
+
     private var isActive: Bool {
-        isActiveRunStatus(run.status)
+        isActiveRunStatus(effectiveStatus)
+    }
+
+    private var isPaused: Bool {
+        !isSessionCleared && run.status == "paused"
+    }
+
+    private var diffSummary: (files: Int, additions: Int, deletions: Int)? {
+        run.resolvedDiff
     }
 
     var body: some View {
@@ -89,7 +132,7 @@ struct RunTurnView: View {
                 }
             }
 
-            if !textItems.isEmpty || !toolItems.isEmpty || isActive || !(run.files ?? []).isEmpty || !(run.error ?? "").isEmpty {
+            if !contentItems.isEmpty || displayedStepCount > 0 || isActive || isPaused || diffSummary != nil || !(run.error ?? "").isEmpty {
                 HStack(alignment: .top, spacing: 9) {
                     AgentAvatarView(
                         name: agentName,
@@ -103,18 +146,29 @@ struct RunTurnView: View {
                     .padding(.top, 2)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        if !toolItems.isEmpty {
+                        if displayedStepCount > 0 {
                             Button {
+                                let nextOpen = !showTools
                                 withAnimation(.easeInOut(duration: 0.18)) {
-                                    showTools.toggle()
+                                    showTools = nextOpen
+                                }
+                                if nextOpen
+                                    && embeddedToolItems.isEmpty
+                                    && (effectiveToolItems.isEmpty || displayedStepCount > effectiveToolItems.count) {
+                                    onLoadSteps?(run.id)
                                 }
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: showTools ? "chevron.down" : "chevron.right")
                                         .font(.system(size: 10, weight: .semibold))
-                                    Text("\(toolItems.count) 个执行步骤")
+                                    Text("\(displayedStepCount) 个执行步骤")
                                         .font(.system(size: 12, weight: .medium))
                                     Spacer()
+                                    if isLoadingSteps {
+                                        ProgressView()
+                                            .scaleEffect(0.62)
+                                            .tint(LeverTheme.inkTertiary)
+                                    }
                                 }
                                 .foregroundStyle(LeverTheme.inkTertiary)
                                 .padding(.horizontal, 10)
@@ -125,30 +179,71 @@ struct RunTurnView: View {
                             .buttonStyle(.plain)
 
                             if showTools {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    ForEach(toolItems) { item in
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.title?.isEmpty == false ? item.title! : item.kind)
-                                                .font(.system(size: 11.5, weight: .semibold))
-                                                .foregroundStyle(LeverTheme.inkSecondary)
-                                            if let detail = item.text, !detail.isEmpty {
-                                                Text(detail)
-                                                    .font(.system(size: 11, design: .monospaced))
-                                                    .foregroundStyle(LeverTheme.inkTertiary)
-                                                    .lineLimit(5)
-                                            }
+                                if effectiveToolItems.isEmpty && isLoadingSteps {
+                                    HStack(spacing: 8) {
+                                        ProgressView()
+                                            .scaleEffect(0.68)
+                                            .tint(LeverTheme.inkTertiary)
+                                        Text("正在按需加载执行步骤…")
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(LeverTheme.inkTertiary)
+                                        Spacer()
+                                    }
+                                    .padding(10)
+                                    .background(LeverTheme.surfaceInset)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                } else if effectiveToolItems.isEmpty {
+                                    HStack(spacing: 8) {
+                                        Text("未能加载执行步骤")
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(LeverTheme.inkTertiary)
+                                        Spacer()
+                                        Button("重试") {
+                                            onLoadSteps?(run.id)
                                         }
-                                        .padding(8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(LeverTheme.surfaceInset)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                        .font(.system(size: 11.5, weight: .medium))
+                                        .foregroundStyle(LeverTheme.inkSecondary)
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(10)
+                                    .background(LeverTheme.surfaceInset)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                } else {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(effectiveToolItems) { item in
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(item.title?.isEmpty == false ? item.title! : item.kind)
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                                    .foregroundStyle(LeverTheme.inkSecondary)
+                                                if let detail = item.text, !detail.isEmpty {
+                                                    Text(detail)
+                                                        .font(.system(size: 11, design: .monospaced))
+                                                        .foregroundStyle(LeverTheme.inkTertiary)
+                                                        .lineLimit(5)
+                                                }
+                                            }
+                                            .padding(8)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(LeverTheme.surfaceInset)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        ForEach(textItems) { item in
-                            MarkdownTextView(text: item.text ?? "", foreground: LeverTheme.inkPrimary)
+                        ForEach(contentItems) { item in
+                            if item.kind == "user" {
+                                Text(item.text ?? "")
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(LeverTheme.inkSecondary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(LeverTheme.surfaceInset)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            } else {
+                                MarkdownTextView(text: item.text ?? "", foreground: LeverTheme.inkPrimary)
+                            }
                         }
 
                         if let err = run.error, !err.isEmpty {
@@ -161,8 +256,8 @@ struct RunTurnView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
 
-                        if let files = run.files, !files.isEmpty {
-                            FileDiffStrip(files: files)
+                        if let diff = diffSummary {
+                            DiffSummaryBadge(files: diff.files, additions: diff.additions, deletions: diff.deletions)
                         }
 
                         if isActive {
@@ -170,11 +265,11 @@ struct RunTurnView: View {
                                 ProgressView()
                                     .scaleEffect(0.72)
                                     .tint(LeverTheme.runningEmerald)
-                                Text(runStatusLabel(run.status))
+                                Text(runStatusLabel(effectiveStatus))
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(run.status == "waiting_user" ? LeverTheme.approvalAmber : LeverTheme.runningEmerald)
+                                    .foregroundStyle(effectiveStatus == "waiting_user" ? LeverTheme.approvalAmber : LeverTheme.runningEmerald)
                                 Spacer()
-                                if run.status != "cancelling" {
+                                if effectiveStatus != "cancelling" {
                                     Button {
                                         onStop(run.id)
                                     } label: {
@@ -194,6 +289,15 @@ struct RunTurnView: View {
                                     .disabled(isBusy)
                                 }
                             }
+                            .padding(.top, 2)
+                        } else if isPaused {
+                            HStack(spacing: 6) {
+                                Image(systemName: "pause.circle")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("已暂停")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundStyle(LeverTheme.inkTertiary)
                             .padding(.top, 2)
                         }
                     }
@@ -297,10 +401,6 @@ struct InlineTopicCardView: View {
                                 .foregroundStyle(LeverTheme.approvalAmber)
                                 .lineLimit(1)
                         }
-                    }
-
-                    if !topic.fileStats.isEmpty {
-                        FileDiffStrip(files: Array(topic.fileStats.prefix(3)))
                     }
                 }
 
@@ -592,52 +692,154 @@ struct RequestActionCard: View {
     }
 }
 
-struct FileDiffStrip: View {
-    let files: [FileStat]
+/// Compact aggregate diff pill displayed right after an assistant reply (no per-file breakdown).
+struct DiffSummaryBadge: View {
+    let files: Int
+    let additions: Int
+    let deletions: Int
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(files, id: \.name) { f in
-                    HStack(spacing: 4) {
-                        Text(f.name)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(LeverTheme.inkSecondary)
-                        if f.additions > 0 {
-                            Text("+\(f.additions)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(LeverTheme.runningEmerald)
-                        }
-                        if f.deletions > 0 {
-                            Text("-\(f.deletions)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(LeverTheme.unreadRed)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3.5)
-                    .background(LeverTheme.surfaceElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(LeverTheme.hairline, lineWidth: 0.5)
-                    )
-                }
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(LeverTheme.inkTertiary)
+            Text(files > 0 ? "\(files) 个文件变更" : "文件变更")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(LeverTheme.inkSecondary)
+            if additions > 0 {
+                Text("+\(additions)")
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LeverTheme.runningEmerald)
+            }
+            if deletions > 0 {
+                Text("-\(deletions)")
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(LeverTheme.unreadRed)
             }
         }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(LeverTheme.surfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(LeverTheme.hairline, lineWidth: 0.5)
+        )
     }
 }
 
 /// Full Block + Inline cached Markdown renderer (headings, fenced code blocks, lists, quotes, tables, inline code).
-struct MarkdownTextView: View {
+struct MarkdownTextView: View, Equatable {
     let text: String
     let foreground: Color
     var isUserBubble: Bool = false
+
+    static func == (lhs: MarkdownTextView, rhs: MarkdownTextView) -> Bool {
+        lhs.text == rhs.text && lhs.isUserBubble == rhs.isUserBubble
+    }
 
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             MarkdownContentView(text: trimmed, foreground: foreground, isUserBubble: isUserBubble)
+                .equatable()
         }
+    }
+}
+
+/// Subtle grayscale shimmer skeleton shown during cold-cache first sync so users immediately
+/// see that messages are being fetched from Desktop instead of staring at a blank screen.
+struct ConversationLoadingSkeleton: View {
+    var message: String = "正在同步消息…"
+    @State private var pulse = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 7) {
+                ProgressView()
+                    .scaleEffect(0.75)
+                    .tint(LeverTheme.inkSecondary)
+                Text(message)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(LeverTheme.inkTertiary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 12)
+
+            // User bubble placeholder
+            HStack {
+                Spacer(minLength: 90)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(LeverTheme.surfaceInset)
+                    .frame(height: 38)
+            }
+
+            // Assistant reply placeholder
+            HStack(alignment: .top, spacing: 9) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(LeverTheme.surfaceInset)
+                    .frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(LeverTheme.surfaceInset)
+                        .frame(height: 14)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(LeverTheme.surfaceInset)
+                        .frame(maxWidth: 240, minHeight: 14, maxHeight: 14)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(LeverTheme.surfaceInset)
+                        .frame(maxWidth: 170, minHeight: 14, maxHeight: 14)
+                }
+            }
+
+            // Second turn placeholder
+            HStack {
+                Spacer(minLength: 130)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(LeverTheme.surfaceInset)
+                    .frame(height: 34)
+            }
+
+            HStack(alignment: .top, spacing: 9) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(LeverTheme.surfaceInset)
+                    .frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(LeverTheme.surfaceInset)
+                        .frame(height: 14)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(LeverTheme.surfaceInset)
+                        .frame(maxWidth: 200, minHeight: 14, maxHeight: 14)
+                }
+            }
+        }
+        .opacity(pulse ? 0.52 : 0.92)
+        .animation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true), value: pulse)
+        .onAppear { pulse = true }
+        .padding(.vertical, 10)
+    }
+}
+
+/// Non-blocking inline sync indicator displayed in navigation subtitles while warm-cached
+/// conversations refresh their latest delta in the background.
+struct NavSyncSubtitleView: View {
+    let isSyncing: Bool
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if isSyncing {
+                ProgressView()
+                    .scaleEffect(0.56)
+                    .frame(width: 11, height: 11)
+                    .tint(LeverTheme.inkTertiary)
+            }
+            Text(isSyncing ? "同步中…" : text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(LeverTheme.inkTertiary)
+                .lineLimit(1)
+        }
+        .animation(.easeOut(duration: 0.18), value: isSyncing)
     }
 }

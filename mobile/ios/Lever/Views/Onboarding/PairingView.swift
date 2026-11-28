@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 struct PairingView: View {
+    @Environment(\.dismiss) private var dismiss
     @Bindable var store: LeverStore
     @State private var linkText = ""
     @State private var showScanner = false
@@ -145,7 +146,10 @@ struct PairingView: View {
                     Task { await store.pair(link: scanned) }
                 }
             }
-            .onChange(of: store.pendingPairLink) { _, newValue in
+            .onChange(of: store.isPairing) { wasPairing, pairing in
+                if wasPairing && !pairing && store.isPaired && store.errorMessage == nil { dismiss() }
+            }
+            .onChange(of: store.pendingPairLink, initial: true) { _, newValue in
                 if let newValue, !newValue.isEmpty {
                     linkText = newValue
                 }

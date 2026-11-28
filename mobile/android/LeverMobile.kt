@@ -1,5 +1,16 @@
 package dev.mygo
 
+import android.app.Dialog
+import android.app.DownloadManager
+import android.os.Environment
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
@@ -47,10 +58,57 @@ class LeverMobile : MyGoPlugin {
         handler.postDelayed(release, 2000)
     }
 
+    private fun openWorkspace(url: String) {
+        val origin = Uri.parse(url)
+        require(origin.scheme == "http" && origin.host == "127.0.0.1" && origin.port > 0 && origin.path == "/workspace")
+        val activity = checkNotNull(PluginHost.activity)
+        val dialog = Dialog(activity)
+        val view = WebView(activity)
+        fun sameOrigin(uri: Uri) = uri.scheme == origin.scheme && uri.encodedAuthority == origin.encodedAuthority
+        view.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+        }
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = !sameOrigin(request.url)
+        }
+        view.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                PluginHost.startForResult(params.createIntent()) { code, data -> callback.onReceiveValue(FileChooserParams.parseResult(code, data)) }
+                return true
+            }
+        }
+        view.setDownloadListener { location, _, disposition, mime, _ ->
+            val target = Uri.parse(location)
+            if (sameOrigin(target)) {
+                val name = URLUtil.guessFileName(location, disposition, mime).substringAfterLast('/').substringAfterLast('\\')
+                if (name.isNotBlank() && name != "." && name != "..") {
+                    val request = DownloadManager.Request(target).setMimeType(mime)
+                        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+                        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    CookieManager.getInstance().getCookie(location)?.let { request.addRequestHeader("Cookie", it) }
+                    (activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+                }
+            }
+        }
+        dialog.setContentView(view)
+        dialog.setOnDismissListener {
+            view.stopLoading()
+            view.destroy()
+            PluginHost.emit("leverMobile", "workspaceClosed", origin.encodedAuthority)
+        }
+        dialog.show()
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        view.loadUrl(url)
+    }
+
     override fun call(method: String, args: JSONObject, reply: PluginReply) {
         val context = PluginHost.context
         runCatching {
             when (method) {
+                "workspace" -> openWorkspace(args.getString("url"))
                 "allowDiscovery" -> allowDiscovery(context)
                 "configureFirebase" -> {
                     configure(context, args)
