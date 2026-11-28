@@ -11,31 +11,37 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
+	"time"
 
 	"lever/internal/app"
+	"lever/internal/bonjour"
 	"lever/internal/device"
 	"lever/internal/model"
 	p "lever/internal/remoteproto"
 )
 
 type Management struct {
-	Operation    string            `json:"operation,omitempty"`
-	ControllerID string            `json:"controllerId,omitempty"`
-	Name         string            `json:"name,omitempty"`
-	NoteVersion  string            `json:"noteVersion,omitempty"`
-	Enabled      bool              `json:"enabled,omitempty"`
-	AllAgents    bool              `json:"allAgents,omitempty"`
-	AgentIDs     []string          `json:"agentIds,omitempty"`
-	Operations   []string          `json:"operations,omitempty"`
-	Action       string            `json:"action"`
-	Scope        model.SharedScope `json:"scope"`
-	Pair         PairConfig        `json:"pair,omitempty"`
-	AgentID      string            `json:"agentId,omitempty"`
-	ID           string            `json:"id,omitempty"`
-	Method       string            `json:"method,omitempty"`
-	Path         string            `json:"path,omitempty"`
-	Body         json.RawMessage   `json:"body,omitempty"`
+	AccessLevel     p.AccessLevel     `json:"accessLevel,omitempty"`
+	ReadOnlyFS      *bool             `json:"readOnlyFs,omitempty"`
+	RequireApproval *bool             `json:"requireApproval,omitempty"`
+	Operation       string            `json:"operation,omitempty"`
+	ControllerID    string            `json:"controllerId,omitempty"`
+	Name            string            `json:"name,omitempty"`
+	NoteVersion     string            `json:"noteVersion,omitempty"`
+	Enabled         bool              `json:"enabled,omitempty"`
+	AllAgents       bool              `json:"allAgents,omitempty"`
+	AgentIDs        []string          `json:"agentIds,omitempty"`
+	Operations      []string          `json:"operations,omitempty"`
+	Action          string            `json:"action"`
+	Scope           model.SharedScope `json:"scope"`
+	Pair            PairConfig        `json:"pair,omitempty"`
+	AgentID         string            `json:"agentId,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	Method          string            `json:"method,omitempty"`
+	Path            string            `json:"path,omitempty"`
+	Body            json.RawMessage   `json:"body,omitempty"`
 }
 
 func (h *Host) Paired() bool {
@@ -45,6 +51,106 @@ func (h *Host) Paired() bool {
 }
 func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 	switch in.Action {
+	case "discover_peers":
+		ids, err := bonjour.Browse(ctx)
+		return slices.DeleteFunc(ids, func(id string) bool { return id == h.App.Store.DeviceID }), err
+	case "probe_peer":
+		if in.ID != "" {
+			var err error
+			in.Path, err = bonjour.Discover(ctx, in.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		id, err := p.ProbeLANIdentity(ctx, strings.TrimSpace(in.Path))
+		if err != nil {
+			return nil, err
+		}
+		if in.ID != "" && in.ID != id.ID {
+			return nil, errors.New("discovered device identity changed")
+		}
+		return map[string]any{"address": in.Path, "name": id.Name, "fingerprint": p.Fingerprint(id.PublicKey), "link": p.DirectPairLink(in.Path, id.ID, id.PublicKey, "confirm", id.Name)}, nil
+	case "browse_roots":
+		return h.browseRoots(ctx)
+	case "add_browse_root", "remove_browse_root":
+		h.configMu.Lock()
+		defer h.configMu.Unlock()
+		if in.Action == "add_browse_root" {
+			return h.addBrowseRoot(ctx, in.Path)
+		}
+		_, err := h.App.Store.DB.ExecContext(ctx, "DELETE FROM remote_browse_roots WHERE id=?", in.ID)
+		return true, err
+	case "local_only":
+		table := ""
+		switch in.Operation {
+		case "agent":
+			table = "agents"
+		case "chat":
+			table = "chats"
+		default:
+			return nil, errors.New("select an Agent or Chat")
+		}
+		return true, h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+			result, err := tx.Exec("UPDATE "+table+" SET data=json_set(data,'$.localOnly',json(?)) WHERE id=?", store.JSON(in.Enabled), in.ID)
+			if err != nil {
+				return err
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				return sql.ErrNoRows
+			}
+			// Invalidate existing mirrored children, including legacy clients' paged cursors.
+			_, err = tx.Exec("UPDATE remote_memberships SET epoch=?,version=version+1,acked=0", p.NewID())
+			return err
+		})
+	case "diagnostics":
+		bindings, err := h.Bindings(ctx)
+		return map[string]any{"nodeId": h.App.Store.DeviceID, "bindings": bindings, "nodes": h.NodeStatus()}, err
+	case "peers":
+		return store.List[map[string]any](ctx, h.App.Store.DB, "SELECT json_object('nodeId',node_id,'name',name,'platform',platform,'address',address) FROM remote_peers ORDER BY name,node_id")
+	case "forget_peer":
+		if in.ID == "" {
+			return nil, errors.New("select a paired peer")
+		}
+		var key []byte
+		if err := h.App.Store.DB.QueryRowContext(ctx, "SELECT key FROM remote_identity").Scan(&key); err != nil {
+			return nil, err
+		}
+		peers, err := h.directPeers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var matched bool
+		for _, peer := range peers {
+			if peer.Membership.Hub.ID == in.ID {
+				matched = true
+				peer.Key = key
+				short, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = h.lanClient.UnpairDirect(short, peer, in.ID)
+				cancel()
+				break
+			}
+		}
+		if !matched {
+			return nil, sql.ErrNoRows
+		}
+		err = h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.Exec("DELETE FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?", h.App.Store.DeviceID, h.App.Store.DeviceID, in.ID); err != nil {
+				return err
+			}
+			_, err := tx.Exec("DELETE FROM remote_peers WHERE node_id=?", in.ID)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+		h.nodesMu.Lock()
+		if n := h.nodes[in.ID]; n != nil {
+			n.cancel()
+			delete(h.nodes, in.ID)
+		}
+		h.nodesMu.Unlock()
+		h.reload()
+		return true, nil
 	case "status":
 		return h.Bindings(ctx)
 	case "local_info":
@@ -71,8 +177,16 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		defer h.configMu.Unlock()
 		return h.IssueLANTicket(ctx)
 	case "pair":
-		h.configMu.Lock()
-		defer h.configMu.Unlock()
+		params, direct, err := p.ParseDirectPairLink(in.Pair.Link)
+		if err != nil {
+			return nil, err
+		}
+		if direct && params.Reciprocal && in.Pair.Role == p.Workstation && !in.Pair.NoControl && params.HostID != h.App.Store.DeviceID {
+			in.Pair.reciprocal, err = h.returnGrant(ctx, p.Identity{ID: params.HostID, PublicKey: params.HostPub})
+			if err != nil {
+				return nil, err
+			}
+		}
 		v, err := PairStore(ctx, h.App.Store, in.Pair)
 		h.reload()
 		return v, err
@@ -82,7 +196,7 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(bindings) == 0 && (in.Action == "lan" || in.Action == "expose_all" || in.Action == "expose" || in.Action == "hide") {
+		if len(bindings) == 0 && (in.Action == "access" || in.Action == "lan" || in.Action == "expose_all" || in.Action == "expose" || in.Action == "hide") {
 			scope, _, err := h.ensureDirectScope(ctx, in.Action == "lan" && in.Enabled)
 			if err != nil {
 				return nil, err
@@ -99,7 +213,24 @@ func (h *Host) Manage(ctx context.Context, in Management) (any, error) {
 		return nil, err
 	}
 	switch in.Action {
-	case "trust", "untrust", "rename_trusted", "permission", "set_permissions", "trusted":
+	case "access":
+		if !st.Membership.Role.Executes() {
+			return nil, errors.New("executor role required")
+		}
+		if in.AccessLevel != "" && !in.AccessLevel.Allows(p.AccessChat) {
+			return nil, errors.New("invalid access level")
+		}
+		h.configMu.Lock()
+		defer h.configMu.Unlock()
+		if in.RequireApproval != nil && !*in.RequireApproval && st.Origin != "" && st.Membership.SpaceKind != "personal" {
+			return nil, errors.New("automatic trust requires a personal space")
+		}
+		_, err := h.App.Store.DB.ExecContext(ctx, `INSERT INTO remote_access(hub,space,level,read_only,confirm)
+			VALUES(?,?,coalesce(nullif(?,''),'workspace'),coalesce(?,0),coalesce(?,1))
+			ON CONFLICT(hub,space) DO UPDATE SET level=coalesce(nullif(?,''),level),read_only=coalesce(?,read_only),confirm=coalesce(?,confirm)`,
+			in.Scope.HubID, in.Scope.SpaceID, in.AccessLevel, in.ReadOnlyFS, in.RequireApproval, in.AccessLevel, in.ReadOnlyFS, in.RequireApproval)
+		return true, err
+	case "pending_controllers", "discard_controller", "trust", "untrust", "rename_trusted", "permission", "set_permissions", "trusted":
 		return h.manageController(ctx, st, in)
 	case "share_note", "preview_note":
 		return h.note(ctx, st, in)
@@ -217,6 +348,9 @@ ON CONFLICT(hub,space,kind,object_id) DO UPDATE SET version=excluded.version,cha
 	case "accept", "decline":
 		h.configMu.Lock()
 		defer h.configMu.Unlock()
+		if result, ok, err := h.reviewPeerDelegation(ctx, st, in); ok {
+			return result, err
+		}
 		if result, ok, err := h.reviewLAN(ctx, in); ok {
 			return result, err
 		}

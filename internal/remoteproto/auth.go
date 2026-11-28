@@ -94,7 +94,6 @@ type HTTPError struct {
 func (e *HTTPError) Error() string { return fmt.Sprintf("Hub HTTP %d: %s", e.Status, e.Message) }
 func Decode(data []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
 		return err
 	}

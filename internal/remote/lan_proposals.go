@@ -40,7 +40,7 @@ func (h *Host) propose(ctx context.Context, g p.Grant, cmd p.LANCommand) (p.Inbo
 				return errors.New("chat required")
 			}
 			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=? AND m.space=?
-WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
+WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 AND (?=0 OR coalesce(json_extract(a.data,'$.profile.acceptDelegations'),1)=1)
 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`, g.HubID, g.SpaceID, i.AgentID, i.Delegation != nil).Scan(&visible); err != nil {
 				return err
@@ -87,7 +87,7 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 	return out, err
 }
 func (h *Host) lanInbox(ctx context.Context, scope model.SharedScope) ([]p.InboxItem, error) {
-	return store.List[p.InboxItem](ctx, h.App.Store.DB, `SELECT json_object('intent',json_extract(command,'$.intent'),'receipt',json(receipt)) FROM lan_proposals WHERE hub=? AND space=? AND json_extract(receipt,'$.status')='pending' ORDER BY rowid`, scope.HubID, scope.SpaceID)
+	return store.List[p.InboxItem](ctx, h.App.Store.DB, `SELECT json_object('intent',json_extract(command,'$.intent'),'receipt',json(receipt)) FROM lan_proposals WHERE hub=? AND space=? AND json_extract(receipt,'$.status')='pending' UNION ALL SELECT json_object('intent',json(intent),'receipt',json(receipt)) FROM peer_delegation_reviews WHERE hub=?1 AND space=?2 AND json_extract(receipt,'$.status')='pending'`, scope.HubID, scope.SpaceID)
 }
 func (h *Host) reviewLAN(ctx context.Context, in Management) (p.Receipt, bool, error) {
 	var out p.Receipt

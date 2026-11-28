@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,20 +27,30 @@ import (
 )
 
 type Host struct {
-	lanClient     lanclient.Client
-	lanMu         sync.Mutex
-	lan           *lanServer
-	lanAddr       string
-	lanError      string
-	lanTickets    map[string]int64
-	App           *app.App
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	mu            sync.Mutex
-	configMu      sync.Mutex
-	configChanged chan struct{}
-	clients       map[model.SharedScope]*connection
+	nodesMu                   sync.RWMutex
+	nodes                     map[string]*connectedNode
+	hubDirectories            map[model.SharedScope][]p.Device
+	nodesChanged              chan struct{}
+	peerOnce                  sync.Once
+	peerMux                   http.Handler
+	lanClient                 lanclient.Client
+	lanMu                     sync.Mutex
+	listenAddr, advertiseAddr string
+	lan                       *lanServer
+	lanAddr                   string
+	lanError                  string
+	lanAttempts               int
+	lanTickets                map[string]int64
+	lanNoncesMu               sync.Mutex
+	lanNonces                 map[string]int64
+	App                       *app.App
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	wg                        sync.WaitGroup
+	mu                        sync.Mutex
+	configMu                  sync.Mutex
+	configChanged             chan struct{}
+	clients                   map[model.SharedScope]*connection
 }
 type connection struct {
 	state  p.ClientState
@@ -48,12 +59,16 @@ type connection struct {
 	detail string
 }
 type Binding struct {
-	Login          bool   `json:"login"`
-	LoginSupported bool   `json:"loginSupported"`
-	LAN            bool   `json:"lan"`
-	LANAddr        string `json:"lanAddr,omitempty"`
-	LANError       string `json:"lanError,omitempty"`
-	Direct         bool   `json:"direct,omitempty"`
+	LegacyPermissions bool          `json:"legacyPermissions,omitempty"`
+	AccessLevel       p.AccessLevel `json:"accessLevel"`
+	ReadOnlyFS        bool          `json:"readOnlyFs"`
+	RequireApproval   bool          `json:"requireApproval"`
+	Login             bool          `json:"login"`
+	LoginSupported    bool          `json:"loginSupported"`
+	LAN               bool          `json:"lan"`
+	LANAddr           string        `json:"lanAddr,omitempty"`
+	LANError          string        `json:"lanError,omitempty"`
+	Direct            bool          `json:"direct,omitempty"`
 	model.SharedScope
 	Origin          string   `json:"origin"`
 	SpaceKind       string   `json:"spaceKind,omitempty"`
@@ -70,13 +85,18 @@ type Binding struct {
 
 func Start(a *app.App) *Host {
 	ctx, cancel := context.WithCancel(a.Context())
-	h := &Host{App: a, ctx: ctx, cancel: cancel, configChanged: make(chan struct{}, 1), clients: map[model.SharedScope]*connection{}, lanTickets: map[string]int64{}}
-	h.wg.Add(1)
+	h := &Host{nodes: map[string]*connectedNode{}, nodesChanged: make(chan struct{}, 1), App: a, ctx: ctx, cancel: cancel, configChanged: make(chan struct{}, 1), clients: map[model.SharedScope]*connection{}, lanTickets: map[string]int64{}}
+	h.wg.Add(2)
+	go h.pollNodes()
 	go h.manage()
 	return h
 }
 func (h *Host) Close() { h.cancel(); h.wg.Wait() }
 func (h *Host) reload() {
+	select {
+	case h.nodesChanged <- struct{}{}:
+	default:
+	}
 	select {
 	case h.configChanged <- struct{}{}:
 	default:
@@ -94,20 +114,23 @@ func stateFor(ctx context.Context, s *store.Store, scope model.SharedScope) (p.C
 	return st, err
 }
 func (h *Host) Bindings(ctx context.Context) ([]Binding, error) {
-	rows, err := h.App.Store.DB.QueryContext(ctx, "SELECT hub,space,origin,coalesce(json_extract(credential,'$.spaceKind'),'personal'),json_extract(credential,'$.role'),acked,version,lan,expose_all,allow_delegation FROM remote_memberships ORDER BY origin,space")
+	rows, err := h.App.Store.DB.QueryContext(ctx, "SELECT hub,space,origin,coalesce(json_extract(credential,'$.spaceKind'),'personal'),json_extract(credential,'$.role'),acked,version,lan,expose_all,allow_delegation,coalesce(level,'workspace'),coalesce(read_only,0),coalesce(confirm,1),level IS NULL FROM remote_memberships LEFT JOIN remote_access USING(hub,space) ORDER BY origin,space")
 	if err != nil {
 		return nil, err
 	}
 	list := []Binding{}
 	for rows.Next() {
 		var v Binding
-		if err = rows.Scan(&v.HubID, &v.SpaceID, &v.Origin, &v.SpaceKind, &v.Role, &v.Acked, &v.Version, &v.LAN, &v.ExposeAll, &v.AllowDelegation); err != nil {
+		if err = rows.Scan(&v.HubID, &v.SpaceID, &v.Origin, &v.SpaceKind, &v.Role, &v.Acked, &v.Version, &v.LAN, &v.ExposeAll, &v.AllowDelegation, &v.AccessLevel, &v.ReadOnlyFS, &v.RequireApproval, &v.LegacyPermissions); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		v.LoginSupported = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 		v.Login = device.LoginEnabled(h.App.Store.Dir)
 		v.DeviceID = h.App.Store.DeviceID
+		if !v.Role.Executes() {
+			v.AccessLevel = p.AccessNone
+		}
 		list = append(list, v)
 	}
 	err = rows.Err()
@@ -139,9 +162,25 @@ func (h *Host) Bindings(ctx context.Context) ([]Binding, error) {
 	}
 	return list, nil
 }
+
+// ListenPeer configures the dedicated, authenticated TLS listener for a headless
+// Node. Its full local workbench continues to use a separate loopback listener.
+func (h *Host) ListenPeer(bind, advertise string) (string, error) {
+	h.lanMu.Lock()
+	defer h.lanMu.Unlock()
+	if h.lan != nil {
+		h.lan.close()
+		h.lan = nil
+	}
+	h.listenAddr, h.advertiseAddr = bind, advertise
+	return h.syncLANLocked(true)
+}
 func (h *Host) syncLAN(want bool) (string, error) {
 	h.lanMu.Lock()
 	defer h.lanMu.Unlock()
+	return h.syncLANLocked(want || h.listenAddr != "" && h.ctx.Err() == nil)
+}
+func (h *Host) syncLANLocked(want bool) (string, error) {
 	if want && h.lan == nil {
 		lan, err := h.listenLAN()
 		h.mu.Lock()
@@ -171,10 +210,10 @@ func (h *Host) syncLAN(want bool) (string, error) {
 	return "", nil
 }
 func (h *Host) manage() {
+	defer h.wg.Done()
 	defer func() {
 		_, _ = h.syncLAN(false)
 	}()
-	defer h.wg.Done()
 	for {
 		bindings, err := h.Bindings(h.ctx)
 		if err == nil {
@@ -250,18 +289,30 @@ func (h *Host) run(ctx context.Context, c *connection) {
 func (h *Host) sync(ctx context.Context, c *connection) error {
 	st := c.state
 	m := st.Membership
-	req, err := st.Request(ctx, "GET", st.SpacePath()+"/connect", nil)
-	if err != nil {
-		return err
-	}
-	u := *req.URL
-	if u.Scheme == "https" {
-		u.Scheme = "wss"
-	} else {
-		u.Scheme = "ws"
+	syncPath := st.SpacePath() + "/connect"
+	if slices.Contains(m.Features, p.FeatureTunnel) {
+		syncPath = "/ws/sync"
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Proxy: http.ProxyFromEnvironment}
-	ws, resp, err := dialer.DialContext(ctx, u.String(), req.Header)
+	dial := func(path string) (*websocket.Conn, *http.Response, error) {
+		req, err := st.Request(ctx, "GET", path, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		u := *req.URL
+		if u.Scheme == "https" {
+			u.Scheme = "wss"
+		} else {
+			u.Scheme = "ws"
+		}
+		return dialer.DialContext(ctx, u.String(), req.Header)
+	}
+	ws, resp, err := dial(syncPath)
+	if err != nil && syncPath == "/ws/sync" && resp != nil && (resp.StatusCode == 404 || resp.StatusCode == 426) {
+		resp.Body.Close()
+		ws, resp, err = dial(st.SpacePath() + "/connect")
+	}
+
 	if resp != nil {
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			_, _ = h.App.Store.DB.ExecContext(ctx, "UPDATE remote_memberships SET policy=-1 WHERE hub=? AND space=? AND json_extract(credential,'$.token')=?", m.Hub.ID, m.SpaceID, m.Token)
@@ -313,6 +364,10 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 	}()
 	if m.Role.Executes() {
 		var reports sync.WaitGroup
+		if slices.Contains(hello.Features, p.FeatureTunnel) && hello.TunnelID != "" {
+			reports.Add(1)
+			go func() { defer reports.Done(); h.maintainTunnel(readctx, st, hello.TunnelID) }()
+		}
 		reports.Add(1)
 		go func() {
 			defer reports.Done()
@@ -358,9 +413,24 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 	var epoch string
 	lastPresenceSent := false
 	lastPresenceAt := time.Time{}
+	lastDescriptor := ""
+	var checkedDescriptorAt time.Time
 	sendPresence := func(force bool) error {
 		if !m.Role.Executes() {
 			return nil
+		}
+		if slices.Contains(hello.Features, p.FeatureTunnel) && (force || time.Since(checkedDescriptorAt) >= 2*time.Second) {
+			checkedDescriptorAt = time.Now()
+			node, err := h.descriptor(ctx, m)
+			if err != nil {
+				return err
+			}
+			if data := store.JSON(node); node.Supports(p.FeaturePeer) && data != lastDescriptor {
+				if err = send(p.Frame{Type: "node", Node: &node}); err != nil {
+					return err
+				}
+				lastDescriptor = data
+			}
 		}
 		active := h.App.DesktopActive()
 		if !force && active == lastPresenceSent && (!active || time.Since(lastPresenceAt) < 20*time.Second) {
@@ -378,7 +448,7 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 			return err
 		}
 		if dirty && pending < 0 && m.Role.Executes() {
-			b, err := projectBatch(ctx, h.App.Store, m, base, full)
+			b, err := projectBatch(ctx, h.App.Store, m, base, full, localEpoch)
 			if err != nil {
 				return err
 			}
@@ -415,7 +485,7 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 			}
 			switch f.Type {
 			case "offer_command":
-				if m.Role.Executes() && f.ControllerID != "" && len(f.RPCID) == 36 {
+				if m.Role.Executes() && len(f.RPCID) == 36 {
 					h.acceptOffer(ctx, st, f)
 				}
 			case "refresh":
@@ -439,6 +509,7 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 				}); err != nil {
 					return err
 				}
+				localEpoch = epoch
 				base = pending
 				pending = -1
 			case "query_command", "cancel_dispatch":
@@ -493,10 +564,16 @@ func (h *Host) sync(ctx context.Context, c *connection) error {
 }
 
 type PairConfig struct {
-	Hub  string `json:"hub"`
-	Code string `json:"code"`
-	Role p.Role `json:"role"`
-	Name string `json:"name,omitempty"`
+	reciprocal *p.DirectPairReceipt
+	Link       string        `json:"link,omitempty"`
+	Access     p.AccessLevel `json:"access,omitempty"`
+	ExposeAll  *bool         `json:"exposeAll,omitempty"`
+	AgentIDs   []string      `json:"agentIds,omitempty"`
+	NoControl  bool          `json:"noControl,omitempty"`
+	Hub        string        `json:"hub"`
+	Code       string        `json:"code"`
+	Role       p.Role        `json:"role"`
+	Name       string        `json:"name,omitempty"`
 }
 
 func PairStore(ctx context.Context, s *store.Store, in PairConfig) (model.SharedScope, error) {
@@ -508,11 +585,58 @@ func PairStore(ctx context.Context, s *store.Store, in PairConfig) (model.Shared
 	if len(key) != ed25519.PrivateKeySize {
 		return scope, errors.New("invalid Host private key")
 	}
+	if in.Access == "" {
+		in.Access = p.AccessWorkspace
+	}
+	if !in.Access.Allows(p.AccessChat) {
+		return scope, errors.New("access must be chat, workspace or admin")
+	}
+	if in.NoControl {
+		in.Role = p.Executor
+	}
 	if in.Name == "" {
 		in.Name, _ = os.Hostname()
 	}
 	priv := ed25519.PrivateKey(key)
 	pi := p.PairInput{Code: in.Code, Name: in.Name, Platform: runtime.GOOS, Role: in.Role, Identity: p.Identity{ID: s.DeviceID, PublicKey: priv.Public().(ed25519.PublicKey)}}
+	if in.Link != "" {
+		params, direct, err := p.ParseDirectPairLink(in.Link)
+		if err != nil {
+			return scope, err
+		}
+		if direct {
+			if in.NoControl || in.Role == p.Executor {
+				return scope, errors.New("direct pairing requires a controller or workstation")
+			}
+			if params.HostID == s.DeviceID {
+				return scope, errors.New("cannot pair this device with itself")
+			}
+			// Use the controller wire role for compatibility with older LAN Hosts.
+			pi.Role = p.Controller
+			pi.Reciprocal = in.reciprocal
+			st, receipt, err := p.PairDirect(ctx, params, pi, priv)
+			if err != nil {
+				return scope, err
+			}
+			m := st.Membership
+			receipt.LANAddr = st.LANAddr
+			err = s.Write(ctx, func(tx *sql.Tx) error {
+				if err := savePeer(tx, receipt); err != nil {
+					return err
+				}
+				if in.reciprocal != nil {
+					return saveLANController(tx, model.SharedScope{HubID: s.DeviceID, SpaceID: s.DeviceID}, m.Hub, st.HostName, false)
+				}
+				return nil
+			})
+			return model.SharedScope{HubID: m.Hub.ID, SpaceID: m.SpaceID}, err
+		}
+		origin, code, err := p.HubPairLink(in.Link)
+		if err != nil {
+			return scope, err
+		}
+		in.Hub, pi.Code = origin, code
+	}
 	state, err := p.Pair(ctx, in.Hub, pi, priv)
 	if err != nil {
 		return scope, err
@@ -520,13 +644,27 @@ func PairStore(ctx context.Context, s *store.Store, in PairConfig) (model.Shared
 	m := state.Membership
 	scope = model.SharedScope{HubID: m.Hub.ID, SpaceID: m.SpaceID}
 	err = s.Write(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.Exec("DELETE FROM remote_trusted_controllers WHERE hub=? AND space=?", scope.HubID, scope.SpaceID); err != nil {
+		expose := m.SpaceKind == "personal" && m.Role.Executes()
+		if in.ExposeAll != nil {
+			expose = *in.ExposeAll && m.Role.Executes()
+		}
+		result, err := tx.Exec(`INSERT INTO remote_memberships(hub,space,origin,credential,epoch,expose_all) VALUES(?,?,?,?,?,?)
+			ON CONFLICT(hub,space) DO UPDATE SET origin=excluded.origin,credential=excluded.credential,epoch=excluded.epoch,acked=0
+			WHERE json_extract(remote_memberships.credential,'$.hub.publicKey')=json_extract(excluded.credential,'$.hub.publicKey') AND json_extract(remote_memberships.credential,'$.userId')=json_extract(excluded.credential,'$.userId')`, scope.HubID, scope.SpaceID, state.Origin, store.JSON(m), p.NewID(), expose)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec("DELETE FROM hub_exposed_agents WHERE hub=? AND space=?", scope.HubID, scope.SpaceID); err != nil {
-			return err
+		if n, _ := result.RowsAffected(); n != 1 {
+			return errors.New("paired Hub identity or owner changed")
 		}
-		_, err := tx.Exec(`INSERT INTO remote_memberships(hub,space,origin,credential,epoch) VALUES(?,?,?,?,?) ON CONFLICT(hub,space) DO UPDATE SET origin=excluded.origin,credential=excluded.credential,epoch=excluded.epoch,acked=0,expose_all=0`, scope.HubID, scope.SpaceID, state.Origin, store.JSON(m), p.NewID())
+		if !expose && m.Role.Executes() {
+			for _, id := range in.AgentIDs {
+				if _, err = tx.Exec("INSERT OR IGNORE INTO hub_exposed_agents SELECT ?,?,id FROM agents WHERE id=?", scope.HubID, scope.SpaceID, id); err != nil {
+					return err
+				}
+			}
+		}
+		_, err = tx.Exec("INSERT OR IGNORE INTO remote_access(hub,space,level,confirm) VALUES(?,?,?,?)", scope.HubID, scope.SpaceID, in.Access, m.SpaceKind != "personal")
 		return err
 	})
 	return scope, err
@@ -559,20 +697,32 @@ func (h *Host) ensureDirectScope(ctx context.Context, enableLAN bool) (model.Sha
 	}
 	pub := ed25519.PrivateKey(key).Public().(ed25519.PublicKey)
 	m := p.Membership{
-		Hub:      p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub},
-		SpaceID:  h.App.Store.DeviceID,
-		UserID:   "local",
-		DeviceID: h.App.Store.DeviceID,
-		Role:     p.Workstation,
+		Hub:       p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub},
+		SpaceID:   h.App.Store.DeviceID,
+		SpaceKind: "personal",
+		UserID:    "local",
+		DeviceID:  h.App.Store.DeviceID,
+		Role:      p.Workstation,
 	}
 	lanVal := 0
 	if enableLAN {
 		lanVal = 1
 	}
 	err := h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+		var existing bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_memberships WHERE hub=? AND space=?)", scope.HubID, scope.SpaceID).Scan(&existing); err != nil {
+			return err
+		}
 		_, err := tx.Exec(`INSERT INTO remote_memberships(hub,space,origin,credential,epoch,lan,policy,expose_all) VALUES(?,?,'',?,?,?,1,1)
 			ON CONFLICT(hub,space) DO UPDATE SET credential=excluded.credential,policy=max(policy,1),lan=CASE WHEN ?=1 THEN 1 ELSE lan END`,
 			scope.HubID, scope.SpaceID, store.JSON(m), p.NewID(), lanVal, lanVal)
+		if err != nil {
+			return err
+		}
+		if existing {
+			return nil
+		} // Preserve the original per-controller policy on upgrade.
+		_, err = tx.Exec("INSERT OR IGNORE INTO remote_access(hub,space,level) VALUES(?,?,'workspace')", scope.HubID, scope.SpaceID)
 		return err
 	})
 	return scope, pub, err

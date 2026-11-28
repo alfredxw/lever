@@ -99,6 +99,10 @@ func TestRemoteTaskAndArchive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// This recovery scenario exercises a Host that requires local approval.
+	requireApproval := true
+	manage(remote.Management{Action: "access", Scope: scope, RequireApproval: &requireApproval})
+	manage(remote.Management{Action: "expose_all", Scope: scope, Enabled: false})
 	manage(remote.Management{Action: "expose", Scope: scope, AgentID: agent.ID})
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	pi := p.PairInput{Code: ticket(p.Executor), Role: p.Executor, Identity: p.Identity{ID: p.NewID(), PublicKey: pub}, Name: "Headless C", Platform: "test"}

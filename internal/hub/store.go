@@ -108,6 +108,12 @@ func (h *Hub) init() error {
 		if _, err := tx.Exec(schema); err != nil {
 			return err
 		}
+		if err := ensureColumn(tx, "push_outbox", "source_page", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err := ensureColumn(tx, "devices", "node", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
 		if err := ensureColumn(tx, "devices", "desktop_active_until", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
@@ -315,6 +321,7 @@ CREATE TRIGGER IF NOT EXISTS drain_policy AFTER UPDATE OF draining ON devices WH
 CREATE TRIGGER IF NOT EXISTS device_policy AFTER UPDATE OF revoked,role,token ON devices BEGIN UPDATE spaces SET policy=policy+1 WHERE id=NEW.space_id; END;
 CREATE TABLE IF NOT EXISTS nonces(token TEXT NOT NULL,nonce TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(token,nonce));
 CREATE INDEX IF NOT EXISTS nonce_expiry ON nonces(expires);
+CREATE TABLE IF NOT EXISTS node_hot_pages(space_id TEXT NOT NULL,device_id TEXT NOT NULL,path TEXT NOT NULL,epoch TEXT NOT NULL,revision INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(space_id,device_id,path),FOREIGN KEY(space_id,device_id) REFERENCES devices ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS archive(space_id TEXT NOT NULL,device_id TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(space_id,device_id,kind,id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 CREATE TABLE IF NOT EXISTS archive_streams(space_id TEXT NOT NULL,device_id TEXT NOT NULL,stream TEXT NOT NULL,floor INTEGER NOT NULL,PRIMARY KEY(space_id,device_id),FOREIGN KEY(space_id,device_id) REFERENCES devices);
 CREATE TABLE IF NOT EXISTS archive_updates(space_id TEXT NOT NULL,device_id TEXT NOT NULL,view TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,version INTEGER NOT NULL,PRIMARY KEY(space_id,device_id,view,kind,id),FOREIGN KEY(space_id,device_id) REFERENCES devices);

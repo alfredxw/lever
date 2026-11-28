@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 var ErrNotRepository = errors.New("scope is not a Git repository")
 
 type DiffOptions struct {
+	allowed          func(string) bool // Non-nil for a filtered remote review.
 	Full             bool
 	IgnoreWhitespace bool
 	Path             string
@@ -309,6 +311,16 @@ func diffAt(ctx context.Context, repo, rel string, refs []string, opts DiffOptio
 	result.Files, err = diffFilesAt(ctx, repo, rel, refs, opts)
 	if err != nil {
 		return result, err
+	}
+	if opts.allowed != nil {
+		result.Files = slices.DeleteFunc(result.Files, func(f model.DiffFile) bool { return !opts.allowed(f.Path) })
+		if opts.Path == "" {
+			result.SingleFile = true
+			return result, nil
+		}
+		if !opts.allowed(opts.Path) {
+			return result, os.ErrPermission
+		}
 	}
 	paths := []string{rel}
 	if opts.Path != "" {

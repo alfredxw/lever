@@ -130,6 +130,15 @@ func previewLinkPath(href, origin string) string {
 	return path
 }
 
+// WorkspacePreviewPath resolves a Markdown link only within the supplied roots.
+func WorkspacePreviewPath(path string, scope model.Scope) (string, string, error) {
+	roots := make([]string, 0, len(scope.Roots))
+	for _, root := range scope.Roots {
+		roots = append(roots, root.Path)
+	}
+	return previewPath(path, workspace.CWD(scope), roots)
+}
+
 func (a *App) RunPreviewPath(ctx context.Context, runID, path string, image bool) (string, string, error) {
 	var agentID, sessionID string
 	err := a.Store.DB.QueryRowContext(ctx, "SELECT agent_id, session_id FROM runs WHERE id=?", runID).Scan(&agentID, &sessionID)
@@ -141,11 +150,7 @@ func (a *App) RunPreviewPath(ctx context.Context, runID, path string, image bool
 		return "", "", err
 	}
 	defer release()
-	var roots []string
-	for _, root := range scope.Roots {
-		roots = append(roots, root.Path)
-	}
-	if root, relative, err := previewPath(path, workspace.CWD(scope), roots); err == nil {
+	if root, relative, err := WorkspacePreviewPath(path, scope); err == nil {
 		return root, relative, nil
 	}
 	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {

@@ -16,6 +16,16 @@ import (
 // SearchFiles searches literal text, ignoring case, in the Agent's current
 // roots. Bounds keep a broad query from reading or returning an entire repo.
 func SearchFiles(ctx context.Context, profile model.Scope, query string, content bool) (model.FileSearch, error) {
+	return searchFiles(ctx, profile, query, content, "")
+}
+
+func PeerSearchFiles(ctx context.Context, profile model.Scope, query string, content bool, dataDir string) (model.FileSearch, error) {
+	if dataDir == "" {
+		return model.FileSearch{}, os.ErrPermission
+	}
+	return searchFiles(ctx, profile, query, content, dataDir)
+}
+func searchFiles(ctx context.Context, profile model.Scope, query string, content bool, dataDir string) (model.FileSearch, error) {
 	result := model.FileSearch{Matches: []model.FileMatch{}}
 	if query == "" {
 		return result, ctx.Err()
@@ -35,7 +45,11 @@ func SearchFiles(ctx context.Context, profile model.Scope, query string, content
 		return true
 	}
 	for _, scope := range profile.Roots {
-		err := visitFiles(ctx, scope.Path, nil, func(root *os.Root, path string, info fs.FileInfo) error {
+		var filter func(string) bool
+		if dataDir != "" {
+			filter = func(path string) bool { return peerPathAllowed(filepath.Join(scope.Path, path), dataDir, false) }
+		}
+		err := visitFiles(ctx, scope.Path, filter, func(root *os.Root, path string, info fs.FileInfo) error {
 			absolute := filepath.Join(scope.Path, filepath.FromSlash(path))
 			if seen[absolute] {
 				return nil
@@ -47,7 +61,7 @@ func SearchFiles(ctx context.Context, profile model.Scope, query string, content
 				return fs.SkipAll
 			}
 			if !content {
-				if pattern.MatchString(path) && !add(model.FileMatch{RootID: scope.ID, Path: path}) {
+				if pattern.MatchString(path) && (dataDir == "" || PeerAllowsPath(scope.Path, path, dataDir)) && !add(model.FileMatch{RootID: scope.ID, Path: path}) {
 					return fs.SkipAll
 				}
 				return nil
@@ -55,12 +69,18 @@ func SearchFiles(ctx context.Context, profile model.Scope, query string, content
 			if info.Size() > MaxFileBytes {
 				return nil
 			}
-			f, err := root.Open(filepath.FromSlash(path))
-			if err != nil {
-				return nil // Removed or unreadable since listing.
+			var data model.FileContent
+			var err error
+			if dataDir != "" {
+				data, err = PeerFile(scope.Path, path, dataDir, nil)
+			} else {
+				var f *os.File
+				f, err = root.Open(filepath.FromSlash(path))
+				if err == nil {
+					data, err = readFile(f, path)
+					f.Close()
+				}
 			}
-			data, err := readFile(f, path)
-			f.Close()
 			bytesRead += info.Size()
 			if err != nil || data.Truncated {
 				return nil // Binary, non-UTF-8, or oversized text.

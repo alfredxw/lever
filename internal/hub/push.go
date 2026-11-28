@@ -162,15 +162,19 @@ func noticeKind(r p.Record) string {
 }
 
 func (h *Hub) queuePush(tx *sql.Tx, a principal, r p.Record) error {
+	return h.queuePagePush(tx, a, r, "")
+}
+
+func (h *Hub) queuePagePush(tx *sql.Tx, a principal, r p.Record, path string) error {
 	if noticeKind(r) == "" {
 		return nil
 	}
 	now := time.Now()
-	_, err := tx.Exec(`INSERT INTO push_outbox(space_id,recipient,host,kind,object,status,due,expires)
-		SELECT p.space_id,p.device_id,?,?,?,?,?,? FROM push_devices p JOIN devices d ON d.space_id=p.space_id AND d.id=p.device_id
+	_, err := tx.Exec(`INSERT INTO push_outbox(space_id,recipient,host,kind,object,status,due,expires,source_page)
+		SELECT p.space_id,p.device_id,?,?,?,?,?,?,? FROM push_devices p JOIN devices d ON d.space_id=p.space_id AND d.id=p.device_id
 		WHERE p.space_id=? AND d.user_id=? AND d.revoked=0 AND d.role='controller'
-		ON CONFLICT(space_id,recipient,host,kind,object) DO UPDATE SET status=excluded.status,due=excluded.due,expires=excluded.expires,attempts=0`,
-		a.device, r.Kind, r.ID, r.Status, now.Unix(), now.Add(24*time.Hour).Unix(), a.space, a.user)
+		ON CONFLICT(space_id,recipient,host,kind,object) DO UPDATE SET status=excluded.status,due=excluded.due,expires=excluded.expires,source_page=excluded.source_page,attempts=0`,
+		a.device, r.Kind, r.ID, r.Status, now.Unix(), now.Add(24*time.Hour).Unix(), path, a.space, a.user)
 	return err
 }
 
@@ -183,6 +187,7 @@ type delivery struct {
 
 func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 	var d delivery
+	var sourcePage, kind, object string
 	var raw sql.NullString
 	var expires int64
 	var active bool
@@ -190,11 +195,11 @@ func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 	var desktopActiveUntil int64
 	var sealKey []byte
 	nowUnix := time.Now().Unix()
-	err := h.db.QueryRowContext(ctx, `SELECT q.id,q.attempts,q.status,q.expires,p.platform,p.token,p.seal_key,p.silence_when_desktop_active,host.desktop_active_until,q.recipient,q.space_id,q.host,a.data,(host.revoked=0 AND dest.revoked=0)
+	err := h.db.QueryRowContext(ctx, `SELECT q.id,q.attempts,q.status,q.expires,p.platform,p.token,p.seal_key,p.silence_when_desktop_active,host.desktop_active_until,q.recipient,q.space_id,q.host,q.source_page,q.kind,q.object,a.data,(host.revoked=0 AND dest.revoked=0)
 		FROM push_outbox q JOIN push_devices p ON p.space_id=q.space_id AND p.device_id=q.recipient
 		JOIN devices host ON host.space_id=q.space_id AND host.id=q.host JOIN devices dest ON dest.space_id=q.space_id AND dest.id=q.recipient
 		LEFT JOIN archive a ON (a.space_id,a.device_id,a.kind,a.id)=(q.space_id,q.host,q.kind,q.object)
-		WHERE q.due<=? ORDER BY q.due,q.id LIMIT 1`, nowUnix).Scan(&d.id, &d.attempts, &d.status, &expires, &d.platform, &d.token, &sealKey, &silenceWhenDesktopActive, &desktopActiveUntil, &d.recipient, &d.notice.SpaceID, &d.notice.DeviceID, &raw, &active)
+		WHERE q.due<=? ORDER BY q.due,q.id LIMIT 1`, nowUnix).Scan(&d.id, &d.attempts, &d.status, &expires, &d.platform, &d.token, &sealKey, &silenceWhenDesktopActive, &desktopActiveUntil, &d.recipient, &d.notice.SpaceID, &d.notice.DeviceID, &sourcePage, &kind, &object, &raw, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -202,10 +207,26 @@ func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	var r p.Record
+	if sourcePage != "" {
+		field := "$.runs"
+		if kind == "request" {
+			field = "$.requests"
+		}
+		err = h.db.QueryRowContext(ctx, `SELECT item.value FROM node_hot_pages hp JOIN devices host ON (host.space_id,host.id)=(hp.space_id,hp.device_id),json_each(hp.data,?) item
+			WHERE hp.space_id=? AND hp.device_id=? AND hp.path=? AND hp.epoch=json_extract(nullif(host.node,''),'$.cacheEpoch') AND host.revoked=0 AND json_extract(item.value,'$.id')=?`, field, d.notice.SpaceID, d.notice.DeviceID, sourcePage, object).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			raw = sql.NullString{}
+		} else if err != nil {
+			return false, err
+		}
+	}
 	if raw.Valid {
 		if err = json.Unmarshal([]byte(raw.String), &r); err != nil {
 			return false, err
 		}
+	}
+	if sourcePage != "" && raw.Valid {
+		r.Kind = kind
 	}
 	d.notice.Kind = noticeKind(r)
 	silenced := silenceWhenDesktopActive && desktopActiveUntil > nowUnix
@@ -223,7 +244,7 @@ func (h *Hub) deliverNext(ctx context.Context) (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			if main {
+			if main || strings.HasPrefix(sourcePage, "chats/") {
 				d.notice.SessionID = ""
 			}
 		}

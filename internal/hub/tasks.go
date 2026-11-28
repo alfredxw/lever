@@ -126,6 +126,32 @@ func (h *Hub) createTask(w http.ResponseWriter, r *http.Request, a principal) er
 	if in.Project != nil {
 		t.Project = strings.TrimSpace(*in.Project)
 	}
+	// The authoritative Owner supplies unshared personal chat IDs. An offline
+	// Owner may still have an access-scoped index in the hot cache.
+	var native, linked bool
+	var viewErr error
+	if src := in.Source; src != nil {
+		var view *p.NodeOverview
+		view, viewErr = h.taskOwnerView(r.Context(), a, space, src.DeviceID, "chat", src.ChatID)
+		if view != nil {
+			native = true
+			for _, c := range view.Chats {
+				if c.ID == src.ChatID {
+					linked = true
+					break
+				}
+			}
+			if linked && src.SessionID != "" {
+				linked = false
+				for _, c := range view.Conversations {
+					if c.ID == src.SessionID && c.ChatID == src.ChatID {
+						linked = true
+						break
+					}
+				}
+			}
+		}
+	}
 	err := write(h.db, func(tx *sql.Tx) error {
 		res, err := tx.Exec("INSERT OR IGNORE INTO tasks VALUES(?,?,?,?)", space, t.ID, digest, encoded(t))
 		if err != nil {
@@ -133,7 +159,13 @@ func (h *Hub) createTask(w http.ResponseWriter, r *http.Request, a principal) er
 		}
 		n, _ := res.RowsAffected()
 		if n != 0 {
-			if src := in.Source; src != nil {
+			if viewErr != nil {
+				return viewErr
+			}
+			if native && !linked {
+				return invalid("select a visible conversation in this space")
+			}
+			if src := in.Source; src != nil && !native {
 				var visible bool
 				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive WHERE space_id=? AND device_id=? AND kind='chat' AND id=?) AND (?='' OR EXISTS(SELECT 1 FROM archive WHERE space_id=? AND device_id=? AND kind='session' AND id=? AND json_extract(data,'$.chatId')=?))`, space, src.DeviceID, src.ChatID, src.SessionID, space, src.DeviceID, src.SessionID, src.ChatID).Scan(&visible); err != nil {
 					return err
@@ -224,7 +256,7 @@ type dispatchInput struct {
 	Force         bool   `json:"force,omitempty"`
 }
 
-func (h *Hub) target(tx *sql.Tx, space, device, agent, group string) error {
+func (h *Hub) target(tx *sql.Tx, space, device, agent, group string, view *p.NodeOverview) error {
 	var active bool
 	err := tx.QueryRow("SELECT role IN ('workstation','executor') AND revoked=0 AND draining=0 FROM devices WHERE space_id=? AND id=?", space, device).Scan(&active)
 	if err != nil {
@@ -232,6 +264,23 @@ func (h *Hub) target(tx *sql.Tx, space, device, agent, group string) error {
 	}
 	if !active || !h.online(deviceKey{space, device}) {
 		return conflict("target is offline, paused or revoked")
+	}
+	if view != nil {
+		visible := false
+		for _, a := range view.Agents {
+			if a.ID == agent {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			return denied
+		}
+		if group == "" {
+			return nil
+		}
+		// A named worktree is still validated by the legacy directory and by
+		// the Owner when it accepts the command.
 	}
 	rec, err := get[p.Record](tx, "SELECT data FROM archive WHERE space_id=? AND device_id=? AND kind='agent' AND id=?", space, device, agent)
 	if err != nil {
@@ -276,6 +325,7 @@ func (h *Hub) dispatch(w http.ResponseWriter, r *http.Request, a principal) erro
 			verifiedRun = old.RunID
 		}
 	}
+	view, viewErr := h.taskOwnerView(r.Context(), a, space, in.DeviceID, "agent", in.AgentID)
 	err = write(h.db, func(tx *sql.Tx) error {
 		var previous string
 		err := tx.QueryRow("SELECT digest FROM dispatches WHERE space_id=? AND id=?", space, in.CommandID).Scan(&previous)
@@ -296,7 +346,10 @@ func (h *Hub) dispatch(w http.ResponseWriter, r *http.Request, a principal) erro
 		if t.Version != in.Version || t.Status == "done" || t.Status == "closed" {
 			return conflict("task changed; refresh")
 		}
-		if err = h.target(tx, space, in.DeviceID, in.AgentID, in.WorkingCopyID); err != nil {
+		if viewErr != nil {
+			return viewErr
+		}
+		if err = h.target(tx, space, in.DeviceID, in.AgentID, in.WorkingCopyID, view); err != nil {
 			return err
 		}
 		if t.DispatchID != "" {
@@ -354,13 +407,10 @@ func (h *Hub) dispatch(w http.ResponseWriter, r *http.Request, a principal) erro
 }
 
 func (h *Hub) offer(space, host, controller, id string, delegation bool) {
-	if controller == "" {
-		return
-	}
 	h.mu.Lock()
 	l := h.links[deviceKey{space, host}]
 	h.mu.Unlock()
-	if l != nil {
+	if l != nil && l.conn != nil {
 		_ = l.send(p.Frame{Type: "offer_command", SpaceID: space, DeviceID: host, ControllerID: controller, Delegation: delegation, RPCID: id})
 	}
 }
@@ -403,6 +453,11 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 	space := r.PathValue("space")
 	var item p.InboxItem
 	isDelegation := i.Delegation != nil
+	var view *p.NodeOverview
+	var viewErr error
+	if i.Kind == "send" && i.ChatID == "" {
+		view, viewErr = h.taskOwnerView(r.Context(), a, space, i.DeviceID, "agent", i.AgentID)
+	}
 	err := write(h.db, func(tx *sql.Tx) error {
 		if old, err := get[p.InboxItem](tx, "SELECT data FROM receipts WHERE space_id=? AND device_id=? AND id=?", space, i.DeviceID, i.ID); err == nil {
 			if encoded(old.Intent) != encoded(i) {
@@ -417,7 +472,10 @@ func (h *Hub) submit(w http.ResponseWriter, r *http.Request, a principal) error 
 			return conflict("device offline")
 		}
 		if i.Kind == "send" && i.ChatID == "" {
-			if err := h.target(tx, space, i.DeviceID, i.AgentID, i.WorkingCopyID); err != nil {
+			if viewErr != nil {
+				return viewErr
+			}
+			if err := h.target(tx, space, i.DeviceID, i.AgentID, i.WorkingCopyID, view); err != nil {
 				return err
 			}
 			if i.Delegation != nil {

@@ -17,9 +17,9 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 	if err != nil {
 		return nil, err
 	}
-	out := []model.RemoteAgentTarget{}
+	out, handled := h.nativeDelegationTargets(ctx, scope)
 	for _, b := range bindings {
-		if !b.Role.Controls() {
+		if b.Direct || !b.Role.Controls() {
 			continue
 		}
 		if scope != nil && (b.HubID != scope.HubID || b.SpaceID != scope.SpaceID) {
@@ -35,6 +35,17 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 		}
 		for _, d := range devices {
 			if d.ID == h.App.Store.DeviceID || d.Revoked || !d.Role.Executes() {
+				continue
+			}
+			if handled[d.ID] {
+				continue
+			}
+			if d.Node != nil && d.Node.Supports(p.FeatureDelegationTargets) && d.Online {
+				var rows []model.RemoteAgentTarget
+				if st.Do(ctx, "GET", st.SpacePath()+"/nodes/"+url.PathEscape(d.ID)+"/delegation-targets", nil, &rows) == nil {
+					identifyTargets(rows, b.SharedScope, d.ID, d.Name, d.Online, d.Draining)
+					out = append(out, rows...)
+				}
 				continue
 			}
 			var records []p.Record
@@ -109,6 +120,11 @@ func (h *Host) ListRemoteTargets(ctx context.Context, scope *model.SharedScope) 
 
 func (h *Host) SubmitRemoteIntent(ctx context.Context, scope model.SharedScope, intent p.Intent) (p.InboxItem, error) {
 	var item p.InboxItem
+	if node, ok := h.delegationNode(&scope, intent.DeviceID); ok {
+		err := peerJSON(ctx, node, "POST", "/delegations", intent, &item.Receipt)
+		return item, err
+	}
+
 	st, err := stateFor(ctx, h.App.Store, scope)
 	if err != nil {
 		return item, err
@@ -132,6 +148,11 @@ func (h *Host) SubmitRemoteIntent(ctx context.Context, scope model.SharedScope, 
 
 func (h *Host) LookupRemoteCommand(ctx context.Context, scope model.SharedScope, deviceID, commandID string) (p.InboxItem, error) {
 	var item p.InboxItem
+	if node, ok := h.delegationNode(&scope, deviceID); ok {
+		err := peerJSON(ctx, node, "GET", "/commands/"+url.PathEscape(commandID), nil, &item.Receipt)
+		return item, err
+	}
+
 	st, err := stateFor(ctx, h.App.Store, scope)
 	if err != nil {
 		return item, err

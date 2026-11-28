@@ -98,11 +98,10 @@ type DelegationSettings struct {
 	MaxConcurrent int              `json:"maxConcurrent,omitempty"`
 }
 
+const MaxDelegationHops = 3
+
 func (s DelegationSettings) EffectiveMaxDepth() int {
-	if s.MaxDepth >= 2 {
-		return 2
-	}
-	return 1
+	return max(1, min(s.MaxDepth, MaxDelegationHops))
 }
 
 func (s DelegationSettings) EffectiveMaxConcurrent() int {
@@ -187,11 +186,8 @@ func (p Profile) EffectiveDelegationPolicy(defaults DelegationSettings) Delegati
 }
 
 func (p Profile) EffectiveMaxDelegationDepth(defaults DelegationSettings) int {
-	if p.MaxDelegationDepth >= 2 {
-		return 2
-	}
-	if p.MaxDelegationDepth == 1 {
-		return 1
+	if p.MaxDelegationDepth > 0 {
+		return min(p.MaxDelegationDepth, MaxDelegationHops)
 	}
 	return defaults.EffectiveMaxDepth()
 }
@@ -218,6 +214,9 @@ type Avatar struct {
 }
 
 type Agent struct {
+	NodeID string `json:"nodeId,omitempty"` // Assigned by the multi-device HTTP gateway.
+
+	LocalOnly bool    `json:"localOnly,omitempty"`
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
 	Avatar    *Avatar `json:"avatar,omitempty"`
@@ -237,6 +236,9 @@ type SharedTaskRef struct {
 	DispatchID  string `json:"dispatchId"`
 }
 type Chat struct {
+	NodeID string `json:"nodeId,omitempty"` // Assigned by the multi-device HTTP gateway.
+
+	LocalOnly     bool           `json:"localOnly,omitempty"`
 	SharedScope   *SharedScope   `json:"sharedScope,omitempty"`
 	SharedTaskRef *SharedTaskRef `json:"sharedTaskRef,omitempty"`
 	ID            string         `json:"id"`
@@ -255,6 +257,8 @@ type Chat struct {
 // Conversation is the sidebar projection of a main or Topic session. Its
 // unread cursor advances when its view has loaded or the user marks it read.
 type Conversation struct {
+	NodeID string `json:"nodeId,omitempty"` // Assigned by the multi-device HTTP gateway.
+
 	BackgroundOnly  bool              `json:"backgroundOnly,omitempty"` // No foreground activity in this session yet.
 	Comparison      *ComparisonOrigin `json:"comparison,omitempty"`
 	ID              string            `json:"id"`
@@ -487,11 +491,11 @@ type SessionHandoff struct {
 }
 
 type Session struct {
-	Runtime            *SessionRuntime         `json:"runtime,omitempty"`
-	ProjectID          string                  `json:"projectId,omitempty"`
-	WorkingCopyID      string                  `json:"workingCopyId,omitempty"`
-	WorkingCopyName    string                  `json:"workingCopyName,omitempty"`
-	Title              string                  `json:"title,omitempty"`
+	Runtime            *SessionRuntime `json:"runtime,omitempty"`
+	ProjectID          string          `json:"projectId,omitempty"`
+	WorkingCopyID      string          `json:"workingCopyId,omitempty"`
+	WorkingCopyName    string          `json:"workingCopyName,omitempty"`
+	Title              string          `json:"title,omitempty"`
 	Scope              `tstype:",extends"`
 	ID                 string                  `json:"id"`
 	ChatID             string                  `json:"chatId"`
@@ -623,6 +627,7 @@ type Run struct {
 	Status                  string         `json:"status"`
 	Superseded              bool           `json:"superseded,omitempty"` // Excluded from the active conversation.
 	Items                   []Item         `json:"items"`
+	StepCount               int            `json:"stepCount,omitempty"` // Omitted non-text/non-user steps count when projected lazily.
 	CreatedAgents           []CreatedAgent `json:"createdAgents,omitempty"`
 	Error                   string         `json:"error,omitempty"`
 	CreatedAt               string         `json:"createdAt"`
@@ -630,24 +635,24 @@ type Run struct {
 	FinishedAt              string         `json:"finishedAt,omitempty"`
 	// A nil native turn ID permits lookup by the original client message ID.
 	// An empty ID records a continuation whose delivery has yet to be confirmed.
-	NativeTurnID        *string             `json:"nativeTurnId,omitempty"`
-	CanPause            bool                `json:"canPause,omitempty"`
-	CanSteer            bool                `json:"canSteer,omitempty"`
-	SteerPending        bool                `json:"steerPending,omitempty"`
+	NativeTurnID          *string             `json:"nativeTurnId,omitempty"`
+	CanPause              bool                `json:"canPause,omitempty"`
+	CanSteer              bool                `json:"canSteer,omitempty"`
+	SteerPending          bool                `json:"steerPending,omitempty"`
 	PauseRequested        bool                `json:"pauseRequested,omitempty"`
 	Continued             bool                `json:"continued,omitempty"`
 	ContinuationCommandID string              `json:"continuationCommandId,omitempty"`
 	ResumeAfterShutdown   bool                `json:"resumeAfterShutdown,omitempty"`
-	Operation           string              `json:"operation,omitempty"`
-	Delivery            string              `json:"delivery,omitempty"`
-	SteerRunID          string              `json:"steerRunId,omitempty"`
-	AfterRunIDs         []string            `json:"afterRunIds,omitempty"`
-	WaitingOn           []RunDependency     `json:"waitingOn,omitempty"`
-	ScopePaths          []string            `json:"scopePaths,omitempty"`
-	TurnDiff            *TurnPatch          `json:"turnDiff,omitempty"`
-	Changes             []RunChanges        `json:"changes,omitempty"`
-	Channel             *ChannelTurn        `json:"channel,omitempty"`
-	DelegationReceipts  []DelegationReceipt `json:"delegationReceipts,omitempty"`
+	Operation             string              `json:"operation,omitempty"`
+	Delivery              string              `json:"delivery,omitempty"`
+	SteerRunID            string              `json:"steerRunId,omitempty"`
+	AfterRunIDs           []string            `json:"afterRunIds,omitempty"`
+	WaitingOn             []RunDependency     `json:"waitingOn,omitempty"`
+	ScopePaths            []string            `json:"scopePaths,omitempty"`
+	TurnDiff              *TurnPatch          `json:"turnDiff,omitempty"`
+	Changes               []RunChanges        `json:"changes,omitempty"`
+	Channel               *ChannelTurn        `json:"channel,omitempty"`
+	DelegationReceipts    []DelegationReceipt `json:"delegationReceipts,omitempty"`
 }
 
 // RunDependency is the live status projection of an upstream run this turn waits on.
@@ -792,21 +797,21 @@ type Answer struct {
 }
 
 type SendInput struct {
-	SharedScope   *SharedScope  `json:"sharedScope,omitempty"`
-	WorkingCopyID string        `json:"workingCopyId,omitempty"`
-	CommandID     string        `json:"commandId"`
-	ChatID        string        `json:"chatId"`
-	AgentID       string        `json:"agentId,omitempty"`
-	Operation     string        `json:"operation"`
-	SessionID     string        `json:"sessionId,omitempty"`
-	Text          string        `json:"text"`
-	Selection     *Selection    `json:"selection,omitempty"`
-	AttachmentIDs []string      `json:"attachmentIds,omitempty"`
-	References    []Reference   `json:"references,omitempty"`
-	Quote         *MessageQuote `json:"quote,omitempty"`
-	Delivery      string        `json:"delivery,omitempty"`
-	SteerRunID    string        `json:"steerRunId,omitempty"`
-	AfterRunIDs   []string      `json:"afterRunIds,omitempty"`
+	SharedScope          *SharedScope  `json:"sharedScope,omitempty"`
+	WorkingCopyID        string        `json:"workingCopyId,omitempty"`
+	CommandID            string        `json:"commandId"`
+	ChatID               string        `json:"chatId"`
+	AgentID              string        `json:"agentId,omitempty"`
+	Operation            string        `json:"operation"`
+	SessionID            string        `json:"sessionId,omitempty"`
+	Text                 string        `json:"text"`
+	Selection            *Selection    `json:"selection,omitempty"`
+	AttachmentIDs        []string      `json:"attachmentIds,omitempty"`
+	References           []Reference   `json:"references,omitempty"`
+	Quote                *MessageQuote `json:"quote,omitempty"`
+	Delivery             string        `json:"delivery,omitempty"`
+	SteerRunID           string        `json:"steerRunId,omitempty"`
+	AfterRunIDs          []string      `json:"afterRunIds,omitempty"`
 	EditRunID            string        `json:"editRunId,omitempty"`
 	ReplaceRunID         string        `json:"replaceRunId,omitempty"`
 	HandoffFromSessionID string        `json:"handoffFromSessionId,omitempty"`
@@ -1037,6 +1042,9 @@ type Overview struct {
 }
 
 type Event struct {
+	ReadSequence int64  `json:"readSequence,omitempty"`
+	NodeID       string `json:"nodeId,omitempty"` // Assigned by the multi-device HTTP gateway.
+
 	SessionID    string              `json:"sessionId,omitempty"`
 	RunID        string              `json:"runId,omitempty"`
 	RequestID    string              `json:"requestId,omitempty"`

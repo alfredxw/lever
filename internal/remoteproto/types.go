@@ -21,15 +21,24 @@ type Identity struct {
 	ID        string `json:"id"`
 	PublicKey []byte `json:"publicKey"`
 }
+type DirectPairReceipt struct {
+	Membership Membership `json:"membership"`
+	Grant      string     `json:"grant"`
+	Host       Device     `json:"host"`
+	LANAddr    string     `json:"lanAddr,omitempty"`
+}
+
 type PairInput struct {
-	Code     string `json:"code"`
-	Identity `tstype:",extends"`
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Role     Role   `json:"role"`
-	Proof    []byte `json:"proof"`
+	Reciprocal *DirectPairReceipt `json:"reciprocal,omitempty"`
+	Code       string             `json:"code"`
+	Identity   `tstype:",extends"`
+	Name       string `json:"name"`
+	Platform   string `json:"platform"`
+	Role       Role   `json:"role"`
+	Proof      []byte `json:"proof"`
 }
 type Membership struct {
+	Features  []string `json:"features,omitempty"`
 	Hub       Identity `json:"hub"`
 	SpaceID   string   `json:"spaceId"`
 	SpaceKind string   `json:"spaceKind,omitempty"`
@@ -44,6 +53,7 @@ type Space struct {
 	Kind string `json:"kind"`
 }
 type Device struct {
+	Node          *NodeDescriptor `json:"node,omitempty"`
 	Identity      `tstype:",extends"`
 	SpaceID       string `json:"spaceId"`
 	Name          string `json:"name"`
@@ -161,30 +171,36 @@ type FileStat struct {
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 }
+type DiffSummary struct {
+	Files     int `json:"files,omitempty"`
+	Additions int `json:"additions,omitempty"`
+	Deletions int `json:"deletions,omitempty"`
+}
 type Record struct {
-	CanSteer          bool          `json:"canSteer,omitempty"`
-	Files             []FileStat    `json:"files,omitempty"`
-	Error             string        `json:"error,omitempty"`
-	WorkingCopyID     string        `json:"workingCopyId,omitempty"`
-	WorkingCopyName   string        `json:"workingCopyName,omitempty"`
-	AnsweredByUserID  string        `json:"answeredByUserId,omitempty"`
-	Avatar            string        `json:"avatar,omitempty"`
-	AvatarSpec        *AvatarSpec   `json:"avatarSpec,omitempty"`
-	Description       string        `json:"description,omitempty"`
-	Permission        string        `json:"permission,omitempty"`
-	AcceptDelegations *bool         `json:"acceptDelegations,omitempty"`
-	Private           bool          `json:"private,omitempty"`
-	Kind              string        `json:"kind"`
-	ID                string        `json:"id"`
-	AgentID           string        `json:"agentId,omitempty"`
-	ChatID            string        `json:"chatId,omitempty"`
-	SessionID         string        `json:"sessionId,omitempty"`
-	RunID             string        `json:"runId,omitempty"`
-	TaskID            string        `json:"taskId,omitempty"`
-	DispatchID        string        `json:"dispatchId,omitempty"`
-	Title             string        `json:"title,omitempty"`
-	Status            string        `json:"status,omitempty"`
-	Type              string        `json:"type,omitempty"`
+	CanSteer          bool            `json:"canSteer,omitempty"`
+	Files             []FileStat      `json:"files,omitempty"`
+	Diff              *DiffSummary    `json:"diff,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	WorkingCopyID     string          `json:"workingCopyId,omitempty"`
+	WorkingCopyName   string          `json:"workingCopyName,omitempty"`
+	AnsweredByUserID  string          `json:"answeredByUserId,omitempty"`
+	Avatar            string          `json:"avatar,omitempty"`
+	AvatarSpec        *AvatarSpec     `json:"avatarSpec,omitempty"`
+	Description       string          `json:"description,omitempty"`
+	Permission        string          `json:"permission,omitempty"`
+	AcceptDelegations *bool           `json:"acceptDelegations,omitempty"`
+	Private           bool            `json:"private,omitempty"`
+	Kind              string          `json:"kind"`
+	ID                string          `json:"id"`
+	AgentID           string          `json:"agentId,omitempty"`
+	ChatID            string          `json:"chatId,omitempty"`
+	SessionID         string          `json:"sessionId,omitempty"`
+	RunID             string          `json:"runId,omitempty"`
+	TaskID            string          `json:"taskId,omitempty"`
+	DispatchID        string          `json:"dispatchId,omitempty"`
+	Title             string          `json:"title,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	Type              string          `json:"type,omitempty"`
 	Model             string          `json:"model,omitempty"`
 	Effort            string          `json:"effort,omitempty"`
 	Fast              bool            `json:"fast,omitempty"`
@@ -192,27 +208,28 @@ type Record struct {
 	Models            []ModelOption   `json:"models,omitempty"`
 	Groups            []Group         `json:"groups,omitempty"`
 	Attachments       []AttachmentRef `json:"attachments,omitempty"`
-	Text              string        `json:"text,omitempty"`
-	Items             []Item        `json:"items,omitempty"`
-	Truncated         bool          `json:"truncated,omitempty"`
-	Superseded        bool          `json:"superseded,omitempty"`
-	QueuePaused       bool          `json:"queuePaused,omitempty"`
-	UnreadSequence    int64         `json:"unreadSequence,omitempty"`
-	ReadSequence      int64         `json:"readSequence,omitempty"`
-	ClearedSequence   int64         `json:"clearedSequence,omitempty"`
-	Preview           string        `json:"preview,omitempty"`
-	MessageAt         string        `json:"messageAt,omitempty"`
-	ActiveStatus      string        `json:"activeStatus,omitempty"`
-	PendingCount      int           `json:"pendingCount,omitempty"`
-	ReplyCount        int           `json:"replyCount,omitempty"`
-	SourceRunID       string        `json:"sourceRunId,omitempty"`
-	Sequence          int64         `json:"sequence,omitempty"`
-	CreatedAt         string        `json:"createdAt,omitempty"`
-	UpdatedAt         string        `json:"updatedAt,omitempty"`
-	Questions         []Question    `json:"questions,omitempty"`
-	Options           []Option      `json:"options,omitempty"`
-	Answer            *Answer       `json:"answer,omitempty"`
-	AllowOnce         *Answer       `json:"allowOnce,omitempty"`
+	Text              string          `json:"text,omitempty"`
+	Items             []Item          `json:"items,omitempty"`
+	StepCount         int             `json:"stepCount,omitempty"`
+	Truncated         bool            `json:"truncated,omitempty"`
+	Superseded        bool            `json:"superseded,omitempty"`
+	QueuePaused       bool            `json:"queuePaused,omitempty"`
+	UnreadSequence    int64           `json:"unreadSequence,omitempty"`
+	ReadSequence      int64           `json:"readSequence,omitempty"`
+	ClearedSequence   int64           `json:"clearedSequence,omitempty"`
+	Preview           string          `json:"preview,omitempty"`
+	MessageAt         string          `json:"messageAt,omitempty"`
+	ActiveStatus      string          `json:"activeStatus,omitempty"`
+	PendingCount      int             `json:"pendingCount,omitempty"`
+	ReplyCount        int             `json:"replyCount,omitempty"`
+	SourceRunID       string          `json:"sourceRunId,omitempty"`
+	Sequence          int64           `json:"sequence,omitempty"`
+	CreatedAt         string          `json:"createdAt,omitempty"`
+	UpdatedAt         string          `json:"updatedAt,omitempty"`
+	Questions         []Question      `json:"questions,omitempty"`
+	Options           []Option        `json:"options,omitempty"`
+	Answer            *Answer         `json:"answer,omitempty"`
+	AllowOnce         *Answer         `json:"allowOnce,omitempty"`
 }
 type Change struct {
 	Record  `tstype:",extends"`
@@ -273,28 +290,31 @@ type ClearSync struct {
 	Items    []ClearMark `json:"items"`
 }
 type Frame struct {
-	ControllerID  string      `json:"controllerId,omitempty"`
-	Delegation    bool        `json:"delegation,omitempty"`
-	Digest        string      `json:"digest,omitempty"`
-	Receipt       *Receipt    `json:"receipt,omitempty"`
-	Completed     bool        `json:"completed,omitempty"`
-	Policy        int64       `json:"policy,omitempty"`
-	RPCID         string      `json:"rpcId,omitempty"`
-	SessionID     string      `json:"sessionId,omitempty"`
-	RunID         string      `json:"runId,omitempty"`
-	Idle          bool        `json:"idle,omitempty"`
-	DesktopActive bool        `json:"desktopActive,omitempty"`
-	Type          string      `json:"type"`
-	Protocol      int         `json:"protocol,omitempty"`
-	SpaceID       string      `json:"spaceId"`
-	DeviceID      string      `json:"deviceId"`
-	Epoch         string      `json:"epoch,omitempty"`
-	Base          int64       `json:"base,omitempty"`
-	Version       int64       `json:"version,omitempty"`
-	Full          bool        `json:"full,omitempty"`
-	Changes       []Change    `json:"changes,omitempty"`
-	ReadMarks     []ReadMark  `json:"readMarks,omitempty"`
-	ClearMarks    []ClearMark `json:"clearMarks,omitempty"`
+	Features      []string        `json:"features,omitempty"`
+	TunnelID      string          `json:"tunnelId,omitempty"`
+	Node          *NodeDescriptor `json:"node,omitempty"`
+	ControllerID  string          `json:"controllerId,omitempty"`
+	Delegation    bool            `json:"delegation,omitempty"`
+	Digest        string          `json:"digest,omitempty"`
+	Receipt       *Receipt        `json:"receipt,omitempty"`
+	Completed     bool            `json:"completed,omitempty"`
+	Policy        int64           `json:"policy,omitempty"`
+	RPCID         string          `json:"rpcId,omitempty"`
+	SessionID     string          `json:"sessionId,omitempty"`
+	RunID         string          `json:"runId,omitempty"`
+	Idle          bool            `json:"idle,omitempty"`
+	DesktopActive bool            `json:"desktopActive,omitempty"`
+	Type          string          `json:"type"`
+	Protocol      int             `json:"protocol,omitempty"`
+	SpaceID       string          `json:"spaceId"`
+	DeviceID      string          `json:"deviceId"`
+	Epoch         string          `json:"epoch,omitempty"`
+	Base          int64           `json:"base,omitempty"`
+	Version       int64           `json:"version,omitempty"`
+	Full          bool            `json:"full,omitempty"`
+	Changes       []Change        `json:"changes,omitempty"`
+	ReadMarks     []ReadMark      `json:"readMarks,omitempty"`
+	ClearMarks    []ClearMark     `json:"clearMarks,omitempty"`
 }
 type ChatRef struct {
 	DeviceID  string `json:"deviceId"`
@@ -381,4 +401,55 @@ type Receipt struct {
 type InboxItem struct {
 	Intent  Intent  `json:"intent"`
 	Receipt Receipt `json:"receipt"`
+}
+
+// Features describe the binary. AccessLevel describes the owner's current grant.
+type AccessLevel string
+
+const (
+	AccessNone      AccessLevel = "none"
+	AccessChat      AccessLevel = "chat"
+	AccessWorkspace AccessLevel = "workspace"
+	AccessAdmin     AccessLevel = "admin"
+)
+
+const (
+	FeatureWorkspaceAssets   = "workspace_assets_v1"
+	FeatureAgentSkills       = "agent_skills_v1"
+	FeatureHealth            = "peer_health_v1"
+	FeatureChatControls      = "chat_controls_v1"
+	FeatureTerminal          = "terminal_v1"
+	FeatureDelegationTargets = "delegation_targets_v1"
+	FeatureDelegate          = "delegation_v1"
+	FeatureManage            = "agent_manage_v1"
+	FeatureGit               = "git_v1"
+	FeatureHotCache          = "hot_cache_v1"
+	FeaturePeer              = "peer_v1"
+	FeatureTunnel            = "tunnel_v1"
+	FeatureFiles             = "fs_v1"
+)
+
+type BrowseRootInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type NodeDescriptor struct {
+	BrowseRoots           []BrowseRootInfo `json:"browseRoots,omitempty"`
+	LeverVersion          string           `json:"leverVersion,omitempty"`
+	DelegationEnabled     *bool            `json:"delegationEnabled,omitempty"`
+	CacheEpoch            string           `json:"cacheEpoch,omitempty"`
+	CacheRevision         int64            `json:"cacheRevision,omitempty"`
+	NodeID                string           `json:"nodeId"`
+	PublicKey             []byte           `json:"publicKey"`
+	Name                  string           `json:"name"`
+	Platform              string           `json:"platform"`
+	ProtocolVersion       int              `json:"protocolVersion"`
+	MinCompatibleProtocol int              `json:"minCompatibleProtocol"`
+	Features              []string         `json:"features"`
+	Online                bool             `json:"online"`
+	Draining              bool             `json:"draining"`
+	CanControl            bool             `json:"canControl"`
+	AccessLevel           AccessLevel      `json:"accessLevel"`
+	ReadOnlyFS            bool             `json:"readOnlyFs"`
 }

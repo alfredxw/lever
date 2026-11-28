@@ -5,9 +5,7 @@ package lanclient
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net"
@@ -29,11 +27,12 @@ type Client struct {
 	Discover func(context.Context, string) (string, error)
 	// A signed grant contains public identities. Only the native controller
 	// holds the private key needed to use it after an app restart.
-	LoadGrant func(key string) string
-	SaveGrant func(key, token string)
-	mu        sync.Mutex
-	routes    map[string]route
-	misses    map[string]time.Time
+	LoadGrant  func(key string) string
+	SaveGrant  func(key, token string)
+	mu         sync.Mutex
+	routes     map[string]route
+	misses     map[string]time.Time
+	transports map[string]*http.Transport
 }
 
 func routeKey(st p.ClientState, host string) string {
@@ -63,14 +62,70 @@ func (c *Client) RememberHost(st p.ClientState, host, token string) {
 	}
 }
 
-func (c *Client) NetworkChanged() {
+// Forget drops grants and transports from an explicitly detached pairing.
+func (c *Client) Forget(st p.ClientState) {
+	prefix := st.Membership.Hub.ID + "/" + st.Membership.SpaceID + "/" + st.Membership.DeviceID + "/"
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for key, r := range c.routes {
+		if strings.HasPrefix(key, prefix) {
+			poolKey := r.address + "|" + string(r.grant.Grant.Host.PublicKey)
+			if tr := c.transports[poolKey]; tr != nil {
+				tr.CloseIdleConnections()
+				delete(c.transports, poolKey)
+			}
+			delete(c.routes, key)
+			delete(c.misses, key)
+		}
+	}
+}
+
+func (c *Client) NetworkChanged() {
+	c.mu.Lock()
 	clear(c.misses)
 	for key, r := range c.routes {
 		r.address = ""
 		c.routes[key] = r
 	}
+	old := c.transports
+	c.transports = nil
+	c.mu.Unlock()
+	for _, tr := range old {
+		tr.CloseIdleConnections()
+	}
+}
+
+func (c *Client) pooledTransport(r route) *http.Transport {
+	tKey := r.address + "|" + string(r.grant.Grant.Host.PublicKey)
+	c.mu.Lock()
+	if tr := c.transports[tKey]; tr != nil {
+		c.mu.Unlock()
+		return tr
+	}
+	dialer := &net.Dialer{Timeout: 2500 * time.Millisecond, KeepAlive: 30 * time.Second}
+	pub := append([]byte(nil), r.grant.Grant.Host.PublicKey...)
+	tr := &http.Transport{
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          12,
+		MaxIdleConnsPerHost:   6,
+		IdleConnTimeout:       60 * time.Second,
+		ResponseHeaderTimeout: 20 * time.Second,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			// The self-signed leaf is authenticated by its Hub-registered Ed25519 key.
+			InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				_, err := p.PeerCertificate(cs, pub)
+				return err
+			},
+		},
+	}
+	if c.transports == nil {
+		c.transports = map[string]*http.Transport{}
+	}
+	c.transports[tKey] = tr
+	c.mu.Unlock()
+	return tr
 }
 
 func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, renew, forceDiscover bool) (route, error) {
@@ -98,8 +153,11 @@ func (c *Client) readRoute(ctx context.Context, st p.ClientState, host string, r
 			}
 		}
 	}
-	if r.token == "" && !renew && c.LoadGrant != nil {
-		token := c.LoadGrant(key)
+	if r.token == "" && !renew {
+		token := st.DirectGrant
+		if token == "" && c.LoadGrant != nil {
+			token = c.LoadGrant(key)
+		}
 		s, err := p.ParseGrant(token)
 		if err == nil && s.Authentic(st.Membership.Hub, host, st.Membership.SpaceID) && s.Grant.Controller.ID == st.Membership.DeviceID {
 			r.token, r.grant = token, s
@@ -187,38 +245,59 @@ func (c *Client) UnpairDirect(ctx context.Context, st p.ClientState, host string
 }
 
 func (c *Client) direct(ctx context.Context, st p.ClientState, r route, method, path string, body []byte, out any) error {
-	dialer := &net.Dialer{Timeout: 2500 * time.Millisecond}
-	client := http.Client{Timeout: 20 * time.Second, CheckRedirect: p.Client.CheckRedirect, Transport: &http.Transport{
-		DialContext:       dialer.DialContext,
-		DisableKeepAlives: true,
-		TLSClientConfig: &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		// The self-signed leaf is authenticated by its Hub-registered Ed25519 key.
-		InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) != 1 {
-				return errors.New("unexpected LAN certificate chain")
-			}
-			leaf := cs.PeerCertificates[0]
-			key, ok := leaf.PublicKey.(ed25519.PublicKey)
-			if !ok || !bytes.Equal(key, r.grant.Grant.Host.PublicKey) || time.Now().After(leaf.NotAfter) || time.Now().Before(leaf.NotBefore) || leaf.CheckSignature(x509.PureEd25519, leaf.RawTBSCertificate, leaf.Signature) != nil {
-				return errors.New("Host key mismatch")
-			}
-			return nil
-		},
-	}}}
-	u, err := url.ParseRequestURI(path)
+	tr := c.pooledTransport(r)
+	client, req, err := signedLANRequest(ctx, st, r, tr, method, path, body, 20*time.Second)
 	if err != nil {
 		return err
+	}
+	return p.Exchange(client, req, out)
+}
+
+// OpenPeer keeps a streaming response on its authenticated route. Writes are
+// never retried after an ambiguous transport failure.
+func (c *Client) OpenPeer(ctx context.Context, st p.ClientState, host, method, path string, body []byte, headers http.Header) (*http.Response, error) {
+	r, err := c.readRoute(ctx, st, host, false, false)
+	if err != nil {
+		return nil, err
+	}
+	client, req, err := signedLANRequest(ctx, st, r, nil, method, path, body, 0)
+	if err != nil {
+		return nil, err
+	}
+	p.CopyPeerRequest(req.Header, headers, req.URL.Path)
+	return client.Do(req)
+}
+func signedLANRequest(ctx context.Context, st p.ClientState, r route, pooled *http.Transport, method, path string, body []byte, timeout time.Duration) (*http.Client, *http.Request, error) {
+	tr := pooled
+	if tr == nil {
+		dialer := &net.Dialer{Timeout: 2500 * time.Millisecond, KeepAlive: 30 * time.Second}
+		pub := append([]byte(nil), r.grant.Grant.Host.PublicKey...)
+		tr = &http.Transport{
+			DialContext:       dialer.DialContext,
+			DisableKeepAlives: true,
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				// The self-signed leaf is authenticated by its Hub-registered Ed25519 key.
+				InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
+					_, err := p.PeerCertificate(cs, pub)
+					return err
+				},
+			}}
+	}
+	client := http.Client{Timeout: timeout, CheckRedirect: p.Client.CheckRedirect, Transport: tr}
+	u, err := url.ParseRequestURI(path)
+	if err != nil {
+		return nil, nil, err
 	}
 	u.Scheme = "https"
 	u.Host = r.address
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	p.Sign(req, r.token, st.Key, body)
-	return p.Exchange(&client, req, out)
+	return &client, req, nil
 }
 
 // TryArchive falls back at the caller using the identical shared resource ID.
@@ -326,6 +405,11 @@ func (c *Client) Local(ctx context.Context, st p.ClientState, method, path strin
 		if len(parts) == 3 && parts[0] == "avatars" && parts[1] != "" && len(parts[2]) == 64 {
 			var out json.RawMessage
 			err := c.exchange(ctx, st, parts[1], "GET", "/avatars/"+url.PathEscape(parts[2]), nil, &out)
+			return out, true, err
+		}
+		if len(parts) == 4 && parts[0] == "runs" && parts[1] != "" && parts[2] != "" && parts[3] == "steps" {
+			var out json.RawMessage
+			err := c.exchange(ctx, st, parts[1], "GET", "/runs/"+url.PathEscape(parts[2])+"/steps", nil, &out)
 			return out, true, err
 		}
 		if len(parts) == 2 && parts[0] == "composer-meta" && parts[1] != "" {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/sideshow/apns2"
+	"lever/internal/model"
 	p "lever/internal/remoteproto"
 )
 
@@ -151,6 +153,51 @@ func TestMobileArchiveAndPush(t *testing.T) {
 	if _, err := p.OpenPush(msg.Message.Data.Lever, make([]byte, 32)); err == nil {
 		t.Fatal("different phone opened alert")
 	}
+	t.Run("native hot page and revoked visibility", func(t *testing.T) {
+		native := model.Run{ID: p.NewID(), ChatID: p.NewID(), SessionID: p.NewID(), Status: "completed"}
+		source := "chats/" + native.ChatID
+		data, err := json.Marshal(model.ChatView{Runs: []model.Run{native}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = h.db.Exec("UPDATE devices SET node=json_object('cacheEpoch',?) WHERE space_id=? AND id=?", epoch, space, a.device); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = h.db.Exec("INSERT INTO node_hot_pages(space_id,device_id,path,epoch,revision,data) VALUES(?,?,?,?,1,?)", space, a.device, source, epoch, string(data)); err != nil {
+			t.Fatal(err)
+		}
+		enqueue := func() {
+			t.Helper()
+			if err := write(h.db, func(tx *sql.Tx) error {
+				return h.queuePagePush(tx, a, p.Record{Kind: "run", ID: native.ID, ChatID: native.ChatID, Status: native.Status}, source)
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		enqueue()
+		posted = nil
+		if more, err := h.deliverNext(t.Context()); err != nil || !more {
+			t.Fatal(more, err)
+		}
+		if err := json.Unmarshal(posted, &msg); err != nil {
+			t.Fatal(err)
+		}
+		notice, err := p.OpenPush(msg.Message.Data.Lever, sub.Key)
+		if err != nil || notice.RunID != native.ID || notice.ChatID != native.ChatID {
+			t.Fatal(notice, err)
+		}
+		enqueue()
+		if _, err := h.db.Exec("UPDATE devices SET node='' WHERE space_id=? AND id=?", space, a.device); err != nil {
+			t.Fatal(err)
+		}
+		posted = nil
+		if more, err := h.deliverNext(t.Context()); err != nil || !more {
+			t.Fatal(more, err)
+		}
+		if len(posted) != 0 {
+			t.Fatal("delivered after Owner revoked access")
+		}
+	})
 	commit(0, 5, true, chat, topic, run, request)
 	next(false)
 	if page := readPage(chat.ID, delta.Cursor); !page.Full {

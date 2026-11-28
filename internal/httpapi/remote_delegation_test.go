@@ -102,10 +102,10 @@ func TestCrossDeviceDelegationEndToEnd(t *testing.T) {
 	hostB.request("PUT", "/agents/"+workerB.ID, workerB, 200, &workerB)
 
 	acceptFalse := false
-	privateB := hostB.agent("codex")
-	privateB.Name = "Private B"
-	privateB.Profile.AcceptDelegations = &acceptFalse
-	hostB.request("PUT", "/agents/"+privateB.ID, privateB, 200, &privateB)
+	privateProfile := workerB.Profile
+	privateProfile.AcceptDelegations = &acceptFalse
+	var privateB model.Agent
+	hostB.request("POST", "/agents", model.Agent{Name: "Private B", Profile: privateProfile}, 200, &privateB)
 
 	if _, err := hostB.s.Remote.Manage(t.Context(), remote.Management{
 		Action: "expose_all", Scope: scopeB, Enabled: true,

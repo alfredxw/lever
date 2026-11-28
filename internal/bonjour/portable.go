@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/mdns"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ type advertisement struct{ server *mdns.Server }
 
 func (a advertisement) Close() error { return a.server.Shutdown() }
 func Advertise(id string, port int, ips []net.IP) (io.Closer, error) {
-	zone, err := mdns.NewMDNSService(id, "_lever._tcp", "local.", "lever-"+id+".local.", port, ips, []string{"v=1"})
+	zone, err := mdns.NewMDNSService(id, "_lever._tcp", "local.", "lever-"+id+".local.", port, ips, serviceTXT(id))
 	if err != nil {
 		return nil, err
 	}
@@ -55,4 +56,30 @@ func Discover(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	return "", errors.New("Host not on this LAN")
+}
+
+func Browse(ctx context.Context) ([]string, error) {
+	entries := make(chan *mdns.ServiceEntry, 32)
+	params := mdns.DefaultParams("_lever._tcp")
+	params.Entries = entries
+	params.WantUnicastResponse = true
+	params.DisableIPv6 = true
+	params.Timeout = 1200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(ctx, params.Timeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- mdns.QueryContext(ctx, params); close(entries) }()
+	ids := []string{}
+	for entry := range entries {
+		id, ok := strings.CutSuffix(strings.ToLower(entry.Name), "._lever._tcp.local.")
+		if ok && validInstance(id) && len(ids) < 64 && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	err := <-done
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = nil
+	}
+	slices.Sort(ids)
+	return ids, err
 }

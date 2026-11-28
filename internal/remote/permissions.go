@@ -28,6 +28,9 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 	if !m.Role.Executes() {
 		return nil, errors.New("executor role required")
 	}
+	if in.Action == "pending_controllers" {
+		return store.List[trustedController](ctx, h.App.Store.DB, `SELECT json_object('id',controller,'name',name,'permissions',json_array()) FROM remote_pending_controllers WHERE hub=? AND space=? ORDER BY name,controller`, m.Hub.ID, m.SpaceID)
+	}
 	if in.Action == "trusted" {
 		return store.List[trustedController](ctx, h.App.Store.DB, `SELECT json_object('id',t.controller,'name',t.name,'permissions',
 			(SELECT json_group_array(json_object('agentId',p.agent_id,'action',p.action)) FROM remote_control_permissions p WHERE (p.hub,p.space,p.controller)=(t.hub,t.space,t.controller)))
@@ -40,7 +43,27 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 	defer h.configMu.Unlock()
 	args := []any{m.Hub.ID, m.SpaceID, in.ControllerID}
 	switch in.Action {
+	case "discard_controller":
+		_, err := h.App.Store.DB.ExecContext(ctx, "DELETE FROM remote_pending_controllers WHERE hub=? AND space=? AND controller=?", args...)
+		return true, err
 	case "trust":
+		if st.Origin == "" {
+			return true, h.App.Store.Write(ctx, func(tx *sql.Tx) error {
+				var pub []byte
+				var name string
+				if err := tx.QueryRow("SELECT pub,name FROM remote_pending_controllers WHERE hub=? AND space=? AND controller=?", args...).Scan(&pub, &name); err != nil {
+					return err
+				}
+				if err := saveLANController(tx, in.Scope, p.Identity{ID: in.ControllerID, PublicKey: pub}, name, false); err != nil {
+					return err
+				}
+				if err := approveReturnPeer(tx, in.Scope.HubID, in.Scope.SpaceID, in.ControllerID); err != nil {
+					return err
+				}
+				_, err := tx.Exec("DELETE FROM remote_pending_controllers WHERE hub=? AND space=? AND controller=?", args...)
+				return err
+			})
+		}
 		var d p.Device
 		if err := st.Do(ctx, "GET", st.SpacePath()+"/controllers/"+url.PathEscape(in.ControllerID), nil, &d); err != nil {
 			return nil, err
@@ -124,7 +147,7 @@ func (h *Host) manageController(ctx context.Context, st p.ClientState, in Manage
 
 func validRemoteOperation(op string) bool {
 	switch op {
-	case "send", "answer", "stop", "dispatch_task":
+	case "send", "answer", "allow_run", "resume_queue", "resolve_unknown", "stop", "dispatch_task":
 		return true
 	default:
 		return false
@@ -132,6 +155,20 @@ func validRemoteOperation(op string) bool {
 }
 
 func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Intent) (bool, error) {
+	if i.Delegation != nil {
+		return h.delegationPermitted(ctx, scope, i)
+	}
+	if !i.Private && validRemoteOperation(i.Kind) && i.ActorUserID != "" {
+		var owner bool
+		err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_access JOIN remote_memberships m USING(hub,space)
+			WHERE hub=? AND space=? AND confirm=0 AND json_extract(credential,'$.userId')=?
+			AND (m.origin='' OR json_extract(credential,'$.spaceKind')='personal'))`, scope.HubID, scope.SpaceID, i.ActorUserID).Scan(&owner)
+		if err != nil || owner {
+			// ReviewRemote checks the actual Chat, Agent exposure and child IDs
+			// against the local database before committing the action.
+			return owner, err
+		}
+	}
 	if i.OriginDeviceID == "" {
 		return false, nil
 	}
@@ -148,7 +185,7 @@ func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Inten
 			JOIN agents a ON a.id=c.agent_id
 			WHERE c.id=? AND json_type(c.data,'$.sharedScope') IS NULL
 			AND json_extract(m.credential,'$.userId')=?
-			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 			scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ChatID, i.ActorUserID).Scan(&ok)
 		return ok, err
@@ -164,7 +201,7 @@ func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Inten
 			JOIN target t ON (p.agent_id='*' OR p.agent_id=t.agent_id)
 			JOIN agents a ON a.id=t.agent_id
 			WHERE p.hub=? AND p.space=? AND p.controller=? AND p.action=? AND json_extract(m.credential,'$.userId')=?
-			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 		i.ChatID, i.AgentID, i.ChatID, scope.HubID, scope.SpaceID,
 		scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind, i.ActorUserID).Scan(&ok)
@@ -175,15 +212,19 @@ func (h *Host) permitted(ctx context.Context, scope model.SharedScope, i p.Inten
 }
 
 func (h *Host) delegationPermitted(ctx context.Context, scope model.SharedScope, i p.Intent) (bool, error) {
+	return h.delegationAllowed(ctx, scope, i, false)
+}
+
+func (h *Host) delegationAllowed(ctx context.Context, scope model.SharedScope, i p.Intent, reviewed bool) (bool, error) {
 	if i.Private || i.OriginDeviceID == "" || i.ActorUserID == "" {
 		return false, nil
 	}
 	var allowedMembership bool
 	err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_memberships
-		WHERE hub=? AND space=? AND allow_delegation=1
+		WHERE hub=? AND space=? AND (allow_delegation=1 OR ?)
 		AND json_extract(credential,'$.userId')=?
 		AND coalesce(nullif(json_extract(credential,'$.spaceKind'),''),'personal')='personal')`,
-		scope.HubID, scope.SpaceID, i.ActorUserID).Scan(&allowedMembership)
+		scope.HubID, scope.SpaceID, reviewed, i.ActorUserID).Scan(&allowedMembership)
 	if err != nil || !allowedMembership {
 		return false, err
 	}
@@ -194,7 +235,7 @@ func (h *Host) delegationPermitted(ctx context.Context, scope model.SharedScope,
 		var ok bool
 		err = h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a
 			JOIN remote_memberships m ON m.hub=? AND m.space=?
-			WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			WHERE a.id=? AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND coalesce(json_extract(a.data,'$.profile.acceptDelegations'),1)=1
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 			scope.HubID, scope.SpaceID, i.AgentID).Scan(&ok)
@@ -217,9 +258,9 @@ func (h *Host) delegationPermitted(ctx context.Context, scope model.SharedScope,
 		JOIN sessions s ON s.chat_id=c.id AND s.kind='main'
 		JOIN agents a ON a.id=c.agent_id
 		JOIN remote_memberships m ON m.hub=? AND m.space=?
-		WHERE c.id=? AND json_extract(c.data,'$.sharedScope.hubId')=? AND json_extract(c.data,'$.sharedScope.spaceId')=?
+		WHERE c.id=? AND (json_type(c.data,'$.sharedScope') IS NULL OR (json_extract(c.data,'$.sharedScope.hubId')=? AND json_extract(c.data,'$.sharedScope.spaceId')=?))
 		AND json_extract(s.data,'$.delegatedFrom.deviceId')=?
-		AND (?='stop' OR (coalesce(json_extract(a.data,'$.archived'),0)=0
+		AND (?='stop' OR (coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))))`,
 		scope.HubID, scope.SpaceID, i.ChatID, scope.HubID, scope.SpaceID, i.OriginDeviceID, i.Kind).Scan(&ok)
 	return ok, err
@@ -230,11 +271,5 @@ func (h *Host) acceptOffer(ctx context.Context, st p.ClientState, f p.Frame) {
 	// the settings action and recheck the actual intent fetched from the Hub.
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	var eligible bool
-	if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM remote_control_permissions WHERE hub=? AND space=? AND controller=?)
-		OR (?=1 AND EXISTS(SELECT 1 FROM remote_memberships WHERE hub=? AND space=? AND allow_delegation=1 AND coalesce(nullif(json_extract(credential,'$.spaceKind'),''),'personal')='personal'))`,
-		st.Membership.Hub.ID, st.Membership.SpaceID, f.ControllerID, f.Delegation, st.Membership.Hub.ID, st.Membership.SpaceID).Scan(&eligible); err != nil || !eligible {
-		return
-	}
 	_, _ = h.review(ctx, st, Management{Action: "authorized", Scope: model.SharedScope{HubID: st.Membership.Hub.ID, SpaceID: st.Membership.SpaceID}, ID: f.RPCID})
 }

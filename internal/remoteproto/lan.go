@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -83,25 +82,21 @@ type LANReport struct {
 	Receipt Receipt    `json:"receipt"`
 }
 
-type DirectPairReceipt struct {
-	Membership Membership `json:"membership"`
-	Grant      string     `json:"grant"`
-	Host       Device     `json:"host"`
-	LANAddr    string     `json:"lanAddr,omitempty"`
-}
-
 type DirectPairParams struct {
-	LANAddr  string
-	HostID   string
-	HostPub  ed25519.PublicKey
-	Code     string
-	HostName string
+	Reciprocal bool
+	LANAddr    string
+	HostID     string
+	HostPub    ed25519.PublicKey
+	Code       string
+	HostName   string
 }
 
 func DirectPairLink(lanAddr, hostID string, hostPub ed25519.PublicKey, code, hostName string) string {
 	q := url.Values{}
 	q.Set("lan", lanAddr)
-	q.Set("host", hostID)
+	q.Set("host", hostID) // Compatibility with older controllers.
+	q.Set("node", hostID)
+	q.Set("feature", "reciprocal_v1")
 	q.Set("pub", base64.RawURLEncoding.EncodeToString(hostPub))
 	q.Set("code", code)
 	if hostName != "" {
@@ -124,18 +119,24 @@ func ParseDirectPairLink(link string) (DirectPairParams, bool, error) {
 	if _, _, err := net.SplitHostPort(lanAddr); err != nil {
 		return out, true, errors.New("局域网配对地址格式无效")
 	}
-	hostID := strings.TrimSpace(q.Get("host"))
+	hostID := strings.TrimSpace(q.Get("node"))
+	if hostID == "" {
+		hostID = strings.TrimSpace(q.Get("host"))
+	} else if old := q.Get("host"); old != "" && old != hostID {
+		return out, true, errors.New("conflicting node identities")
+	}
 	code := strings.TrimSpace(q.Get("code"))
 	pubRaw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(q.Get("pub")))
 	if hostID == "" || code == "" || err != nil || len(pubRaw) != ed25519.PublicKeySize {
 		return out, true, errors.New("局域网配对链接缺少有效设备公钥或配对码")
 	}
 	out = DirectPairParams{
-		LANAddr:  lanAddr,
-		HostID:   hostID,
-		HostPub:  ed25519.PublicKey(pubRaw),
-		Code:     code,
-		HostName: strings.TrimSpace(q.Get("name")),
+		Reciprocal: q.Get("feature") == "reciprocal_v1",
+		LANAddr:    lanAddr,
+		HostID:     hostID,
+		HostPub:    ed25519.PublicKey(pubRaw),
+		Code:       code,
+		HostName:   strings.TrimSpace(q.Get("name")),
 	}
 	return out, true, nil
 }
@@ -163,15 +164,8 @@ func PairDirect(ctx context.Context, params DirectPairParams, in PairInput, key 
 				MinVersion:         tls.VersionTLS13,
 				InsecureSkipVerify: true,
 				VerifyConnection: func(cs tls.ConnectionState) error {
-					if len(cs.PeerCertificates) != 1 {
-						return errors.New("unexpected LAN certificate chain")
-					}
-					leaf := cs.PeerCertificates[0]
-					pub, ok := leaf.PublicKey.(ed25519.PublicKey)
-					if !ok || !bytes.Equal(pub, params.HostPub) || time.Now().After(leaf.NotAfter) || time.Now().Before(leaf.NotBefore) || leaf.CheckSignature(x509.PureEd25519, leaf.RawTBSCertificate, leaf.Signature) != nil {
-						return errors.New("Host identity mismatch")
-					}
-					return nil
+					_, err := PeerCertificate(cs, params.HostPub)
+					return err
 				},
 			},
 		},
@@ -189,7 +183,7 @@ func PairDirect(ctx context.Context, params DirectPairParams, in PairInput, key 
 		return state, receipt, errors.New("invalid direct pairing receipt")
 	}
 	grant, err := ParseGrant(receipt.Grant)
-	if err != nil || !grant.Authentic(m.Hub, params.HostID, m.SpaceID) || grant.Grant.Controller.ID != in.ID {
+	if err != nil || !grant.Authentic(m.Hub, params.HostID, m.SpaceID) || grant.Grant.Controller.ID != in.ID || !bytes.Equal(grant.Grant.Controller.PublicKey, in.PublicKey) {
 		return state, receipt, errors.New("invalid direct LAN grant")
 	}
 	lanAddr := receipt.LANAddr

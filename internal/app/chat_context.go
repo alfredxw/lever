@@ -431,11 +431,23 @@ func contextMessages(run model.Run, kind string) []ContextMessage {
 	return messages
 }
 
+// PeerSessionContext pages the exact Owner session after transport authorization.
+func (a *App) PeerSessionContext(ctx context.Context, chat, session string, position *ContextAnchor, direction string) (ReadContextResult, error) {
+	return a.readChatContext(ctx, model.Run{ChatID: chat}, readContextInput{Target: session, Anchor: position, Direction: direction})
+}
+
 func (a *App) readRemoteChatContext(ctx context.Context, scope model.SharedScope, deviceID, remoteChatID, remoteSessionID string, position *ContextAnchor, direction string, newer bool) (ReadContextResult, error) {
 	out := ReadContextResult{Messages: []ContextMessage{}}
 	rc := a.remoteCollaborator()
 	if rc == nil {
 		return out, invalid("Remote device collaboration is not configured on this host")
+	}
+	if native, ok := rc.(interface {
+		ReadPeerContext(context.Context, model.SharedScope, string, string, *ContextAnchor, string) (ReadContextResult, bool, error)
+	}); ok && remoteSessionID != "" {
+		if result, used, err := native.ReadPeerContext(ctx, scope, deviceID, remoteSessionID, position, direction); used || err != nil {
+			return result, err
+		}
 	}
 	records, err := rc.ReadRemoteChat(ctx, scope, deviceID, remoteChatID)
 	if err != nil {

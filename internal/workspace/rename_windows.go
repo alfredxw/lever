@@ -25,6 +25,10 @@ func renameEntry(root *os.Root, source, destination string) (err error) {
 		return err
 	}
 	defer to.Close()
+	return renameEntryAt(from, to, filepath.Base(source), filepath.Base(destination))
+}
+func renameEntryAt(from, to *os.File, source, destination string) (err error) {
+
 	name, err := windows.NewNTUnicodeString(filepath.Base(source))
 	if err != nil {
 		return err

@@ -5,9 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
-	"path"
-	"strings"
 	"unicode/utf8"
 
 	"lever/internal/model"
@@ -24,7 +21,7 @@ type batch struct {
 }
 type object struct{ kind, id string }
 
-func projectBatch(ctx context.Context, s *store.Store, m p.Membership, base int64, full bool) (batch, error) {
+func projectBatch(ctx context.Context, s *store.Store, m p.Membership, base int64, full bool, previousEpoch string) (batch, error) {
 	var b batch
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -35,7 +32,7 @@ func projectBatch(ctx context.Context, s *store.Store, m p.Membership, base int6
 	if err = tx.QueryRow("SELECT epoch,version,acked FROM remote_memberships WHERE hub=? AND space=? AND credential IS NOT NULL", m.Hub.ID, m.SpaceID).Scan(&b.epoch, &b.version, &retained); err != nil {
 		return b, err
 	}
-	b.full = full || base < retained || base > b.version
+	b.full = full || previousEpoch != b.epoch || base < retained || base > b.version
 	if !b.full && b.version == base {
 		return b, nil
 	}
@@ -43,7 +40,7 @@ func projectBatch(ctx context.Context, s *store.Store, m p.Membership, base int6
 	if b.full {
 		rows, err = tx.QueryContext(ctx, `WITH shared AS(SELECT id FROM chats WHERE json_extract(data,'$.sharedScope.hubId')=?1 AND json_extract(data,'$.sharedScope.spaceId')=?2)
 SELECT 'agent',a.id FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
-WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))
+WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))
 UNION ALL SELECT 'chat',id FROM shared UNION ALL SELECT 'session',id FROM sessions WHERE chat_id IN shared
 UNION ALL SELECT 'run',id FROM runs WHERE chat_id IN shared UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN shared`, m.Hub.ID, m.SpaceID)
 	} else {
@@ -89,6 +86,9 @@ func clipped(s string, max int) (string, bool) {
 	return s[:max], true
 }
 func project(ctx context.Context, tx *sql.Tx, m p.Membership, o object, privateController string) (p.Record, error) {
+	return projectWithOpts(ctx, tx, m, o, privateController, false)
+}
+func projectWithOpts(ctx context.Context, tx *sql.Tx, m p.Membership, o object, privateController string, lazySteps bool) (p.Record, error) {
 	r := p.Record{ID: o.id, Kind: o.kind}
 	// An incremental tombstone cannot accidentally read an object if it moved out of scope.
 	scope := sharedChatScope
@@ -104,7 +104,7 @@ func project(ctx context.Context, tx *sql.Tx, m p.Membership, o object, privateC
 	switch o.kind {
 	case "agent":
 		a, err := store.Get[model.Agent](ctx, tx, `SELECT a.data FROM agents a JOIN remote_memberships m ON m.hub=?2 AND m.space=?3
-WHERE a.id=?1 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+WHERE a.id=?1 AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))`, args...)
 		if err != nil {
 			return r, err
@@ -222,8 +222,18 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		}
 		r.Preview, _ = clipped(preview, 512)
 		r.MessageAt = messageAt
+		sessionCleared := r.ClearedSequence > 0 && r.ClearedSequence >= r.UnreadSequence
 		var activeStatus string
-		if err := tx.QueryRow(`SELECT status FROM runs WHERE session_id=?
+		if sessionCleared {
+			// A paused session that has already been cleared is treated as stopped & cleared,
+			// not paused/uncleared. Only genuinely running/waiting runs override cleared state.
+			if err := tx.QueryRow(`SELECT status FROM runs WHERE session_id=?
+				AND status IN ('waiting_user','running','starting','cancelling','unknown')
+				ORDER BY CASE status WHEN 'waiting_user' THEN 0 WHEN 'running' THEN 1 WHEN 'starting' THEN 2 ELSE 3 END, sequence DESC LIMIT 1`, s.ID).Scan(&activeStatus); err == nil {
+				r.ActiveStatus = activeStatus
+			}
+			r.QueuePaused = false
+		} else if err := tx.QueryRow(`SELECT status FROM runs WHERE session_id=?
 			AND status IN ('waiting_user','running','starting','cancelling','unknown','queued','paused')
 			ORDER BY CASE status WHEN 'waiting_user' THEN 0 WHEN 'running' THEN 1 WHEN 'starting' THEN 2 WHEN 'paused' THEN 3 WHEN 'queued' THEN 4 ELSE 5 END, sequence DESC LIMIT 1`, s.ID).Scan(&activeStatus); err == nil {
 			r.ActiveStatus = activeStatus
@@ -253,43 +263,39 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 		}
 		r.CanSteer = run.CanSteer || run.SteerPending
 		r.Status = run.Status
+		if r.Status == "paused" {
+			var unreadSeq, clearedSeq int64
+			if err := tx.QueryRow(`SELECT coalesce(json_extract(activity,'$.unreadSequence'),0), coalesce(json_extract(activity,'$.clearedSequence'),0) FROM sessions WHERE id=?`, run.SessionID).Scan(&unreadSeq, &clearedSeq); err == nil {
+				if clearedSeq > 0 && clearedSeq >= unreadSeq {
+					r.Status = "interrupted"
+				}
+			}
+		}
 		r.Superseded = run.Superseded
 		r.Sequence = run.Sequence
 		r.CreatedAt = run.CreatedAt
 		r.UpdatedAt = run.FinishedAt
 		r.Text, r.Truncated = clipped(run.Input, 48<<10)
 		r.Error, _ = clipped(run.Error, 2048)
-		addFiles := func(files []model.DiffFile) {
+		var diff p.DiffSummary
+		addDiff := func(files []model.DiffFile) {
 			for _, f := range files {
-				if len(r.Files) >= 128 {
-					r.Truncated = true
-					break
-				}
-				name, _ := clipped(path.Base(strings.ReplaceAll(f.Path, "\\", "/")), 256)
-				r.Files = append(r.Files, p.FileStat{Name: name, Additions: f.Additions, Deletions: f.Deletions})
+				diff.Files++
+				diff.Additions += f.Additions
+				diff.Deletions += f.Deletions
 			}
 		}
 		if run.TurnDiff != nil && run.TurnDiff.Reported {
-			addFiles(run.TurnDiff.Files)
+			addDiff(run.TurnDiff.Files)
 		} else {
 			for _, change := range run.Changes {
-				addFiles(change.Files)
+				addDiff(change.Files)
 			}
 		}
-		budget := 128 << 10
-		for _, i := range run.Items {
-			if budget <= 0 || len(r.Items) == 256 {
-				r.Truncated = true
-				break
-			}
-			if i.Kind == "user" && i.Message != nil {
-				i.Text = i.Message.Input
-			}
-			title, ct := clipped(i.Title, 1024)
-			text, cx := clipped(i.Text, min(12<<10, budget))
-			budget -= len(text) + len(title)
-			r.Items = append(r.Items, p.Item{ID: i.ID, Kind: i.Kind, Title: title, Text: text, Truncated: ct || cx})
+		if diff.Files > 0 || diff.Additions > 0 || diff.Deletions > 0 {
+			r.Diff = &diff
 		}
+		r.Items, r.StepCount, r.Truncated = projectRunItems(run.Items, r.Truncated, !lazySteps)
 	case "request":
 		q, err := store.Get[model.Request](ctx, tx, "SELECT q.data FROM requests q JOIN chats c ON c.id=q.chat_id WHERE q.id=?1 AND "+scope, args...)
 		if err != nil {
@@ -355,19 +361,148 @@ AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.h
 	return r, nil
 }
 
-const sharedChatScope = "json_extract(c.data,'$.sharedScope.hubId')=?2 AND json_extract(c.data,'$.sharedScope.spaceId')=?3"
+// projectRunItems projects a run's items in original chronological order while guaranteeing
+// that visible text replies and steered user messages are NEVER starved or dropped by
+// verbose intermediate tool/reasoning logs. When includeSteps is false (two-stage lazy
+// hydration), intermediate tool/reasoning items are omitted and summarized via stepCount.
+func projectRunItems(items []model.Item, alreadyTruncated bool, includeSteps bool) ([]p.Item, int, bool) {
+	if len(items) == 0 {
+		return nil, 0, alreadyTruncated
+	}
+	const (
+		textTotalBudget = 256 << 10
+		textItemLimit   = 64 << 10
+		toolTotalBudget = 48 << 10
+		toolTextLimit   = 1536
+		toolTitleLimit  = 256
+		maxToolItems    = 256
+	)
+	projected := make([]*p.Item, len(items))
+	truncated := alreadyTruncated
+	stepCount := 0
+
+	// Pass 1: prioritize text & user items from the end backwards so the final answer
+	// always receives full budget first.
+	textBudget := textTotalBudget
+	for idx := len(items) - 1; idx >= 0; idx-- {
+		it := items[idx]
+		if it.Kind != "text" && it.Kind != "user" {
+			stepCount++
+			continue
+		}
+		rawText := it.Text
+		if it.Kind == "user" && it.Message != nil {
+			rawText = it.Message.Input
+		}
+		title, ct := clipped(it.Title, 512)
+		var text string
+		var cx bool
+		if textBudget > 0 {
+			text, cx = clipped(rawText, min(textItemLimit, textBudget))
+			textBudget -= len(text)
+		} else if rawText != "" {
+			cx = true
+		}
+		if ct || cx {
+			truncated = true
+		}
+		projected[idx] = &p.Item{ID: it.ID, Kind: it.Kind, Title: title, Text: text, Truncated: ct || cx}
+	}
+
+	// Pass 2: optionally project non-text steps (tool/reasoning) under a separate compact budget.
+	if includeSteps {
+		toolBudget := toolTotalBudget
+		toolCount := 0
+		for idx := len(items) - 1; idx >= 0; idx-- {
+			it := items[idx]
+			if it.Kind == "text" || it.Kind == "user" {
+				continue
+			}
+			if toolCount >= maxToolItems {
+				truncated = true
+				continue
+			}
+			toolCount++
+			title, ct := clipped(it.Title, toolTitleLimit)
+			var text string
+			var cx bool
+			if toolBudget > 0 && it.Text != "" {
+				text, cx = clipped(it.Text, min(toolTextLimit, toolBudget))
+				toolBudget -= len(text)
+			} else if it.Text != "" {
+				cx = true
+			}
+			if ct || cx {
+				truncated = true
+			}
+			projected[idx] = &p.Item{ID: it.ID, Kind: it.Kind, Title: title, Text: text, Truncated: ct || cx}
+		}
+	}
+
+	out := make([]p.Item, 0, len(items))
+	for _, item := range projected {
+		if item != nil {
+			out = append(out, *item)
+		}
+	}
+	return out, stepCount, truncated
+}
+
+// projectRunSteps projects ONLY the intermediate execution steps (tool/reasoning) for on-demand
+// lazy expansion when the user taps "N 个执行步骤".
+func projectRunSteps(items []model.Item) []p.Item {
+	const (
+		stepTotalBudget = 128 << 10
+		stepTextLimit   = 4 << 10
+		stepTitleLimit  = 384
+		maxSteps        = 256
+	)
+	projected := make([]*p.Item, len(items))
+	budget := stepTotalBudget
+	count := 0
+	for idx := len(items) - 1; idx >= 0; idx-- {
+		it := items[idx]
+		if it.Kind == "text" || it.Kind == "user" {
+			continue
+		}
+		if count >= maxSteps {
+			break
+		}
+		count++
+		title, ct := clipped(it.Title, stepTitleLimit)
+		var text string
+		var cx bool
+		if budget > 0 && it.Text != "" {
+			text, cx = clipped(it.Text, min(stepTextLimit, budget))
+			budget -= len(text)
+		} else if it.Text != "" {
+			cx = true
+		}
+		projected[idx] = &p.Item{ID: it.ID, Kind: it.Kind, Title: title, Text: text, Truncated: ct || cx}
+	}
+	out := make([]p.Item, 0, count)
+	for _, item := range projected {
+		if item != nil {
+			out = append(out, *item)
+		}
+	}
+	return out
+}
+
+const remotelyVisibleChat = "coalesce(json_extract(c.data,'$.localOnly'),0)=0 AND EXISTS(SELECT 1 FROM agents visible_agent WHERE visible_agent.id=c.agent_id AND coalesce(json_extract(visible_agent.data,'$.localOnly'),0)=0)"
+const sharedChatScope = remotelyVisibleChat + " AND json_extract(c.data,'$.sharedScope.hubId')=?2 AND json_extract(c.data,'$.sharedScope.spaceId')=?3"
 
 func sharedChatCond(hubP, spaceP string) string {
-	return fmt.Sprintf("json_extract(c.data,'$.sharedScope.hubId')=%s AND json_extract(c.data,'$.sharedScope.spaceId')=%s", hubP, spaceP)
+	return remotelyVisibleChat + " AND " + fmt.Sprintf("json_extract(c.data,'$.sharedScope.hubId')=%s AND json_extract(c.data,'$.sharedScope.spaceId')=%s", hubP, spaceP)
 }
 
 func privateChatCond(hubP, spaceP, ctrlP string) string {
-	return fmt.Sprintf(`json_type(c.data,'$.sharedScope') IS NULL AND (
+	return remotelyVisibleChat + " AND " + fmt.Sprintf(`json_type(c.data,'$.sharedScope') IS NULL AND (
 		EXISTS(SELECT 1 FROM remote_private_chats g WHERE g.chat=c.id AND g.hub=%[1]s AND g.space=%[2]s AND g.controller=%[3]s)
 		OR EXISTS(SELECT 1 FROM remote_memberships m
 			JOIN remote_trusted_controllers t USING(hub,space)
 			JOIN agents a ON a.id=c.agent_id
 			WHERE m.hub=%[1]s AND m.space=%[2]s AND m.origin='' AND t.controller=%[3]s
-			AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))))`, hubP, spaceP, ctrlP)
 }

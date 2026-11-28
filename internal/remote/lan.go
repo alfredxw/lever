@@ -2,6 +2,7 @@ package remote
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -35,13 +36,14 @@ type lanServer struct {
 }
 
 type LANTicketResult struct {
-	Code     string            `json:"code"`
-	Expires  int64             `json:"expires"`
-	HostID   string            `json:"hostId"`
-	HostName string            `json:"hostName"`
-	LAN      string            `json:"lan"`
-	Link     string            `json:"link"`
-	Scope    model.SharedScope `json:"scope"`
+	Fingerprint string            `json:"fingerprint"`
+	Code        string            `json:"code"`
+	Expires     int64             `json:"expires"`
+	HostID      string            `json:"hostId"`
+	HostName    string            `json:"hostName"`
+	LAN         string            `json:"lan"`
+	Link        string            `json:"link"`
+	Scope       model.SharedScope `json:"scope"`
 }
 
 func (l *lanServer) close() {
@@ -129,39 +131,49 @@ func (h *Host) listenLAN() (*lanServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	l, err := net.Listen("tcp4", ":0")
+	bind := h.listenAddr
+	if bind == "" {
+		bind = ":0"
+	}
+	l, err := net.Listen("tcp", bind)
 	if err != nil {
 		return nil, err
 	}
 	ips := collectLANIPs()
-	if len(ips) == 0 {
-		l.Close()
-		return nil, errors.New("no private LAN address")
+	actual := l.Addr().(*net.TCPAddr)
+	addr := h.advertiseAddr
+	if addr == "" {
+		ip := actual.IP
+		if ip.IsUnspecified() {
+			if len(ips) == 0 {
+				l.Close()
+				return nil, errors.New("supply an explicit advertise address")
+			}
+			ip = ips[0]
+		}
+		addr = net.JoinHostPort(ip.String(), strconv.Itoa(actual.Port))
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	ad, err := bonjour.Advertise(h.App.Store.DeviceID, port, ips)
-	if err != nil {
+	hostname, port, err := net.SplitHostPort(addr)
+	number, portErr := strconv.Atoi(port)
+	if err != nil || hostname == "" || strings.ContainsAny(hostname, "/@?#%") || (net.ParseIP(hostname) != nil && net.ParseIP(hostname).IsUnspecified()) || portErr != nil || number <= 0 || number > 65535 {
 		l.Close()
-		return nil, err
+		return nil, errors.New("advertise requires a concrete host and TCP port")
 	}
-	addr := net.JoinHostPort(ips[0].String(), strconv.Itoa(port))
-	s := &http.Server{Handler: http.HandlerFunc(h.ServeLAN), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 8 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
+	var ad io.Closer
+	if !actual.IP.IsLoopback() && len(ips) > 0 {
+		ad, _ = bonjour.Advertise(h.App.Store.DeviceID, actual.Port, ips)
+	}
+	s := &http.Server{Handler: http.HandlerFunc(h.ServeLAN), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 8 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	go s.Serve(tls.NewListener(l, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}}}))
 	return &lanServer{http: s, mdns: ad, addr: addr}, nil
 }
 
-const lanTicketAlphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-
 func randomTicketCode() (string, error) {
-	buf := make([]byte, 12)
-	if _, err := rand.Read(buf); err != nil {
+	value, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
 		return "", err
 	}
-	out := make([]byte, len(buf))
-	for i, b := range buf {
-		out[i] = lanTicketAlphabet[int(b)%len(lanTicketAlphabet)]
-	}
-	return string(out), nil
+	return fmt.Sprintf("%06d", value), nil
 }
 
 func (h *Host) IssueLANTicket(ctx context.Context) (LANTicketResult, error) {
@@ -182,29 +194,24 @@ func (h *Host) IssueLANTicket(ctx context.Context) (LANTicketResult, error) {
 	expires := time.Now().Add(10 * time.Minute).Unix()
 	digest := p.Digest([]byte(code))
 	h.mu.Lock()
-	if h.lanTickets == nil {
-		h.lanTickets = map[string]int64{}
-	}
-	now := time.Now().Unix()
-	for k, exp := range h.lanTickets {
-		if exp <= now {
-			delete(h.lanTickets, k)
-		}
-	}
-	h.lanTickets[digest] = expires
+	// Only the most recent code is live. Invalid proofs cannot be used to
+	// bypass the attempt budget by rotating source addresses.
+	h.lanTickets = map[string]int64{digest: expires}
+	h.lanAttempts = 5
 	h.mu.Unlock()
 	hostName, _ := os.Hostname()
 	if hostName == "" {
 		hostName = "Lever"
 	}
 	return LANTicketResult{
-		Code:     code,
-		Expires:  expires,
-		HostID:   h.App.Store.DeviceID,
-		HostName: hostName,
-		LAN:      addr,
-		Link:     p.DirectPairLink(addr, h.App.Store.DeviceID, pub, code, hostName),
-		Scope:    scope,
+		Fingerprint: p.Fingerprint(pub),
+		Code:        code,
+		Expires:     expires,
+		HostID:      h.App.Store.DeviceID,
+		HostName:    hostName,
+		LAN:         addr,
+		Link:        p.DirectPairLink(addr, h.App.Store.DeviceID, pub, code, hostName),
+		Scope:       scope,
 	}, nil
 }
 
@@ -218,6 +225,10 @@ func (h *Host) consumeLANTicket(code string) bool {
 	defer h.mu.Unlock()
 	exp, ok := h.lanTickets[digest]
 	if !ok || exp <= now {
+		h.lanAttempts--
+		if h.lanAttempts <= 0 {
+			clear(h.lanTickets)
+		}
 		delete(h.lanTickets, digest)
 		return false
 	}
@@ -231,7 +242,7 @@ func (h *Host) handleDirectPair(w http.ResponseWriter, r *http.Request, body []b
 		http.Error(w, "invalid pairing request", 400)
 		return
 	}
-	if !in.Valid() || in.Role != p.Controller {
+	if !in.Valid() || !in.Role.Controls() || in.ID == h.App.Store.DeviceID {
 		http.Error(w, "invalid controller identity", 400)
 		return
 	}
@@ -253,6 +264,10 @@ func (h *Host) handleDirectPair(w http.ResponseWriter, r *http.Request, body []b
 	}
 	priv := ed25519.PrivateKey(key)
 	pub := priv.Public().(ed25519.PublicKey)
+	if err := validateReturnGrant(in.Reciprocal, in.Identity, p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub}); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	scope, _, err := h.ensureDirectScope(r.Context(), true)
 	if err != nil {
 		http.Error(w, "failed to prepare direct LAN scope", 500)
@@ -265,23 +280,29 @@ func (h *Host) handleDirectPair(w http.ResponseWriter, r *http.Request, body []b
 	}
 	h.configMu.Lock()
 	err = h.App.Store.Write(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO remote_trusted_controllers VALUES(?,?,?,?,?)
-			ON CONFLICT(hub,space,controller) DO UPDATE SET pub=excluded.pub,name=excluded.name`,
-			scope.HubID, scope.SpaceID, in.ID, []byte(in.PublicKey), name); err != nil {
+		var confirm, trusted bool
+		if err := tx.QueryRow("SELECT confirm,EXISTS(SELECT 1 FROM remote_trusted_controllers t WHERE (t.hub,t.space,t.controller,t.pub)=(x.hub,x.space,?,?)) FROM remote_access x WHERE x.hub=? AND x.space=?", in.ID, []byte(in.PublicKey), scope.HubID, scope.SpaceID).Scan(&confirm, &trusted); err != nil {
 			return err
 		}
-		for _, op := range []string{"send", "answer", "stop", "dispatch_task"} {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO remote_control_permissions VALUES(?,?,?,'*',?)", scope.HubID, scope.SpaceID, in.ID, op); err != nil {
-				return err
-			}
+		pending := confirm && !trusted
+		if err := saveLANController(tx, scope, in.Identity, name, pending); err != nil {
+			return err
 		}
-		return nil
+		if in.Reciprocal == nil {
+			return nil
+		}
+		if !pending {
+			return savePeer(tx, *in.Reciprocal)
+		}
+		_, err := tx.Exec("INSERT INTO remote_pending_peers VALUES(?,?,?,?) ON CONFLICT(hub,space,controller) DO UPDATE SET receipt=excluded.receipt", scope.HubID, scope.SpaceID, in.ID, store.JSON(in.Reciprocal))
+		return err
 	})
 	h.configMu.Unlock()
 	if err != nil {
 		http.Error(w, "failed to trust controller", 500)
 		return
 	}
+	h.reload()
 	hostID := p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub}
 	grant := p.IssueGrant(p.Grant{
 		HubID:      scope.HubID,
@@ -324,13 +345,57 @@ func (h *Host) handleDirectPair(w http.ResponseWriter, r *http.Request, body []b
 	})
 }
 
+func saveLANController(tx *sql.Tx, scope model.SharedScope, controller p.Identity, name string, pending bool) error {
+	table := "remote_trusted_controllers"
+	if pending {
+		table = "remote_pending_controllers"
+	}
+	result, err := tx.Exec("INSERT INTO "+table+` VALUES(?,?,?,?,?)
+			ON CONFLICT(hub,space,controller) DO UPDATE SET name=excluded.name WHERE pub=excluded.pub`,
+		scope.HubID, scope.SpaceID, controller.ID, []byte(controller.PublicKey), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("paired controller public key changed")
+	}
+	if table == "remote_pending_controllers" {
+		return nil
+	}
+	for _, op := range []string{"send", "answer", "allow_run", "resume_queue", "resolve_unknown", "stop", "dispatch_task"} {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO remote_control_permissions VALUES(?,?,?,'*',?)", scope.HubID, scope.SpaceID, controller.ID, op); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ServeLAN serves the Host's dedicated, authenticated TLS endpoint.
 func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" && r.URL.Path == "/identity" {
+		var pub []byte
+		if err := h.App.Store.DB.QueryRowContext(r.Context(), "SELECT substr(key,33,32) FROM remote_identity WHERE singleton=1").Scan(&pub); err != nil {
+			peerError(w, err)
+			return
+		}
+		name, _ := os.Hostname()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(p.LANIdentity{Identity: p.Identity{ID: h.App.Store.DeviceID, PublicKey: pub}, Name: name, Platform: runtime.GOOS})
+		return
+	}
 	commandID, lookup := strings.CutPrefix(r.URL.Path, "/commands/")
 	lookup = lookup && len(commandID) == 36 && !strings.Contains(commandID, "/")
 	avatarID, avatarLookup := strings.CutPrefix(r.URL.Path, "/avatars/")
 	avatarLookup = avatarLookup && len(avatarID) == 64 && !strings.Contains(avatarID, "/")
-	if !(r.Method == http.MethodGet && (r.URL.Path == "/archive" || r.URL.Path == "/private" || r.URL.Path == "/host" || r.URL.Path == "/composer-meta" || lookup || avatarLookup) ||
+	runStepsID, runStepsLookup := "", false
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/runs/"); ok {
+		if id, ok2 := strings.CutSuffix(rest, "/steps"); ok2 && id != "" && !strings.Contains(id, "/") {
+			runStepsID, runStepsLookup = id, true
+		}
+	}
+	peer := strings.HasPrefix(r.URL.Path, "/peer/v1/")
+	if !peer && !(r.Method == http.MethodGet && (r.URL.Path == "/archive" || r.URL.Path == "/private" || r.URL.Path == "/host" || r.URL.Path == "/composer-meta" || lookup || avatarLookup || runStepsLookup) ||
 		r.Method == http.MethodPut && r.URL.Path == "/starred-models" ||
 		r.Method == http.MethodPost && (r.URL.Path == "/commands" || r.URL.Path == "/read" || r.URL.Path == "/cleared" || r.URL.Path == "/attachments" || r.URL.Path == "/pair" || r.URL.Path == "/unpair")) {
 		http.NotFound(w, r)
@@ -339,6 +404,9 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	maxBody := int64(p.MaxFrame)
 	if r.Method == http.MethodPost && r.URL.Path == "/attachments" {
 		maxBody = 12 << 20
+	}
+	if peer && (strings.HasSuffix(r.URL.Path, "/attachments") || strings.HasSuffix(r.URL.Path, "/file")) {
+		maxBody = p.MaxPeerBody
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
@@ -357,41 +425,57 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	}
 	g := grant.Grant
 	var m p.Membership
-	err = h.App.Store.Write(r.Context(), func(tx *sql.Tx) error {
+	{
 		var policy int64
 		var raw string
-		if err := tx.QueryRow("SELECT credential,policy FROM remote_memberships WHERE hub=? AND space=? AND lan=1", g.HubID, g.SpaceID).Scan(&raw, &policy); err != nil {
-			return err
-		}
+		err = h.App.Store.DB.QueryRowContext(r.Context(), "SELECT credential,policy FROM remote_memberships WHERE hub=? AND space=? AND lan=1", g.HubID, g.SpaceID).Scan(&raw, &policy)
 		now := time.Now()
-		if json.Unmarshal([]byte(raw), &m) != nil || !m.Role.Executes() || policy <= 0 || policy != g.Policy || !grant.Authentic(m.Hub, h.App.Store.DeviceID, m.SpaceID) || !p.Verify(r, g.Controller.PublicKey, body, now) {
-			return errors.New("invalid LAN authorization")
-		}
-		if g.Expires <= now.Unix() {
-			var trusted bool
-			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=? AND pub=?)", g.HubID, g.SpaceID, g.Controller.ID, g.Controller.PublicKey).Scan(&trusted); err != nil {
-				return err
+		if err == nil {
+			if json.Unmarshal([]byte(raw), &m) != nil || !m.Role.Executes() || policy <= 0 || policy != g.Policy || !grant.Authentic(m.Hub, h.App.Store.DeviceID, m.SpaceID) || !p.Verify(r, g.Controller.PublicKey, body, now) {
+				err = errors.New("invalid LAN authorization")
 			}
-			if !trusted || m.UserID != g.UserID {
-				return errors.New("expired LAN grant")
+		}
+		if err == nil {
+			if g.Expires <= now.Unix() {
+				var trusted bool
+				if err = h.App.Store.DB.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=? AND pub=?)", g.HubID, g.SpaceID, g.Controller.ID, g.Controller.PublicKey).Scan(&trusted); err == nil && (!trusted || m.UserID != g.UserID) {
+					err = errors.New("expired LAN grant")
+				}
+			} else if g.Expires > now.Add(5*time.Minute+5*time.Second).Unix() {
+				err = errors.New("invalid LAN expiry")
 			}
-		} else if g.Expires > now.Add(5*time.Minute+5*time.Second).Unix() {
-			return errors.New("invalid LAN expiry")
 		}
-		if _, err := tx.Exec("DELETE FROM remote_lan_nonces WHERE expires<?", now.Unix()); err != nil {
-			return err
+		if err == nil && !h.consumeLANNonce(r.Header.Get("X-Lever-Nonce"), now.Unix()) {
+			err = errors.New("replayed LAN nonce")
 		}
-		_, err := tx.Exec("INSERT INTO remote_lan_nonces VALUES(?,?)", r.Header.Get("X-Lever-Nonce"), now.Unix()+121)
-		return err
-	})
+	}
 	if err != nil {
 		http.Error(w, "LAN authorization expired or revoked", 403)
+		return
+	}
+	if peer {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		h.servePeer(w, r, peerActor{scope: model.SharedScope{HubID: g.HubID, SpaceID: g.SpaceID}, user: g.UserID, device: g.Controller.ID, draining: g.Draining, lan: &g})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodPost && r.URL.Path == "/unpair" {
-		_, _ = h.App.Store.DB.ExecContext(r.Context(), "DELETE FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?", g.HubID, g.SpaceID, g.Controller.ID)
+		err := h.App.Store.Write(r.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.Exec("DELETE FROM remote_trusted_controllers WHERE hub=? AND space=? AND controller=?", g.HubID, g.SpaceID, g.Controller.ID); err != nil {
+				return err
+			}
+			if g.HubID == h.App.Store.DeviceID {
+				_, err := tx.Exec("DELETE FROM remote_peers WHERE node_id=? AND json_extract(membership,'$.hub.publicKey')=?", g.Controller.ID, base64.StdEncoding.EncodeToString(g.Controller.PublicKey))
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			peerError(w, err)
+			return
+		}
+		h.reload()
 		_ = json.NewEncoder(w).Encode(true)
 		return
 	}
@@ -437,7 +521,7 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		var allowed bool
 		err := h.App.Store.DB.QueryRowContext(r.Context(), `SELECT EXISTS(
 			SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
-			WHERE coalesce(json_extract(a.data,'$.archived'),0)=0
+			WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND json_extract(a.data,'$.avatar.kind')='image'
 			AND json_extract(a.data,'$.avatar.value')=?3
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
@@ -464,6 +548,11 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/host" {
+		node, err := h.descriptor(r.Context(), m)
+		if err != nil {
+			http.Error(w, "device unavailable", 500)
+			return
+		}
 		var version int64
 		_ = h.App.Store.DB.QueryRowContext(r.Context(), "SELECT version FROM remote_memberships WHERE hub=? AND space=?", g.HubID, g.SpaceID).Scan(&version)
 		hostName, _ := os.Hostname()
@@ -471,6 +560,7 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 			hostName = "Lever"
 		}
 		_ = json.NewEncoder(w).Encode(p.Device{
+			Node:          &node,
 			Identity:      g.Host,
 			SpaceID:       g.SpaceID,
 			Name:          hostName,
@@ -480,6 +570,19 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 			DesktopActive: h.App.DesktopActive(),
 			Version:       version,
 		})
+		return
+	}
+	if r.Method == http.MethodGet && runStepsLookup {
+		run, err := store.Get[model.Run](r.Context(), h.App.Store.DB, `SELECT r.data FROM runs r JOIN chats c ON c.id=r.chat_id WHERE r.id=?1 AND ((`+sharedChatCond("?2", "?3")+`) OR (`+privateChatCond("?2", "?3", "?4")+`))`, runStepsID, g.HubID, g.SpaceID, g.Controller.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "run steps unavailable", 500)
+			return
+		}
+		writeLANJSON(w, r, projectRunSteps(run.Items))
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/composer-meta" {
@@ -510,6 +613,11 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/attachments" {
+		var level p.AccessLevel
+		if err := h.App.Store.DB.QueryRowContext(r.Context(), "SELECT coalesce((SELECT level FROM remote_access WHERE hub=? AND space=?),'workspace')", g.HubID, g.SpaceID).Scan(&level); err != nil || !level.Allows(p.AccessWorkspace) {
+			http.Error(w, "workspace access required", 403)
+			return
+		}
 		var in p.AttachmentUpload
 		if err = p.Decode(body, &in); err != nil || strings.TrimSpace(in.Name) == "" || in.Data == "" {
 			http.Error(w, "invalid attachment upload", 400)
@@ -568,44 +676,84 @@ func (h *Host) ServeLAN(w http.ResponseWriter, r *http.Request) {
 	chatID := q.Get("chat")
 	sessionID := q.Get("session")
 	beforeSeq, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+	afterSeq, _ := strconv.ParseInt(q.Get("after"), 10, 64)
+	lazySteps := q.Get("steps") == "lazy"
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit > 200 {
 		limit = 200
 	}
-	if controller == "" && q.Get("sync") == "1" && sessionID == "" && beforeSeq == 0 && limit == 0 {
+	if controller == "" && q.Get("sync") == "1" && sessionID == "" && beforeSeq == 0 && afterSeq == 0 && limit == 0 {
 		page, err := h.archivePage(r.Context(), m, chatID, p.ReadCursor(q))
 		if err != nil {
 			http.Error(w, "archive unavailable", 500)
 			return
 		}
-		json.NewEncoder(w).Encode(page)
+		writeLANJSON(w, r, page)
 		return
 	}
-	records, err := lanArchivePaged(r.Context(), h.App.Store, m, chatID, controller, sessionID, beforeSeq, limit)
+	records, err := lanArchivePaged(r.Context(), h.App.Store, m, chatID, controller, sessionID, beforeSeq, afterSeq, limit, lazySteps)
 	if err != nil {
 		http.Error(w, "archive unavailable", 500)
 		return
 	}
-	json.NewEncoder(w).Encode(records)
+	writeLANJSON(w, r, records)
+}
+
+func (h *Host) consumeLANNonce(nonce string, now int64) bool {
+	if nonce == "" {
+		return false
+	}
+	h.lanNoncesMu.Lock()
+	defer h.lanNoncesMu.Unlock()
+	if h.lanNonces == nil {
+		h.lanNonces = make(map[string]int64, 64)
+	}
+	if len(h.lanNonces) > 64 {
+		for k, exp := range h.lanNonces {
+			if exp < now {
+				delete(h.lanNonces, k)
+			}
+		}
+	}
+	if exp, exists := h.lanNonces[nonce]; exists && exp >= now {
+		return false
+	}
+	h.lanNonces[nonce] = now + 121
+	return true
+}
+
+func writeLANJSON(w http.ResponseWriter, r *http.Request, v any) {
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Vary", "Accept-Encoding")
+		gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		if err == nil {
+			_ = json.NewEncoder(gz).Encode(v)
+			_ = gz.Close()
+			return
+		}
+		w.Header().Del("Content-Encoding")
+	}
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func lanArchive(ctx context.Context, s *store.Store, m p.Membership, chat, controller string) ([]p.Record, error) {
-	return lanArchivePaged(ctx, s, m, chat, controller, "", 0, 0)
+	return lanArchivePaged(ctx, s, m, chat, controller, "", 0, 0, 0, false)
 }
 
-func lanArchivePaged(ctx context.Context, s *store.Store, m p.Membership, chat, controller, sessionID string, beforeSeq int64, limit int) ([]p.Record, error) {
+func lanArchivePaged(ctx context.Context, s *store.Store, m p.Membership, chat, controller, sessionID string, beforeSeq, afterSeq int64, limit int, lazySteps bool) ([]p.Record, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if chat != "" && (sessionID != "" || limit > 0) {
-		return readLANArchivePaged(ctx, tx, m, chat, controller, sessionID, beforeSeq, limit)
+	if chat != "" && (sessionID != "" || limit > 0 || afterSeq > 0) {
+		return readLANArchivePaged(ctx, tx, m, chat, controller, sessionID, beforeSeq, afterSeq, limit, lazySteps)
 	}
 	return readLANArchive(ctx, tx, m, chat, controller)
 }
 
-func readLANArchivePaged(ctx context.Context, tx *sql.Tx, m p.Membership, chat, controller, sessionID string, beforeSeq int64, limit int) ([]p.Record, error) {
+func readLANArchivePaged(ctx context.Context, tx *sql.Tx, m p.Membership, chat, controller, sessionID string, beforeSeq, afterSeq int64, limit int, lazySteps bool) ([]p.Record, error) {
 	if limit <= 0 {
 		limit = 30
 	}
@@ -621,20 +769,26 @@ func readLANArchivePaged(ctx context.Context, tx *sql.Tx, m p.Membership, chat, 
 	args = append(args, sessionID)
 	beforeArg := fmt.Sprintf("?%d", len(args)+1)
 	args = append(args, beforeSeq)
+	afterArg := fmt.Sprintf("?%d", len(args)+1)
+	args = append(args, afterSeq)
 	limitArg := fmt.Sprintf("?%d", len(args)+1)
 	args = append(args, limit)
+
+	// When afterSeq > 0 (incremental delta sync), only fetch runs newer than afterSeq
+	// OR currently active/in-progress runs so immutable historical turns are never re-downloaded.
+	runWindowFilter := "(" + beforeArg + "=0 OR sequence<" + beforeArg + ") AND (" + afterArg + "=0 OR sequence>" + afterArg + " OR status IN ('starting','running','waiting_user','cancelling','unknown','queued'))"
 
 	var query string
 	if sessionID != "" {
 		query = "WITH allowed AS (SELECT c.id FROM chats c WHERE " + scope + " AND c.id=?3), " +
-			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id=" + sessArg + " AND (" + beforeArg + "=0 OR sequence<" + beforeArg + ") ORDER BY sequence DESC LIMIT " + limitArg + ") " +
+			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id=" + sessArg + " AND " + runWindowFilter + " ORDER BY sequence DESC LIMIT " + limitArg + ") " +
 			"SELECT 'session',id FROM sessions WHERE chat_id IN allowed AND id=" + sessArg + " " +
 			"UNION ALL SELECT 'run',id FROM page_runs " +
 			"UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN allowed AND json_extract(data,'$.sessionId')=" + sessArg + " AND (status='pending' OR json_extract(data,'$.runId') IN (SELECT id FROM page_runs))"
 	} else {
 		query = "WITH allowed AS (SELECT c.id FROM chats c WHERE " + scope + " AND c.id=?3), " +
 			"main_sess AS (SELECT id FROM sessions WHERE chat_id IN allowed AND kind='main'), " +
-			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id IN (SELECT id FROM main_sess) AND (" + beforeArg + "=0 OR sequence<" + beforeArg + ") ORDER BY sequence DESC LIMIT " + limitArg + ") " +
+			"page_runs AS (SELECT id FROM runs WHERE chat_id IN allowed AND session_id IN (SELECT id FROM main_sess) AND " + runWindowFilter + " ORDER BY sequence DESC LIMIT " + limitArg + ") " +
 			"SELECT 'chat',id FROM allowed " +
 			"UNION ALL SELECT 'session',id FROM sessions WHERE chat_id IN allowed " +
 			"UNION ALL SELECT 'run',id FROM page_runs " +
@@ -660,7 +814,7 @@ func readLANArchivePaged(ctx context.Context, tx *sql.Tx, m p.Membership, chat, 
 	}
 	records := []p.Record{}
 	for _, o := range keys {
-		rec, err := project(ctx, tx, m, o, controller)
+		rec, err := projectWithOpts(ctx, tx, m, o, controller, lazySteps)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -684,7 +838,7 @@ func readLANArchive(ctx context.Context, tx *sql.Tx, m p.Membership, chat, contr
 		query += " UNION ALL SELECT 'run',id FROM runs WHERE chat_id IN allowed UNION ALL SELECT 'request',id FROM requests WHERE chat_id IN allowed"
 	} else if controller == "" {
 		query += ` UNION ALL SELECT 'agent',a.id FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
-WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))`
+WHERE coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0 AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id))`
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -877,7 +1031,7 @@ func (h *Host) composerMeta(ctx context.Context, g p.Grant, agentID, chatID, ses
 	} else if resolvedAgent != "" {
 		var visible bool
 		if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
-			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 			g.HubID, g.SpaceID, resolvedAgent).Scan(&visible); err != nil || !visible {
 			return meta, nil
@@ -931,7 +1085,7 @@ func (h *Host) uploadScopeAttachment(ctx context.Context, g p.Grant, chatID, age
 	if agentID != "" {
 		var visible bool
 		if err := h.App.Store.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agents a JOIN remote_memberships m ON m.hub=?1 AND m.space=?2
-			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0
+			WHERE a.id=?3 AND coalesce(json_extract(a.data,'$.archived'),0)=0 AND coalesce(json_extract(a.data,'$.localOnly'),0)=0
 			AND (m.expose_all=1 OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE e.hub=m.hub AND e.space=m.space AND e.agent_id=a.id)))`,
 			g.HubID, g.SpaceID, agentID).Scan(&visible); err != nil || !visible {
 			return out, errors.New("agent is not accessible")

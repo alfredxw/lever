@@ -261,6 +261,12 @@ func (a *App) localTargetWorkingCopies(ctx context.Context, agentID string) []mo
 	return out
 }
 
+// DelegationWorkspace reports the same checkout occupancy that the Owner uses
+// to admit a local collaborator. No local repository paths leave the device.
+func (a *App) DelegationWorkspace(ctx context.Context, agent model.Agent) (bool, []model.RemoteWorkingCopy) {
+	return a.isDefaultScopeBusy(ctx, agent), a.localTargetWorkingCopies(ctx, agent.ID)
+}
+
 func (a *App) isDefaultScopeBusy(ctx context.Context, target model.Agent) bool {
 	targetCWD := workspace.CWD(target.Profile.Scope)
 	if targetCWD == "" {
@@ -440,7 +446,7 @@ func (a *App) addDelegationTools(ctx context.Context, server *mcp.Server, owner 
 		return nil, &delegateTargetsResult{Targets: a.listEligibleTargets(ctx, owner, in.Query, in.DeviceID)}, nil
 	})
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "delegate_start",
+		Name:        "delegate_start",
 		Description: fmt.Sprintf("Start a task on another collaborator Agent (%s; child permissions are capped to this turn's permission level). Omit deviceId for a local Agent (defaults to workspace='inherit' to share the current checkout for tight same-task collaboration; pass workspace='agent' for its own scope—auto-picking an idle pre-created worktree if its default checkout is busy—or pass workingCopyId to target a specific worktree), or pass deviceId (and optional workingCopyId) for a remote device Agent. You may start multiple tasks in parallel, wait with delegate_wait, continue an existing delegation with delegate_reply, inspect child transcripts via read_chat_context, or finish your turn to automatically receive a receipt when autoWake is true (default).", depthNote) + startTargetNote,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in delegateInput) (*mcp.CallToolResult, *model.Delegation, error) {
 		d, err := a.delegate(ctx, owner, in)
@@ -693,7 +699,7 @@ func (a *App) delegate(ctx context.Context, parent *execution, in delegateInput)
 		delegationScope:    delegationScope,
 		maxPermissionMode:  maxPerm,
 		delegationDepth:    parent.session.EffectiveDelegationDepth() + 1,
-		delegationMaxDepth: min(parent.delegationMaxDepth, 2),
+		delegationMaxDepth: min(parent.delegationMaxDepth, model.MaxDelegationHops),
 		delegationChain:    parent.nextDelegationChain(),
 	})
 	if err != nil {

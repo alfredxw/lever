@@ -22,8 +22,18 @@ CREATE TABLE IF NOT EXISTS shared_sync_log(hub TEXT NOT NULL,space TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS remote_commands(hub TEXT NOT NULL,space TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(hub,space,id));
 CREATE TABLE IF NOT EXISTS remote_private_chats(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,chat TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,PRIMARY KEY(hub,space,controller,chat),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS lan_proposals(hub TEXT NOT NULL,space TEXT NOT NULL,id TEXT NOT NULL,command TEXT NOT NULL,receipt TEXT NOT NULL,expires INTEGER NOT NULL,policy INTEGER NOT NULL,published INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(hub,space,id),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS peer_delegation_reviews(hub TEXT NOT NULL,space TEXT NOT NULL,id TEXT PRIMARY KEY,intent TEXT NOT NULL,grant TEXT NOT NULL,receipt TEXT NOT NULL,FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS remote_lan_nonces(nonce TEXT PRIMARY KEY,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS remote_replay_bounds(hub TEXT NOT NULL,space TEXT NOT NULL,floor INTEGER NOT NULL,PRIMARY KEY(hub,space),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS remote_browse_roots(id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS remote_access(hub TEXT NOT NULL,space TEXT NOT NULL,level TEXT NOT NULL CHECK(level IN ('chat','workspace','admin')),read_only INTEGER NOT NULL DEFAULT 0,confirm INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(hub,space),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS remote_pending_controllers(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,pub BLOB NOT NULL,name TEXT NOT NULL,PRIMARY KEY(hub,space,controller),FOREIGN KEY(hub,space) REFERENCES remote_memberships ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS remote_pending_peers(hub TEXT NOT NULL,space TEXT NOT NULL,controller TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(hub,space,controller),FOREIGN KEY(hub,space,controller) REFERENCES remote_pending_controllers ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS remote_peers(node_id TEXT PRIMARY KEY, membership TEXT NOT NULL, grant TEXT NOT NULL, address TEXT NOT NULL, name TEXT NOT NULL, platform TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS peer_local_index(node_id TEXT PRIMARY KEY REFERENCES remote_peers(node_id) ON DELETE CASCADE,epoch TEXT NOT NULL,data BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS peer_local_pages(node_id TEXT NOT NULL REFERENCES peer_local_index(node_id) ON DELETE CASCADE,path TEXT NOT NULL,epoch TEXT NOT NULL,data BLOB NOT NULL,PRIMARY KEY(node_id,path));
+CREATE TRIGGER IF NOT EXISTS peer_cache_epoch AFTER UPDATE OF epoch ON peer_local_index WHEN OLD.epoch<>NEW.epoch BEGIN DELETE FROM peer_local_pages WHERE node_id=NEW.node_id; END;
+CREATE TRIGGER IF NOT EXISTS peer_cache_repair AFTER UPDATE OF grant ON remote_peers WHEN OLD.grant<>NEW.grant BEGIN DELETE FROM peer_local_index WHERE node_id=NEW.node_id; END;
 INSERT OR IGNORE INTO remote_replay_bounds SELECT hub,space,acked FROM remote_memberships;
 CREATE TABLE IF NOT EXISTS remote_note_tasks(note_id TEXT NOT NULL,hub TEXT NOT NULL,space TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(note_id,hub,space));
 `
@@ -57,6 +67,20 @@ func (s *Store) initRemote() error {
 		if _, err = tx.Exec("ALTER TABLE remote_memberships ADD COLUMN expose_all INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
+	}
+	if _, err = tx.Exec(`CREATE VIEW IF NOT EXISTS peer_agents AS
+		SELECT m.hub,m.space,a.id AS agent_id FROM remote_memberships m JOIN agents a
+		WHERE NOT coalesce(json_extract(a.data,'$.archived'),0) AND NOT coalesce(json_extract(a.data,'$.localOnly'),0)
+		AND (m.expose_all OR EXISTS(SELECT 1 FROM hub_exposed_agents e WHERE (e.hub,e.space,e.agent_id)=(m.hub,m.space,a.id)));
+		CREATE VIEW IF NOT EXISTS peer_chats AS
+		SELECT a.hub,a.space,a.agent_id,c.id AS chat_id FROM peer_agents a JOIN chats c ON c.agent_id=a.agent_id
+		WHERE NOT coalesce(json_extract(c.data,'$.localOnly'),0)
+		AND (json_extract(c.data,'$.sharedScope') IS NULL OR
+		(json_extract(c.data,'$.sharedScope.hubId'),json_extract(c.data,'$.sharedScope.spaceId'))=(a.hub,a.space))`); err != nil {
+		return err
+	}
+	if err = initPeerCheckpoints(tx); err != nil {
+		return err
 	}
 	var hasAllowDelegation bool
 	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('remote_memberships') WHERE name='allow_delegation')").Scan(&hasAllowDelegation); err != nil {

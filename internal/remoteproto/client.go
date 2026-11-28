@@ -12,6 +12,7 @@ import (
 )
 
 type ClientState struct {
+	DirectGrant  string             `json:"directGrant,omitempty"`
 	Origin       string             `json:"origin"`
 	Direct       bool               `json:"direct,omitempty"`
 	LANAddr      string             `json:"lanAddr,omitempty"`
@@ -54,7 +55,11 @@ func (s ClientState) Request(ctx context.Context, method, path string, body []by
 		return nil, errors.New("invalid device key")
 	}
 	u, err := url.ParseRequestURI(path)
-	if err != nil || u.IsAbs() || u.Host != "" || strings.Contains(u.Path, "..") || (u.Path != "/api/me" && !strings.HasPrefix(u.Path, s.SpacePath()+"/")) {
+	if err != nil {
+		return nil, err
+	}
+	syncPath := u.Path == "/ws/sync" || u.Path == "/ws/tunnel"
+	if u.IsAbs() || u.Host != "" || strings.Contains(u.Path, "..") || (!syncPath && u.Path != "/api/me" && !strings.HasPrefix(u.Path, s.SpacePath()+"/")) {
 		return nil, errors.New("request outside paired space")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, s.Origin+path, bytes.NewReader(body))

@@ -42,6 +42,7 @@ func start(dir, address, devOrigin string, control *desktopControl) (*httpapi.Se
 	if err != nil {
 		return nil, err
 	}
+	a.Version = DesktopVersion
 	if _, err := a.ConnectLocalProviders(context.Background()); err != nil {
 		slog.Warn("connect local runtimes", "error", err)
 	}

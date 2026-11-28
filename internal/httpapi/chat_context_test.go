@@ -104,7 +104,11 @@ func TestChatContextThroughHostedACPStdio(t *testing.T) {
 		t.Fatalf("stdio did not preserve the reference scope: %+v", got)
 	}
 	before := f.waitNative(first.SessionID).NativeID
-	second, got, _ := historyTurn(f, chat.ID, "main", read(local.SessionID), read(mentioned.SessionID))
+	// Anchor the scope check on the user message. A long provider receipt may occupy the newer page.
+	localInput := read(local.SessionID)
+	localInput.Arguments["anchor"] = map[string]any{"runId": local.ID}
+	localInput.Arguments["direction"] = "newer"
+	second, got, _ := historyTurn(f, chat.ID, "main", localInput, read(mentioned.SessionID))
 	if second.SessionID != first.SessionID || f.waitNative(second.SessionID).NativeID != before ||
 		len(got[0].Body.Messages) == 0 || got[0].Body.Messages[0].Text != local.Input || got[1].Error == "" {
 		t.Fatalf("resumed stdio did not get a fresh execution scope: %+v", got)

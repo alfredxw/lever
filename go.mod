@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/xpty v0.1.3
 	github.com/coder/acp-go-sdk v0.13.5
+	github.com/coder/websocket v1.8.15
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.10.1-0.20261127015856-03703069e619
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
@@ -16,6 +17,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/mdns v1.0.6
+	github.com/hashicorp/yamux v0.1.2
 	github.com/larksuite/oapi-sdk-go/v3 v3.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/sideshow/apns2 v0.25.0

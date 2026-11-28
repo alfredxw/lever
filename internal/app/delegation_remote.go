@@ -89,6 +89,9 @@ func (a *App) StartRemoteDelegationFollower() {
 	go a.runRemoteDelegationFollower()
 }
 
+// RemoteNodeChanged wakes active delegates when an Owner publishes progress.
+func (a *App) RemoteNodeChanged() { a.wakeRemoteDelegations() }
+
 func (a *App) wakeRemoteDelegations() {
 	if a.remoteDelegationWake == nil {
 		return
@@ -356,7 +359,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 			DelegationID:      d.ID,
 			MaxPermissionMode: maxPerm,
 			Depth:             parent.session.EffectiveDelegationDepth() + 1,
-			MaxDepth:          min(parent.delegationMaxDepth, 2),
+			MaxDepth:          min(parent.delegationMaxDepth, model.MaxDelegationHops),
 			Chain:             parent.nextDelegationChain(),
 		},
 	}
@@ -498,7 +501,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'starting',?,0,'',0,?,?)`,
 			DelegationID:      d.ID,
 			MaxPermissionMode: maxPerm,
 			Depth:             parent.session.EffectiveDelegationDepth() + 1,
-			MaxDepth:          min(parent.delegationMaxDepth, 2),
+			MaxDepth:          min(parent.delegationMaxDepth, model.MaxDelegationHops),
 			Chain:             parent.nextDelegationChain(),
 		},
 	}
@@ -712,9 +715,9 @@ func (a *App) runRemoteDelegationFollower() {
 	defer a.wg.Done()
 	for {
 		active := a.pollRemoteDelegations(a.ctx)
-		delay := 5 * time.Second
+		delay := 45 * time.Second
 		if active {
-			delay = 350 * time.Millisecond
+			delay = 5 * time.Second
 		}
 		timer := time.NewTimer(delay)
 		select {
@@ -868,35 +871,16 @@ func (a *App) syncRemoteDelegationRow(ctx context.Context, rc RemoteCollaborator
 		return
 	}
 
-	// Phase 2: Accepted; follow remote run progress via archive.
-	records, err := rc.ReadRemoteChat(ctx, scope, row.DeviceID, row.ChatID)
+	nextStatus, nextOutput, nextError, pendingReqs, err := remoteProgress(ctx, rc, scope, row)
 	if err != nil {
 		if isPermanentRemoteError(err) {
 			a.finalizeRemoteDelegationError(ctx, parentChatID, row, err.Error())
 		}
 		return
 	}
-	var runRec *p.Record
-	pendingReqs := []model.Request{}
-	for i := range records {
-		r := records[i]
-		if r.Kind == "run" && r.ID == row.RunID {
-			copyRec := r
-			runRec = &copyRec
-		}
-		if r.Kind == "request" && r.RunID == row.RunID && r.Status == "pending" {
-			pendingReqs = append(pendingReqs, remoteRecordToModelRequest(r))
-		}
-	}
-	if runRec == nil {
+	if nextStatus == "" {
 		return
 	}
-	nextStatus := runRec.Status
-	if nextStatus == "" {
-		nextStatus = row.Status
-	}
-	nextOutput := remoteRecordOutput(*runRec)
-	nextError := runRec.Error
 	nextSummary := truncateRunes(nextOutput, 180)
 	if nextSummary == "" && nextError != "" {
 		nextSummary = truncateRunes(nextError, 180)
@@ -931,6 +915,30 @@ SET status=?,output=?,summary=?,error=?,requests=?,pending_cancel=?,updated_at=?
 		a.scheduleDelegationReceiptsLocked(row.ParentSessionID, false)
 		a.mu.Unlock()
 	}
+}
+
+func remoteProgress(ctx context.Context, rc RemoteCollaborator, scope model.SharedScope, row remoteDelegationRow) (status, output, detail string, pending []model.Request, err error) {
+	if modern, ok := rc.(interface {
+		ReadRemoteRun(context.Context, model.SharedScope, string, string) (p.PeerRun, bool, error)
+	}); ok {
+		if page, used, err := modern.ReadRemoteRun(ctx, scope, row.DeviceID, row.RunID); used || err != nil {
+			return page.Run.Status, runOutputText(page.Run), page.Run.Error, page.Requests, err
+		}
+	}
+	records, err := rc.ReadRemoteChat(ctx, scope, row.DeviceID, row.ChatID)
+	if err != nil {
+		return
+	}
+	pending = []model.Request{}
+	for _, rec := range records {
+		if rec.Kind == "run" && rec.ID == row.RunID {
+			status, output, detail = rec.Status, remoteRecordOutput(rec), rec.Error
+		}
+		if rec.Kind == "request" && rec.RunID == row.RunID && rec.Status == "pending" {
+			pending = append(pending, remoteRecordToModelRequest(rec))
+		}
+	}
+	return
 }
 
 func (a *App) finalizeRemoteDelegationError(ctx context.Context, parentChatID string, row remoteDelegationRow, msg string) {

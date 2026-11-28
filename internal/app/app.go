@@ -48,43 +48,44 @@ func now() string              { return time.Now().UTC().Format(time.RFC3339Nano
 func hash(v any) string        { s := sha256.Sum256([]byte(store.JSON(v))); return hex.EncodeToString(s[:]) }
 
 type App struct {
-	Store                *store.Store
-	Terminals            terminal.Manager
-	URL                  string
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	mu                   sync.Mutex
-	active               map[string]*execution
-	restarts             []store.RestartRun
-	independentProviders bool
-	hostLease            *runhost.BackendLease
-	closed               bool
-	wg                   sync.WaitGroup
-	worktreeMu           sync.Mutex
-	removingCheckout     string
-	scopeUsers           map[string]int
-	initializing         map[string]bool // Physical checkouts leased for setup.
-	catalogs             map[catalogKey]*catalogEntry
-	usages               map[usageKey]*usageEntry
-	usageVersions        map[string]string
-	localStats           *localstats.Service
-	setups               map[string]*providerSetup
-	agyLogin             terminal.Key
-	sharedSending        sync.Map
-	notesMu              sync.Mutex
-	notesDir             string
-	noteFiles            map[string]parsedNote
-	taskAdapters         map[[2]string]plugin.TaskSourceAdapter
-	eventAdapters        map[[2]string]plugin.EventSourceAdapter
-	taskSyncWake         chan struct{}
-	taskQueueWake        chan struct{}
-	taskReminderWake     chan struct{}
-	taskSync             *taskSourceSync
-	eventPoll            *activeEventPoll
-	automationStarted    bool
-	feishu               feishuChannel
-	personal                map[string]*personalWorker
-	pluginPreviews          map[string]*packagePreview
+	Version                  string // Packaged application version. Set at bootstrap.
+	Store                    *store.Store
+	Terminals                terminal.Manager
+	URL                      string
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	mu                       sync.Mutex
+	active                   map[string]*execution
+	restarts                 []store.RestartRun
+	independentProviders     bool
+	hostLease                *runhost.BackendLease
+	closed                   bool
+	wg                       sync.WaitGroup
+	worktreeMu               sync.Mutex
+	removingCheckout         string
+	scopeUsers               map[string]int
+	initializing             map[string]bool // Physical checkouts leased for setup.
+	catalogs                 map[catalogKey]*catalogEntry
+	usages                   map[usageKey]*usageEntry
+	usageVersions            map[string]string
+	localStats               *localstats.Service
+	setups                   map[string]*providerSetup
+	agyLogin                 terminal.Key
+	sharedSending            sync.Map
+	notesMu                  sync.Mutex
+	notesDir                 string
+	noteFiles                map[string]parsedNote
+	taskAdapters             map[[2]string]plugin.TaskSourceAdapter
+	eventAdapters            map[[2]string]plugin.EventSourceAdapter
+	taskSyncWake             chan struct{}
+	taskQueueWake            chan struct{}
+	taskReminderWake         chan struct{}
+	taskSync                 *taskSourceSync
+	eventPoll                *activeEventPoll
+	automationStarted        bool
+	feishu                   feishuChannel
+	personal                 map[string]*personalWorker
+	pluginPreviews           map[string]*packagePreview
 	remoteCollab             RemoteCollaborator
 	remoteDelegationWake     chan struct{}
 	remoteDelegationNotify   chan struct{}
@@ -94,10 +95,10 @@ type App struct {
 	receiptTimers            map[string]*time.Timer
 	delegationCoalesceWindow time.Duration
 	presenceMu               sync.Mutex
-	desktopActive           bool
-	desktopSeenAt           time.Time
-	screenLockCheckedAt     time.Time
-	screenLocked            bool
+	desktopActive            bool
+	desktopSeenAt            time.Time
+	screenLockCheckedAt      time.Time
+	screenLocked             bool
 }
 
 // Open embeds provider execution in the caller. The standalone hosts use
@@ -116,10 +117,10 @@ func open(dir string, independent bool) (*App, error) {
 		localStats:   localstats.NewService(s.DB, dir),
 		taskAdapters: builtin.TaskSourceAdapters(), taskSyncWake: make(chan struct{}, 1), taskQueueWake: make(chan struct{}, 1), taskReminderWake: make(chan struct{}, 1),
 		eventAdapters: builtin.EventSourceAdapters(), personal: make(map[string]*personalWorker), pluginPreviews: make(map[string]*packagePreview),
-		remoteDelegationWake: make(chan struct{}, 1),
-		typingUntil:          make(map[string]time.Time),
-		typingDeferSince:     make(map[string]time.Time),
-		receiptTimers:        make(map[string]*time.Timer),
+		remoteDelegationWake:     make(chan struct{}, 1),
+		typingUntil:              make(map[string]time.Time),
+		typingDeferSince:         make(map[string]time.Time),
+		receiptTimers:            make(map[string]*time.Timer),
 		delegationCoalesceWindow: 1500 * time.Millisecond,
 	}
 	if err = a.migrateWorkingCopies(ctx); err != nil {
@@ -284,7 +285,13 @@ func (a *App) Overview(ctx context.Context) (model.Overview, error) {
 	}
 	o.Runs, err = store.List[model.Run](ctx, tx, `SELECT `+store.RunWithOverviewFields+` FROM runs r
 LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer'
-WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','queued') OR r.status='paused' ORDER BY r.sequence`)
+WHERE r.status IN ('starting','running','waiting_user','cancelling','unknown','queued')
+   OR (r.status='paused' AND NOT EXISTS(
+       SELECT 1 FROM sessions s WHERE s.id=r.session_id
+         AND coalesce(json_extract(s.activity,'$.clearedSequence'),0) > 0
+         AND coalesce(json_extract(s.activity,'$.clearedSequence'),0) >= coalesce(json_extract(s.activity,'$.unreadSequence'),0)
+   ))
+ORDER BY r.sequence`)
 	if err != nil {
 		return o, err
 	}
@@ -317,6 +324,7 @@ func (a *App) SaveAgent(ctx context.Context, agent model.Agent) (model.Agent, er
 }
 
 func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave func(*sql.Tx, model.Agent) error) (model.Agent, error) {
+	agent.NodeID = ""
 	agent.Name = strings.TrimSpace(agent.Name)
 	if agent.Name == "" || len(agent.Name) > 100 {
 		return agent, invalid("Agent name is required (up to 100 characters)")
@@ -371,8 +379,8 @@ func (a *App) saveAgentLocked(ctx context.Context, agent model.Agent, afterSave 
 	if !p.DelegationPolicy.Valid() {
 		return agent, invalid("Invalid delegation policy")
 	}
-	if p.MaxDelegationDepth != 0 && p.MaxDelegationDepth != 1 && p.MaxDelegationDepth != 2 {
-		return agent, invalid("Max delegation depth must be 1 or 2")
+	if p.MaxDelegationDepth < 0 || p.MaxDelegationDepth > model.MaxDelegationHops {
+		return agent, invalid("Max delegation depth must be between 1 and 3")
 	}
 	p.Description = strings.TrimSpace(p.Description)
 	if len([]rune(p.Description)) > 240 {
@@ -594,27 +602,27 @@ func (a *App) MarkSessionsRead(ctx context.Context, items []model.ReadMark) erro
 		return invalid("Too many read cursors in one request")
 	}
 	return a.Store.Write(ctx, func(tx *sql.Tx) error {
-		changed := false
 		for _, item := range items {
 			if item.SessionID == "" || item.Sequence <= 0 {
 				continue
 			}
-			res, err := tx.Exec(`UPDATE sessions
+			event := model.Event{Type: "conversation-read", SessionID: item.SessionID}
+			err := tx.QueryRow(`UPDATE sessions
 SET activity=json_set(activity,'$.readSequence',min(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0)))
 WHERE id=?2 AND activity IS NOT NULL
-  AND COALESCE(json_extract(activity,'$.readSequence'),0) < min(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0))`,
-				item.Sequence, item.SessionID)
+  AND COALESCE(json_extract(activity,'$.readSequence'),0) < min(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0))
+RETURNING chat_id,json_extract(activity,'$.readSequence')`, item.Sequence, item.SessionID).Scan(&event.ChatID, &event.ReadSequence)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
-			if n, _ := res.RowsAffected(); n > 0 {
-				changed = true
+			if err = store.Event(tx, event); err != nil {
+				return err
 			}
 		}
-		if !changed {
-			return nil
-		}
-		return store.Event(tx, model.Event{Type: "conversation-read"})
+		return nil
 	})
 }
 
@@ -648,6 +656,33 @@ SET activity=json_set(activity,'$.clearedSequence',max(?1,COALESCE(json_extract(
 WHERE id=?2 AND activity IS NOT NULL
   AND COALESCE(json_extract(activity,'$.clearedSequence'),0) < max(?1,COALESCE(json_extract(activity,'$.unreadSequence'),0),1)`,
 					item.Sequence, item.SessionID)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n > 0 {
+					changed = true
+				}
+				// Clearing a paused session stops any paused run so it becomes stopped & cleared
+				// rather than remaining paused and uncleared.
+				pausedRuns, perr := store.List[model.Run](ctx, tx, "SELECT data FROM runs WHERE session_id=? AND status='paused'", item.SessionID)
+				if perr != nil {
+					return perr
+				}
+				for _, pr := range pausedRuns {
+					if err := finishPausedRun(tx, pr); err != nil {
+						return err
+					}
+					changed = true
+				}
+				// Clear stale queuePaused flag if no queued runs remain on this cleared session.
+				if qres, qerr := tx.Exec(`UPDATE sessions SET data=json_set(data,'$.queuePaused',json('false'))
+WHERE id=?1 AND json_extract(data,'$.queuePaused')=1
+  AND NOT EXISTS(SELECT 1 FROM runs WHERE session_id=?1 AND status='queued')`, item.SessionID); qerr == nil {
+					if n, _ := qres.RowsAffected(); n > 0 {
+						changed = true
+					}
+				}
+				continue
 			}
 			if err != nil {
 				return err
@@ -1053,7 +1088,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			session = model.Session{ID: ID(), ChatID: chat.ID, AgentID: agent.ID, Kind: kind, ParentRunID: origin.parentRunID, ProjectID: agent.Profile.ProjectID, Scope: agent.Profile.Scope, Selection: defaultSel, CreatedAt: now()}
 			if origin.parentRunID != "" && origin.remoteDelegation == nil {
 				session.DelegationDepth = max(origin.delegationDepth, 1)
-				session.DelegationMaxDepth = min(origin.delegationMaxDepth, 2)
+				session.DelegationMaxDepth = min(origin.delegationMaxDepth, model.MaxDelegationHops)
 				session.DelegationChain = slices.Clone(origin.delegationChain)
 			}
 			if origin.delegationScope != nil {
@@ -1065,7 +1100,7 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.comm
 			if rd := origin.remoteDelegation; rd != nil {
 				session.ParentRunID = "remote:" + rd.DeviceID + ":" + rd.RunID
 				session.DelegationDepth = max(rd.Depth, 1)
-				session.DelegationMaxDepth = min(rd.MaxDepth, 2)
+				session.DelegationMaxDepth = min(rd.MaxDepth, model.MaxDelegationHops)
 				session.DelegationChain = slices.Clone(rd.Chain)
 				src := &model.RemoteDelegationSource{
 					DeviceID:   rd.DeviceID,
@@ -1570,7 +1605,7 @@ func (a *App) newExecution(run model.Run, session model.Session, profile model.P
 	defaults, _ := delegationSettings(a.ctx, a.Store.DB)
 	maxDepth := profile.EffectiveMaxDelegationDepth(defaults)
 	if session.ParentRunID != "" || session.DelegatedFrom != nil {
-		maxDepth = min(session.DelegationMaxDepth, 2)
+		maxDepth = min(session.DelegationMaxDepth, model.MaxDelegationHops)
 	}
 	execution := &execution{app: a, ctx: runCtx, cancel: cancel, runtimeCtx: runtimeCtx, interrupt: interrupt, run: run, session: session, profile: profile, delegationPolicy: profile.EffectiveDelegationPolicy(defaults), delegationMaxDepth: maxDepth, provider: config, recovery: recovery, requests: map[string]chan model.Answer{}, token: ID() + ID(), done: make(chan struct{}), steers: make(chan struct{}, 1)}
 	if config.Type == "pi" {
@@ -1686,7 +1721,7 @@ func (a *App) answer(ctx context.Context, id string, answer model.Answer, origin
 	}
 	if request.Status == "answered" {
 		if origin != nil {
-			if _, err := a.RemoteReceipt(ctx, origin.scope, origin.intent); !errors.Is(err, sql.ErrNoRows) {
+			if _, err := a.RemoteReceipt(ctx, origin.receipts, origin.intent); !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 			return conflict("Request has already been answered")

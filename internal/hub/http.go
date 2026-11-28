@@ -117,6 +117,10 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	m.HandleFunc("GET /api/spaces/{space}/devices", h.handler("controller", h.devices))
 	m.HandleFunc("PATCH /api/spaces/{space}/devices/{id}", h.handler("controller", h.editDevice))
 	m.HandleFunc("DELETE /api/spaces/{space}/devices/{id}", h.handler("any", h.revoke))
+	m.HandleFunc("GET /api/nodes", h.handler("controller", h.aggregate))
+	m.HandleFunc("GET /api/overview", h.handler("controller", h.aggregate))
+	m.HandleFunc("GET /api/events", h.handler("controller", h.nodeEvents))
+	m.HandleFunc("GET /api/spaces/{space}/node-events", h.handler("controller", h.nodeEvents))
 	m.HandleFunc("GET /api/spaces/{space}/events", h.handler("controller", h.events))
 	m.HandleFunc("GET /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
 	m.HandleFunc("PUT /api/spaces/{space}/push", h.handler("controller", h.pushDevice))
@@ -127,6 +131,12 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	m.HandleFunc("POST /api/spaces/{space}/read", h.handler("controller", h.markRead))
 	m.HandleFunc("GET /api/spaces/{space}/cleared", h.handler("controller", h.clearedCursors))
 	m.HandleFunc("POST /api/spaces/{space}/cleared", h.handler("controller", h.markCleared))
+	m.HandleFunc("GET /ws/sync", h.handler("any", h.connect))
+	m.HandleFunc("GET /ws/tunnel", h.handler("executor", h.tunnel))
+	for _, method := range []string{"GET", "POST", "PUT"} {
+		m.HandleFunc(method+" /api/spaces/{space}/nodes/{node}/{route...}", h.handler("controller", h.peer))
+		m.HandleFunc(method+" /api/nodes/{node}/{route...}", h.handler("controller", h.peer))
+	}
 	m.HandleFunc("GET /api/spaces/{space}/connect", h.handler("any", h.connect))
 	m.HandleFunc("GET /api/spaces/{space}/devices/{id}/lan", h.handler("controller", h.grant))
 	m.HandleFunc("GET /api/spaces/{space}/controllers/{id}", h.handler("executor", h.personalController))
@@ -152,7 +162,7 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		if origin := r.Header.Get("Origin"); origin != "" {
 			u, err := url.Parse(origin)
@@ -165,7 +175,11 @@ func (h *Hub) Handler(assets fs.FS) http.Handler {
 			fail(w, denied)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, p.MaxFrame)
+		limit := int64(p.MaxFrame)
+		if strings.Contains(r.URL.Path, "/nodes/") && (strings.HasSuffix(r.URL.Path, "/attachments") || strings.HasSuffix(r.URL.Path, "/file")) {
+			limit = p.MaxPeerBody
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		m.ServeHTTP(w, r)
 	})
 }
@@ -404,7 +418,7 @@ func (h *Hub) pair(w http.ResponseWriter, r *http.Request, _ principal) error {
 	}
 	code := strings.ToUpper(strings.TrimSpace(in.Code))
 	token := p.Token()
-	m := p.Membership{Hub: h.identity, Role: in.Role, DeviceID: in.ID, Token: token}
+	m := p.Membership{Features: []string{p.FeatureTunnel}, Hub: h.identity, Role: in.Role, DeviceID: in.ID, Token: token}
 	err := write(h.db, func(tx *sql.Tx) error {
 		var cap p.Role
 		if err := tx.QueryRow("DELETE FROM tickets WHERE digest=? AND expires>? RETURNING space_id,user_id,role", p.Digest([]byte(code)), time.Now().Unix()).Scan(&m.SpaceID, &m.UserID, &cap); err != nil {
@@ -447,7 +461,7 @@ func (h *Hub) devices(w http.ResponseWriter, r *http.Request, a principal) error
 			return err
 		}
 	}
-	rows, err := h.db.Query("SELECT id,pub,name,platform,role,draining,revoked,seen,version,desktop_active_until FROM devices WHERE space_id=? ORDER BY name,id", space)
+	rows, err := h.db.Query("SELECT id,pub,name,platform,role,draining,revoked,seen,version,desktop_active_until,node FROM devices WHERE space_id=? ORDER BY name,id", space)
 	if err != nil {
 		return err
 	}
@@ -461,10 +475,20 @@ func (h *Hub) devices(w http.ResponseWriter, r *http.Request, a principal) error
 	for rows.Next() {
 		d := p.Device{SpaceID: space}
 		var desktopActiveUntil int64
-		if err := rows.Scan(&d.ID, &d.PublicKey, &d.Name, &d.Platform, &d.Role, &d.Draining, &d.Revoked, &d.LastSeen, &d.Version, &desktopActiveUntil); err != nil {
+		var nodeRaw string
+		if err := rows.Scan(&d.ID, &d.PublicKey, &d.Name, &d.Platform, &d.Role, &d.Draining, &d.Revoked, &d.LastSeen, &d.Version, &desktopActiveUntil, &nodeRaw); err != nil {
 			return err
 		}
 		d.Online = !d.Revoked && (h.online(deviceKey{space, d.ID}) || d.Role == p.Controller && time.Since(time.Unix(d.LastSeen, 0)) < 75*time.Second)
+		if nodeRaw != "" {
+			var n p.NodeDescriptor
+			if json.Unmarshal([]byte(nodeRaw), &n) == nil {
+				n.Name = d.Name
+				n.Online = d.Online
+				n.Draining = d.Draining
+				d.Node = &n
+			}
+		}
 		d.DesktopActive = d.Online && desktopActiveUntil > nowUnix
 		item := entry{Device: d}
 		if grant.Controller.ID != "" && !d.Revoked && d.Role.Executes() && d.ID != a.device {

@@ -18,5 +18,9 @@ func renameEntry(root *os.Root, source, destination string) error {
 		return err
 	}
 	defer to.Close()
+	return renameEntryAt(from, to, filepath.Base(source), filepath.Base(destination))
+}
+func renameEntryAt(from, to *os.File, source, destination string) (err error) {
+
 	return unix.Renameat2(int(from.Fd()), filepath.Base(source), int(to.Fd()), filepath.Base(destination), unix.RENAME_NOREPLACE)
 }

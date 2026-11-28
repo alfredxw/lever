@@ -48,8 +48,30 @@ static DNSServiceErrorType lever_resolve(const char *name, int milliseconds, str
     DNSServiceRefDeallocate(ref);
     return error ? error : reply->error;
 }
-static DNSServiceErrorType lever_register(const char *name, int port, DNSServiceRef *ref) {
-    return DNSServiceRegister(ref, 0, 0, name, "_lever._tcp", "local.", NULL, htons(port), 0, NULL, NULL, NULL);
+struct lever_instances {char names[64][37]; int count;};
+static void browsed(DNSServiceRef ref,DNSServiceFlags flags,uint32_t iface,DNSServiceErrorType err,
+    const char *name,const char *type,const char *domain,void *context){
+    struct lever_instances *out=context;
+    if (err || !(flags & kDNSServiceFlagsAdd) || strlen(name)!=36 || out->count>=64) return;
+    for(int i=0;i<out->count;i++) if(!strcmp(out->names[i],name)) return;
+    strlcpy(out->names[out->count++],name,37);
+}
+static DNSServiceErrorType lever_browse(int timeout,struct lever_instances *out){
+    DNSServiceRef ref;
+    DNSServiceErrorType err=DNSServiceBrowse(&ref,0,0,"_lever._tcp","local.",browsed,out);
+    if(err) return err;
+    struct pollfd fd={DNSServiceRefSockFD(ref),POLLIN,0};
+    uint64_t end=clock_gettime_nsec_np(CLOCK_MONOTONIC)+(uint64_t)timeout*1000000;
+    while(out->count<64){
+        uint64_t now=clock_gettime_nsec_np(CLOCK_MONOTONIC);
+        if(now>=end || poll(&fd,1,(int)((end-now)/1000000))<=0) break;
+        if((err=DNSServiceProcessResult(ref))) break;
+    }
+    DNSServiceRefDeallocate(ref);
+    return err;
+}
+static DNSServiceErrorType lever_register(const char *name, int port, const void *txt, uint16_t len, DNSServiceRef *ref) {
+    return DNSServiceRegister(ref, 0, 0, name, "_lever._tcp", "local.", NULL, htons(port), len, txt, NULL, NULL);
 }
 */
 import "C"
@@ -60,6 +82,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 	"unsafe"
@@ -73,7 +96,12 @@ func Advertise(id string, port int, _ []net.IP) (io.Closer, error) {
 	name := C.CString(id)
 	defer C.free(unsafe.Pointer(name))
 	var a advertisement
-	if status := C.lever_register(name, C.int(port), &a.ref); status != 0 {
+	var txt []byte
+	for _, item := range serviceTXT(id) {
+		txt = append(txt, byte(len(item)))
+		txt = append(txt, item...)
+	}
+	if status := C.lever_register(name, C.int(port), unsafe.Pointer(&txt[0]), C.uint16_t(len(txt)), &a.ref); status != 0 {
 		return nil, fmt.Errorf("Bonjour registration failed (%d)", status)
 	}
 	return a, nil
@@ -102,4 +130,25 @@ func Discover(ctx context.Context, id string) (string, error) {
 		}
 	}
 	return "", errors.New("Host has no local IPv4 address")
+}
+
+func Browse(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	end, _ := ctx.Deadline()
+	var records C.struct_lever_instances
+	if err := C.lever_browse(C.int(time.Until(end).Milliseconds()), &records); err != 0 {
+		return nil, fmt.Errorf("Bonjour browse failed (%d)", err)
+	}
+	out := []string{}
+	for i := 0; i < int(records.count); i++ {
+		if id := C.GoString(&records.names[i][0]); validInstance(id) {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }

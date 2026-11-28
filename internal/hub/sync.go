@@ -13,10 +13,15 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 	p "lever/internal/remoteproto"
 )
 
 type link struct {
+	checkpoint chan struct{}
+	tunnelID   string
+	ended      chan struct{}
+	tunnel     *yamux.Session // protected by Hub.mu
 	conn       *websocket.Conn
 	generation int64
 	probes     sync.Map
@@ -51,8 +56,9 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 	defer ws.Close()
 	ws.SetReadLimit(p.MaxFrame)
 	k := deviceKey{a.space, a.device}
-	l := &link{conn: ws}
-	hello := p.Frame{Type: "hello", Protocol: p.Version, SpaceID: a.space, DeviceID: a.device}
+	l := &link{checkpoint: make(chan struct{}, 1), conn: ws, tunnelID: p.NewID(), ended: make(chan struct{})}
+	defer close(l.ended)
+	hello := p.Frame{Features: []string{p.FeatureTunnel, p.FeatureHotCache}, TunnelID: l.tunnelID, Type: "hello", Protocol: p.Version, SpaceID: a.space, DeviceID: a.device}
 	err = h.db.QueryRow("UPDATE devices SET generation=generation+1,seen=? WHERE space_id=? AND id=? AND token=? AND revoked=0 RETURNING generation,epoch,version", time.Now().Unix(), a.space, a.device, a.token).Scan(&l.generation, &hello.Epoch, &hello.Version)
 	if err != nil {
 		return nil
@@ -110,6 +116,25 @@ func (h *Hub) connect(w http.ResponseWriter, r *http.Request, a principal) error
 			return nil
 		}
 		switch f.Type {
+		case "node":
+			if f.Node == nil || f.Node.NodeID != a.device || !f.Node.Supports(p.FeaturePeer) {
+				return nil
+			}
+			result, err := h.db.ExecContext(ctx, "UPDATE devices SET node=? WHERE space_id=? AND id=? AND generation=? AND pub=? AND revoked=0", encoded(f.Node), k.space, k.device, l.generation, f.Node.PublicKey)
+			if err != nil {
+				return nil
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				return nil
+			}
+			if _, err = h.db.ExecContext(ctx, "DELETE FROM node_hot_pages WHERE space_id=? AND device_id=? AND epoch<>?", k.space, k.device, f.Node.CacheEpoch); err != nil {
+				return nil
+			}
+			select {
+			case l.checkpoint <- struct{}{}:
+			default:
+			}
+			h.notify(a.space)
 		case "command_state":
 			if f.Receipt == nil || f.Receipt.ID != f.RPCID || len(f.Digest) != 64 {
 				return nil
@@ -215,7 +240,7 @@ func (h *Hub) reconcile(ctx context.Context, k deviceKey, l *link) error {
 			f.Type = "cancel_dispatch"
 		}
 		probes = append(probes, f)
-		if status != "cancelled" && controller != "" {
+		if status != "cancelled" {
 			probes = append(probes, p.Frame{Type: "offer_command", SpaceID: k.space, DeviceID: k.device, RPCID: f.RPCID, ControllerID: controller, Delegation: isDelegation})
 		}
 	}

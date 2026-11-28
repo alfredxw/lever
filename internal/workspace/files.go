@@ -96,6 +96,10 @@ func List(ctx context.Context, root, path string) ([]model.FileEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return listDirectory(ctx, f, path, true)
+}
+
+func listDirectory(ctx context.Context, f *os.File, path string, gitStatus bool) ([]model.FileEntry, error) {
 	entries, err := f.ReadDir(2000)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
@@ -114,7 +118,9 @@ func List(ctx context.Context, root, path string) ([]model.FileEntry, error) {
 		}
 		out = append(out, model.FileEntry{Name: e.Name(), Path: filepath.ToSlash(filepath.Join(path, e.Name())), Directory: e.IsDir(), Size: info.Size()})
 	}
-	markGitIgnored(ctx, f.Name(), out)
+	if gitStatus {
+		markGitIgnored(ctx, f.Name(), out)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Directory != out[j].Directory {
 			return out[i].Directory
@@ -282,12 +288,9 @@ func CreateFile(root *os.Root, path string, data []byte) error {
 // Write replaces a complete text file. The version is the last content the
 // editor read, so stale browser drafts cannot silently overwrite newer content.
 func Write(root, path, content, version string) (model.FileContent, error) {
-	if !filepath.IsLocal(path) || version == "" || len(content) > MaxFileBytes || !utf8.ValidString(content) || strings.ContainsRune(content, 0) {
-		return model.FileContent{}, fmt.Errorf("%w: expected complete UTF-8 text up to 2 MiB and a file version", ErrInvalidFile)
+	if !filepath.IsLocal(path) {
+		return model.FileContent{}, ErrInvalidFile
 	}
-	// Serialize the check and replacement across tabs, clients and overlapping roots.
-	fileWriteMu.Lock()
-	defer fileWriteMu.Unlock()
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return model.FileContent{}, err
@@ -298,6 +301,16 @@ func Write(root, path, content, version string) (model.FileContent, error) {
 		return model.FileContent{}, err
 	}
 	defer parent.Close()
+	return writeFileAt(parent, path, content, version)
+}
+
+func writeFileAt(parent *os.Root, path, content, version string) (model.FileContent, error) {
+	if !filepath.IsLocal(path) || version == "" || len(content) > MaxFileBytes || !utf8.ValidString(content) || strings.ContainsRune(content, 0) {
+		return model.FileContent{}, fmt.Errorf("%w: expected complete UTF-8 text up to 2 MiB and a file version", ErrInvalidFile)
+	}
+	// Serialize the check and replacement across tabs, clients and overlapping roots.
+	fileWriteMu.Lock()
+	defer fileWriteMu.Unlock()
 	name := filepath.Base(path)
 	info, err := parent.Lstat(name)
 	if err != nil {
@@ -310,9 +323,14 @@ func Write(root, path, content, version string) (model.FileContent, error) {
 		return model.FileContent{}, os.ErrPermission
 	}
 	// Check write access without truncating the original file.
-	f, err := parent.OpenFile(name, os.O_RDWR, 0)
+	f, err := parent.OpenFile(name, os.O_RDWR|hostOpenFlags, 0)
 	if err != nil {
 		return model.FileContent{}, err
+	}
+	opened, statErr := f.Stat()
+	if statErr != nil || !os.SameFile(info, opened) {
+		f.Close()
+		return model.FileContent{}, ErrFileConflict
 	}
 	current, err := readFile(f, path)
 	f.Close()
@@ -339,7 +357,7 @@ func Write(root, path, content, version string) (model.FileContent, error) {
 	if err != nil || !os.SameFile(info, latestInfo) {
 		return model.FileContent{}, ErrFileConflict
 	}
-	f, err = parent.Open(name)
+	f, err = parent.OpenFile(name, hostOpenFlags, 0)
 	if err != nil {
 		return model.FileContent{}, err
 	}

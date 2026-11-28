@@ -32,7 +32,7 @@ func delegationSettings(ctx context.Context, q store.Queryer) (model.DelegationS
 	if parsed.DefaultPolicy != model.DelegationPolicyNone && parsed.DefaultPolicy != model.DelegationPolicyAll {
 		return defaultDelegationSettings, nil
 	}
-	if parsed.MaxDepth != 0 && parsed.MaxDepth != 1 && parsed.MaxDepth != 2 {
+	if parsed.MaxDepth < 0 || parsed.MaxDepth > model.MaxDelegationHops {
 		parsed.MaxDepth = 1
 	}
 	if parsed.MaxConcurrent < 0 || parsed.MaxConcurrent > 20 {
@@ -49,8 +49,8 @@ func (a *App) SaveDelegationSettings(ctx context.Context, input model.Delegation
 	if input.DefaultPolicy != model.DelegationPolicyNone && input.DefaultPolicy != model.DelegationPolicyAll {
 		return model.DelegationSettings{}, invalid("Default delegation policy must be 'none' or 'all'")
 	}
-	if input.MaxDepth != 0 && input.MaxDepth != 1 && input.MaxDepth != 2 {
-		return model.DelegationSettings{}, invalid("Default delegation max depth must be 1 or 2")
+	if input.MaxDepth < 0 || input.MaxDepth > model.MaxDelegationHops {
+		return model.DelegationSettings{}, invalid("Default delegation max depth must be between 1 and 3")
 	}
 	if input.MaxConcurrent != 0 && (input.MaxConcurrent < 1 || input.MaxConcurrent > 20) {
 		return model.DelegationSettings{}, invalid("Max concurrent delegations must be between 1 and 20")

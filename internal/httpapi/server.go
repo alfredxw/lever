@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"mime"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"lever/internal/app"
+	"lever/internal/eventstream"
 	"lever/internal/localstats"
 	"lever/internal/model"
 	"lever/internal/plugin"
@@ -110,6 +110,29 @@ func New(a *app.App, address, devOrigin string, assets fs.FS) (*Server, error) {
 	})
 	api := http.NewServeMux()
 	api.Handle("POST /api/remote", s.Remote.Handler())
+	api.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, _ *http.Request) { respond(w, s.Remote.Nodes(), nil) })
+	for _, method := range []string{"GET", "PUT", "POST"} {
+		api.HandleFunc(method+" /api/nodes/{node}/{route...}", func(w http.ResponseWriter, r *http.Request) {
+			if r.PathValue("node") == a.Store.DeviceID {
+				path := r.PathValue("route")
+				if path == "" || strings.HasPrefix(path, "nodes/") || strings.Contains(path, "..") {
+					http.NotFound(w, r)
+					return
+				}
+				clone := r.Clone(r.Context())
+				clone.URL.Path = "/api/" + path
+				clone.URL.RawPath = ""
+				if path == "overview" || path == "events" {
+					v := clone.URL.Query()
+					v.Set("scope", "local")
+					clone.URL.RawQuery = v.Encode()
+				}
+				api.ServeHTTP(w, clone)
+				return
+			}
+			s.Remote.RouteNode(w, r)
+		})
+	}
 	s.routes(api)
 	s.channelRoutes(api)
 	mux.Handle("/api/", s.auth(api))
@@ -254,7 +277,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	s.pluginRoutes(mux)
 	mux.HandleFunc("GET /api/agents/{id}/terminal", s.terminal)
 	mux.HandleFunc("DELETE /api/agents/{id}/terminal", s.closeTerminal)
-	mux.HandleFunc("GET /api/overview", func(w http.ResponseWriter, r *http.Request) { v, err := a.Overview(r.Context()); respond(w, v, err) })
+	mux.HandleFunc("GET /api/overview", s.overview)
 	mux.HandleFunc("GET /api/providers", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.Providers(r.Context(), r.URL.Query().Get("login") == "true")
 		respond(w, v, err)
@@ -912,55 +935,16 @@ LEFT JOIN channel_deliveries d ON d.run_id=r.id AND d.part='answer' WHERE r.id=?
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	f, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unavailable", 500)
+	id := s.App.Store.DeviceID
+	if r.URL.Query().Get("scope") == "local" {
+		eventstream.Serve(w, r, s.App.Store, nil, func(e *model.Event) (bool, error) { e.NodeID = id; return true, nil })
 		return
 	}
-	cursor, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-	if h := r.Header.Get("Last-Event-ID"); h != "" {
-		cursor, _ = strconv.ParseInt(h, 10, 64)
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	ch, unsubscribe := s.App.Store.Subscribe()
-	defer unsubscribe()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		var min, max int64
-		if err := s.App.Store.DB.QueryRowContext(r.Context(), "SELECT COALESCE(MIN(sequence),0),COALESCE(MAX(sequence),0) FROM events").Scan(&min, &max); err != nil {
-			return
+	eventstream.Merge(w, r, id, func(ctx context.Context) map[string]eventstream.Source {
+		sources := s.Remote.EventSources(ctx)
+		if r.URL.Query().Get("scope") != "remote" {
+			sources[id] = eventstream.Local(s.App.Store)
 		}
-		if cursor < min-1 || cursor > max {
-			fmt.Fprintf(w, "id: %d\nevent: reset\ndata: {}\n\n", max)
-			cursor = max
-			f.Flush()
-		}
-		events, err := s.App.Store.Events(r.Context(), cursor)
-		if err != nil {
-			return
-		}
-		for _, event := range events {
-			if _, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Sequence, store.JSON(event)); err != nil {
-				return
-			}
-			cursor = event.Sequence
-		}
-		f.Flush()
-		if len(events) == 100 {
-			continue
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ch:
-		case <-ticker.C:
-			if _, err = fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
-				return
-			}
-			f.Flush()
-		}
-	}
+		return sources
+	})
 }
